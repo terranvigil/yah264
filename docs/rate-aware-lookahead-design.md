@@ -2,25 +2,25 @@
 
 **Result so far: R0.1 (the byte-identical `y264_lr_blk` D/R-separate record) is
 in the tree as the TPL-ready substrate. R1 (the rate-aware propfrac consumed
-through mb-tree) measured a net VMAF-NEG regression and is reverted:** mean
-~+0.08%, foreman +0.91%, akiyo +1.36%, i.e. the clips mb-tree helps most
-regress hardest, and the result is robust to recalibrating
-`LR_INTRA_PEN_BITS`. Pricing MV rate in the propagation cost *reduces*
-propagation exactly where mb-tree wants to boost. That is "tightening mb-tree",
-which dead-ends the same way three prior mb-tree tweaks did.
+through mb-tree) measured a net VMAF-NEG regression and is reverted.** The mean
+was ~+0.08%, with foreman at +0.91% and akiyo at +1.36%. The clips mb-tree
+helps most regress hardest. Recalibrating `LR_INTRA_PEN_BITS` does not
+change that. Pricing MV rate in the propagation cost *reduces* propagation
+exactly where mb-tree wants to boost. That is "tightening mb-tree", and it
+dead-ends the same way three prior mb-tree tweaks did.
 
 **Conclusion: the mb-tree propfrac is the wrong consumer of the rate record.
 The right consumer is TPL.** R2 and R3 were downstream of a winning R1 and are
 parked. The record layout below is the part that matters, because it is what
 TPL will read.
 
-Reference for the record's forward compatibility: SVT-AV1's published TPL
-description and its `TplStats` fields. Everything is reimplemented from
-understanding, not copied.
+The record's forward compatibility follows SVT-AV1's published TPL
+description and its `TplStats` fields. Everything is reimplemented from our own
+understanding of them. Nothing is copied.
 
 ## 1. Problem statement
 
-Four consumers make decisions off lowres analysis, and each sees a different,
+Four consumers make decisions off lowres analysis. Each sees a different
 rate-blind cost:
 
 | consumer | cost it sees today |
@@ -31,23 +31,23 @@ rate-blind cost:
 | rate control | none of the above; a separate full-res zero-motion SATD `frame_complexity` |
 
 x264 prices one cost (SATD + lambda*mvbits + fixed penalties, lambda =
-its ME lambda at QP 12 is 1) and routes it to all four consumers, with a parallel
-AQ-weighted accumulator for RC only. Its CRF then carries per-frame complexity
-*through* mb-tree's offsets instead of a frame-level complexity equation. We
-fight that architecture with `CRF_BASE_CPLX=9000` and an asymmetric `-2.0`
-clamp.
+its ME lambda at QP 12 is 1) and routes it to all four consumers. A parallel
+AQ-weighted accumulator serves RC only. Its CRF then passes per-frame complexity
+*through* mb-tree's offsets instead of using a frame-level complexity equation.
+We work against that architecture with `CRF_BASE_CPLX=9000` and an asymmetric
+`-2.0` clamp.
 
 Three prior dead ends (b-adapt over-demote, IPPP mb-tree chain saturation, the
-mb-tree/AQ motion-alloc attempts) all trace to this: decisions taken on costs
-that do not price rate.
+mb-tree/AQ motion-alloc attempts) all trace to decisions taken on costs that do
+not price rate.
 
 x264 collapses distortion and rate into one SATD-like scalar per lowres
-block. We deliberately do NOT: TPL's entire advantage over mb-tree is keeping
-distortion and rate separate, as the AV1 encoders' TPL statistics do (source
-and reconstruction distortion and rate per block, plus the propagated
-dependent distortion and rate). The record below stores D and R apart and
-every consumer composes its own scalar on read. That is the one-way door; get it right and TPL
-is an additive change.
+block. We deliberately do NOT. TPL's entire advantage over mb-tree is that it
+keeps distortion and rate separate, as the AV1 encoders' TPL statistics do
+(source and reconstruction distortion and rate per block, plus the propagated
+dependent distortion and rate). The record below stores D and R apart, and
+every consumer composes its own scalar on read. That is the one-way door. Get
+it right and TPL is an additive change.
 
 ## 2. Design overview
 
@@ -69,11 +69,11 @@ is an additive change.
    duration-based constant-qscale form with an mb-tree compensation offset;
    `CRF_BASE_CPLX`, `crf_cblur` and the `-2.0` clamp are deleted. The mb-tree
    centring special case for IPPP dies with them.
-6. **AQ unification** rides along: `mbtree_invqscale` derives a mode-1
+6. **AQ unification** comes along with it. `mbtree_invqscale` derives a mode-1
    flat-variance offset for the anchor fold while encode-time AQ defaults to
    mode 2, so anchors and B frames are quantized against two different AQ
    metrics. The record stores ONE per-frame offset array computed with the
-   shipped `aq_analyze` metric, and every fold, weight and encode-time offset
+   shipped `aq_analyze` metric. Every fold, weight and encode-time offset
    reads it.
 
 ## 3. The record layout (the irreversible part)
@@ -145,8 +145,8 @@ Ownership and lifecycle:
 - When a frame is typed B and its planes are buffered into `bplane[]`, the
   record pointers (`d_intra`, `leg[*]`, `qp_off_aq`, `inv_q`) are
   POINTER-SWAPPED into a parallel per-B-slot set on the encoder. The la ring
-  reuses entries, so a swap, not a copy, keeps the B's analysis alive until it
-  is coded. Anchors need no swap: `encode_frame_core` receives the popped
+  reuses entries. Swapping the pointers, instead of copying the data, keeps the
+  B's analysis alive until it is coded. Anchors need no swap: `encode_frame_core` receives the popped
   `la_entry*` directly (signature change, NULL on the legacy no-window path).
 - The legacy per-encoder arrays `lr_intra` / `lr_inter` / `lr_mvx` / `lr_mvy`
   and the `lowres_analyse` run in `encode_frame_core` feed the mb-tree FINISH
@@ -166,8 +166,8 @@ Ownership and lifecycle:
   `la_depth==0` keeps `lowres_analyse` wholesale, out of scope.
 
 Memory: 3 legs * 12 B + 4 B intra + 8 B AQ = 48 B per MB per entry. 1080p
-(8160 MB) at depth 40 is ~15.7 MB total, noise next to the per-entry plane
-copies that already exist.
+(8160 MB) at depth 40 is ~15.7 MB total. That is noise next to the per-entry
+plane copies that already exist.
 
 What mb-tree reads against what TPL will read:
 
@@ -181,24 +181,25 @@ What mb-tree reads against what TPL will read:
 | `qp_off_aq` | the fold in the combined offset | same |
 | (future) recon-domain dist/rate | -- | added fields; nothing else moves |
 
-TPL's propagation grid needs a (dist, rate) PAIR per MB; the existing
-`la_prop_a/b` doubles widen to a two-field struct when that lands. mb-tree uses
-only the dist half. Reserve nothing now; it is additive.
+TPL's propagation grid needs a (dist, rate) PAIR per MB. The existing
+`la_prop_a/b` doubles widen to a two-field struct when TPL arrives, and mb-tree
+uses only the dist half. Reserve nothing now, because the change is additive.
 
 ## 4. The cost formula and its constants (re-derived, not copied)
 
 **Lambda scale.** x264 prices the lookahead at an ME lambda of 1 (QP 12). Our
-`lambda_me` IS that table, verified entry for entry, and our qscale convention
+`lambda_me` IS that table, verified entry for entry. Our qscale convention also
 matches x264's (`qscale = 2^((QP-12)/6)`, used throughout `rc_account` and
 `vbv_update`; the RD-domain `lambda_mode = 0.85*2^((QP-12)/3)` is a different,
 SSD-domain object and is not used here). Our lowres SATD is the same half-res
 8-bit 8x8 SATD magnitude (a sum of four satd4x4 against x264's 8x8 SATD: same
 scale, slightly different low-frequency capture, which the calibration sweep
-absorbs). So the independent derivation lands on the same point:
+absorbs). So the independent derivation arrives at the same point:
 `lambda_lr = lambda_me(Y264_LR_QP)` with `Y264_LR_QP = 12`, i.e. lambda 1, so
 the stored `r_inter` bits act at face value. The lookahead cost must be
-QP-independent (computed once, consumed at every operating QP), so a fixed
-low-QP lambda is correct by construction, and 12 is where our table crosses 1.
+QP-independent (computed once, consumed at every operating QP). A fixed low-QP
+lambda is therefore correct by construction, and 12 is where our table
+crosses 1.
 Calibration knob: env `Y264_LR_QP`, sweep {8, 12, 16, 20} once on the corpus;
 expect a flat optimum at 12 and keep whatever wins.
 
@@ -208,11 +209,11 @@ expect a flat optimum at 12 and keep whatever wins.
 cost(mv) = SATD8x8(src, ref+mv) + lambda_lr * (mvbits(4*(mvx-px)) + mvbits(4*(mvy-py)))
 ```
 
-- Predictor `(px,py)`: median of left / top / top-right neighbours' winning MVs
+- Predictor `(px,py)`: median of left / top / top-right neighbors' winning MVs
   in the SAME leg, forward raster scan, bitstream-MVP geometry (degenerate
-  cases as in 8.4.1.3.1: missing neighbours drop out). x264 scans in reverse
+  cases as in 8.4.1.3.1: missing neighbors drop out). x264 scans in reverse
   and predicts from right and below because its lookahead MVs seed the main
-  encode; that is a later step's business. The record does not encode scan
+  encode. That is a later step's business. The record does not encode scan
   order, so flipping later is free.
 - The factor 4 prices the mvd at lowres quarter-pel scale, matching what x264's
   `p_cost_mv` indexing does on its lowres grid; our search stays integer-pel
@@ -221,8 +222,8 @@ cost(mv) = SATD8x8(src, ref+mv) + lambda_lr * (mvbits(4*(mvx-px)) + mvbits(4*(mv
   `lowres_mvbits`) minus the 1-bit baseline per component, so a
   predictor-perfect MV prices 0 bits: `r = sev_bits(dx)+sev_bits(dy)-2`.
 - Zero-residual fast path, as x264 has: when the predictor is zero and SATD at
-  mv 0 is < 64 (8-bit domain), accept mv 0 and skip the search. This is a speed
-  guard AND it protects static content from spurious nonzero MVs.
+  mv 0 is < 64 (8-bit domain), accept mv 0 and skip the search. This guards
+  speed AND protects static content from spurious nonzero MVs.
 
 Stored per block (composition happens at the consumer, never at store time):
 
@@ -231,27 +232,27 @@ d_inter = SATD of the winner (>> (BIT_DEPTH-8) for 10-bit)
 r_inter = mvbits(4*dx)+mvbits(4*dy)-2 + (mv != 0 ? LR_NZMV_PEN_BITS : 0)
 ```
 
-Fixed penalties (all in bits at lambda 1, mirroring x264's shape at our own
-scale, sweepable only if a corpus class regresses):
+Fixed penalties are all in bits at lambda 1. They mirror x264's form at our own
+scale. We sweep them only if a corpus class regresses.
 
 - `LR_NZMV_PEN_BITS = 5`: nonzero-MV flat penalty. Rate side, so it lives in
   `r_inter`.
 - `LR_INTRA_PEN_BITS = 5`: intra bias. Applied in `lr_icost`, not stored, so
   `d_intra` stays pure.
-- `LR_LOWRES_PEN = 4`: flat floor on every composed cost, an anti-zero-cost
-  guard for VBV and RC. It is neither D nor R, so it lives only in the
+- `LR_LOWRES_PEN = 4`: flat floor on every composed cost. It guards VBV and RC
+  against zero costs. It is neither D nor R, so it lives only in the
   composition helpers.
 
 **AQ weighting.** One function (a refactor of `aq_analyze`, exposed as
 `y264_aq_offsets(plane, stride, wmb, hmb, strength, out_off)`) computes the
 per-MB offsets with the SHIPPED default metric (mode 2 auto-variance) at
-`la_push`, once per frame. `inv_q[i] = 2^(-qp_off_aq[i]/6)`, mean-normalised to
+`la_push`, once per frame. `inv_q[i] = 2^(-qp_off_aq[i]/6)`, mean-normalized to
 1.0 exactly as `mbtree_invqscale` does today. `mbtree_invqscale` itself is
-deleted; all its callers (the anchor fold, the per-B propagation weights, the
-chain-prop self terms) read the stored arrays. This is both a correctness
-unification (anchor fold and B-frame AQ finally use the same metric) and a
-large CPU win, since the full-res 16x16 variance pass currently reruns per B
-per anchor per chain step.
+deleted. All its callers (the anchor fold, the per-B propagation weights, the
+chain-prop self terms) read the stored arrays. This unifies correctness, since
+anchor fold and B-frame AQ finally use the same metric. It is also a large CPU
+win, because the full-res 16x16 variance pass currently reruns per B per anchor
+per chain step.
 
 Frame sums, filled when a leg is analysed:
 
@@ -262,29 +263,30 @@ sum_cost[l]    = sum_i min(lr_icost(...), lr_cost(&leg[l][i], lambda_lr))
 sum_cost_aq[l] = same, * inv_q[i]
 ```
 
-Unweighted sums feed slicetype decisions, AQ-weighted sums feed RC; never mix,
-which is x264's explicit rule too.
+Unweighted sums feed slicetype decisions and AQ-weighted sums feed RC. Never
+mix them. x264 follows the same explicit rule.
 
 ## 5. Consumer diffs
 
 ### 5.1 Scene-cut
 
 `la_push` stops capturing raw `sc_ic` / `sc_pc` and instead stores `sum_icost`
-and `sum_cost[LR_LEG_PREV]`. `scenecut_from_sums` is unchanged: the ratio and
-bias geometry was matched to measured behaviour whose sums are composed exactly
-this way, so this ALIGNS the threshold semantics rather than shifting them.
-Directionally, mv rate raises pcost on fast pans, making cuts slightly more
-likely there; the existing flash guard already covers the failure mode. The
-flash test's transient backward ME composes the same way. Gate: a cut-placement
-diff over the corpus, all classes; every moved cut is inspected, and the count
-of moved cuts at default settings is expected near zero.
+and `sum_cost[LR_LEG_PREV]`. `scenecut_from_sums` is unchanged. Its ratio and
+bias geometry was matched to measured behavior whose sums are composed exactly
+this way, so the change ALIGNS the threshold semantics instead of shifting them.
+On fast pans, mv rate raises pcost and makes cuts slightly more likely. The
+existing flash guard already covers that failure mode. The flash test's
+transient backward ME composes the same way. Gate: a cut-placement diff over
+the corpus, all classes. We inspect every moved cut and expect close to
+zero of them at default settings.
 
 ### 5.2 b-adapt demote
 
-The demote comparison switches to composed costs, and the backward ME result is
-written into the candidate's `leg[LR_LEG_NEXT]` instead of being discarded (a
-later Viterbi step will want it). Two adjustments, because rate-pricing raises
-exactly the long-distance term that already drives the known over-demote bias:
+The demote comparison switches to composed costs. The backward ME result goes
+into the candidate's `leg[LR_LEG_NEXT]` instead of being discarded, because a
+later Viterbi step will want it. Rate-pricing raises exactly the long-distance
+term that already drives the known over-demote bias, so two adjustments
+follow.
 
 - Apply the B discount when composing the continue-run side:
   `cb_scaled = cb * 100 / (120 + bframe_bias)` with bias 0. x264's costs are
@@ -293,13 +295,12 @@ exactly the long-distance term that already drives the known over-demote bias:
 - Re-A/B the 0.90 threshold under the new composition (sweep 0.88-0.94 once).
 
 If the b-adapt BD gate regresses anyway, this consumer alone reverts to
-composing without the rate term (`Y264_LR_RATE_BADAPT=0`), which the
-split-field record makes a one-line consumer choice. Nothing else is coupled to
-it.
+composing without the rate term (`Y264_LR_RATE_BADAPT=0`). The split-field
+record makes that a one-line consumer choice. Nothing else is coupled to it.
 
 ### 5.3 mb-tree
 
-`la_finalize`'s anchor ME stores pure (D, R, MV) into `leg[LR_LEG_ANCHOR]`; the
+`la_finalize`'s anchor ME stores pure (D, R, MV) into `leg[LR_LEG_ANCHOR]`. The
 `bframes == 0` block that folds `mvlambda * lowres_mvbits` into the stored cost
 is DELETED along with `mbtree_mvlambda` and the `Y264_MBTREE_MVLAMBDA` knob.
 The propfrac in `la_chain_prop` and both `compute_mbtree` loops becomes
@@ -308,15 +309,15 @@ The propfrac in `la_chain_prop` and both `compute_mbtree` loops becomes
 frac = 1 - min(lr_cost(blk, lambda_lr), icost) / icost, icost = lr_icost(d_intra[i], lambda_lr)
 ```
 
-which is the principled version of the hack, now on EVERY path (B-vs-anchor and
-next-mini-GOP loops included, which were raw SATD). This is what makes the IPPP
-chain converge without special-casing: a tracked pan pays lambda*mvbits, so
-frac stays below 1 and the geometric series is finite. The +/-51 IPPP bound and
-+/-8 bframes bound, the bothlist split, adaptive strength and centring policy
-are untouched in this phase (centring changes in R3).
+This is the principled version of the hack, now on EVERY path, including the
+B-vs-anchor and next-mini-GOP loops that used raw SATD. It lets the IPPP chain
+converge without special-casing. A tracked pan pays lambda*mvbits, so frac
+stays below 1 and the geometric series is finite. This phase leaves the +/-51
+IPPP bound, the +/-8 bframes bound, the bothlist split, adaptive strength and
+the centering policy untouched (centering changes in R3).
 
 `compute_mbtree`'s per-B ME writes into the B's swapped `leg[LR_LEG_NEXT]`
-record and, as a byproduct, accumulates the B's RC cost (section 6). The finish
+record. As a byproduct it accumulates the B's RC cost (section 6). The finish
 ratio's intra term reads the entry's `d_intra` and `inv_q` instead of
 `e->lr_intra` and a fresh invqscale pass.
 
@@ -325,9 +326,9 @@ rate term reduces propagation exactly where mb-tree wants to boost.
 
 ### 5.4 What must NOT consume this cost
 
-The main-encode ME and mode decision. Feeding extra SATD-domain candidates into
-full-res decisions the bitstream does not price measured +0.28% BD: SATD must
-own the field. The lookahead cost feeds frame-level decisions only: typing,
+The main-encode ME and mode decision must not. Feeding extra SATD-domain
+candidates into full-res decisions the bitstream does not price measured
++0.28% BD, so SATD must own the field. The lookahead cost feeds frame-level decisions only: typing,
 cuts, frame QP, per-MB QP offsets. Seeding full-res ME from `leg[].mv` is
 explicitly out of scope until something prices it properly.
 
@@ -345,11 +346,10 @@ P anchor: C = sum_cost_aq[LR_LEG_ANCHOR]     /* ME vs its actual list-0 ref */
 B frame:  C = sum_i min(icost_i, cost(leg PREV), cost(leg NEXT)) * inv_q_i
 ```
 
-The B sum is accumulated inside `compute_mbtree`'s existing per-B loop (it
-already computes intra and the vs-anchor ME there) into a per-B-slot scalar
-`e->b_lacost[b]`, using the swapped-in PREV leg for the list-0 side. This is
-x264's AQ-adjusted cost-estimate shape built from our own
-machinery.
+The B sum is accumulated into a per-B-slot scalar `e->b_lacost[b]` inside
+`compute_mbtree`'s existing per-B loop, which already computes intra and the
+vs-anchor ME. The list-0 side uses the swapped-in PREV leg. This is the same
+form as x264's AQ-adjusted cost estimate, built from our own machinery.
 
 `frame_complexity` survives ONLY as the `la_depth == 0` fallback. The
 `Y264_DBG_CPLX` debug print reports both during bring-up.
@@ -362,18 +362,18 @@ machinery.
   encode the calibration probe set, take `BASE' = BASE * median(C_new/C_old)`
   over P anchors, then BD-gate. The code comment already claims this scale
   ("~820 per MB on the lookahead's ME-compensated lowres cost"), so `BASE'`
-  should land near 9000; measure, do not trust. The `-2.0` clamp STAYS in this
+  should come out near 9000. Measure it instead of trusting that. The `-2.0` clamp STAYS in this
   phase and dies in R3.
 - **ABR** (`rc_set_qp`): drop-in. `abr_scale[type]` is learned online as
-  `bits*qscale/C`, so it self-recalibrates within a few frames; the win is that
-  a motion-compensated C stops mispredicting pans (today a pan reads as a huge
-  zero-motion residual and ABR over-reacts).
+  `bits*qscale/C`, so it self-recalibrates within a few frames. The win is that
+  a motion-compensated C stops mispredicting pans. Today a pan reads as a huge
+  zero-motion residual and ABR over-reacts.
 - **VBV** (`vbv_clip_qp` / `vbv_update`): same self-calibrating structure, same
   drop-in. Better C means fewer false underflow clamps on motion. Per-row SATD
-  for mid-frame adaptation (x264 keeps per-row SATD sums for this) is NOT built now, but the
-  per-MB min-cost values needed to build row sums later are all in the record,
-  so row-QP work can add it without touching the layout.
-- **2-pass**: pass 1 logs the new C in the stats line; the pass-2 allocator is
+  for mid-frame adaptation (x264 keeps per-row SATD sums for this) is NOT built
+  now. The per-MB min-cost values needed to build row sums later are all in the
+  record, so row-QP work can add it without touching the layout.
+- **2-pass**: pass 1 logs the new C in the stats line. The pass-2 allocator is
   C-agnostic (it uses measured bits). Pass-1/pass-2 consistency is covered by
   the existing varying-QP canary, which must gate on CRF/ABR/AQ configs, not
   just `--qp`.
@@ -384,8 +384,8 @@ machinery.
 `emit_frame` (anchor) or swaps its record into the B slot (section 3). The
 flush path already pops typed entries and works unchanged. `code_b_hier` and
 `flush_buffered_p` pass the B slot index through so `emit_frame` can find
-`b_lacost[b]`; tail Bs coded as P at flush use their B-slot cost with the PREV
-leg only, since no future anchor exists, which is exactly why they are being
+`b_lacost[b]`. Tail Bs coded as P at flush use their B-slot cost with the PREV
+leg only. No future anchor exists for them, which is exactly why they are
 P-coded.
 
 ## 7. The CRF equation (R3, parked)
@@ -393,8 +393,9 @@ P-coded.
 x264 with mb-tree on keeps per-frame qscale essentially CONSTANT:
 `q = (base_duration/duration)^(1-qcomp) / rate_factor`, with
 `rate_factor = base_cplx^(1-qcomp) / qscale(crf + 13.5*(1-qcomp))`. ALL
-content adaptation happens through the per-MB combined offsets, whose uncentred
-mean (mostly negative boosts) the `13.5*(1-qcomp)` term pre-compensates.
+content adaptation happens through the per-MB combined offsets. The
+`13.5*(1-qcomp)` term pre-compensates their uncentered mean (mostly negative
+boosts).
 Complexity enters RC only as the combined-offset-weighted cost, used for
 VBV/ABR size prediction, never in the CRF QP equation itself.
 
@@ -402,53 +403,54 @@ The R3 change, one atomic flip:
 
 1. `rc_set_qp_crf` becomes
    `qp = crf + MBTREE_QP_OFFSET + 6*(1-qcomp)*log2(BASE_DUR/duration_clamped)`
-   for P anchors when mb-tree is on (I keeps the frame_qp -3, B keeps the
-   cascade; revisiting the I/P/B relation against x264's ip/pb qscale factors
-   is a separate, later A/B, since churning two equations in one flip is how
-   this goes wrong). `BASE_DUR = 0.04 s`, duration clamped. At 25 fps CFR the
+   for P anchors when mb-tree is on. I keeps the frame_qp -3 and B keeps the
+   cascade. Revisiting the I/P/B relation against x264's ip/pb qscale factors
+   is a separate, later A/B, because churning two equations in one flip is how
+   this goes wrong. `BASE_DUR = 0.04 s`, duration clamped. At 25 fps CFR the
    duration term is exactly 0.
 2. Delete `CRF_BASE_CPLX`, `crf_cblur`, `crf_cblur_init`, the asymmetric `-2.0`
    clamp, and the complexity argument to the CRF path entirely.
-3. mb-tree boosts go UNCENTRED under CRF and ABR on every path: the
-   `e->bframes == 0` centring special case is deleted. The equation's
-   `MBTREE_QP_OFFSET` is what absorbs the uncentred mean, which is the whole
-   point of the coupling.
+3. mb-tree boosts go UNCENTERED under CRF and ABR on every path, and the
+   `e->bframes == 0` centering special case is deleted. The equation's
+   `MBTREE_QP_OFFSET` absorbs the uncentered mean. That is the whole point of
+   the coupling.
 4. RC complexity weighting for mb-tree frames switches from AQ-only `inv_q` to
    the FULL combined offset: `C = sum_i mincost_i * 2^(-mbtree_off[i]/6)` (our
    analog of x264's lowres frame-cost recalculation; the offsets exist
-   before `emit_frame` runs). This is the guard against double-counting: the
-   frame QP equation no longer sees complexity, so the only complexity paths
-   are the per-MB offsets (spend) and the offset-weighted C (VBV/ABR
-   prediction), which is internally consistent.
-5. The duration and fps terms land as a PAIR: this CRF duration term AND the
+   before `emit_frame` runs). This guards against double-counting. The frame QP
+   equation no longer sees complexity, so the only complexity paths are the
+   per-MB offsets (spend) and the offset-weighted C (VBV/ABR prediction). Those
+   two are internally consistent.
+5. The duration and fps terms arrive as a PAIR: this CRF duration term AND the
    mb-tree propagation `fps_factor` analog (scale propagated amounts by
    `duration/avg_duration` and the finish ratio by its inverse). At CFR both
-   are no-ops at 25 fps and mild constants otherwise; importing one without the
+   are no-ops at 25 fps and mild constants otherwise. Importing one without the
    other is the documented "fps_factor red herring" dead end. Our windows are
    CFR today, so implement both as clamped constants derived from the
-   configured fps and add 50/60 fps clips to the gate explicitly.
+   configured fps, and add 50/60 fps clips to the gate explicitly.
 
 `MBTREE_QP_OFFSET` derivation: closed-form start
 `13.5 * (1-qcomp) * (strength_eff/2.0)` where `strength_eff` is the corpus mean
-of our content-adaptive strength (the adaptive multiplier means x264's constant
-does not transfer verbatim). Then one calibration sweep: pick the offset (grid
-0.5 QP) that matches the corpus-median bitrate at CRF 32 to the pre-R3 build,
-so "CRF x" keeps meaning roughly the same rate across the flip. That is the
-no-broken-CRF sequencing: R3 is one commit, calibrated before merge, with
-`Y264_RC_LEGACY=1` keeping the old equation alive for one cycle of A/Bs.
+of our content-adaptive strength. The adaptive multiplier means x264's constant
+does not transfer verbatim. Then one calibration sweep picks the offset (grid
+0.5 QP) that matches the corpus-median bitrate at CRF 32 to the pre-R3 build.
+"CRF x" then keeps meaning roughly the same rate across the flip. The sequencing
+keeps CRF working throughout: R3 is one commit, calibrated before merge, and
+`Y264_RC_LEGACY=1` keeps the old equation alive for one cycle of A/Bs.
 
 ## 8. TPL forward-compatibility contract
 
-What TPL needs the substrate to provide, and where this design puts it:
+This list gives what TPL needs the substrate to provide and where this design
+puts it.
 
-- Per-block dist/rate kept separate: `y264_lr_blk` (src rate is already in
-  bits, the domain `delta_rate_cost` works in).
+- Per-block dist/rate kept separate: `y264_lr_blk`. The src rate is already in
+  bits, the domain `delta_rate_cost` works in.
 - Recon-domain distortion and rate: future additive fields on
-  `y264_lr_blk` once a lowres transform+quant sim exists; no consumer moves.
+  `y264_lr_blk` once a lowres transform+quant sim exists. No consumer moves.
 - MV plus reference identity: `mv` plus the leg index (the [list][dist]
-  generalisation subsumes it).
-- A propagation grid carrying (dist, rate) pairs: widen `la_prop_a/b` when TPL
-  lands; mb-tree keeps reading the dist half.
+  generalization subsumes it).
+- A propagation grid holding (dist, rate) pairs: widen `la_prop_a/b` when TPL
+  arrives. mb-tree keeps reading the dist half.
 - A frame base-QP hook: after R3, the mb-tree contribution to the frame QP
   lives in exactly one place (`MBTREE_QP_OFFSET` inside `rc_set_qp_crf`). TPL
   replaces that term with `f(r0)`, where r0 is the frame's own distortion over
@@ -458,19 +460,19 @@ What TPL needs the substrate to provide, and where this design puts it:
 - Per-block lambda modulation: `mb_qp_pre` already re-derives `cur_qp` per MB
   and every RD/ME lambda derives from it, so TPL's beta arrives as a QP-offset
   field through the existing combined-offset slot. No new plumbing.
-- mb-tree stays the default; TPL builds behind `Y264_TPL=1` on this record and
+- mb-tree stays the default. TPL builds behind `Y264_TPL=1` on this record and
   flips only on a corpus-wide NEG win with no class regression.
 
 ## 9. Phases, gates, canaries
 
-Every phase is a separate commit series with its own gate; a failed gate
-reverts the phase, not the design. BD gates are VMAF-NEG, 5-point sweeps in the
+Every phase is a separate commit series with its own gate. A failed gate
+reverts the phase and leaves the design standing. BD gates are VMAF-NEG, 5-point sweeps in the
 discriminating band, `bdcompare --no-cache`, on the broadened corpus
 (`--full`; report `--class` grain/cadence/crowd separately).
 
-**R0, record migration (byte-identical).** Introduce the structs, migrate
-`aintra` / `pinter` / `ainter` / `amv*` / `sc_*` onto them, with NO formula
-changes: composition reproduces today's raw values bit for bit and
+**R0, record migration (byte-identical).** Introduce the structs and migrate
+`aintra` / `pinter` / `ainter` / `amv*` / `sc_*` onto them with NO formula
+changes. Composition reproduces today's raw values bit for bit, and
 `mbtree_mvlambda` is still applied where it is today. Gate: byte-identity on
 the full canary matrix.
 
@@ -481,20 +483,20 @@ the full canary matrix.
   conformance equal to HEAD.
 - **R0.2 is only plumbing**: thread the popped `la_entry*` into
   `encode_frame_core`. It is byte-identical and strictly needed only by R2, so
-  it can ride with R2. The finish-step `lr_*` dedup is NOT a standalone
+  it can ship with R2. The finish-step `lr_*` dedup is NOT a standalone
   byte-identical step (see section 3) and belongs to R1.
 
 **R1, rate-aware cost plus slicetype/mb-tree consumers.** Sections 4 and 5,
 including the AQ unification and the deletion of `mbtree_mvlambda` and
 `mbtree_invqscale`. Default output CHANGES for every config with a lookahead
-(including CQP with bframes>0, since mb-tree offsets shift); the only
-byte-identity holdout is `la_depth==0` paths. Gates: corpus BD, expecting the
+(including CQP with bframes>0, since mb-tree offsets shift). Only the
+`la_depth==0` paths stay byte-identical. Gates: corpus BD, expecting the
 motion classes to move and static to hold (the akiyo -6.9% win must survive); a
 scene-cut placement diff with near-zero moved cuts; a b-adapt demote-rate
 report against HEAD with the 5.2 escape hatch pre-wired; a speed check,
 expecting a WIN from the invqscale dedup. Risk watch: IPPP long-chain offsets
-(the +/-51 path) on a 300-frame IPPP run, since the rate term is the
-convergence mechanism, so verify offsets stabilise.
+(the +/-51 path) on a 300-frame IPPP run. The rate term is the convergence
+mechanism, so verify the offsets stabilize.
 
 **This phase measured negative and is reverted** (see the result at the top).
 
@@ -514,12 +516,12 @@ cycle, then delete.
 **R4, backlog:** the I/P/B qscale relation A/B against the frame_qp cascade;
 the b-adapt threshold retune; row-SATD for VBV; [list][dist] legs.
 
-Why this design dodges the three recorded dead ends:
+This design avoids the three recorded dead ends.
 
 1. **IPPP chain saturation** was caused by propfrac -> 1 on rate-free tracked
-   motion. The rate term is structural on every propagation path, and the D/R
-   split means tuning lambda can never again corrupt stored distortions (the
-   old `ainter` fold was destructive).
+   motion. The rate term is structural on every propagation path. With the D/R
+   split, tuning lambda can never again corrupt stored distortions (the old
+   `ainter` fold was destructive).
 2. **The fps_factor red herring**: duration terms ship only in R3, only as the
    matched pair (propagation scaling plus CRF term), with fps-diverse gate
    clips. No half-import can recur.
@@ -530,8 +532,8 @@ Why this design dodges the three recorded dead ends:
 ## 10. Knobs
 
 None of the knobs below is wired. R1 stopped short of them, so each row is the
-default this design intended, not one the tree reads. Setting any of them today
-does nothing.
+default this design intended. The tree reads none of them, and setting any of
+them today does nothing.
 
 | env | intended default | purpose | state |
 |---|---|---|---|
@@ -546,8 +548,8 @@ The three knobs this design planned to retire are all still live in
 `src/encoder/encoder.c`. `Y264_MBTREE_MVLAMBDA` sets the lambda on the
 propagation mvcost term (default 8.0), `Y264_MBTREE_PROP_INVQ` toggles the
 inverse-qscale weighting of a propagation pass (default 1), and
-`Y264_MBTREE_CENTER` (default 0) centres the boost term on the frame mean.
-Nothing subsumed or removed them, because R3 never landed.
+`Y264_MBTREE_CENTER` (default 0) centers the boost term on the frame mean.
+Nothing subsumed or removed them, because R3 never shipped.
 
 Existing mb-tree knobs (`Y264_MBTREE_STRENGTH/ADAPT/AINT/ASLOPE/ALO/AHI`,
 `Y264_MBTREE_BOTHLIST`, `Y264_MBTREE_IPPP`) all still read their env.
