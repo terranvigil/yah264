@@ -598,6 +598,8 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0, NULL);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25, NULL);
     k->vbv_cbr_dive   = rc_tunable("Y264_VBV_CBR_DIVE", 2.0, NULL);
+    k->vbv_posti_raise = rc_tunable("Y264_VBV_POSTI_RAISE", 3.0, NULL);
+    k->vbv_posti_n    = rc_tunable("Y264_VBV_POSTI_N", 2.0, NULL);
     k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
     k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
     k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
@@ -1427,6 +1429,10 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     int q = (int)lround(newqp);
     if (q < 1) q = 1;              /* the VBV loop's own floor, below --qpmin */
     q = qp_bound(e, q);
+    /* An intra frame the buffer raised: the anchors that refine it are
+ * the ones the bits model cannot price (see the burst gate). */
+    if (type == 0 && e->crf_on && !e->abr_on)
+        e->rcp_posti_left = q - e->crf_pre_qp >= e->rck.vbv_posti_raise ? (int)e->rck.vbv_posti_n : 0;
     e->qp = q;
     e->chroma_qp = y264_chroma_qp(q, e->param.chroma_qp_index_offset);
 }
@@ -1556,6 +1562,16 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * 20% of the buffer.
  * One thread already codes every frame on the serial schedule, so its
  * bytes do not move. */
+    /* CRF+VBV: the anchors right after an intra frame the buffer raised
+ * vbv_posti_raise QP or more over the rate factor take the serial
+ * schedule. Each refines a picture coded far below the quality its bits
+ * model was measured on, so it codes much of the picture again: samsung
+ * at a 480 kbit cap, two threads, the second anchor after an intra frame
+ * raised from 26 to 44 predicted 50 kbit and coded 296 kbit into 276. */
+    if (e->rcp_posti_left > 0) {
+        e->rcp_posti_left--;
+        tight = 1;
+    }
     /* CBR: a burst whose rate factor sits more than vbv_cbr_dive under the QP
  * regime the bits model was calibrated at takes the serial schedule. The
  * buffer has no headroom above the delivery, and the model under-predicts
