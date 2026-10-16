@@ -32,11 +32,40 @@ below.
 | `--cqm8ic`, `--cqm8pc` | no seat | The 4:4:4 chroma 8x8 lists. 4:4:4 never picks the 8x8 transform here, so they would be read by nothing. |
 | `--bluray-compat` | refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, strict B-pyramid, access-unit delimiters, picture structure) are each available on their own. |
 
-## What's left
+## The closing census
 
-- **Noise reduction** has shipped as `--nr N`, off by default. It still needs
-  its quality check: it should help on grainy content without hurting
-  elsewhere.
-- **The closing census.** Re-run it against x264's full option list. Zero
-  unresolved options ends the program, and the README's parity sentence is
-  rewritten from that run.
+The census compared every option in x264's `--fullhelp` against yah264's
+`--help` and this page. Each x264 option was passed to the yah264 CLI, and
+any the parser rejected as an unknown argument counts as absent. It found
+165 options, short aliases and the help variants included.
+
+| result | count |
+|---|--:|
+| present, same flag | 113 |
+| renamed, with a row in `docs/options.md` | 3 |
+| refused or absorbed, on the list above | 28 |
+| unresolved | 21 |
+
+The three renames are `--no-cabac` (`--cavlc`), `--no-8x8dct`
+(`--no-transform-8x8`) and `--dump-yuv` (`--dump-recon`). `--video-filter`
+counts as refused: it is the long spelling of `--vf`. The `--opencl-clbin`
+and `--opencl-device` flags count under `--opencl`, and `--tcfile-in` and
+`--tcfile-out` under `--tcfile-*`.
+
+The program isn't complete. These need an owner decision:
+
+| x264 option | what it does | suggestion |
+|---|---|---|
+| `-I`, `-i`, `-b`, `-r`, `-f`, `-q`, `-B`, `-p`, `-A`, `-m`, `-t` | Single-letter aliases for `--keyint`, `--min-keyint`, `--bframes`, `--ref`, `--deblock`, `--qp`, `--bitrate`, `--pass`, `--partitions`, `--subme` and `--trellis`. | Build. Each is an alias of a flag that is already present, so a ported command line works unchanged. |
+| `--longhelp`, `--fullhelp` | Longer help listings. | Rename: point both at `--help`, which already lists everything. |
+| `--zones` | Inline per-range QP force or bitrate multiplier. | Build it as a front end to the zone interface `--plan` uses. `--plan` takes QP offsets from a file, which is not the same thing, so it can't count as a rename yet. |
+| `--b-bias` | Biases the adaptive B-frame decision. | Build. It is one term in a decision that already exists. Refuse if the owner wants no unmeasured knobs. |
+| `--slice-max-size`, `--slice-max-mbs`, `--slice-min-mbs`, `--slices-max` | Cap slices by bytes or macroblocks. | Refuse unless someone asks for packetized delivery. `--slices` covers the count form. A byte cap would need the slice writer to cut mid-row. |
+| `--asm` | Overrides CPU feature detection. | Refuse. `--no-asm` covers the test need. Every kernel already matches its C reference. |
+| `--avcintra-flavor` | Picks the vendor variant of `--avcintra-class`. | Refuse along with `--avcintra-class`. |
+
+`docs/denoise.md` has the `--nr` quality check. `--nr-inter 100` is neutral
+to better on the HD band, where no clip reads worse than the per-clip bar
+allows. It doesn't help on grain. The noise gate skips both 1924-scan
+excerpts. Of the two Nocturne excerpts, one gets better and one gets worse.
+So it meets "neutral elsewhere" but not "helps on grain". It stays opt-in.
