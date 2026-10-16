@@ -1541,8 +1541,8 @@ traps but will still surprise:
  `frame_threads` is still the explicit low-level width, and it wins when set,
  which is what lets the CLI's GOP workers carry their own share.
 - **`param.annexb` is read by nothing at all.** Annex-B is the only output mode.
-- **`badapt` 2** is silently narrowed rather than rejected:
- `X264_B_ADAPT_TRELLIS` becomes fast b-adapt.
+- **`badapt` 2** (trellis B-frame placement) is silently narrowed rather than
+ rejected: it becomes fast b-adapt.
 - **`cqm` 2 is `YAH264_CQM_CUSTOM`** and reads the lists from `cqm_4x4[6][16]`
  (Intra Y, Cb, Cr, then Inter Y, Cb, Cr) and `cqm_8x8[2][64]` (Intra Y, Inter
  Y) at the end of the struct, in raster order, weights 1..255. A zero weight
