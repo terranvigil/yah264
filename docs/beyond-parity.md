@@ -1,9 +1,9 @@
 # Beyond parity
 
-The ideas here come from published work, and each section names its sources.
-What's ours is where they run: inside an H.264 encoder, in one pass, with the
-guarantee that a shot encoded on its own matches the same shot inside the full
-encode. That guarantee lets a search probe one shot and keep the result.
+The ideas here come from published work. Each section names its sources.
+What's ours is where they run: inside an H.264 encoder, in one pass. They also
+run under a guarantee that a shot encoded on its own matches the same shot
+inside the full encode. That guarantee lets a search probe one shot and keep the result.
 
 The page runs from shipped, to in progress, to ideas we haven't built.
 `shot-based-plan.md` has the staged plan for the shot work,
@@ -17,7 +17,7 @@ we tried and dropped.
 `--shot-crf` gives each shot its own quality setting: more bits for the hard
 shots, fewer for the easy ones. Before encoding, yah264 reads the file once
 and rates each shot from the lookahead's costs, so nothing is encoded twice.
-Each shot stays within four QP of the setting you chose, and every cut gets
+Each shot stays within four QP of the setting you chose. Every cut gets
 its own keyframe.
 
 Against the same CRF without it, BD-rate (lower is better):
@@ -96,13 +96,13 @@ Measuring each shot's rate-quality hull, choosing across shots and reading a
 ladder off the title's curve all happen above the encoder. That lives in a
 separate repository that reaches all three codecs through the engine
 interface. A prototype has run against yah264. Joining one cell's segments
-reproduced that cell's encode byte for byte, and its measured hull, at one
-resolution over five CRF points, read -11.7% against flat CRF on the five-shot
-720p sequence and -2.2% on a long Big Buck Bunny window. The lessons were to work in the encoder's
+reproduced that cell's encode byte for byte. Its measured hull covered one
+resolution over five CRF points. It read -11.7% against flat CRF on the
+five-shot 720p sequence and -2.2% on a long Big Buck Bunny window. The lessons were to work in the encoder's
 GOPs and to weight each unit by its frame count. Unweighted, the Big Buck
 Bunny assembly lost 4.8% against flat.
 
-Predicting the hull instead of measuring it comes next, and the literature
+Predicting the hull instead of measuring it comes next. The literature
 says most of the gain survives:
 
 - RCN-Hull predicts which resolution and QP points sit on the hull from a
@@ -115,12 +115,12 @@ says most of the gain survives:
 
 Our advantage is the lookahead, which already computes per-frame intra and
 inter costs. Those predict coded bits better than features computed without
-an encoder, and the shot table hands them over so the search never runs its
+an encoder. The shot table hands them over, so the search never runs its
 own analysis.
 
 ### A live control plane
 
-Today a live service can swap an encoder's settings between frames, and that's
+Today a live service can swap an encoder's settings between frames. That's
 all. It doesn't learn which frame took the change, the rate control isn't told,
 and nothing comes back but packet sizes.
 
@@ -139,11 +139,11 @@ the example app.
 
 ### Film grain synthesis
 
-The film grain SEI has been in the H.264 standard since 2004, and FFmpeg's
+The film grain SEI has been in the H.264 standard since 2004. FFmpeg's
 decoder has applied it since 2021. AV1 made the approach mainstream: denoise
 the source, code the clean frames, send grain parameters, and add the grain
-back at the decoder. Grain is the most expensive content to code, so this is a
-large saving on film. No mainstream open H.264 encoder writes this SEI.
+back at the decoder. Grain is the most expensive content to code, so this saves a lot on
+film. No mainstream open H.264 encoder writes this SEI.
 
 This one is a port. yah265 already ships `--film-grain`, opt-in, with the SEI,
 a grain estimator and an optional denoiser. It isn't the default there because
@@ -190,8 +190,8 @@ Sources: [neural rate control via imitation learning](https://arxiv.org/pdf/2012
 
 A small model could predict which partition shapes and modes are worth a full
 trial, from costs the encoder already has. VVC work reports 30 to 50% faster
-encodes for about 1% BD-rate. H.264 has fewer modes, so the ceiling is lower,
-but the costliest searches (P8x8 sub-modes and 4x4 intra modes) would still
+encodes for about 1% BD-rate. H.264 has fewer modes, so the ceiling is lower.
+The costliest searches, P8x8 sub-modes and 4x4 intra modes, would still
 benefit. Decision trees exported as plain C arrays would add almost no cost
 and no dependency.
 
@@ -200,9 +200,9 @@ Source: [CNN partition prediction for VVC](https://arxiv.org/pdf/2310.13838).
 ### A prefilter trained for this encoder
 
 Google's sandwiched compression wraps a standard codec in networks trained
-through a model of the codec. The full version needs a custom player, but the
-prefilter alone doesn't: it reshapes frames so H.264 codes them more cheaply,
-and every player benefits. Ours would be trained against this encoder's own
+through a model of the codec. The full version needs a custom player. The
+prefilter alone doesn't. It reshapes frames so H.264 codes them more cheaply,
+and every player benefits from that. Ours would be trained against this encoder's own
 quantizer and mode decisions. It's the riskiest idea here and the only one
 that needs a training pipeline.
 
