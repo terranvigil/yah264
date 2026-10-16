@@ -45,7 +45,7 @@ typedef struct {
     uint64_t rd_mb, rd_part;
     uint64_t probe_int, probe_sub, cavlc_scratch, est_mb;
     /* satd_pix split by CALLER. The totals above say satd volume is flat across
- * bitrate while the reference encoder's falls 32%; they cannot say which
+ * bitrate; they cannot say which
  * caller is flat, and
  * guessing from a sampling profile is how buckets get mislabelled here.
  * Site is a plain global set by NLED_SITE at each analysis entry. */

@@ -984,7 +984,8 @@ static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp, int d
  * A GOP's bytes do not depend on WHICH thread encodes it. They CAN depend on
  * how many: --threads sets the per-worker frame-thread share k, and k=1 vs
  * k>=2 take different in-frame paths. Thread-count invariance is NOT offered
- * here (docs/advantages.md), and the reference encoder does not offer it either. What holds is
+ * here (docs/advantages.md); the reference encoder's output also varies with
+ * thread count. What holds is
  * that the same input,
  * config AND thread count always give the same output -- anything else would
  * be a race. */
@@ -2721,7 +2722,7 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
     int nidr = 0;
     for (int i = 0; i < n; i++) nidr += idr[i];
     if (ns >= 0 && g_shot_crf && param->rc.method == YAH264_RC_CRF) {
-        /* S2: per-shot CRF. The reference's rate equation at shot
+        /* S2: per-shot CRF. The CRF rate curve at shot
  * granularity: qp = crf + 6(1-qcomp) log2(C_shot / C_title), C the
  * shot's mean inter cost (its frames' actual price), clamped, shots
  * shorter than min-shot merged into their predecessor. A GOP takes
@@ -3908,7 +3909,7 @@ static long opt_int(const char *flag, const char *val, long lo, long hi)
 /* ---- custom quant matrices ----------------------------------------------
  *
  * The lists are raster order (row by row), which is how the JM format writes
- * them and how the x264 per-list options read: the encoder zig-zags them   [x264-ok]
+ * them and how the reference encoder's per-list options read: the encoder zig-zags them
  * into the SPS. Weights are 1..255; 16 is flat. The per-list options start
  * from flat, so `--cqm4iy L` alone leaves every other list flat.
  *
@@ -4837,11 +4838,10 @@ int main(int argc, char **argv)
             opt_env("Y264_ABR_QCOMP", argv[i], argv[i + 1], argv[i + 1]);
             i++;
         }
-        /* the reference encoder inverts its deadzone on the way in: the internal
- * bias is 32 - the flag), so a flag that carries the reference encoder's name has to
- * invert too or it would mean the opposite at the same number. With the
- * inversion, the reference encoder's own defaults -- inter 21, intra 11 -- land on the
- * biases this encoder already ships, 10.67 and 21.33. */
+        /* The flags take the reference encoder's documented 0..32 values, so
+ * existing command lines carry over. Our bias is 32 - the flag; with that,
+ * the documented defaults (inter 21, intra 11) land on the biases this
+ * encoder already ships, 10.67 and 21.33. */
         else if ((!strcmp(argv[i], "--deadzone-inter") ||
                   !strcmp(argv[i], "--deadzone-intra")) && i + 1 < argc) {
             const char *flag = argv[i];
@@ -5364,8 +5364,8 @@ int main(int argc, char **argv)
  * belongs to that unit and not to this line's own calibration: the 0.4
  * above wins -3.81% median on its own terms, but it does so by trading away
  * 7-10 points of mb-tree TERM value on the board's leg clips (samsung,
- * park_joy, bus) -- a cost that only comes back with the reference encoder's anchor,
- * strength and gain restored alongside it. An explicit --aq-strength still
+ * park_joy, bus) -- a cost that only comes back with the mode's own anchor,
+ * strength and gain alongside it. An explicit --aq-strength still
  * wins, for attribution. The gate is the env resolver in macroblock.c
  * (y264_mbt_derived); read directly here because the CLI links only the
  * public header. */
@@ -5377,7 +5377,7 @@ int main(int argc, char **argv)
     param.aq_strength = aq_strength;
     if (no_sei) param.sei = 0;
     /* SAR: an explicit --sar wins; else carry the Y4M 'A' tag through to the
- * VUI (the reference encoder's y4m reader does the same). A0:0 stays "unspecified". */
+ * VUI (the reference encoder's output carries it the same way). A0:0 stays "unspecified". */
     param.sar_num = sar_num > 0 ? sar_num : y4m_sar_n;
     param.sar_den = sar_num > 0 ? sar_den : y4m_sar_d;
     param.level_idc = level_idc;

@@ -351,7 +351,7 @@ void y264_satd_x4_8x8_avx512(const pixel *src, int ss, const pixel *r0,
  * block's pixel sum -- the sum of the sixteen tile DCs -- is subtracted once.
  *
  * The 4x4 term replaces each tile's DC magnitude with its distance from the
- * nearest multiple of 16 (the reference's flat-DC correction); with all
+ * nearest multiple of 16 (the C reference's flat-DC correction); with all
  * sixteen DCs in one register of dwords that is five vector instructions. */
 
 /* (x + y, x - y) in each word pair, low word first. */

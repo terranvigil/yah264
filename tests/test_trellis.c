@@ -5,8 +5,8 @@
  * same absout regardless of how they are implemented internally. This test
  * drives both kernels over a large deterministic input corpus and folds every
  * output into an FNV-1a hash; the hash is frozen as a golden constant so any
- * kernel rewrite (e.g. the x264-style 4-byte node-state port, see
- * docs/archive/trellis-kernel-plan.md) is gated on producing bit-identical decisions.
+ * kernel rewrite (e.g. a packed node-state layout) is gated on producing
+ * bit-identical decisions.
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *

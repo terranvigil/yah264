@@ -561,8 +561,8 @@ print(f"[{clip}]  speed: x264 is {ns/xs:.2f}x faster   quality: yah264 {nv-xv:+.
 # In CRF the two encoders' rate-factor scales are NOT the same scale -- yah264's
 # CRF resolves to a flat qp = crf + 5.4 with no complexity term on the default
 # path (src/encoder/encoder.c rc_set_qp_crf; the 140/1.8/1.5 calibration is
-# behind `crf_cl && mbtree_on` and so is unreachable by default), while x264
-# modulates qscale by blurred complexity. So equal CRF puts them at different
+# behind `crf_cl && mbtree_on` and so is unreachable by default), while x264's
+# QP at a given --crf varies with content. So equal CRF puts them at different
 # operating points by an amount that is pure content luck, measured on this tree
 # as foreman -10%, bus +9%, park_joy +44%, sintel -55%. Quoting the dVMAF from
 # such a run as a quality verdict is what produced the "-1.9 VMAF, undershooting

@@ -1,12 +1,12 @@
 /*
- * sfpipe.c - THROWAWAY serial-frame pipeline prototype (docs/archive/serial-frame-prototype.md)
+ * sfpipe.c - THROWAWAY serial-frame pipeline prototype
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * NOT part of the shipped encoder. Answers one question from the frame-pipeline
  * rearchitecture investigation's reopen condition: does one-thread-per-whole-frame
- * pipelining (x264's frame-threading execution shape: no wavefront, no in-frame
- * row parallelism, consecutive frames offset by a row-gated reference dependency)
+ * pipelining (frame-level threading: no wavefront, no in-frame row
+ * parallelism, consecutive frames offset by a row-gated reference dependency)
  * beat the row-wavefront on small grids?
  *
  * Scope, deliberately narrow so the number is cheap but the WORK is real:
@@ -15,7 +15,7 @@
  * - Each frame is encoded start-to-finish by ONE thread via the real
  * y264_frame_analyze / y264_frame_emit, with the real per-row trailer
  * (deblock + border-extend + hpel band) run inline on the same thread
- * between rows -- exactly the per-row reconstruction-filter shape x264 uses.
+ * between rows, so each row's reconstruction is final as soon as it is coded.
  * - Frame i's ME reads frame i-1's actual recon/hpel, row-gated with the
  * staircase's own publish/consume budget (stair_trailer_task's bounds) and
  * the fixed vertical MV clamp 16*LAG-24 px via f.stair_clamp0_poc.
@@ -25,7 +25,7 @@
  * Honesty check built in: with --lag 0 (clamp off) and -t 1 the output is
  * byte-identical to
  * yah264 --qp Q --bframes 0 --ref 1 --rc-lookahead 0 --no-scenecut --no-sei
- * minus the per-frame lowres analysis the real encoder still runs (see the doc).
+ * minus the per-frame lowres analysis the real encoder still runs.
  *
  * Build (not wired into meson, on purpose):
  * clang -O3 -std=c11 -Iinclude -Isrc -DY264_BIT_DEPTH=8 tools/sfpipe.c \
@@ -430,7 +430,7 @@ static void encode_frame(int i)
     f->mbqp = NULL;
     f->mb_tr8 = s->mb_tr8;
     f->aq_strength = 0.f;
-    f->psy_rd = 1.0f;                           /* param default (x264-match) */
+    f->psy_rd = 1.0f;                           /* param default */
     f->psy_trellis = 0.f;
     f->pool = NULL;                             /* serial analyze: the whole point */
     f->row_done = NULL; f->row_done_ctx = NULL;
@@ -594,7 +594,7 @@ int main(int argc, char **argv)
     y264_cavlc_warm();
     y264_mb_warm_statics();
     y264_me_set_subme(g_subme);
-    y264_me_set_method(YAH264_ME_AUTO);   /* not 0 -- 0 is _DIA since the x264 renumbering */
+    y264_me_set_method(YAH264_ME_AUTO);   /* not 0 -- 0 is _DIA since the enum renumbering */
     y264_me_set_subpel(g_subpel);
 
     if (g_threads < 1) g_threads = 1;

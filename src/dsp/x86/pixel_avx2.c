@@ -324,7 +324,7 @@ int y264_sa8d_16x16_avx2(const pixel *a, int as, const pixel *b, int bs)
     load8x8_pair_diff(d, a + 8 * as, a + 8 * as + 8, as,
                       b + 8 * bs, b + 8 * bs + 8, bs);
     had8x8_absum_pair(d, &q2, &q3);
-    /* Each quadrant carries the reference's own rounding. */
+    /* Each quadrant carries the C reference's own rounding. */
     return ((q0 + 2) >> 2) + ((q1 + 2) >> 2)
          + ((q2 + 2) >> 2) + ((q3 + 2) >> 2);
 }

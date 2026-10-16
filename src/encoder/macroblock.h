@@ -531,8 +531,8 @@ int              y264_rb_trace_on(void);
 int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm);
 
 /* Y264_MBT_DERIVED: the whole-system derived mb-tree mode. One gate for the whole
- * jointly-adapted set of constants and compositions that separate our mb-tree
- * from the reference encoder's -- the field's derivation AND its consumption -- because every
+ * jointly-adapted set of constants and compositions of the alternative mb-tree
+ * field -- its derivation AND its consumption -- because every
  * axis-aligned half of it is measured-refused. Lives here rather than in
  * encoder.c because aq_analyze needs it too. */
 int              y264_mbt_derived(void);

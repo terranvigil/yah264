@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Seeded option-matrix regression harness, after x264's tools/test_x264.py.
+"""Seeded option-matrix regression harness.
 
-x264's harness had three ideas worth keeping: a random cartesian product over
-an option table (seeded, so a failure replays), verification through a REAL
-decoder rather than self-comparison, and results keyed to the git revision so
-runs are comparable across commits. This is those three ideas in Python 3,
-fitted to this tree's rules:
+Three ideas: a random cartesian product over an option table (seeded, so a
+failure replays), verification through a REAL decoder rather than
+self-comparison, and results keyed to the git revision so runs are comparable
+across commits. Fitted to this tree's rules:
 
   - every assertion is on the PRODUCER (exit code, frame count, decode
     errors), never only a comparison of two outputs -- two empty files match;
@@ -36,7 +35,7 @@ Results append to local/regress/results.jsonl, one row per cell:
 A future perf/regression pass reads that file and diffs rows between two revs
 at matched (seed, cell); nothing is built on it yet.
 
-The JM reference decoder is the strongest oracle x264's harness used; wire it
+The JM reference decoder is the strongest oracle available; wire it
 via JM_DECODER=<ldecod binary> and each cell is also decoded with JM and its
 frame count checked. Optional -- ffmpeg is the always-on decoder.
 """
@@ -48,7 +47,7 @@ FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 JM = os.environ.get("JM_DECODER", "")
 
 # The option table. Each axis is a list of alternatives; a cell draws one
-# entry per axis. "" = axis absent, mirroring x264's ("", "--flag") pairs.
+# entry per axis. "" = axis absent, so ("", "--flag") toggles a flag.
 # --pass 2 and --dump-recon are deliberately absent: 2-pass needs a stats
 # plumbing step (TODO) and recon forces the serial path, which conformance.sh
 # already covers. --pass 2 IS in the rc axis (it runs pass 1 first).

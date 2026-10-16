@@ -4,7 +4,7 @@
 #
 # hygiene_check.sh -- repository hygiene, the part a machine can check.
 #
-# Eight things that should never be true of this tree, each of which has been
+# Nine things that should never be true of this tree, each of which has been
 # true at least once. None of them is a matter of taste; each is either a
 # licensing problem or a file that will not mean anything to anyone else.
 #
@@ -122,5 +122,31 @@ if [ -n "$hits" ]; then
     printf '  %s\n' "$hits" | head -20; fail=1
 fi
 
-[ "$fail" = 0 ] && echo "hygiene: clean (no foreign licence, no checked-in patch, every file licensed, no home paths, no unexplained asm, none under src/dsp/x86, no -march=, no unmarked reference-encoder name)"
+# 9. No reference-encoder internals anywhere in the code, tests, tools or
+#    scripts. Item 8 catches the name in shipped code; this catches what tends
+#    to come with it, in every tracked file under those directories: function
+#    names from the reference encoder's own namespace, its rate-control and
+#    motion-search enum names, file:line citations into files this tree does
+#    not have, and wording that claims a port. The same per-line `x264-ok`
+#    marker applies, for the public header's ABI notes.
+own=$(git ls-files | sed 's#.*/##' | sort -u)
+hits=$(git ls-files src include cli tests tools scripts 2>/dev/null \
+        | grep -v 'hygiene_check.sh' \
+        | xargs grep -nHiE 'x264_[a-z_]+\(|X264_(RC|ME)_|x264-style|x264.s source|ported from x264|[A-Za-z0-9_]+\.c:[0-9]+' 2>/dev/null \
+        | grep -v 'x264-ok' \
+        | while IFS= read -r line; do
+              body=${line#*:*:}
+              if printf '%s' "$body" | grep -qiE 'x264_[a-z_]+\(|X264_(RC|ME)_|x264-style|x264.s source|ported from x264'; then
+                  printf '%s\n' "$line"; continue
+              fi
+              for c in $(printf '%s' "$body" | grep -oE '[A-Za-z0-9_]+\.c:[0-9]+'); do
+                  printf '%s\n' "$own" | grep -qx "${c%%:*}" || { printf '%s\n' "$line"; break; }
+              done
+          done | head -20 || true)
+if [ -n "$hits" ]; then
+    echo "HYGIENE: reference-encoder internals (identifier, enum, foreign file:line, or port wording):"
+    printf '%s\n' "$hits" | sed 's/^/  /'; fail=1
+fi
+
+[ "$fail" = 0 ] && echo "hygiene: clean (no foreign licence, no checked-in patch, every file licensed, no home paths, no unexplained asm, none under src/dsp/x86, no -march=, no unmarked reference-encoder name, no reference-encoder internals)"
 exit $fail

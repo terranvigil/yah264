@@ -1041,7 +1041,7 @@ long y264_cabac_residual_bits(const y264_cabac_t *c, int cat, const dctcoef *l,
     return bits + est_levels(lst, coeffs, nc);
 }
 
-/* --- single-forward-Viterbi RDOQ (the reference's CABAC trellis quantiser) --- */
+/* --- single-forward-Viterbi RDOQ: the CABAC trellis quantiser --- */
 
 /* One entry in the shared decision chain: a NONZERO abs level chosen at scan
  * position `pos`, plus the index of the rest of the chain (toward higher scan
@@ -1086,11 +1086,9 @@ typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
  * no term; a dropped run's |psyp[i]| is the same constant on every path, so
  * the argmin -- and the run batching above -- are untouched. psyp == NULL is
  * the shipped path, bit-identical. */
-/* Work census (gated by y264_tl_on, set from Y264_TRPROF): is our lattice
- * doing MORE work per call than the reference encoder's, or the same work
- * more slowly? The
- * answer is the latter -- ~7.8 coefficient steps and ~17 node updates per
- * call, which is very little work for the measured ~160 ns. */
+/* Work census (gated by y264_tl_on, set from Y264_TRPROF): how much lattice
+ * work a call does. ~7.8 coefficient steps and ~17 node updates per call,
+ * which is very little work for the measured ~160 ns. */
 int y264_tl_on;
 _Atomic uint64_t y264_tl_calls, y264_tl_coef, y264_tl_node;
 /* Bins walked in est_mode, to split "more bins" from "slower bins". */
