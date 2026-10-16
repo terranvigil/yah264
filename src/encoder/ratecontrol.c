@@ -475,14 +475,16 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     overspend. Symmetric gains 3..16 traded tracking (better with gain)
  *     against the overspend side reacting to every I frame's cost; 16 down
  *     with 12 up beat the old model's tracking on both ladders and its BD.
- *   ovc_gain_cbr 14 / ovc_gain_cbr_up 4: CBR's window is a quarter of the
+ *   ovc_gain_cbr 10 / ovc_gain_cbr_up 4: CBR's window is a quarter of the
  *     buffer, so the ABR gains saturate the feedback on every I frame and
  *     the QP swings +-6 (16/12 lost up to 23% BD on the CBR band). Read on
  *     CBR tracking (maxrate = bufsize = target), the CBR band and sintel's
  *     CBR underflow count: 4..16 symmetric and 6..16 / 2..12 asymmetric.
- *     12/4 and 14/4 track tighter than the old model (median 0.41% vs
- *     0.58%, worst -3.3% vs -3.95%) with every scorable clip ahead; 14/4
- *     also matches its underflow count where 12/4 had two more.
+ *     Re-read once CBR stopped running every burst serially (the dive rule
+ *     in rcp_vbv_gate): 14/4 overspent samsung by 5.6%, and 8..14 under,
+ *     4..8 over gave 10/4 as the pair that tracks tighter than the old
+ *     model (median 0.52% vs 0.58%, worst -2.5% vs -3.95%) with every
+ *     scorable clip of the CBR band ahead.
  *   rfm_degen 4: a frame whose decide complexity per MB is below this stays
  *     out of the ledger (its bits still count in the feedback's error).
  *     A near-black opening otherwise credits the ledger with frames that
@@ -553,7 +555,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->pf_slew        = rc_tunable("Y264_PF_SLEW", 1.0, NULL);
     k->ovc_gain       = rc_tunable("Y264_OVC_GAIN", 16.0, NULL);
     k->ovc_gain_up    = rc_tunable("Y264_OVC_GAIN_UP", 12.0, NULL);
-    k->ovc_gain_cbr   = rc_tunable("Y264_OVC_GAIN_CBR", 14.0, NULL);
+    k->ovc_gain_cbr   = rc_tunable("Y264_OVC_GAIN_CBR", 10.0, NULL);
     k->ovc_gain_cbr_up = rc_tunable("Y264_OVC_GAIN_CBR_UP", 4.0, NULL);
     k->ovc_lo         = rc_tunable("Y264_OVC_LO", 6.0, NULL);
     k->ovc_hi         = rc_tunable("Y264_OVC_HI", 6.0, NULL);
@@ -595,6 +597,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->vbv_exit_hard  = (int)rc_tunable("Y264_VBV_EXIT_HARD", 0.0, NULL);
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0, NULL);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25, NULL);
+    k->vbv_cbr_dive   = rc_tunable("Y264_VBV_CBR_DIVE", 2.0, NULL);
     k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
     k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
     k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
@@ -980,6 +983,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             if (r > 16.0) r = 16.0;
             double sh = 0.7 * e->rcp_vbv_shock;
             e->rcp_vbv_shock = r > sh ? r : sh;
+
             if (e->rcp_vbv_shock < 1.0) e->rcp_vbv_shock = 1.0;
         }
         if (rcp_dbg_on() && p->vpred > 0)
@@ -1453,13 +1457,7 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
             e->rcp_arr_cvi = e->rcp_bcvi[i];
     int tight = 1;
     double vs1 = rcp_vbv_scale_eff(e, 1);
-    /* CBR runs every burst on the serial schedule. Its buffer has no
- * headroom above the delivery, so one mispredicted anchor is an underflow,
- * and only the serial emit can re-code a frame against its measured size:
- * sintel at a 648 kbit CBR on four threads had a post-cut P predicted at
- * 15 kbit code 480 kbit into a buffer half that full (main underflowed 16
- * times there, by up to 441 kbit). One thread was already serial. */
-    if (!rcp_warm(e) && !is_idr && vs1 > 0.0 && !e->vbv_cbr) {
+    if (!rcp_warm(e) && !is_idr && vs1 > 0.0) {
         /* Warm phase is serial-tight anyway; an IDR burst has no trailing B's
  * to ride predictions (pre-IDR B's flush as P frames, each deciding
  * on full actuals) and its intra spike is the classic underflow shape
@@ -1489,8 +1487,8 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         if (e->bm_rvbv.cplx[1] > 0 && e->rcp_arr_cvi * cj < e->bm_rvbv.cplx[1])
             tight = 1;
         /* The anchor at the current base QP (type-1 frame_qp offset is 0)... */
-        /* Under CRF+VBV, when the buffer raised the last anchor above the
- * rate factor's QP, the next decide starts from the rate factor again and
+        /* Under CRF+VBV and CBR, when the buffer raised the last anchor above
+ * the rate factor's QP, the next decide starts from the rate factor and
  * may drop as far as the extrapolation guard allows (QPD under the
  * calibrated regime). Price the anchor there, and with the model's
  * downward-extrapolation error (about 2x per 6 QP) in place of r_hi when
@@ -1498,15 +1496,20 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * raised from 26 to 44, the next decided at 30, priced by the gate at
  * 44, coded 300 kbit into 281. With this the share of frames on the
  * serial schedule over the 18 compliance cells at six threads goes from
- * 9.8% to 10.8%. */
+ * 9.8% to 10.9%. CBR the same way: sintel at 1224 kbit on four threads,
+ * a burst priced at the last anchor's raised QP while its rate factor sat
+ * 5 QP lower took 443 kbit out of 438. */
         double gq = e->qp, ext = 1.0;
-        if (e->crf_on && !e->abr_on && e->crf_pre_qp > 0 && e->crf_pre_qp < gq && e->bm_rvbv.have[1]) {
+        double rfq = e->crf_on && !e->abr_on ? e->crf_pre_qp
+                   : e->vbv_cbr && e->abr_rf2 && e->abr_qp > 0 ? e->abr_qp + e->crf_dc : 0.0;
+        if (rfq > 0 && rfq < gq && e->bm_rvbv.have[1]) {
             double reg = e->bm_rvbv.qp[1], lo = reg - vbv_qpd_env();
-            gq = e->crf_pre_qp > lo ? e->crf_pre_qp : lo;
+            gq = rfq > lo ? rfq : lo;
             if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
         }
         double q = pow(2.0, (gq - 12) / 6.0);
-        fill -= (ext > rhi ? ext : rhi) * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
+        double mg = ext > rhi ? ext : rhi;
+        fill -= mg * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
         if (fill < 0) tight = 1;
         fill = rcbuf_refill(&e->vbv, fill);
         /* ...then the B's at the smallest cascade offset (+1) over the QPD
@@ -1553,6 +1556,22 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * 20% of the buffer.
  * One thread already codes every frame on the serial schedule, so its
  * bytes do not move. */
+    /* CBR: a burst whose rate factor sits more than vbv_cbr_dive under the QP
+ * regime the bits model was calibrated at takes the serial schedule. The
+ * buffer has no headroom above the delivery, and the model under-predicts
+ * an anchor decided below its regime by more than any margin covers:
+ * sintel at a 1224 kbit CBR on four threads, rate factor at 17 against a
+ * regime of 25, an anchor predicted at 366 kbit coded 1149 kbit. A priced
+ * walk alone (above), a fixed 3-4x margin or a margin from the recent
+ * prediction error let one through at 55-80% serial. With the priced walk,
+ * dive 2 / 3 / 4 / 6 on sintel's four CBR rungs at four and six threads,
+ * three runs each: 3 is the largest with no underflow in any run, 4 and 6
+ * underflow on most; 2 keeps a QP of margin under that edge. CBR frames on
+ * the serial schedule over the band cells at six threads: 19.5% (main
+ * 12.7%; 16.8% at 3). */
+    if (!tight && e->vbv_cbr && e->bm_rvbv.have[1] && e->abr_qp > 0
+        && e->abr_qp + e->crf_dc < e->bm_rvbv.qp[1] - e->rck.vbv_cbr_dive)
+        tight = 1;
     if (!tight && e->rck.vbv_low > 0.0 && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && e->vbv.fill < e->rck.vbv_low * e->vbv.size)
         tight = 1;

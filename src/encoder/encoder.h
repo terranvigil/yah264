@@ -199,6 +199,7 @@ struct rc_knobs {
     double open_ia, open_ib, open_ic, open_imargin;
     double open_tex_t, open_tex_g, open_tex_m;  /* the opening I's offset on low-texture content, no lookahead */  /* the opening QP's intra fit, and RF2's margin under it on flat content */
     double open_ioff, open_ip0, open_rfs;  /* per-frame openings: fit offset, rf prior QP, rf ledger seed per sqrt(mbs) */
+    double vbv_cbr_dive;        /* CBR: rate factor this far under the bits model's QP regime -> serial burst */
     double vbv_fill_frac, vbv_fill_h, vbv_fill_hup, vbv_fill_min;  /* CRF+VBV fill target, horizon below / above it, floor */
     double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;

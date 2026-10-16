@@ -288,12 +288,13 @@ on all six clips and was VBV-clean on all six. x264 on the same cells missed by
 as much as -23.2%, so five of those six comparison cells are recorded as
 unmatched.
 
-CBR codes every burst on the serial schedule, at any thread count, so each
-picture can be re-coded against its measured size before it goes out. Its
-buffer has no headroom above the delivery, and a pipelined burst is only ever
-checked against predictions: the first picture after a black run once coded
-30 times its prediction into a half-empty buffer. Frame threads still run
-inside each picture and GOP workers still run in parallel. The buffer model
+CBR sends a burst to the serial schedule, where each picture can be re-coded
+against its measured size before it goes out, whenever the rate factor sits
+under the QP range the bits model was measured at. Its buffer has no
+headroom above the delivery, and down there a pipelined burst is checked
+against predictions that run 2-5x low: an anchor once coded 1.15 Mbit
+against a 366 kbit prediction. About 20% of CBR frames take that path
+against 13% before. The buffer model
 charges each picture its bytes on the wire, start codes and emulation
 prevention included, so it reads the occupancy a decoder's buffer holds.
 
