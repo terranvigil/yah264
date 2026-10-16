@@ -2,7 +2,7 @@
 
 Shot-based encoding gives each shot of a title its own settings. This page
 covers what yah264 does for it, which parts belong in the encoder and which
-belong above it, and the stages still to build. The orchestrator that runs the
+above it, and the stages still to build. The orchestrator that runs the
 search above the encoder has its own design in
 [orchestrator-design.md](orchestrator-design.md). The contract between the two
 is [engine-interface.md](engine-interface.md).
@@ -24,12 +24,12 @@ Against plain CRF at the same setting, over CRF 21 to 33, `--shot-crf` reads:
 | three short multi-shot sequences | -1 to -4% | |
 
 The gain is largest on the 2-minute segments. On the 10-minute excerpts it's
-small, and a few titles come out slightly behind on VMAF-NEG.
+small. A few titles come out slightly behind on VMAF-NEG there.
 
-The per-shot tool-selection stage was measured and closed. The two stages
-left, a measured hull with a resolution ladder and then a predicted hull,
-belong to the orchestrator, which will live in its own repository and has
-not been built past a prototype.
+The per-shot tool-selection stage was measured and closed. Two stages are
+left: a measured hull with a resolution ladder, then a predicted hull. Both
+belong to the orchestrator. It will live in its own repository and has not
+been built past a prototype.
 
 ## Decisions
 
@@ -37,13 +37,13 @@ not been built past a prototype.
 ladder.** Finding shots, rating them and sharing quality between them at one
 resolution is work the encoder does better than any wrapper, because its
 lookahead already computes the costs. A resolution ladder needs a scaler, a
-decode and a metric scored against the source. Those live outside the encoder,
-and an encoder that scored its own output with the metric it's judged on would
-be grading its own homework. Distribution across machines, stitching,
+decode and a metric scored against the source. Those live outside the encoder.
+An encoder that scored its own output with the metric it's judged on would be
+grading its own homework. Distribution across machines, stitching,
 manifests and containers belong to the orchestrator too.
 
-That makes yah264's job to be the best engine under an orchestration layer,
-which is a narrower goal than a dynamic optimizer inside the encoder. We think
+That makes yah264's job to be the best engine under an orchestration layer.
+It's a narrower goal than a dynamic optimizer inside the encoder. We think
 it's the right one. [plan.md](plan.md) names the same goal as hull-assist
 mode.
 
@@ -54,8 +54,8 @@ question moot anyway, because each rung is its own stream. A one-run ladder
 with shared analysis would still save compute, but never quality.
 
 **No demuxer in yah264, in the library or the CLI.** Real shot-based inputs
-are compressed mezzanines, so "mp4 support" really means decoding support,
-which means taking on libavformat and libavcodec. Other encoders draw the same
+are compressed mezzanines, so "mp4 support" really means decoding support.
+That means taking on libavformat and libavcodec. Other encoders draw the same
 line. SVT-AV1 takes Y4M and raw input, x264 builds its libav input as an
 option, and av1an does all its IO through ffmpeg or VapourSynth. People pipe
 from ffmpeg:
@@ -76,21 +76,21 @@ limit. Plain encodes stream from a pipe without that cost.
 
 **Gates are measured against our own flat CRF.** Every stage gate is
 BD-VMAF-NEG from `scripts/bdcompare.py --vmaf --no-cache` over five-point
-sweeps. Equal CRF doesn't mean equal quality across encoders, so comparing our
-shot mode against another encoder's CRF would measure the scales instead of
-the mode ([rc-mode-matrix.md](rc-mode-matrix.md)). Each multi-shot gate also
-reports a per-shot floor, the worst single shot's VMAF change against the
-flat encode, because a mode that wins the average by starving one shot is a
-regression viewers will see.
+sweeps. Equal CRF doesn't mean equal quality across encoders. Comparing our shot
+mode against another encoder's CRF would measure the two scales and say
+nothing about the mode ([rc-mode-matrix.md](rc-mode-matrix.md)). Each
+multi-shot gate also reports a per-shot floor: the worst single shot's VMAF
+change against the flat encode. A mode that wins the average by starving one
+shot is a regression viewers will see.
 
 ## How it works
 
 The shot detector is the lookahead's own scene-cut decision run ahead of the
 encode. It replays the same state machine, flash guard included, so the
 keyframes it reports are exactly the ones the real encode would place. It runs
-in parallel and codes nothing. Its output is a shot table: each shot's first
-and last frame, its mean and peak lowres intra cost, its mean inter cost, and
-the ratio of the two. `--shot-table` prints it as JSON on stderr.
+in parallel and codes nothing. Its output is a shot table. For each shot it
+gives the first and last frame, the mean and peak lowres intra cost, the mean
+inter cost, and the ratio of the two. `--shot-table` prints it as JSON on stderr.
 
 `--scan-out FILE` saves the scan and `--scan-in FILE` reuses it. The scan
 depends on the frames and a handful of settings and not on the rate control,
@@ -120,9 +120,9 @@ CRF works in whole QP steps, so the offsets move bitrate in jumps of about
 12%. At a four-QP clamp that's acceptable. Fractional QP is a separate item.
 
 Nothing is encoded twice and no trial encode runs. That's the whole
-difference from Netflix's dynamic optimizer, whose savings come from a search
+difference from Netflix's dynamic optimizer. Its savings come from a search
 over trial encodes at many resolutions and QPs. The two share only the
-direction of the allocation, and the stages that need the search are S4 and
+direction of the allocation. The stages that need the search are S4 and
 after.
 
 ## What's done
@@ -155,11 +155,10 @@ set with no shot below the floor, killed below 1%. It cleared that against
 
 Comparing against x264 then exposed a gap in our flat CRF. Our flat CRF
 trailed x264 on the multi-shot sequences while leading on the same clips taken
-one at a time, so the shot mode was catching up rather than pulling ahead. The
-cause was the frame-mean part of adaptive quantization, which ran at the
-within-frame strength of 0.4 instead of full strength and was missing from
-non-reference B frames. The fix puts it on every frame's base QP at full
-strength, and it ships on by default for every input path.
+one at a time. The shot mode was only catching up. The cause was the
+frame-mean part of adaptive quantization. It ran at the within-frame strength
+of 0.4 instead of full strength. Non-reference B frames had none of it. The fix puts it on every frame's base QP at full strength. It ships on
+by default for every input path.
 
 BD-VMAF-NEG on the three sequences:
 
@@ -169,7 +168,7 @@ BD-VMAF-NEG on the three sequences:
 | the frame-mean fix, no pre-scan | the old default | -8.2% | -4.1% | -6.2% |
 
 The fix cost single-shot clips +0.3% at the median. Over the new default,
-`--shot-crf` keeps 1 to 4% on the short sequences, and all of that comes from
+`--shot-crf` keeps 1 to 4% on the short sequences. All of that comes from
 sizing each shot against the whole title. On the ten real titles it's the
 result in the table at the top.
 
@@ -217,8 +216,8 @@ BD-VMAF-NEG:
 | a 3000-frame Big Buck Bunny window | -2.2% | -4.6% |
 
 `--shot-crf` lost to flat CRF by 2.6% on that Big Buck Bunny window, because
-the pre-scan's inter cost misreads the animation's pans. That's why the hull's
-margin over it is larger there. Joining one cell's segments reproduced that
+the pre-scan's inter cost misreads the animation's pans. The hull's margin over
+it is larger there for that reason. Joining one cell's segments reproduced that
 cell's encode byte for byte. The prototype taught two things the orchestrator
 design now builds in: the unit is the engine's GOP, and each unit's objective
 is weighted by its frame count. Unweighted, the Big Buck Bunny assembly lost
@@ -228,10 +227,10 @@ is weighted by its frame count. Unweighted, the Big Buck Bunny assembly lost
 
 ### S5: a measured hull and ladder
 
-This runs in the orchestrator, not here. It encodes sparse per-shot grids,
-around three resolutions by four QPs at a fast preset, interpolates each
-shot's curve, builds per-shot hulls, picks across shots at a common slope, and
-runs final encodes only at the chosen points. It brings the project's first
+This runs in the orchestrator. It encodes sparse per-shot grids of around
+three resolutions by four QPs at a fast preset. From those it interpolates
+each shot's curve, builds per-shot hulls and picks across shots at a common
+slope. Final encodes run only at the chosen points. It brings the project's first
 output-quality scaler, Lanczos-3, and the decode, upscale and VMAF method the
 published work uses. A ladder tool comes into this repository only if shared
 analysis turns out to be a compute win worth owning.
@@ -249,11 +248,11 @@ table's features with a gradient-boosted tree model trained on S5's measured
 hulls, shipped as plain C arrays. Because a convexity check runs after
 encoding, a wrong guess costs one extra encode instead of a broken ladder. The
 target comes from RCN-Hull, which got within about 1% BD of the measured hull
-with 60% fewer encodes, and the TOMM benchmark says handcrafted features are
+with 60% fewer encodes. The TOMM benchmark says handcrafted features are
 enough to get there.
 
-S6 starts only once S5 has produced the training data, and only if S5 shows
-that trial encodes are the cost that matters.
+S6 starts only after S5 has produced the training data. It also needs S5 to
+show that trial encodes are the cost that matters.
 
 ## What would change this plan
 
@@ -287,11 +286,11 @@ roughly 900 tasks per hour of content swamped their messaging layer. The next ge
 stay the unit of quality decisions and chunks the unit of work. yah264's GOP
 workers are the same arrangement inside one machine.
 
-**av1an** is the open-source per-scene orchestrator most people run: scene
-splitting, chunk-parallel encodes, a target-quality mode that probes CRFs per
-chunk to hit a VMAF score, and support for x264, x265, SVT-AV1 and rav1e. It's
-free and it works, which is why the useful thing for yah264 to be is a good
-engine under it rather than a rival to it.
+**av1an** is the open-source per-scene orchestrator most people run. It has
+scene splitting, chunk-parallel encodes, a target-quality mode that probes CRFs
+per chunk to hit a VMAF score, and support for x264, x265, SVT-AV1 and rav1e.
+It's free and it works. That's why the useful thing for yah264 to be is a good
+engine under it, and not a rival.
 
 **Encoder-side pieces** exist everywhere. x264 has `--zones` for manual
 per-range ratefactor overrides, and CRF with qcomp and mb-tree is already
@@ -311,10 +310,10 @@ exhaustive search. VCA's DCT-energy features are cheap enough
 to run at ingest speed, and ARTEMIS applies the idea to live streaming with no
 trial encodes at all.
 
-So per-shot QP inside an encoder isn't new. It's zones done automatically, and
+Per-shot QP inside an encoder isn't new. It's zones done automatically.
 CRF already allocates at a finer grain than shots. What we haven't seen
-shipped elsewhere is the combination yah264 has: shot-level allocation in one
-pass with a measured BD gate, and a determinism guarantee that lets a search
+shipped elsewhere is the combination yah264 has. It allocates at shot level in
+one pass with a measured BD gate. Its determinism guarantee lets a search
 probe one shot and keep the result. We haven't checked every encoder.
 
 ## Sources
