@@ -15,7 +15,7 @@ parked. The record layout below is the part that matters, because it is what
 TPL will read.
 
 The record's forward compatibility follows SVT-AV1's published TPL
-description and its `TplStats` fields. Everything is reimplemented from our own
+description. Everything is reimplemented from our own
 understanding of them. Nothing is copied.
 
 ## 1. Problem statement
@@ -173,9 +173,9 @@ What mb-tree reads against what TPL will read:
 
 | field | mb-tree (this design) | TPL (later) |
 |---|---|---|
-| `d_intra` | finish-ratio denominator, self-importance | intra srcrf_dist analog |
-| `leg[].d_inter` | via lr_cost in propfrac | srcrf_dist |
-| `leg[].r_inter` | via lr_cost in propfrac | srcrf_rate (already in bits) |
+| `d_intra` | finish-ratio denominator, self-importance | intra source-domain distortion |
+| `leg[].d_inter` | via lr_cost in propfrac | inter source-domain distortion |
+| `leg[].r_inter` | via lr_cost in propfrac | source-domain rate (already in bits) |
 | `leg[].mv` | splat target | propagation target |
 | `inv_q` | propagation weight + RC weight | lambda/beta baseline |
 | `qp_off_aq` | the fold in the combined offset | same |
@@ -215,8 +215,8 @@ cost(mv) = SATD8x8(src, ref+mv) + lambda_lr * (mvbits(4*(mvx-px)) + mvbits(4*(mv
   and predicts from right and below because its lookahead MVs seed the main
   encode. That is a later step's business. The record does not encode scan
   order, so flipping later is free.
-- The factor 4 prices the mvd at lowres quarter-pel scale, matching what x264's
-  `p_cost_mv` indexing does on its lowres grid; our search stays integer-pel
+- The factor 4 prices the mvd at lowres quarter-pel scale, matching the
+  quarter-pel MV cost x264 charges on its lowres grid; our search stays integer-pel
   (subpel lowres refinement is later fidelity work, out of scope).
 - `mvbits(d)` is the exact se(v) exp-Golomb length (the existing
   `lowres_mvbits`) minus the 1-bit baseline per component, so a
@@ -289,7 +289,7 @@ term that already drives the known over-demote bias, so two adjustments
 follow.
 
 - Apply the B discount when composing the continue-run side:
-  `cb_scaled = cb * 100 / (120 + bframe_bias)` with bias 0. x264's costs are
+  scale the B cost by 100/120, the discount x264 applies at `--b-bias 0`. x264's costs are
   only comparable across B/P choices WITH this discount; importing the rate
   term without it would demote more.
 - Re-A/B the 0.90 threshold under the new composition (sweep 0.88-0.94 once).
@@ -390,12 +390,11 @@ P-coded.
 
 ## 7. The CRF equation (R3, parked)
 
-x264 with mb-tree on keeps per-frame qscale essentially CONSTANT:
-`q = (base_duration/duration)^(1-qcomp) / rate_factor`, with
-`rate_factor = base_cplx^(1-qcomp) / qscale(crf + 13.5*(1-qcomp))`. ALL
-content adaptation happens through the per-MB combined offsets. The
-`13.5*(1-qcomp)` term pre-compensates their uncentered mean (mostly negative
-boosts).
+x264 with mb-tree on keeps per-frame qscale essentially CONSTANT under CRF.
+The frame qscale depends only on the CRF value, qcomp and the frame's
+duration, and ALL content adaptation happens through the per-MB combined
+offsets. A fixed QP shift that grows with (1-qcomp) pre-compensates their
+uncentered mean (mostly negative boosts).
 Complexity enters RC only as the combined-offset-weighted cost, used for
 VBV/ABR size prediction, never in the CRF QP equation itself.
 
@@ -404,7 +403,7 @@ The R3 change, one atomic flip:
 1. `rc_set_qp_crf` becomes
    `qp = crf + MBTREE_QP_OFFSET + 6*(1-qcomp)*log2(BASE_DUR/duration_clamped)`
    for P anchors when mb-tree is on. I keeps the frame_qp -3 and B keeps the
-   cascade. Revisiting the I/P/B relation against x264's ip/pb qscale factors
+   cascade. Revisiting the I/P/B relation against x264's ipratio/pbratio
    is a separate, later A/B, because churning two equations in one flip is how
    this goes wrong. `BASE_DUR = 0.04 s`, duration clamped. At 25 fps CFR the
    duration term is exactly 0.
@@ -422,10 +421,10 @@ The R3 change, one atomic flip:
    per-MB offsets (spend) and the offset-weighted C (VBV/ABR prediction). Those
    two are internally consistent.
 5. The duration and fps terms arrive as a PAIR: this CRF duration term AND the
-   mb-tree propagation `fps_factor` analog (scale propagated amounts by
+   mb-tree propagation duration scaling (scale propagated amounts by
    `duration/avg_duration` and the finish ratio by its inverse). At CFR both
    are no-ops at 25 fps and mild constants otherwise. Importing one without the
-   other is the documented "fps_factor red herring" dead end. Our windows are
+   other is the "frame-duration red herring" dead end. Our windows are
    CFR today, so implement both as clamped constants derived from the
    configured fps, and add 50/60 fps clips to the gate explicitly.
 
@@ -444,7 +443,7 @@ This list gives what TPL needs the substrate to provide and where this design
 puts it.
 
 - Per-block dist/rate kept separate: `y264_lr_blk`. The src rate is already in
-  bits, the domain `delta_rate_cost` works in.
+  bits, the domain TPL's rate deltas work in.
 - Recon-domain distortion and rate: future additive fields on
   `y264_lr_blk` once a lowres transform+quant sim exists. No consumer moves.
 - MV plus reference identity: `mv` plus the leg index (the [list][dist]
@@ -522,7 +521,7 @@ This design avoids the three recorded dead ends.
    motion. The rate term is structural on every propagation path. With the D/R
    split, tuning lambda can never again corrupt stored distortions (the old
    `ainter` fold was destructive).
-2. **The fps_factor red herring**: duration terms ship only in R3, only as the
+2. **The frame-duration red herring**: duration terms ship only in R3, only as the
    matched pair (propagation scaling plus CRF term), with fps-diverse gate
    clips. No half-import can recur.
 3. **The RD-owns-the-field trap**: section 5.4 forbids lookahead cost and MV
