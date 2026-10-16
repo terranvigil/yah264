@@ -33,9 +33,9 @@ x264's sync-lookahead knob does not do that. Its delay budget is built in three
 additive parts: a base window that is the larger of the B-frame-driven delay
 and the configured lookahead depth; plus one frame per additional frame thread;
 plus the sync-lookahead value on top of both. The lookahead thread fires its
-slicetype decision once the queue is longer than that base window. The decision
+frame-type decision once the queue is longer than that base window. The decision
 itself still walks a window of the lookahead depth.
-`i_sync_lookahead` (default `bframes+1`) just means that many MORE frames sit
+`--sync-lookahead` (default `bframes+1`) just means that many MORE frames sit
 buffered ahead of the window before the thread is required to have an answer
 ready. The window's depth is untouched.
 
@@ -100,8 +100,8 @@ computes:
 - The "window still filling" gate that decides whether an arrival call pops
   anything (`la_n < e->la_depth`) becomes `la_n < e->la_cap`. This is the one
   place the change is visible from outside. The encoder withholds the first `k`
-  frames' worth of output for an extra `k` calls, mirroring x264's ifbuf/next
-  split.
+  frames' worth of output for an extra `k` calls, as x264 does when it holds
+  extra input frames back.
 - `la_th`'s own bookkeeping (`struct la_thread.q[64]`, the `% 64` indices in
   `la_th_enqueue`/`la_th_main`) was sized to the assumption that lag between
   "pushed" and "popped" never exceeds 64 (`la_depth`'s hard clamp). With
