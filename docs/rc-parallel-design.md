@@ -3,6 +3,10 @@
 > 2026-10-04: the pipeline is the only rate-control path now. The serial
 > controller and its `Y264_RC_PIPE` / `Y264_RC_PIPE_VBV` escapes were removed;
 > the A/B results below that use them are history.
+>
+> `Y264_RCP_LAG` has defaulted to 1 above one thread since commit 94bc84c, so
+> ABR output at more than one thread varies with the thread count by design.
+> The sections below that call the lag refused or default 0 predate that.
 
 
 **Goal: the MT frame pipeline serves every rate-control mode, CRF/CQP and the
@@ -18,8 +22,10 @@ in-flight prediction, post-frame accounting and an overflow-buffer feedback).
 **Its output must not vary with thread count.** The
 feedback schedule below is fixed by CONFIG (env + params + input), never by
 runtime timing, engagement, or thread count. RC_PIPE=1 output is therefore
-identical at t1 and t18 and run-to-run. That is the design's core invariant and
-the hard determinism gate.
+identical at t1 and t18 and run-to-run. That was the design's core invariant
+when it was written. It no longer holds above one thread (see the note at the
+top), and the owner's rule no longer asks it to: two runs at `--threads 1` must
+be byte-identical, and identity across thread counts is informational only.
 
 ## The model: decide with predictions, account on a fixed schedule
 
@@ -152,7 +158,8 @@ complexity is:
   deferred-drain machinery orders the NALs; the FIFO orders the stats
   identically).
 - **CRF/CQP.** Unchanged; RC_PIPE is inert there.
-- **VBV** (`Y264_RC_PIPE_VBV`, sub-gate default ON). The buffer law
+- **VBV** (`Y264_RC_PIPE_VBV`, a sub-gate that defaulted ON until it was
+  removed with the serial path). The buffer law
   `fill += rate - bits` is safety-critical. Instrumentation confirmed the
   design's fear: the per-frame actual/predicted ratio has an UNBOUNDED tail
   (p50 ~0.85, p90 ~2, p99.9 in the hundreds). The tail comes from near-zero
@@ -162,7 +169,8 @@ complexity is:
 
 ## Implementation shape
 
-- Env gate `Y264_RC_PIPE` (default ON; warmed static). Effective:
+- Env gate `Y264_RC_PIPE` (default ON; warmed static; removed since, with
+  `Y264_RC_PIPE_VBV`, so the pipeline is now unconditional). Effective:
   `e->rcp_on = env && (abr_on || tp_pass || vbv_on) && (!vbv_on ||
   Y264_RC_PIPE_VBV)`. The VBV sub-gate defaults ON, so VBV runs through the
   pipeline unless you set it to 0.
@@ -239,6 +247,9 @@ corpus present and from `--fast`, so quote the run instead of the number.
    >= 1.15x t18 single-GOP.
 
 ## VBV under the pipeline (Y264_RC_PIPE_VBV, default ON)
+
+The knob is gone now and VBV always runs through the pipeline. The
+`RC_PIPE_VBV=0` comparisons below are history.
 
 This covers every VBV combo: ABR/CRF/CQP/2-pass with a vbv constraint. CRF/CQP
 enter rcp only when VBV is on, and pure CRF/CQP are untouched. The contract is
@@ -406,6 +417,12 @@ exactly the byte-queue ordering that the whole RCP determinism argument rests on
 
 ## `Y264_RCP_LAG`: the lagged schedule, measured and refused
 
+This refusal was later reversed. Lag 1 became the default above one thread in
+commit 94bc84c, once each in-flight frame was predicted from its own
+complexity (`Y264_ABR_RF2_INFLIGHT`). At one thread it's byte-identical to lag
+0 (`rcp_lag_env` and `rcp_lag_for` in `src/encoder/encoder.c`). The section
+below is the record from before that.
+
 Zero-lag anchors trade overlap for accuracy. That trade is what keeps a wide
 staircase ring from engaging under ABR at all. `stair_run_burst` retires
 everything before each anchor decide, and width is deferred retirement.
@@ -413,7 +430,7 @@ everything before each anchor decide, and width is deferred retirement.
 **The drain cannot be narrowed, only lagged.** Retirement is oldest-first, so a
 wide ring holds the NEWEST bursts and the immediate predecessor is the last thing
 that can still be flying. Any drain that leaves a burst live is a lagged decide.
-`Y264_RCP_LAG` (default 0) buys that lag back in coding order. The lag has to
+`Y264_RCP_LAG` (default 0 when this ran) buys that lag back in coding order. The lag has to
 live in `rcp_pop_ready`'s seq bound as well as in the drain. Deferring only the
 drain makes bits move with the thread count, because the serial path has
 everything filled and takes it all.
@@ -449,6 +466,8 @@ and a pool that reaches `Y264_MT_POOL_MIN`. `rcp_pop_bound`, `rcp_decide` and
 `stair_run_burst` read `e->rcp_lag` instead of the env. With the env set, these
 stay byte-identical to the zero-lag path: a `--threads 1` encode, a 2-GOP encode
 at `--threads 8` (whose per-worker pool is 4), and every CRF/CQP/VBV config.
+The 2-GOP case held while `Y264_MT_POOL_MIN` was 8. It's 2 now
+(`src/encoder/encoder.h`), so a pool of 4 can engage the lag.
 
 ### Where the lag engages and what it costs
 
@@ -508,7 +527,7 @@ as the target tightens: +19% at the higher ladder against +212% at the lower.
 It fails this document's own bar outright, which asks for a per-clip deviation
 within 1.25x of serial's.
 
-**Verdict: `Y264_RCP_LAG` stays default 0.** The speed is real and the mechanism
+**Verdict at the time: `Y264_RCP_LAG` stays default 0.** The speed is real and the mechanism
 is understood. But seven of eleven measurable clips lose, the worst by 20%, and
 the twelfth loses rate control entirely. Tuning QPD does not rescue it. The guard
 already moved from 0 to 6. These losses are what survived it.
@@ -551,8 +570,8 @@ Two independent predicates refuse a wide staircase ring under ABR at `--ref 3`.
 `stair_wide_nref_ok` wants `nref <= 1` unless `Y264_STAIR_WIDE_REF` lifts it.
 That knob now defaults ON, so `--ref 3` no longer refuses width on that clause.
 The grid above was measured when it defaulted off. `stair_wide_rc_ok` wants
-`rcp_lag > 0`. `Y264_RCP_LAG` defaults 0, so ABR still refuses width at every
-`--ref`. With `Y264_RCP_LAG=1`, ABR at `--ref 1` reaches 42 launches and 2
+`rcp_lag > 0`. `Y264_RCP_LAG` defaulted 0 then, so ABR still refused width at
+every `--ref`. With `Y264_RCP_LAG=1`, ABR at `--ref 1` reaches 42 launches and 2
 concurrent bursts, and `--ref 3` reaches the same 42 and 2. The machinery runs
 fine. The rate-control predicate is what refuses to let it start.
 
@@ -878,9 +897,9 @@ every cell of the grid above.
   gate.
 - **Sanitizer sweeps must match the config under test.** `stair_san.sh` runs
   `--ref 1` with no rate flag, so every one of its runs is constant-quality and
-  both lag envs are inert in all of them, which a sanitizer run over the matrix confirms
-  reason and sweeps ABR at `--ref` 1/3 x lag 1/2 x nowide 0/1 x t8/t18 across 5
-  shapes. A floor above zero hides the next real report, so run the shipped mode
+  both lag envs are inert in all of them, so it does not cover a lag change.
+  `abr_san.sh` exists for that reason and sweeps ABR at `--ref` 1/3 x lag 1/2 x
+  nowide 0/1 x t8/t18 across 5 shapes. A floor above zero hides the next real report, so run the shipped mode
   beside the probe modes instead of quoting a floor from a different config. One
   such gap hid a real race. The SHIPPED path raced at ABR `--ref 3`, t18, roughly
   one run in four, on `intra_screen_pure.env`. That is a function-local static
@@ -1016,20 +1035,20 @@ onto the driver path, exactly what losing concurrency looks like. The flushes
 that inflate `emit_sync_wait` are the serialized bursts' ordering flushes, not RC.
 
 "Width and ABR: the two gates" above already named the predicate.
-`stair_wide_rc_ok` wants `rcp_lag > 0`, and `Y264_RCP_LAG` defaults 0, so ABR
-refuses width at every `--ref`. This round walked into that section's own TRAP
+`stair_wide_rc_ok` wants `rcp_lag > 0`, and `Y264_RCP_LAG` defaulted 0 then, so
+ABR refused width at every `--ref`. This round walked into that section's own TRAP
 line from the other side: *a knob measured on a config that cannot engage it
 reads exactly like a knob that does not work.* Read that section before pricing
 anything here.
 
 ### The existing arm is worth 46% of the gap
 
-`Y264_RCP_LAG=1` already exists, shipped but off and already fixed
+`Y264_RCP_LAG=1` already existed, shipped but off and already fixed
 (`rcp-lag-shipped`). Same clip, same target, medians of 5 interleaved:
 
 | arm | wall | size | ABR/CRF |
 |---|--:|--:|--:|
-| ABR, `Y264_RCP_LAG=0` (default) | 1.315 s | 9163640 B | 1.141 |
+| ABR, `Y264_RCP_LAG=0` (default then) | 1.315 s | 9163640 B | 1.141 |
 | ABR, `Y264_RCP_LAG=1` | **1.241 s** | 9137443 B (-0.29%) | **1.076** |
 | CRF 27 | 1.153 s | 9164114 B | 1.000 |
 
@@ -1042,5 +1061,6 @@ side needs nothing more.
 The lag changes when an anchor's ledger is current, so it wants the ABR rate
 error across the corpus and a band read with `bench/lowrate/abr_noise.py`
 alongside (`abr-band-noise-floor`: an ABR row smaller than that clip's floor is
-not evidence). It belongs to the same predicate family as `Y264_RC_PIPE_VBV`.
-That knob took the same decision and now defaults on.
+not evidence). It belongs to the same predicate family as `Y264_RC_PIPE_VBV`,
+which took the same decision and defaulted on before it was removed. The lag
+took it too and has been the default above one thread since commit 94bc84c.
