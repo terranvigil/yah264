@@ -14,7 +14,7 @@ material from derf is exactly where an accidental overlap would come from.
 
 ## Gate corpus, `tests/corpus/`
 
-Sixteen clips. Class is in `tests/corpus/CLASSES`; the ten that form the speed
+Fifteen clips. Class is in `tests/corpus/CLASSES`; the ten that form the speed
 table and their calibrated operating points are in `scripts/parity-clips.sh`.
 
 | clip | res | class | source |
@@ -115,7 +115,10 @@ a systemic overshoot. Window length and thread count both move it, so quote
 neither without naming them.
 
 **These clips are fetched, not yet promoted.** Adding one to a band ladder
-re-medians every published number, so promotion is an owner call.
+re-medians every published number, so promotion is an owner call. Since then
+five of them joined the ten-clip speed board in `scripts/parity-clips.sh`
+(fourpeople, shields, sunflower, pedestrian, riverbed), and those five plus
+crowd_run sit in the HD band ladder in `scripts/hd_band.py`.
 
 ### What they say about where we stand
 
@@ -246,7 +249,7 @@ Listed, not fetched by default:
 | El Fuente (Netflix Open Content, 2013) | the 96-shot title the convex-hull papers use | the public bucket holds only two 4K60 10-bit Y4M clips, FoodMarket (15.9 GB) and Boat (8 GB): `https://download.opencontent.netflix.com/ElFuente/`; the full title is not public | 24 GB | CC BY 4.0 |
 | Sparks, Sol Levante, Nocturne (Netflix Open Content) | 4K HDR HFR; Sol Levante is the one anime master | `https://download.opencontent.netflix.com/` (IMF, EXR, ProRes; no MP4 for Sparks) | very large | CC BY 4.0 |
 | SVT Open Content 2022, Natural Complexity | 2160p50 professional captures, short sequences, not long-form | `ftp://svtopencontent.svt.se` | | CC BY 4.0 |
-| UVG | 16 x 4K 50/120 fps, 5-12 s each, single shots | `https://ultravideo.fi/dataset.html` | | CC BY-NC (owner accepted for this project) |
+| UVG | 16 x 4K, 8 at 120 fps and 8 at 50 fps, 2.5-12 s each, single shots | `https://ultravideo.fi/dataset.html` | | CC BY-NC (owner accepted for this project) |
 | AWCY `objective-1` | the AOM/NETVC benchmark set, short clips | `https://media.xiph.org/video/derf/` | 13 GB | open test material |
 
 Who uses what, so our numbers can sit next to theirs:
@@ -299,7 +302,7 @@ Assessed but not held. Ordered by how useful they would be to us.
 |---|---|---|---|
 | AWCY `objective-1` | AOM/IETF NETVC benchmark set, 13 GB (`-fast` subset 1.9 GB) | open test material | the obvious second training set, and a yardstick others report against |
 | Netflix Open Content | El Fuente, Chimera, Meridian | CC-BY 4.0 | cleanest license of any option, professional cinematic sources. **Fetched now, see the long-form section** |
-| UVG | 5 x 4K 120fps | CC-BY-NC | high frame rate, few sources. Non-commercial terms accepted for this project by owner call |
+| UVG | 16 x 4K, 8 at 120 fps and 8 at 50 fps | CC-BY-NC | high frame rate, few sources. Non-commercial terms accepted for this project by owner call |
 | BVI-DVC | 800 sequences | research use only | the precedent BVI-AOM replaced; skip, its terms are worse |
 | Xiph / derf | assorted SD-heavy | mostly free | **our gate came from here.** Training draws need the explicit no-overlap check |
 | Blender open movies | rendered features | CC-BY 3.0 | more animation, and the only easy source of clean CGI. **Fetched now, see the long-form section** |
