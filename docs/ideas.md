@@ -28,7 +28,7 @@ Quality shortcuts come first (BD-rate on the table), then speed, then tunables.
 | P_8x8 | full sub_mb_types (8x8/8x4/4x8/4x4), per-8x8 ref; shape picked at the 8x8-winning ref only | joint shape x ref search; B_8x8 sub-partitions (sub_mb_type in B slices) |
 | Insurance-RD admission gate (A1b) | subme<=8 path always full-RD's 16x16 as insurance when the SATD winner is another shape. An admission gate (skip when 16x16 SATD > 5/4 * winner) is BUILT + measured but ships OFF (Y264_RD_ADMIT, default 0 = byte-identical to HEAD): ~2-3% faster on both scalar+NEON but only VMAF-NEG-neutral with per-clip scatter (foreman +0.50/tempete +0.55/akiyo -0.57/mobile -0.63, mean ~-0.1%) -- a small speed gain doesn't justify +0.5% motion regressions on a max-quality default. CORRECTION on A1's "3-5x": the fan-out IS real (~12 full-MB RD encodes/MB -- partition SELECTION is SATD, but each chosen shape runs qpel_rd_nudge = ~6 full-MB RD re-encodes, x2 for the winner + the 16x16 insurance). A1(b) only trimmed part of ONE nudge chain -> ~2-3%. The fan-out's COUNT is untapped, but its COST is dominated by the CABAC bit-estimate (est_inter_mb_bits), so cutting the count via luma-only trials (A1a) saves little AND ranks MVs worse (Q4 mode). So 3-5x is an A3+A1-TOGETHER result: A3 makes each of the ~12 estimates cheap (table-walk, skip the residual re-walk), THEN trimming the nudge trial count pays. A3 is the prerequisite lever, not A1 alone | A3 first (cheap per-candidate est), then reduce qpel_rd_nudge trial count + wire A1b into fast presets; A1(c) chroma-once likely marginal until A3 lands |
 | Direct temporal | opt-in (--direct temporal); per-slice fallback to spatial when a co-located reference is not in list0; since 2026-09-03 the default is `--direct auto`: each B slice picks spatial or temporal by the running skippability score, sampled on one macroblock in four (`Y264_DIRECT_AUTO_STRIDE`), under the staircase (`Y264_STAIR_TDIR=1`); pin with `--direct spatial` or `temporal` | --direct auto (per-frame winner heuristic); use temporal on fades where spatial's zero-MV bias hurts |
-| Psy-RD | MB-level texture-energy term in the mode-decision J only (skip/inter/intra/partition choice); the metric is averaged 4x4-SATD-AC + 8x8-SA8D-AC energy difference (8x8 Hadamard >>2 to the SATD scale), default strength 1.0. Adding the 8x8-SA8D support beat the 4x4-only metric on BOTH VMAF-v1 and VMAF-NEG at every clip (v1 -1.5/-0.7/-1.0%, NEG -0.9/-0.3/-0.8% foreman/mobile/akiyo), ~4.6% slower -- NEG negative confirms genuine texture retention, not sharpening | subpel-psy (SATD-domain, likely needs the residual formulation the intra-loop psy did); per-strength recalibration (1.5/2.0 mix NEG on foreman). psy-trellis tried and reverted: a residual-AC-retention term in rdoq_4x4 (penalise J when the reconstructed 4x4 residual sheds Hadamard-AC energy vs the source residual) is CONTENT-DEPENDENT -- akiyo (static) wins -1.4..-3.4% VMAF-v1 but foreman/mobile (motion) LOSE +1..+3% at every strength (0.2/0.5/1.0), net negative on the corpus. Keeping AC energy over-spends where the residual is already large. The real form needs content-adaptive strength (off/low for high-motion, higher for static/detail) driven by the shot class -- that ties to the shot-based plan, not a flat global weight. Also tried: a coefficient-domain reward (subtract psy*lambda*sum|dequant AC| in the trellis), a residual-AC taper, and an intra-only gate -- none broke the tension. Retaining AC energy is exactly what VMAF-NEG penalises when the retained energy is prediction noise/aliasing, so motion clips (foreman, mobile) show NEG regressions at any strength that gives akiyo a v1 win; apparent mid-strength wins were 3-point BD-fit artifacts (sign flips 0.25 lose/0.3 win/0.35 lose). The reference's documented default is `--psy-rd 1.0:0.0`, psy-trellis off -- it's a niche knob, not a parity gap. The same AC term inside the intra-mode SATD loops measures a BD-VMAF LOSS: SATD-domain psy needs a residual-based formulation, not a pred-vs-src energy diff. FINAL: the gap-analysis domain fix implemented faithfully -- J -= psy*sum_AC|fdct(clip(pred+res))|, the true per-coefficient RECONSTRUCTION spectrum (not residual, not dequant-domain), in inter luma 4x4+8x8 RDOQ, env Y264_PSY_TRELLIS (default 0, off-state byte-identical). The domain fix DID kill the content tension on CLEAN content (no motion losses; 7 CIF clips within +-0.5% at 0.2/0.5). GRAIN EVAL (park_joy + ducks 720p): it WINS on grain and the win GROWS with strength -- park_joy 0.6/0.9/1.2 = -0.29/-0.49/-0.64%, ducks 0.9/1.2 = -0.35/-0.75% VMAF-NEG, not plateaued at 1.2. Content-dependent (the inverse of clean, where high strength loses), so no global strength; the ship path is shot-adaptive strength (~1.2 grain, off clean) per docs/shot-based-plan.md. Implementation done+correct, only the gating remains. That proves the corpus, not the code, was the blocker. **SHIPPED as `--tune grain` (strength 1.0) + the direct `--psy-trellis F` knob** (param.psy_trellis threaded to f->psy_trellis; Y264_PSY_TRELLIS still overrides for A/B). Off by default -> byte-identical; the manual/tune knob is the interim gate until shot-adaptive strength (docs/shot-based-plan.md) makes it automatic. `--tune grain` output is byte-identical to the measured Y264_PSY_TRELLIS=1.0 streams. **The class is FLAT/DARK content, not grain**: constant 1.2 at matched rate reads sintel -7.68 / akiyo -1.71 / tempete -1.17 / coastguard -1.01 / samsung -0.94 vs park_joy +0.05 and touchdown +2.26; the automated gate `Y264_PSY_FLAT_GATE=50,307,25` (per-frame flat-MB share) is quality-clean on all three instruments but default-REFUSED at samsung +30% t12 wall (armed frames take the greedy RDOQ path). The ship route for a default is a reconstruction-spectrum psy term inside the Viterbi lattice; the coefficient-domain trellis reward stays measured-refused |
+| Psy-RD | MB-level texture-energy term in the mode-decision J only (skip/inter/intra/partition choice); the metric is averaged 4x4-SATD-AC + 8x8-SA8D-AC energy difference (8x8 Hadamard >>2 to the SATD scale), default strength 2.0 (1.0 when this row was written). Adding the 8x8-SA8D support beat the 4x4-only metric on BOTH VMAF-v1 and VMAF-NEG at every clip (v1 -1.5/-0.7/-1.0%, NEG -0.9/-0.3/-0.8% foreman/mobile/akiyo), ~4.6% slower -- NEG negative confirms genuine texture retention, not sharpening | subpel-psy (SATD-domain, likely needs the residual formulation the intra-loop psy did); per-strength recalibration (1.5/2.0 mix NEG on foreman). psy-trellis tried and reverted: a residual-AC-retention term in rdoq_4x4 (penalise J when the reconstructed 4x4 residual sheds Hadamard-AC energy vs the source residual) is CONTENT-DEPENDENT -- akiyo (static) wins -1.4..-3.4% VMAF-v1 but foreman/mobile (motion) LOSE +1..+3% at every strength (0.2/0.5/1.0), net negative on the corpus. Keeping AC energy over-spends where the residual is already large. The real form needs content-adaptive strength (off/low for high-motion, higher for static/detail) driven by the shot class -- that ties to the shot-based plan, not a flat global weight. Also tried: a coefficient-domain reward (subtract psy*lambda*sum|dequant AC| in the trellis), a residual-AC taper, and an intra-only gate -- none broke the tension. Retaining AC energy is exactly what VMAF-NEG penalises when the retained energy is prediction noise/aliasing, so motion clips (foreman, mobile) show NEG regressions at any strength that gives akiyo a v1 win; apparent mid-strength wins were 3-point BD-fit artifacts (sign flips 0.25 lose/0.3 win/0.35 lose). The reference's documented default is `--psy-rd 1.0:0.0`, psy-trellis off -- it's a niche knob, not a parity gap. The same AC term inside the intra-mode SATD loops measures a BD-VMAF LOSS: SATD-domain psy needs a residual-based formulation, not a pred-vs-src energy diff. FINAL: the gap-analysis domain fix implemented faithfully -- J -= psy*sum_AC|fdct(clip(pred+res))|, the true per-coefficient RECONSTRUCTION spectrum (not residual, not dequant-domain), in inter luma 4x4+8x8 RDOQ, env Y264_PSY_TRELLIS (default 0, off-state byte-identical). The domain fix DID kill the content tension on CLEAN content (no motion losses; 7 CIF clips within +-0.5% at 0.2/0.5). GRAIN EVAL (park_joy + ducks 720p): it WINS on grain and the win GROWS with strength -- park_joy 0.6/0.9/1.2 = -0.29/-0.49/-0.64%, ducks 0.9/1.2 = -0.35/-0.75% VMAF-NEG, not plateaued at 1.2. Content-dependent (the inverse of clean, where high strength loses), so no global strength; the ship path is shot-adaptive strength (~1.2 grain, off clean) per docs/shot-based-plan.md. Implementation done+correct, only the gating remains. That proves the corpus, not the code, was the blocker. **SHIPPED as `--tune grain` (strength 1.0) + the direct `--psy-trellis F` knob** (param.psy_trellis threaded to f->psy_trellis; Y264_PSY_TRELLIS still overrides for A/B). Off by default -> byte-identical; the manual/tune knob is the interim gate until shot-adaptive strength (docs/shot-based-plan.md) makes it automatic. `--tune grain` output is byte-identical to the measured Y264_PSY_TRELLIS=1.0 streams. **The class is FLAT/DARK content, not grain**: constant 1.2 at matched rate reads sintel -7.68 / akiyo -1.71 / tempete -1.17 / coastguard -1.01 / samsung -0.94 vs park_joy +0.05 and touchdown +2.26; the automated gate `Y264_PSY_FLAT_GATE=50,307,25` (per-frame flat-MB share) is quality-clean on all three instruments but default-REFUSED at samsung +30% t12 wall (armed frames take the greedy RDOQ path). The ship route for a default is a reconstruction-spectrum psy term inside the Viterbi lattice; the coefficient-domain trellis reward stays measured-refused |
 | Weighted prediction | frame-level DC fade detection, one weight per ref | block/region-level weights; chroma weights |
 | Variance AQ | `--aq-mode 2` (auto-variance; ours: per-MB log2(var) centred on the frame mean). aq-mode 3 dark-bias hook added (Y264_AQ_DARK, amplifies AQ on low-luma MBs where banding shows) but OFF by default: negligible on the current corpus (foreman -0.00/mobile +0.01/tempete +0.18/coastguard -0.04% VMAF-NEG -- mostly bright content), needs dark/banding clips + subjective eval to tune | joint calibration with mb-tree (the combined-offset fold); tune aq-mode 3 once a dark corpus exists |
 | B-QP cascade | fixed per-depth offsets | derive per-frame from lookahead importance (mb-tree extension) |
@@ -36,8 +36,8 @@ Quality shortcuts come first (BD-rate on the table), then speed, then tunables.
 | VBV | one-sided cap. Capped VBR composes across GOP joins: a GOP that follows another starts its buffer at half rather than full, and half is `vbv_fill_budget`'s own fixed point, so the segment exits where it started without any enforcement and concatenation is legal by induction with no cross-worker traffic. An explicit exit constraint was built and ABLATED AWAY: it never bound on 30/36 cells and where it bound it front-loaded QP without cutting total spend, costing a cell and 600 kbit/s. Costs the multi-GOP clips ~7% of their bits and 1-3 VMAF-NEG points, which is what they were overspending. `scripts/cvbr_compliance.sh` read 34/36 at both windows when this was written; STALE, the current read is 29/36 (2026-09-03, docs/rate-control.md), against the reference's 18/18 over its own 18 cells; samsung keyint 30 went from 9 underflows to 1. ABR+VBV still resets per GOP and composes only because its integrator holds the average (measured 36/36, a tendency and not an invariant) | the two failing cells are one mid-stream scene cut, not a join: the measured-size re-encode bound fixes it but only reaches `emit_frame`, and at 18 threads the stair/fpipe routes code 152 of 180 frames. The bits model still resets per GOP alongside the buffer (11% over cap at keyint 30 vs 7% at 250). HRD parameters in the SPS, so a third-party checker has something to verify against |
 | CRF | absolute complexity vs a resolution-scaled base, foreman-anchored, easy-content discount clamped at -2 QP (stands in for mb-tree gains); ME-compensated lookahead cost as the metric measured slightly worse than full-res zero-motion SATD | uncapping the discount still LOSES post-mb-tree: caps -4/-8 vs -2 measured akiyo VMAF-NEG +4.55/+6.30% (foreman/mobile unaffected -- not easy enough to hit the discount). Even with the combined-offset mb-tree redistributing bits, easy content is VMAF-saturated near the operating range, so a lower QP is pure overspend. The -2 cap stands; mb-tree redistributes WITHIN a frame but can't make saturated easy content benefit from more total bits. Remaining CRF items: per-title base adaptation; CRF-mode BD vs x264 medium after this change: foreman +13.2 / mobile +19.3 / akiyo +9.0 (from +14.3 / unbounded overspend / +7.3). **The absolute-complexity branch is UNREACHABLE on the default path (crf_cl && mbtree_on). Y264_CRF_CPLX tries a different model, a frame QP with no complexity term plus an fps term, with adaptation carried by an absolute (uncentred) per-MB AQ field: BD-VMAF-NEG better on 9/12 clips (mobile -7.57, ducks -7.40, park_joy -5.50), worse on samsung +9.30 and touchdown +10.71, and size-at-equal-CRF vs x264 goes from a sign-flipping [-54.6,+45.3]% spread to [-29.7,+11.4]. DEFAULT OFF pending the chroma-energy fix (our AQ metric is luma-only, which is why the anchor needs a fitted 7.5, and the two losers are flat-content clips). Do NOT re-derive CRF_BASE_CPLX/SLOPE/CAP. sintel stays 25-42% under x264 at every CRF and is unexplained** |
 | RDOQ | greedy with EXACT pixel distortion, iterated to convergence: elimination + bidirectional level nudging -- toward zero (fewer bits) AND away from zero (deadzone recovery toward round-to-nearest, the away probe runs only when the toward move is rejected). Bidirectional nudging measures foreman -0.36 / mobile -0.93 / akiyo -0.31% BD-PSNR, ~17% slower whole-encoder (44% single-thread RDOQ) -- it belongs behind a slower preset once the ladder lands. Key finding: for RDOQ that already computes exact idct distortion, a coeff-domain Viterbi is NOT the path (it trades exact for separable-approx distortion, the same trade that sank DC-trellis >1dB); a WIDER exact search beats greedy. cost is per-coder (CAVLC tables, or CABAC context-state estimate, cbf neighbour terms approx 0/0); no DC-block RDOQ | probe raising currently-zero coefficients (needs source-coef sign threaded in) + multi-step up-moves; exact cbf neighbour contexts; the CAVLC path still scratch-codes in the RD loop (top speed win). DC-block RDOQ tried and reverted: a lone-DC linear distortion model (idct of the DC error) lost >1 dB even at lambda 0 -- the idct's +32>>6 rounding makes +-1/pixel artifacts the same magnitude as the decisions being judged, so exact evaluation needs the AC levels and diffs threaded through the DC stage; DC-trellis gains are tiny elsewhere, so low priority. Transform-domain AC distortion for the FAST path tried and reverted: derived the exact separable model -- the 4x4 inverse columns are orthogonal with per-frequency norms [4,2.5,4,2.5], so pixel SSD = sum K[pos]*(level-ideal)^2 with K folding basis energy and dqstep^2; validated to RANK candidates identically to the idct (100% at qp>=22, 99.7% at qp16). But it is NOT a speed win: in double precision it is break-even-to-slightly-slower (foreman medium 3.80->3.91s) because the light RDOQ makes few probes/block and scan_bits is already O(16)/candidate, and an integer fixed-point form overflows int64 (Efp^2 * per-position weights). The real RDOQ speed lever is the CAVLC/CABAC scan_bits cost per candidate, not the distortion |
-| Deblock filter | scalar `filter_line` | NEON (and x86) vectorization |
-| DCT/IDCT butterflies | scalar C (4x4 and 8x8) | NEON kernels (quant/dequant already are) |
+| Deblock filter | NEON, SSE4 and AVX2 kernels for the luma and chroma edge filters and the strength derivation, which checkasm holds to the C reference | done |
+| DCT/IDCT butterflies | NEON, SSE4 and AVX2 kernels for the 4x4 and 8x8 forward and inverse transforms, beside quant/dequant | done |
 | dct-decimate | inter-only, per-block: drop a 4x4/8x8 residual block whose only nonzeros are isolated +-1 coeffs (decimate score < threshold). Thresholds 3/2, swept: a heavier 6/4 over-decimated because our full RDOQ already drops marginal coeffs (net PSNR loss; 3/2 nets -0.25% PSNR + speed). Y264_DCTDEC=0 disables | tune threshold per shot class; extend to intra |
 | P skip-exit dials | Y264_P_SKIP_EXIT (default 0): 1 = post-RD intra bypass when skip beats inter's RD; 2 = post-16x16-SATD commit; 3 = intra admission bar tightened to min(inter, skip) SATD. exit2 -6.2% samsung-lo wall but band-refuted on every clip (+3..+27 BD); exit1 -2.2% wall, refused on sintel CRF +3.2 / touchdown ABR +15.5; mode 3 a measured null (bars differ only by priced bits, under the 1.5x margin). The P late-skip class (35% of P_Skip verdicts, ~390 ms on the samsung cell) is structurally protected: our late skips are cheaper-rate choices | none; reopen only with a changed question (cheaper trials, not fewer) |
 | Reference-plane borders | 32/16-px edge-replicated borders (done): MC reads out-of-frame positions directly, killing the clamped scalar path; 1.4x on top of the NEON MC work | next speed items: dequant_8x8 in RDOQ, then the RD bit-cost tables |
@@ -85,8 +85,8 @@ available.
 | Item | Benefit | Effort | Status | Notes |
 |---|---|---|---|---|
 | CAVLC bit-cost tables for RD | speed L | M | idea | precompute level/run/coeff_token costs; drop scratch coding in the RD hot path |
-| NEON deblock filter | speed M | M | idea | `filter_line` is scalar; vectorize the normal + strong filters |
-| NEON 4x4 forward/inverse DCT | speed M | M | idea | quant/dequant are NEON; the transform butterflies are still C |
+| NEON deblock filter | speed M | M | done | the normal and strong filters are NEON (src/dsp/deblock_neon.c) |
+| NEON 4x4 forward/inverse DCT | speed M | M | done | the 4x4 and 8x8 butterflies are NEON (src/dsp/transform_neon.c) |
 | Direct 8x8 / 16x16 SATD kernels | speed M | S | idea | mode decision sums 4x4 SATD; a fused 8x8 Hadamard is faster |
 | SAD via i8mm/dotprod (UDOT) | speed M | S | idea | M-series has i8mm; motion search SAD maps well to dot-product |
 | Half/quarter-pel MC in NEON | speed L | M | done | the 16x16-only NEON kernel takes any h<=16, and narrower widths compute 16-wide into a temp and copy out; mc_luma_c was ~75% of encode CPU after the sub-16 partition features landed; 2.2x whole-encoder speedup, byte-identical |
@@ -94,7 +94,7 @@ available.
 | Frame-level pipelining / lookahead thread | speed M | M | idea | overlap analysis with encode, beyond GOP-parallel; the t18 wait budget puts ~1.1 s of a 2.0 s t18 wall in the API-thread lookahead stages -- decoupling it into a dedicated lookahead thread is the next structural t18 lever, new risk class (lookahead state isolation), supervised build |
 | mbtree srcA: hoist per-source build_lr_subpel into parallel units | speed S | M | idea | mbt_pa_source units cap at ~5x (t18 budget); the block loop chains MV predictors serially (decision-coupled, can't split) but the 2 per-source subpel builds are decision-neutral and parallelizable |
 | Slice/tile parallelism within a frame | speed M | L | idea | complements GOP-parallel for low-latency / few-GOP cases |
-| Lowres lookahead for scene-cut ME | speed M | M | idea | scene-cut runs a full-res per-MB diamond ME every frame; half-res lowres frames would be ~4x cheaper with a larger effective search range. Downscale once, cache lowres + its MVs, reuse for adaptive-B and mb-tree |
+| Lowres lookahead for scene-cut ME | speed M | M | done (see the lowres pass below) | scene-cut runs a full-res per-MB diamond ME every frame; half-res lowres frames would be ~4x cheaper with a larger effective search range. Downscale once, cache lowres + its MVs, reuse for adaptive-B and mb-tree |
 
 ## Lookahead and adaptive structure
 
@@ -119,13 +119,14 @@ future frames*. That window is the shared prerequisite for the items still open.
 - Lowres lookahead pass (`done`). A half-res (2x2 average) copy of each frame
  gets a cheap 8x8 diamond ME against the previous frame, which caches per-MB
  intra/inter costs and the winning MV. Scene-cut runs on it (~4x cheaper) and
- mb-tree reuses it. It's still only cur-vs-prev. A multi-frame window is the
- next step.
+ mb-tree reuses it. That pass started as cur-vs-prev only. It now also runs
+ each anchor against the previous anchor and each B against both of its
+ anchors, inside the multi-frame window below.
 - mb-tree (`done, windowed`). Mini-GOP B propagation plus anchor-chain
  propagation over the rc-lookahead window (bilinear splat, stops at IDRs). It's
  centered to zero mean so it redistributes bits instead of just spending
- them. B configs only for now: IPPP offsets need the non-centered CRF/ABR
- model (see the sub-optimal table).
+ them. It started as B configs only. IPPP (bframes 0) is now included and on
+ by default, behind a damper (see the mb-tree row of the sub-optimal table).
 - Multi-frame lookahead window (`done`). Input is delayed by rc-lookahead
  frames (default 40) through a ring in front of the core. Frames are analyzed
  and scene cuts flagged at push time by a push-side replica of the since_idr
@@ -289,7 +290,12 @@ us with the type oracle, reads +2.6%, so matching it isn't the target.
  akiyo +1.65, touchdown +2.16 (the half-pel planes single-rounded in this
  read, see the Y264_LR_HPEL_R1 note in the commit log). The remaining cost is
  the rejected path's legs and the per-block bi-prediction evaluation.
-| threads=1-vs-N bit-identity | correctness S | S | done | threads=1 (non-recon) routes through the GOP-parallel path too, so per-GOP frame_num/POC match at any thread count. The serial streaming path stays only for --dump-recon. Conformance asserts threads 1/2/8 byte-identity across baseline/cabac/8x8/bframes |
+- threads=1-vs-N bit-identity (`done`, then superseded). threads=1 (non-recon)
+ routes through the GOP-parallel path too, so per-GOP frame_num/POC match at
+ any thread count. The serial streaming path stays only for --dump-recon.
+ Conformance used to assert threads 1/2/8 byte-identity. It no longer does:
+ the owner's rule now requires two runs at `--threads 1` to match, and
+ identity across threads is reported as information only.
 
 ## Apple Silicon (M5 Max) specific
 
@@ -319,8 +325,8 @@ are already on the plan. They're listed here for the benefit/effort view.
  varied content and bframes 1-3. The arithmetic engine, 460 context-init
  tables, residual coder and slice plumbing are all done. P adds mb_skip_flag,
  P mb_type, mvd (UEGk k=3) and the inter residual. B adds base-24 skip, the B
- mb_type binarization, B_Direct, dual-list mvd and intra-in-B. It's opt-in
- via --cabac, and CAVLC is the default. Two classes of bug were found and
+ mb_type binarization, B_Direct, dual-list mvd and intra-in-B. CABAC is the
+ default at every preset except ultrafast, and --cavlc turns it off. Two classes of bug were found and
  fixed along the way. The long I-slice desync was two one-digit typos in the
  engine state tables (rangeTabLPS[31][0], transIdxLPS[28]). Encoder, decoder
  and the test's reference decoder all shared those tables, so everything
@@ -333,7 +339,8 @@ are already on the plan. They're listed here for the benefit/effort view.
  tools. There's also a CABAC decode engine (y264_cabac_dec_*) worth growing
  into a real decoder.
 - 8x8 transform + Intra_8x8, High profile (`done`, BD-rate ~3-5%, effort M).
- Opt-in --transform-8x8. It covers the normative 8x8 inverse with a matched
+ On by default at every preset except ultrafast (--no-transform-8x8 turns it
+ off). It covers the normative 8x8 inverse with a matched
  forward, six-category quant/dequant, Intra_8x8 (9 modes with the 8.3.2.2.1
  reference filter), transform_size_8x8_flag, and the 8x8 luma residual for
  CAVLC (four interleaved 4x4 sub-blocks) and CABAC (ctxBlockCat 5, no cbf,
@@ -370,8 +377,8 @@ are already on the plan. They're listed here for the benefit/effort view.
  Per-temporal-layer QP offsets (ref B's lower QP) are the follow-up that
  grows the win. Temporal direct (vs the current spatial direct) is still an
  `idea`.
-- Trellis for CABAC (`idea`, BD-rate S-M, effort M). Extends the current CAVLC
- RDOQ once CABAC lands.
+- Trellis for CABAC (`done`). A Viterbi trellis quantizer over the CABAC
+ contexts runs for 4x4 and 8x8 blocks.
 
 ## Perceptual and content-aware (the differentiators)
 
@@ -405,10 +412,10 @@ quality per bit. Raw PSNR/SSIM understate that, and VMAF partly captures it.
  streaming), 2-pass, and carrying the controller across GOPs. That last one
  conflicts with GOP-parallel independence and needs a lookahead-driven
  pre-pass or a shared rate state.
-- MB-tree (`idea`, BD-rate large, effort M). Lower QP on macroblocks that many
+- MB-tree (`done` as described in the lookahead section, BD-rate large, effort M). Lower QP on macroblocks that many
  future frames reference, which propagates quality backward. It's a big
  objective win and pairs naturally with our GOP structure.
-- Psy-RD (`idea`, subjective, effort M). Bias mode decision toward preserving
+- Psy-RD (`done`, default strength 2.0; subjective, effort M). Bias mode decision toward preserving
  detail/energy instead of minimizing SSD, to counter the blur that pure SSD RD
  produces.
 - VMAF-targeted rate control (`idea`, effort M). Drive per-frame QP to hit a VMAF
@@ -427,9 +434,9 @@ quality per bit. Raw PSNR/SSIM understate that, and VMAF partly captures it.
  on top of variance AQ. Recent VVC work (PAVEN, SJ-PVC) reports 7-22% bitrate
  savings at equal subjective quality from saliency plus JND. Even a crude
  version layered on variance AQ is worth testing against VMAF-NEG.
-- Scene-cut detection for IDR/B placement (`idea`, effort S-M). Place keyframes at
+- Scene-cut detection for IDR/B placement (`done`, effort S-M). Place keyframes at
  cuts and avoid B frames across them.
-- Adaptive B-frame placement, b-adapt (`idea`, effort M). Decide per position
+- Adaptive B-frame placement, b-adapt (`done` and on by default, see the lookahead section). Decide per position
  whether a B frame helps. This would fix the current high-motion B regression.
 - Live control plane (`planned`, differentiator, effort M-L). These are
  settings a broadcast or live service can change while the encoder runs:
@@ -446,8 +453,8 @@ quality per bit. Raw PSNR/SSIM understate that, and VMAF partly captures it.
  brainstorm to find features no other encoder offers. It reads service
  engineering posts, codec conferences, open encoders' trackers and commercial
  feature lists, and considers the needs of each kind of user. Every candidate
- lands in beyond-parity.md with evidence, or in the refused list with a
- reason. The process note is at the end of this file.
+ lands in beyond-parity.md with evidence, or under its "Measured and
+ dropped" heading with a reason. The process note is at the end of this file.
 
 ## Novel / research-flavored
 
@@ -566,14 +573,16 @@ Small, concrete follow-ups from the current code:
  enabled on every slice type, and reference B's store their filtered recon
  into the DPB. Recon-matches ffmpeg across bframes 1-3, CAVLC/CABAC, 8x8,
  crops, QP 0-51.
-- P_8x8 sub-partitions (sub_mb_type) not implemented; only 16x16/16x8/8x16.
+- P_8x8 sub-partitions (`done`). All four sub_mb_types are coded, with a
+ per-8x8 reference (see the P_8x8 row of the sub-optimal table).
 - --dump-recon emits B frames in display order (a per-frame recon callback),
  so the recon-match invariant works for B. Fixing that immediately exposed a
  B mv-predictor bug: a non-list / intra neighbor must contribute mv 0 to the
  median (8.4.1.3.2). It was fixed in nb_at/nb_at_f. The lesson is that
  without recon-match working for B, B reconstruction bugs stay invisible.
-- mb_qp_delta is always coded as 0 (constant QP within a frame). Per-MB QP for
- variance AQ / MB-tree needs the real qp_delta coding + prediction chain.
+- mb_qp_delta coding (`done`). It started as a constant 0. The real per-MB
+ delta and its prediction chain now carry variance AQ and mb-tree, in CAVLC
+ and CABAC.
 
 ## Quality knobs assessed vs x264, support or doc-why-not
 
@@ -631,5 +640,5 @@ here than it cost whoever published it.
 
 Brainstorm from the user's side as well: a broadcaster, a game streamer, a
 surveillance vendor, a phone camera, an archive. Each candidate ends up in
-`beyond-parity.md` with its evidence and its source credited, or in the refused
-list above with the reason it lost.
+`beyond-parity.md` with its evidence and its source credited, or under that
+file's "Measured and dropped" heading with the reason it lost.
