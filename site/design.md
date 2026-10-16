@@ -27,156 +27,144 @@ broken one.
 
 ## The pipeline
 
-yah264 is a staged many-core pipeline. The more common design is a single loop
-over the blocks of a frame with threads bolted on afterwards. That design runs
-out of room quickly. Here each stage owns one kind of decision. The stages
-are where the parallelism is expressed.
+Most encoders loop over the blocks of a frame and add threads afterwards. That
+design runs out of room quickly. yah264 is a pipeline of stages instead. Each stage
+owns one kind of decision, and the parallelism lives between the stages.
 
-The lookahead runs first. It makes a cheap analysis pass over a window of
-future frames, working on a shrunken copy of the picture. It picks each frame's
-type and finds the scene cuts. It also builds the macroblock-tree data that
-later stages spend. That data records how much later frames will depend on each
-block. A macroblock is a 16 by 16 square of pixels that the encoder decides
-about as a unit. Nothing downstream can be smarter than what the lookahead saw.
+The lookahead runs first, on a shrunken copy of each picture over a window of
+future frames. It picks frame types and finds scene cuts. It also builds the
+macroblock-tree data, which records how much later frames will depend on each
+16 by 16 block, or macroblock. Nothing downstream can be smarter than what the lookahead saw.
 
-Behind the lookahead, whole frames encode in parallel where the GOP structure
-allows it. A GOP is the repeating run of frames between one key frame and the
-next. Inside a single frame the rows advance as a wavefront, so a row can only
-start once the row above it is far enough ahead to have given it the
-neighbouring blocks it needs. One lock-free pool feeds both kinds of work.
+Behind it, whole frames encode in parallel where the GOP structure allows. A GOP
+is the run of frames from one keyframe to the next. Inside a frame the rows move
+as a wavefront: a row starts once the row above it is far enough ahead to supply
+the neighbouring blocks it needs. One lock-free pool feeds both kinds of work.
 
-Byte-identical output across runs is not promised, at one thread count or
-across them. Holding it would rule out optimizations, and x264 doesn't promise
-it either. What is promised is correctness: every stream decodes to exactly the
-picture the encoder reconstructed, checked against independent decoders. The
-thread count is part of the configuration. `--threads 1` is its own mode. Its
-output differs from what two threads and up produce.
+At `--threads 1`, two runs of the same encode produce the same bytes. We test
+that. With more threads they may not, across runs or across thread counts.
+Holding it there would rule out optimizations, and x264 doesn't promise it
+either. What we do promise is that every stream decodes to exactly the picture
+the encoder reconstructed.
 
 ## Threading
 
-Asking an encoder for every core on the box can make it slower. A picture
-can only absorb so much concurrency before the coordination costs more than
-the work it buys. CIF is only 352 by 288 pixels, so a wavefront over a CIF
-frame runs out of independent rows quickly. A 1080p frame has more to
-give.
+Giving an encoder every core can make it slower. A picture absorbs only so much
+concurrency before coordination costs more than the work it buys. A CIF frame
+is 352 by 288 pixels, so its wavefront runs out of independent rows quickly. A
+1080p frame has far more to give.
 
-The thread count is chosen in two steps. Auto resolves to the smaller of the
-online core count and 16. The resolved number is then capped by what the
-picture can absorb: 12 for CIF, 21 for 720p, 32 for 1080p. Auto is already at or below 16, so only the CIF cap ever bites under auto.
-The other two matter when a caller asks for a count explicitly. We honour
-the request and then clamp it.
+So the thread count is picked in two steps. Auto takes the smaller of the core
+count and 16. Then the picture caps it: 12 threads for CIF, 21 for 720p, 32 for
+1080p. Under auto only the CIF cap ever bites. The others apply when a caller
+asks for a count, which we honour and then clamp.
 
-The 16 is a conservative default. Nobody measured a knee there. Wavefront
-scaling is bounded by the picture's critical path long before it is bounded by
-the machine. The critical path is the longest chain of work that has to happen
-in order. On a machine with two kinds of core, the last few workers end up on
-the slow ones and lengthen that chain outright. So the ceiling is a number that
-is safe on an unknown box. The measurement behind it is CIF-sized. 18 threads
-there read 6 to 11% worse than 8. The extra workers contend for a diagonal
-that cannot feed them. We have not measured a machine with more than
-18 cores.
+Nobody measured a knee at 16. It's a default that's safe on an unknown machine,
+because wavefront scaling hits the picture's critical path, the longest chain of
+work that has to run in order, well before it runs out of cores. On a chip with
+two kinds of core, the last workers land on the slow ones and lengthen that
+chain. The one measurement behind the default is at CIF, where 18 threads read
+6 to 11% worse than 8. We haven't measured a machine with more than 18 cores.
 
-The [interactive threading page](threading.html) walks the model with live
-diagrams.
+The [interactive threading page](threading.html) walks through the model with
+live diagrams.
 
 ## Rate control
 
 Rate control decides how many bits each frame gets. CQP, CRF, single-pass ABR,
-CBR and VBV, capped VBR, capped CRF and two-pass all ship. Capped CRF is the
-one that gets used most, so it is the one this page explains. [How video encoding works](encoding.md) covers what each
-mode is for. This page covers where ours puts the intelligence.
+CBR and VBV, capped VBR, capped CRF and two-pass all ship. This page covers
+capped CRF, because it's the mode that gets used most.
+[How video encoding works](encoding.md) explains what each mode is for.
 
 Macroblock-tree is on by default. The lookahead works out which blocks later
-frames will predict from and gives them a finer quantizer. A bit spent on a
-block that fifty frames inherit is worth more than one nothing references.
-Variance adaptive quantization runs alongside it and moves bits toward flat
-areas of the picture. Quantization shows up there first. The mode decision's
-lambda is modulated per macroblock from the same signal. Lambda is the exchange
-rate between bits and error that the encoder uses when it picks between two
-ways of coding a block. That per-block modulation is a good deal of the quality
-difference against x264.
+frames will predict from and gives them a finer quantizer, because a bit spent
+on a block that fifty frames inherit is worth more than one nothing references.
+Variance-adaptive quantization runs alongside it and moves bits toward flat
+areas, where quantization shows first. The same signal also adjusts the mode
+decision's lambda per macroblock. Lambda is the exchange rate between bits and
+error that the encoder uses to choose between two ways of coding a block.
+Adjusting it per block accounts for much of our quality lead over x264.
 
-Under capped CRF the encoder codes to the quality target. The buffer can
-only take bits away. The buffer is a model of what a decoder could have
-received by the time it needs each frame. Respecting it is what keeps a stream
-playable on a real player. Where the ceiling never bites anywhere in the stream
-you get the CRF encode you asked for, bit for bit, at the same thread count. A
-cap that bites once changes everything after it. Every GOP after the first then
-opens on a half-full buffer. That costs a few bits on its own. Where the
-ceiling is tight, a per-frame budget pulls the buffer back toward half full.
-Nothing else under CRF watches the bit count. Without that budget the buffer
-would drain until every prediction error became an underflow.
+Under capped CRF the encoder codes to the quality target. The buffer can only
+take bits away. It models what a decoder could have received by the time it
+needs each frame, so respecting it keeps a stream playable. If the cap
+never bites, you get exactly the CRF encode you asked for at the same thread
+count. Once it bites, everything after it changes: every later GOP opens on a
+half-full buffer, which costs a few bits. Where the cap is tight, a per-frame
+budget pulls the buffer back toward half full. Nothing else under CRF watches
+the bit count. Without that budget the buffer would drain until a prediction
+error became an underflow.
 
-The buffer compliance test is six clips by three caps by both VBV paths. It passes 29
-of those 36 cells. The reference encoder passes all 18 cells its own feature
-set covers, so the two counts don't sit against each other as one ratio. The
-seven we fail are tight-cap and mid-stream scene-cut cells. They are tracked in
+The buffer compliance test runs six clips at three caps through both VBV paths.
+We pass 29 of its 36 cells. The seven we fail are tight caps and mid-stream
+scene cuts, tracked in
 [rate-control.md](https://github.com/terranvigil/yah264/blob/main/docs/rate-control.md).
+The reference encoder passes all 18 cells its own features cover, so the two
+counts aren't one ratio.
 
-**Across shots.** The base quantizer under CRF is flat per frame type. Between
-shots it moves with the frame mean of the per-macroblock offsets. That mean
-holds the macroblock-tree boost and the adaptive quantization energy term. We
-apply the energy term's frame mean at full strength on the anchor frame's base
-QP. B frames are predicted from both an earlier and a later picture. They
-inherit the shift through the cascade of offsets under the anchor. A busy shot
-then codes a little cheaper and a quiet one a little better, the way x264's
-constant-quality mode behaves. The term's within-frame part keeps the gentler
-strength that won on single-shot clips. On file input `--cut-split` puts an IDR
-on every cut the pre-scan finds, so nothing after a cut predicts across it.
-`--shot-crf` gives each shot its own CRF from the shot table. Numbers on the
-[results page](results.html).
+Across shots, the base quantizer under CRF is flat per frame type and moves with
+the frame mean of the per-macroblock offsets. That mean holds the
+macroblock-tree boost and the adaptive quantization's energy term. We apply the
+energy term's frame mean at full strength on the anchor frame's base QP. B
+frames predict from an earlier and a later picture, so they inherit the shift
+through the offsets under the anchor. A busy shot then codes a little cheaper
+and a quiet one a little better, as x264's constant-quality mode does. The
+term's within-frame part keeps the gentler strength that won on single-shot
+clips.
+
+On file input, `--cut-split` puts an IDR on every cut the pre-scan finds, so
+nothing after a cut predicts across it. `--shot-crf` gives each shot its own
+CRF from the shot table. The [results page](results.html) has the numbers.
 
 ## Mode decision and motion estimation
 
-Mode decision is the encoder choosing how to carve up a macroblock and how to
-predict each piece. Every candidate partitioning is costed as distortion plus
-lambda times rate. The cheapest wins. Three things separate encoders.
+Mode decision is how the encoder carves up a macroblock and predicts each
+piece. Every candidate is costed as distortion plus lambda times rate. The
+cheapest wins. Encoders differ in three places:
 
-- Which candidates are worth trying.
-- How accurately the rate term is estimated. The entropy coder that turns
-  decisions into real bits has not run yet at that point.
-- Where the search is allowed to stop early.
+- which candidates are worth trying;
+- how well they estimate the rate, since the entropy coder that turns decisions
+  into bits hasn't run yet;
+- where the search may stop early.
 
-Motion estimation is the hunt for where a block moved from in an earlier
-picture. Depending on the preset, the search runs a diamond, hexagon or uneven
-multi-hexagon pattern, each of which walks a different arrangement of test
-points around a starting guess taken from the vectors of neighbouring blocks. Subpel refinement follows at the level the preset sets. It tests positions
-that fall between whole pixels. Full trellis RDOQ runs over both transform
-sizes. It picks each quantized coefficient with the bit cost of that choice
-already in hand. The transform size itself is chosen per
-macroblock by the same cost, with a cheap screen in front of the full test.
+Motion estimation looks for where a block came from in an earlier picture. The
+search starts from a guess built from the neighbouring blocks' vectors and walks
+a diamond, hexagon or uneven multi-hexagon pattern, depending on the preset.
+Subpixel refinement then tests positions between whole pixels, as far as the
+preset allows. Full trellis RDOQ runs over both transform sizes and picks each
+quantized coefficient knowing what it costs in bits. The transform size is
+chosen per macroblock by the same cost, with a cheap screen in front of the
+full test.
 
-The cost function also has a psychovisual term, on by default at strength 2.0.
-It rewards a block for keeping the source's texture energy, on top of
-minimising error. It runs at twice the strength the reference encoder uses.
-It trades pixel accuracy for apparent detail. The
-PSNR-Y floor on the [results page](results.html) is what watches for that
-trade. PSNR-Y measures how far each pixel ended up from the source.
-`--tune psnr` turns the term off.
+The cost also has a psychovisual term, on by default at strength 2.0, twice the
+reference encoder's. It rewards a block for keeping the source's texture
+energy, so it trades some pixel accuracy for visible detail. The PSNR-Y floor
+on the [results page](results.html) watches that trade, since PSNR-Y measures
+how far each pixel ends up from the source. `--tune psnr` turns the term off.
 
 ## The SIMD tier
 
-SIMD instructions do the same arithmetic on many pixels at once. Our SIMD
-path is about 2,800 lines of NEON intrinsics across five files. NEON is the ARM
-form of those instructions. Intrinsics are C functions that map onto them one
-for one. Every kernel is validated against the plain C version of the same
-routine and benchmarked through checkasm. We chose intrinsics over hand-written
-assembly. That trade has a known cost. The compiler schedules instructions and
-allocates registers. That is where x264's assembly still wins.
+SIMD instructions do the same arithmetic on many pixels at once. We write them
+as intrinsics, C functions that map one for one onto the instructions, rather
+than hand assembly. The cost is that the compiler schedules instructions and
+allocates registers. That's where x264's assembly still wins. Every kernel
+is checked against the plain C version of the same routine and benchmarked
+through checkasm.
 
-NEON is where we started. Apple silicon is the development machine, so it got
-the kernels first. The same kernel families now exist for SSE4.2 and AVX2 on
-x86-64, chosen at run time. AVX-512 kernels exist for the pixel comparisons as
-a build option; they beat AVX2 on an AMD machine and stay off by default until
-they also win on an Intel one. On Linux ARM servers with 256-bit SVE, such as
-AWS Graviton3, SVE kernels take over the widest NEON ones.
-[x86-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/x86-plan.md)
-has the plan and the order the kernel families land in.
+NEON, the ARM form, came first because Apple silicon is the development
+machine. It's about 4,000 lines in five files. The same kernel families now
+exist for SSE4.2 and AVX2 on x86-64, picked at run time. AVX-512 kernels cover
+the pixel comparisons as a build option. They beat AVX2 on an AMD machine and
+stay off by default until they also win on an Intel one. On Linux ARM servers
+with 256-bit SVE, such as AWS Graviton3, SVE kernels take over the widest NEON
+ones. [x86-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/x86-plan.md)
+has the plan and the order the kernel families shipped in.
 
 ## Decoder
 
-The tree already contains a decoder. It exists to verify the encoder. It
-decodes our own output for the bitstream validation above and has never been
-benchmarked as a decoder. There is no standalone decode CLI. No number on this site is a decode
-number. Making it fast is a separate track that has not
-started. [decoder-speed-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/decoder-speed-plan.md) is the plan.
+The tree has a decoder. It exists to verify the encoder, by decoding our own
+output for the bitstream validation above. It has never been benchmarked and has no
+standalone command, so no number on this site is a decode number. Making it
+fast is a separate track that hasn't started.
+[decoder-speed-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/decoder-speed-plan.md)
+is the plan.
