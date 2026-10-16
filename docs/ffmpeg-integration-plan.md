@@ -6,7 +6,7 @@ Two reasons, one of them measured.
 
 **Adoption.** Nobody adopts an encoder by piping Y4M into a CLI. They call it
 through ffmpeg, GStreamer or libavcodec directly, the way they call libx264
-today. Until `-c:v yah264` works, the encoder is only a benchmark. Nobody can
+today. Until `-c:v libyah264` works, the encoder is only a benchmark. Nobody can
 put it in a pipeline.
 
 **A real speed cost we currently pay.** Encoding a file with yah264 today means
@@ -106,7 +106,7 @@ There are two destinations. They are not exclusive:
 - **A patch repo** (`yah264-ffmpeg`) that applies to a pinned ffmpeg release.
   Fast, no negotiation, and enough to publish comparable numbers.
 - **Upstream submission** to ffmpeg-devel. Slower, and the code has to meet
-  their review standards. It is the only route that makes `-c:v yah264` work
+  their review standards. It is the only route that makes `-c:v libyah264` work
   in a distribution build. Worth doing once the patch repo has proved itself.
 
 ## Stages
@@ -117,7 +117,7 @@ links `-lyah264` via pkg-config, opens an encoder and encodes 10 frames. The
 result decodes.
 
 **S2. The wrapper, minimum viable.** yuv420p 8-bit, CRF and bitrate, preset,
-keyint, bframes, threads. Gate: `ffmpeg -i in.mp4 -c:v yah264 -crf 25 out.mp4`
+keyint, bframes, threads. Gate: `ffmpeg -i in.mp4 -c:v libyah264 -crf 25 out.mp4`
 produces a file that ffprobe reads. It decodes bit-exactly against the
 encoder's own reconstruction, the same recon-match gate the CLI uses.
 
@@ -317,6 +317,9 @@ Goal 3's median. The in-process table reads it 0.11 better than the CLI table.
 That gain is the input path going away. The encoder did not get faster, and
 1.06x is still above the 1.00x bar. The gap is smaller than it looked, but it
 is still open.
+
+Since then goal 3 has closed with the rest of the parity work: yah264 reached
+parity with x264 on 2026-10-12 (`site/results.md`).
 
 ## Open questions
 
