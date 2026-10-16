@@ -9414,7 +9414,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * makes ours cost 26-38% wall
  * for -0.79% BD, which is why they are off. */
         /* --- direct's SATD, the screen the 16x16 modes ride, and their RD, all
- * BEFORE any subpartition analysis. That is the reference encoder's order (b16x16, the
+ * BEFORE any subpartition analysis. That is the reference encoder's order (the B 16x16 search, the
  * direct-competitiveness test, the first B RD stage, the B_SKIP
  * return, and only then the B 8x8 analysis) and the reason it
  * matters is the return: a macroblock that leaves here has cost us
