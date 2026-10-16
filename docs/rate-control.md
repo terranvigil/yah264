@@ -316,11 +316,12 @@ title becomes undeliverable.
 Mechanically it is one-sided by design. CRF sets the quality, and the VBV
 budget can only ever *take bits away*. Where the cap is slack, your encode is
 exactly the CRF encode you asked for, bit for bit. Where it is tight, a
-per-frame budget aimed at a target buffer fill pulls the buffer back toward
-half full. Above half full that budget is generous. Below it, the budget
-collapses to half of one frame's arrival, so the buffer climbs back at a
-bounded rate. With that budget in place the compliance gate passes 29 of its 36
-cells (2026-09-03; it read 34 of 36 when this was written).
+per-frame budget steers the buffer toward half full. Above half full a frame
+may spend its arrival plus the whole surplus, which is generous, so content
+the cap does not need keeps its CRF quality. Below it a frame may spend its
+arrival less half the deficit, and never less than half an arrival, so the
+buffer climbs back at a bounded rate. With that budget in place the compliance
+gate passes all 36 of its cells (at four threads and at one).
 
 Without that budget the mode would not work at all. Under CRF nothing else in
 the encoder looks at bits. The fit test alone only fires once the buffer is

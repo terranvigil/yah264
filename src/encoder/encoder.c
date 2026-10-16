@@ -5764,28 +5764,21 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->abr_target_bpf = (double)param->rc.bitrate * 1000.0 / fps
                           / (e->fields ? 2.0 : 1.0);
         e->abr_qp = 26.0;                           /* initial guess; converges fast */
-        /* Seed the complexity->bits scale so the FIRST frame
- * isn't computed from the meaningless scale=1.0 default -- that gave the
- * IDR a garbage-high QP and starved the reference (measured: IDR 1518 bytes
- * against 13076 from the reference encoder's output). The scale is per rate-compressed complexity
- * rceq=C^(1-qcomp), so all types share the same seed. */
-        int nmbc = e->width_in_mbs * e->height_in_mbs;
-        double seed = 0.01 * pow(7.0e5, 0.6) * sqrt((double)(nmbc > 0 ? nmbc : 1));
-        for (int t = 0; t < 3; t++) { e->bm_abr.k[t] = seed; e->bm_abr.have[t] = 1; }
+        /* The per-frame model's scales (bits x qscale / C^(1-qcomp)) and its
+ * rf ledger have no value until a frame is coded: the opening I frame sets
+ * the I scale and the ledger from the intra-fit opening QP (rcp_decide),
+ * and P and B are seeded in their lowres domain where the rcp is set up.
+ * RF2 opens its own ledger at its first decide. No slew reference and no P
+ * track until a frame is decided. */
+        for (int t = 0; t < 3; t++) { e->bm_abr.k[t] = 0.0; e->bm_abr.have[t] = 0; }
         e->abr_fps = fps;
-        /* the same seed serves as rf_cplx_sum, and
- * rf_wanted_bits opens at one frame of target bits, so the first
- * rate factor is exactly the seeded scale over the frame target, so
- * frame 0 decides identically with or without the model. */
-        e->rf_cplx_sum = seed;
-        e->rf_wanted_bits = e->abr_target_bpf;
-        e->ptrack_norm = 0.01;
-        e->ptrack_qp = 24.0 * e->ptrack_norm;      /* initial QP 24 */
+        e->rfm_work = 0.0;
+        e->rfm_owed = 0.0;
+        e->itrk_qp = 0.0; e->itrk_wt = 0.0;
         e->last_nonb_type = -1;
         e->last_ref_qp[0] = e->last_ref_qp[1] = -1.0;
-        for (int t = 0; t < 3; t++)
-            e->last_qscale_type[t] = pow(2.0, (24.0 - 12.0) / 6.0);   /* the initial QP */
-        e->st_cplxsum = 0.0; e->st_cplxcount = 0.0;
+        for (int t = 0; t < 3; t++) e->slew_ref[t] = -1.0;
+        e->blur_csum = 0.0; e->blur_cwt = 0.0;
     }
     e->crf_on = (param->rc.method == YAH264_RC_CRF && param->rc.rf > 0);
     if (e->crf_on) {
@@ -5816,19 +5809,19 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             if (init > e->vbv.size) init = e->vbv.size;
             e->vbv.fill = init;
         }
-        /* The handoff level is half the buffer and not a tunable, because it is
- * already this loop's fixed point: vbv_fill_budget solves for a frame
- * that lands the occupancy back on vbv_size/2 and allows a climb when it
- * is below, so a segment that starts there is a segment starting where
- * its own rate loop returns to. It exits there without being told to,
- * which is why composability needs no machinery beyond this line.
+        /* The handoff level is the CRF+VBV fill goal (vbv_fill_budget) and not
+ * a tunable of its own, because the goal is this loop's fixed point: a
+ * segment that starts there starts where its own rate loop returns to, and
+ * exits there without being told to, which is why composability needs no
+ * machinery beyond this line.
  *
  * An explicit exit constraint is deliberately absent under CRF: it was built,
  * measured, and removed on the measurement. Under a bitrate target the budget
  * does not run, so nothing returns the occupancy to the handoff level by
  * itself; a caller that splits a capped ABR encode asks for the exit corridor
  * through yah264_encoder_vbv_handoff instead. */
-        e->vbv_seg_h = vbv_segh_env() * e->vbv.size;
+        rc_knobs_resolve(e);                    /* the fill goal; resolved again below */
+        e->vbv_seg_h = (vbv_segh_env() >= 0 ? vbv_segh_env() : e->rck.vbv_fill_frac) * e->vbv.size;
         /* Under a bitrate target too. The integrator owns the AVERAGE, but
  * nothing about it keeps a GOP from ending with the buffer low, and a
  * per-GOP instance that assumed a full buffer at its start then spent
@@ -6036,15 +6029,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->rcp_vbv_tight = 1;               /* serial until the first burst gate */
     if (e->rcp_on && e->abr_on) {
         /* The rcp P/B decision complexity is the ME-compensated LOWRES cost
- * (never recon), a different domain from the full-res SATD the shared
- * seed above is calibrated for -- warm-up on foreman measures
- * +36% over the first 25 frames off the 2.8x-low P seed. Re-seed P/B
- * with the corpus geometric mean of the CONVERGED Cme-domain scales
- * (foreman/mobile/akiyo/park_joy/samsung, ~90 and ~13 per sqrt(mbs));
- * I keeps the shared seed (its intra-SATD domain is the same). */
+ * (never recon), a different domain from the I frame's full-res SATD.
+ * Seed P/B with the corpus geometric mean of the CONVERGED Cme-domain
+ * scales (foreman/mobile/akiyo/park_joy/samsung, ~90 and ~13 per
+ * sqrt(mbs)); the I scale is set by the opening decide. */
         int nmbc = e->width_in_mbs * e->height_in_mbs;
         e->bm_abr.k[1] = 90.0 * sqrt((double)(nmbc > 0 ? nmbc : 1));
         e->bm_abr.k[2] = 13.0 * sqrt((double)(nmbc > 0 ? nmbc : 1));
+        e->bm_abr.have[1] = e->bm_abr.have[2] = 1;
     }
 
     e->pstride[0] = e->padded_w + 2 * Y264_LUMA_BORDER;
@@ -6167,15 +6159,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             if (!e->mbtree_on) {
                 fprintf(stderr, "yah264: the rate-factor ABR model needs mb-tree (bframes > 0); using the per-frame model\n");
             } else {
-                e->abr_rf2 = 1;
-                double fps = e->abr_fps > 0 ? e->abr_fps : 25.0;
-                double dur = 1.0 / fps;
-                if (dur < 0.01) dur = 0.01;
-                if (dur > 1.00) dur = 1.00;
-                e->rf2_rceq = pow(0.04 / dur, 1.0 - abr_qcomp_env());
-                int nmb = e->width_in_mbs * e->height_in_mbs;
-                e->rf_cplx_sum = 0.01 * 7.0e5 * sqrt((double)(nmb > 0 ? nmb : 1));
-                e->rf_wanted_bits = e->abr_target_bpf;
+                e->abr_rf2 = 1;          /* the ledger opens at the first decide */
             }
         }
         /* mb-tree AND AQ are off at constant QP:

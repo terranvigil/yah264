@@ -187,7 +187,17 @@ struct rc_buffer {
  * once at open, so no decide path calls getenv. The *_set flags mark a knob
  * whose default is another encoder field (qp_step, crf_qcomp). */
 struct rc_knobs {
-    double abr_ovlo, abr_ipoff, abr_ipf, abr_pbf;
+    double abr_pbf;
+    double rfm_slew;            /* the ledger QP's slew per anchor, x qp_step */
+    double rfm_degen;           /* complexity per MB under which a frame stays out of the ledger (0 = none) */
+    double pf_slew;             /* per-frame rf model: its per-type slew, x qp_step */
+    double ovc_gain, ovc_gain_up, ovc_gain_cbr, ovc_gain_cbr_up, ovc_lo, ovc_hi;   /* feedback: QP per window of error (under, over, CBR), and its bounds */
+    double ovc_win, ovc_t0;     /* feedback window: x ratetol seconds of target, sqrt growth past t0 s */
+    double itrk_decay;          /* the mid-stream I frame's P track decay (0 = no track) */
+    double blur_decay;          /* per-frame model: the complexity blur's decay */
+    double open_ia, open_ib, open_ic, open_imargin;  /* the opening QP's intra fit, and RF2's margin under it on flat content */
+    double open_ioff, open_ip0, open_rfs;  /* per-frame openings: fit offset, rf prior QP, rf ledger seed per sqrt(mbs) */
+    double vbv_fill_frac, vbv_fill_h, vbv_fill_hup, vbv_fill_min;  /* CRF+VBV fill target, horizon below / above it, floor */
     double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;
     int    vbv_plan_pred;      /* Y264_VBV_PLAN_PRED: 2 = the burst plan prices at per-type scales with no shock, 1 = keeps the shock, 0 = the fit test's margins */
@@ -939,31 +949,23 @@ struct yah264_encoder {
                                  * Y264_RCP_LAG guard */
     int      abr_rf;            /* the rate-factor ABR allocation model (param.rc.abr_model
  * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
-    int      abr_rf2;           /* Y264_ABR_RF2: the CRF path plus a rate factor (plan A2) */
-    double   rf2_rceq;          /* its duration-only rceq, constant per encode */
-    /* the ABR rate factor. The per-type scale
- * above solves qscale = scale*rceq/target, and since scale IS bits*qscale/rceq
- * that makes bits == target for EVERY frame -- constant bits per frame, which
- * inverts the I/P/B cascade. These two accumulators replace it: their RATIO is
- * the rate factor, q = rceq/rate_factor, so bits follow C^0.6. Self-normalising,
- * with no gain constant to tune. Kept in OUR qscale convention (2^((qp-12)/6),
- * no 0.85) so they stay consistent with the open-time seed. */
-    double   rf_cplx_sum;          /* sum of bits * qscale / rceq */
-    double   rf_wanted_bits; /* sum of per-frame target bits */
-    double   ptrack_qp;         /* P-equivalent QP track, for the I anchor */
-    double   ptrack_norm;
+    int      abr_rf2;           /* the rate-factor model on the CRF path (mb-tree on) */
+    /* The rate-factor ledger (ratecontrol.c, "The RF2 model"): the qscale at
+ * which the frames coded so far would have spent their target is
+ * rfm_work / rfm_owed. Kept in OUR qscale convention, 2^((qp-12)/6). */
+    double   rfm_work;          /* sum of bits * qscale(accounting QP) */
+    double   rfm_owed;          /* sum of per-frame target bits */
+    double   itrk_qp, itrk_wt;  /* decayed P base-QP track, for mid-stream I frames */
     int      last_nonb_type;     /* -1 until the first non-B is decided */
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
-    double   last_qscale_type[3]; /* per-type previous qscale, for the asymmetric per-type clip */
+    double   slew_ref[3];        /* per type: the previous decide's slew-limited
+                                  * equation QP (rf2 reads type 1 only) */
     struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
                                 * (in-flight prediction); have = meas */
-    double   st_cplxsum, st_cplxcount;  /* short-term complexity
-                                         * accumulators: the rate factor
- * runs on a BLURRED complexity, not the raw
- * per-frame one. sintel opens on near-black
- * frames whose C is legitimately ~1, and a
- * raw signal lets that degenerate start
- * poison the accumulators. */
+    double   blur_csum, blur_cwt;   /* per-frame model: the decayed complexity
+                                     * blur its rate factor runs on, so a
+                                     * near-black opening's tiny C cannot
+                                     * poison the ledger */
     double   abr_fps;
 
     /* Constant rate factor (YAH264_RC_CRF). Sets each frame's QP from crf plus a

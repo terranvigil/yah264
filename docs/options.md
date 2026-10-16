@@ -189,9 +189,10 @@ median **-5.65% BD-rate**. 9 clips get better (samsung -26.6%, akiyo -49.2%) and
 3 get worse (ducks +5.8%).
 
 **Hitting it.** When the complexity signal collapses, usually on a near-black
-opening, the rate factor runs away. This model has no swing limit to absorb it:
-sintel reads **+24.5% over target** at 900 frames. Elsewhere the error is a
-warm-up transient that decays with length (ducks +11.4% at 180 frames, +4.6% at
+opening, the rate factor drifts. Its per-type slew (one `--qpstep` per frame)
+and the feedback term bound how far: sintel_720p at 1200 kbit/s reads **+4.4%
+over target** at 900 frames. Elsewhere the error is a warm-up transient that
+decays with length (ducks_720p at 25 Mbit/s: +11.2% at 180 frames, -0.6% at
 480).
 
 Choose it when quality per bit matters more than landing the target exactly. Do
