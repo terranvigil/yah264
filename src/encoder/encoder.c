@@ -5091,6 +5091,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             }
         }
     }
+    if (param->b_bias < -100 || param->b_bias > 100) {
+        fprintf(stderr, "yah264: --b-bias takes -100..100\n");
+        return NULL;
+    }
     /* A tolerance of zero is a divide by zero in the correction term, not a
  * tight loop; negative is meaningless. Infinity is the documented way to
  * take the term out. */
@@ -13363,6 +13367,18 @@ static double badapt_demote_thr(void)
     return v;
 }
 
+/* --b-bias moves the demotion line linearly: to the whole intra cost at +100,
+ * which cb (a per-block minimum that includes intra) can only reach where
+ * nothing predicts better than intra, and to zero at -100, where every frame
+ * demotes. 0 returns the threshold untouched, so the default stays bit-exact. */
+static double badapt_bias_thr(int bias)
+{
+    double t = badapt_demote_thr();
+    if (bias > 0) return t + (1.0 - t) * bias / 100.0;
+    if (bias < 0) return t + t * bias / 100.0;
+    return t;
+}
+
 static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
                         const struct la_entry *nen)
 {
@@ -13496,7 +13512,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
                 ci += en->d_intra[i];
             }
         if (s_lrrow_prof > 0) __atomic_add_fetch(&s_lrrow_ns[2], lrrow_now() - tq, __ATOMIC_RELAXED);
-        anchor = (double)cb >= badapt_demote_thr() * (double)ci;
+        anchor = (double)cb >= badapt_bias_thr(e->param.b_bias) * (double)ci;
         if (!anchor && e->brun_on && e->la_anchor_have)
             anchor = brun_decide(e, en, nen);
     }

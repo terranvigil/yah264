@@ -20,6 +20,8 @@ static const struct y264_hw_opt table[] = {
     { "--sar",              Y264_HW_MAPS,    "pixel aspect ratio" },
     { "--min-keyint",       Y264_HW_IGNORED, NULL },
     { "--b-adapt",          Y264_HW_IGNORED, NULL },
+    { "--b-bias",           Y264_HW_IGNORED, NULL },
+    { "--zones",            Y264_HW_IGNORED, "no per-range QP on the hardware" },
     { "--direct",           Y264_HW_IGNORED, NULL },
     { "--ref",              Y264_HW_IGNORED, "reference count is the hardware's" },
     { "--pass",             Y264_HW_IGNORED, "no two-pass on the hardware" },

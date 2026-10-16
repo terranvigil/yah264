@@ -236,6 +236,7 @@ default sits just above it. Why it lands so far below the reference's default is
 | `--intra-refresh` | | off | No keyframe after the first: a column of intra macroblocks sweeps the picture once every `--keyint` frames, and each sweep opens with a recovery_point SEI. P frames only. See the note below. |
 | `-b`, `--bframes` | N | preset (3) | Consecutive B frames between anchors. 0 disables B entirely. |
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
+| `--b-bias` | -100..100 | 0 | Leans the adaptive B placement toward more B frames (positive) or fewer (negative). A tuning dial, not a quality setting: see [`--b-bias`](#--b-bias-is-a-tuning-dial) below. Ignored at `--b-adapt 0`. |
 | `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation. `auto` lets each B slice pick by the running skippability score (since 2026-09-03). |
 | `-r`, `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. |
 
@@ -383,6 +384,37 @@ last 4 luma columns from where they were. In CRF on fourpeople the cost is +42%.
 With the motion bound removed (which breaks recovery) it is still +27%, so most
 of it is the intra columns themselves. A lower QP on the refresh column made it
 worse at both offsets tried (3 and 6).
+
+#### `--b-bias` is a tuning dial
+
+The adaptive placement keeps a candidate frame as a B while its best
+bidirectional lowres cost stays under 0.77 of its intra cost, and turns it
+into an anchor otherwise. `--b-bias` moves that 0.77 in a straight line: up to
+1.0 at +100, where a frame becomes an anchor only if nothing predicts it
+better than intra, and down to 0 at -100, where every frame is an anchor. The
+B-run limit (`--bframes`), the key-frame interval and scene cuts don't move. At
+0 the threshold is untouched and the output is byte-identical to an encode
+without the flag.
+
+Measured on four board clips, 120 frames, `--threads 1`, CRF 23 to 35 in five
+rungs, BD-rate on VMAF-NEG against `--b-bias 0`. The B share is read at CRF 29.
+
+| clip | B share at 0 | at -50 | BD at -50 | at +50 and +100 |
+|---|--:|--:|--:|---|
+| stefan_cif | 73% | 26% | +14.3% | byte-identical to 0 |
+| shields_720p | 74% | 1% | +54.2% | byte-identical to 0 |
+| park_joy_720p | 74% | 0% | +30.8% | byte-identical to 0 |
+| pedestrian_1080p | 74% | 0% | +11.3% | byte-identical to 0 |
+
+shields' top rung sits at VMAF-NEG 98, so its number is the least exact of the
+four. Two things follow. The positive side does nothing on this content: the
+default already fills every B run to `--bframes` on all four clips, so there
+is no anchor left for a looser test to turn back into a B. The same holds at
+`--bframes 16` on stefan and shields. The negative side is steep. -10 already
+takes stefan from 77 to 71 B frames at `--bframes 16`, -25 to 48, and -50
+removes nearly all of them, at a cost of 11 to 54%. Use it to trade B frames
+away for decode simplicity or latency, in small steps, and expect it to cost
+bits. It is not a quality setting, and nothing here suggests moving it from 0.
 
 ### Coding tools
 
@@ -1365,7 +1397,8 @@ across unchanged:
 `--no-weightb`, `--constrained-intra`, `--chroma-qp-offset`, `--qpmin`,
 `--qpmax`, `--qpstep`,
 `--vbv-init`, `--sps-id`, `--slices`, `--crf-max`, `--ratetol`, `--partitions`,
-`-o`.
+`--b-bias`, `--longhelp`, `--fullhelp`, `-o`, and the one-letter aliases `-I`,
+`-i`, `-b`, `-r`, `-f`, `-q`, `-B`, `-p`, `-A`, `-m` and `-t`.
 
 Options x264 spells differently. Each does the same job under the name on
 the right:
@@ -1412,6 +1445,8 @@ Options that differ, and how:
 | `--open-gop` | Refused with `--stitchable`. It makes the whole encode ONE encoder instance, so `--threads` buys row wavefront rather than parallel GOPs. On an input with no readable frame count (a pipe) it falls back to the serial path. |
 | `--intra-refresh` | P frames only. x264 also allows B frames with it, but here they are refused (or dropped when only a preset set them). A scene cut is ignored rather than placing a keyframe. The encode is one encoder instance, so `--threads` buys row wavefront rather than parallel GOPs. |
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off. Here the value only selects a metric and has no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
+| `--zones` | `q=` and `b=` only, which is all x264's help lists. `b=` is applied as a QP offset of -6 log2(F) in every rate-control mode, so it moves the quantizer and the rate follows. Refused alongside `--plan`, which writes the same zone list. |
+| `--b-bias` | Same range and direction. Here it moves one cost ratio in the placement test, so +100 and -100 have fixed meanings: a B wherever anything predicts better than intra, and no B frames at all. |
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. The reference documents its ratio pair as global. The single-pass modes here anchor I and B through the CRF track and never read them. |
 
 x264 options with **no equivalent at all**:

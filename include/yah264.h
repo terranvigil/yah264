@@ -816,6 +816,16 @@ typedef struct {
  * 16x16's list-0 reference for their rectangles and quadrants. 0 = mixed
  * references, the default. */
     int no_mixed_refs;
+
+    /* Leans the adaptive B placement toward more B frames (positive) or fewer
+ * (negative), -100..100 (--b-bias). The placement keeps a frame as a B
+ * while its best bidirectional cost stays under a fixed share of its intra
+ * cost; the bias moves that share, linearly, toward the whole intra cost at
+ * 100 (a frame turns into an anchor only where nothing predicts it better
+ * than intra) and toward none at -100 (every frame is an anchor). The B-run
+ * limit, the key-frame interval and scene cuts are untouched. Read only
+ * with adaptive placement (badapt non-zero). 0 = the measured default. */
+    int b_bias;
 } yah264_param_t;
 
 /* param.weightp: 0 is unset (= 1), so off needs a value of its own. */

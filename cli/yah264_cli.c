@@ -752,6 +752,10 @@ static void usage(const char *argv0)
         "                     enough to run a chain against, else 0. N=0 disables\n"
         "                     (also set by --tune zerolatency)\n"
         "  --b-adapt N        adaptive B placement, 0 = fixed cadence (default 1)\n"
+        "  --b-bias N         lean the adaptive B placement toward more B frames\n"
+        "                     (positive) or fewer (negative), -100..100 (default 0).\n"
+        "                     100 keeps a B wherever anything predicts it better\n"
+        "                     than intra; -100 codes no B frames at all.\n"
         "  --psy-rd F         psychovisual RD strength (0 = off)\n"
         "  --psy-trellis F    psy-trellis strength (0 = off; ~1.0 for grain/detail)\n"
         "  -t, --trellis N    RDOQ placement (x264-compatible): 0 = off, 1 = final\n"   /* x264-ok */
@@ -4361,6 +4365,7 @@ int main(int argc, char **argv)
         }                                                                     \
     } while (0)
 
+    int b_bias = 0;
     for (int i = 1; i < argc; i++) {
         argv[i] = (char *)short_alias(argv[i]);
         if (!strcmp(argv[i], "--input-y4m") && i + 1 < argc)
@@ -4792,6 +4797,8 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--b-adapt") && i + 1 < argc)
             badapt = (int)opt_int("--b-adapt", argv[++i], 0, 2);
+        else if (!strcmp(argv[i], "--b-bias") && i + 1 < argc)
+            b_bias = (int)opt_int("--b-bias", argv[++i], -100, 100);
         else if (!strcmp(argv[i], "--psy-rd") && i + 1 < argc)
             psy_rd = (float)opt_num("--psy-rd", argv[++i], 0.0, 100.0);
         else if (!strcmp(argv[i], "--psy-trellis") && i + 1 < argc)
@@ -5234,6 +5241,7 @@ int main(int argc, char **argv)
     if (me_method >= 0)                             /* --me overrides the preset's ME gate */
         param.me_method = me_method;
     param.no_mixed_refs = no_mixed_refs;
+    param.b_bias = b_bias;
     /* Both override the preset, like every other explicit tool flag. Note that
  * subme is not only an effort dial here: with no --me, the search method
  * follows it (hex below 8, UMH at 8 and above, me.c:umh_allowed), so
