@@ -36,7 +36,7 @@ yah264 has met and surprised speed, compression and quality parity with x264. Th
 | 2 | plain C, all cores | 1.41x to 1.96x | 1.27x |
 | 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.06x |
 
-NOTE: An Apple M5 is my primary development platform so most of the work was done for arm64. Once we reached parity, I also further optimized for additional plantforms and instruction sets.
+NOTE: An Apple M5 is my primary development platform so most of the work was done for arm64. Once we reached parity, I also further optimized for additional platforms and instruction sets.
 
 ## Details
 
@@ -67,19 +67,19 @@ On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD b
 
 ## Shot-aware support
 
-Most video is a sequence of shots, and each shot wants different settings. yah264 can adapt per shot in a single pass, and it exposes what an external tool needs to run a full per-shot search.
+Most video is a sequence of shots. Each shot wants different settings. yah264 can adapt per shot in a single pass. It also exposes what an external tool needs to run a full per-shot search.
 
-`--cut-split` scans the source for scene cuts first and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot can then be seeked to, packaged or replaced on its own. It costs no compression, because predicting across a cut gains nothing. This is different from the default scene-cut detection, which only turns a sudden change into an intra frame inside the lookahead and knows nothing about shots.
+`--cut-split` scans the source for scene cuts first and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot can then be seeked to, packaged or replaced on its own. It costs no compression, because predicting across a cut gains nothing. The default scene-cut detection is different. It only turns a sudden change into an intra frame inside the lookahead and knows nothing about shots.
 
-`--shot-crf` uses the same scan to give each shot its own quality setting, so hard shots get more bits and easy ones fewer. It's still one encode with no trial encodes. On ten real titles at 1080p it needs a median 1% fewer bits for the same VMAF-NEG score, and 5% fewer for the same PSNR-Y.
+`--shot-crf` uses the same scan to give each shot its own quality setting. Hard shots get more bits and easy ones fewer. It's still one encode with no trial encodes. On ten real titles at 1080p it needs a median 1% fewer bits for the same VMAF-NEG score, and 5% fewer for the same PSNR-Y.
 
 Neither option re-encodes anything: the scan reads the source once before the encode starts. It needs a file, not a pipe.
 
-For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Each shot starts on its own keyframe, so a shot encoded alone matches the full encode exactly. That's guaranteed at one thread and usual with more. Trials are exact previews, and any shot can be redone later. Both options are off by default. [engine-interface.md](docs/engine-interface.md) has the details.
+For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Each shot starts on its own keyframe, so a shot encoded alone matches the full encode exactly. That's guaranteed at one thread and usual with more. Trials are exact previews. Any shot can be redone later. Both options are off by default. [engine-interface.md](docs/engine-interface.md) has the details.
 
 ## Up next
 
-With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice; the open item is speed with every core busy, where we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
+With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice; the open item is speed with every core busy. There we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
 
 A few x264 options are still to build, such as custom quant matrices and exhaustive motion search ([x264-parity-plan.md](docs/x264-parity-plan.md)). After that come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
@@ -117,8 +117,8 @@ unit tests and `make conformance` runs the gate.
 
 ## License
 
-GPL-2.0-or-later, stated per file as well as in `LICENSE`. A commercial licence
-is available for products that cannot comply with the GPL, the same arrangement
-x264 and x265 use. Linking yah264 into a product puts the product under the GPL
-unless it holds the commercial licence.
+GPL-2.0-or-later, stated per file as well as in `LICENSE`. A commercial license
+is available for products that cannot comply with the GPL. x264 and x265 use the
+same arrangement. Linking yah264 into a product puts the product under the GPL
+unless it holds the commercial license.
 Commercial terms: terranvigil@gmail.com.
