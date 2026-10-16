@@ -55,8 +55,8 @@ The gates exist because that explanation is worth nothing on its own.
 
 The most expensive recurring mistake had nothing to do with encoding. A session
 would spend its first hour building a profiler, an oracle, or an A/B harness
-that already existed under a name nobody remembered. The tree holds about fifty harness
-scripts and around 350 environment knobs, which is well past what fits in one context
+that already existed under a name nobody remembered. The tree holds about eighty harness
+scripts and around 400 environment knobs, which is well past what fits in one context
 window.
 
 [instruments.md](https://github.com/terranvigil/yah264/blob/main/docs/instruments.md) is the fix. It catalogs the instruments that have
