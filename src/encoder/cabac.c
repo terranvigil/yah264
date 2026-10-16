@@ -791,16 +791,26 @@ static inline int sig_ctxinc(int cat, int i)
 static const uint8_t SC_ID[16]  = { 0, 1, 2, 3, 4, 5, 6, 7,
                                     8, 9, 10, 11, 12, 13, 14, 15 };
 static const uint8_t SC422DC[8] = { 0, 0, 1, 1, 2, 2, 2, 2 };
-/* node-context tables: the compact form of 9.3.3.1.1.9's
- * numDecodAbsLevelEq1 / numDecodAbsLevelGt1 context derivation. */
-static const uint8_t LVL1_CTX[8]   = { 1, 2, 3, 4, 0, 0, 0, 0 };
-static const uint8_t LVLGT1_CTX[8] = { 5, 5, 5, 5, 6, 7, 8, 9 };
-/* 4:2:2 chroma DC (cat 5) caps the last coeff_abs_level Gt1 context at 8, not 9
- * (the H.264 4:2:2 chroma-DC greater-than-1 context row) — the 8-coeff block can
- * reach node 7, where the general table would spill into the chroma-AC context. */
-static const uint8_t LVLGT1_CTX_422DC[8] = { 5, 5, 5, 5, 6, 7, 8, 8 };
-static const uint8_t LVL_TRANS[2][8] = { { 1, 2, 3, 3, 4, 5, 6, 7 },
-                                         { 4, 4, 4, 4, 5, 6, 7, 7 } };
+/* coeff_abs_level_minus1 context selection, clause 9.3.3.1.3. Within a block
+ * the reverse-scan levels coded so far are summarised by a "tally class":
+ *   0      no level yet            4  one level > 1 so far
+ *   1, 2   one / two levels == 1   5  two levels > 1
+ *   3      three or more == 1,     6  three levels > 1
+ *          none > 1                7  four or more > 1
+ * (numDecodAbsLevelEq1 stops mattering once a level > 1 is seen, and both
+ * counts saturate where the clause's Min() clips them.) Bin 0 takes
+ * ctxIdxInc = gt1 ? 0 : Min(4, 1 + eq1); the later prefix bins take
+ * 5 + Min(4 - (ctxBlockCat == 3), gt1). The tables below are those two
+ * formulas evaluated per class, plus the class each answer moves to. */
+static const uint8_t GT1FLAG_INC[8] = { 1, 2, 3, 4, 0, 0, 0, 0 };
+static const uint8_t PFX_INC[8]     = { 5, 5, 5, 5, 6, 7, 8, 9 };
+/* 4:2:2 chroma DC (our cat 5; the clause's ctxBlockCat 3) caps the prefix
+ * increment at 8: its 8-coefficient block can reach class 7, where the
+ * general row would spill into the chroma-AC context. */
+static const uint8_t PFX_INC_CDC422[8] = { 5, 5, 5, 5, 6, 7, 8, 8 };
+/* TALLY_NEXT[level > 1][class] */
+static const uint8_t TALLY_NEXT[2][8] = { { 1, 2, 3, 3, 4, 5, 6, 7 },
+                                          { 4, 4, 4, 4, 5, 6, 7, 7 } };
 
 /* --- residual bit estimation (RDOQ cost, no arithmetic coding) --- */
 
@@ -943,17 +953,17 @@ static long frz_levels(const uint8_t *lvl, const uint8_t *gt1, const int *coeffs
     int node = 0;
     for (int k = nc - 1; k >= 0; k--) {
         int co = coeffs[k], a = co < 0 ? -co : co;
-        int cx = (mode & 2) ? LVL1_CTX[0] : LVL1_CTX[node];
+        int cx = (mode & 2) ? GT1FLAG_INC[0] : GT1FLAG_INC[node];
         if (a > 1) {
             eb += est_tab[lvl[cx]][1] >> 8;
             int pf = a < 15 ? a - 1 : 14;
             if (mode & 4) eb += 256 * (a < 15 ? a - 1 : 13);
             else          eb += unary_frz[pf][lvl[gt1[node]]];
             if (a >= 15) eb += ueg0_bits(a - 15);
-            node = LVL_TRANS[1][node];
+            node = TALLY_NEXT[1][node];
         } else {
             eb += est_tab[lvl[cx]][0] >> 8;
-            node = LVL_TRANS[0][node];
+            node = TALLY_NEXT[0][node];
         }
         eb += 256;                                        /* sign, bypass */
     }
@@ -969,10 +979,10 @@ static long est_levels(uint8_t lst[10], const int *coeffs, int nc)
     int node = 0;
     for (int k = nc - 1; k >= 0; k--) {
         int coeff = coeffs[k], a = coeff < 0 ? -coeff : coeff;
-        int ctx = LVL1_CTX[node];
+        int ctx = GT1FLAG_INC[node];
         if (a > 1) {
             bits += est_decision(&lst[ctx], 1);
-            ctx = LVLGT1_CTX[node];
+            ctx = PFX_INC[node];
             int m = a < 15 ? a : 15;
             for (int t = m - 2; t > 0; t--)
                 bits += est_decision(&lst[ctx], 1);
@@ -983,10 +993,10 @@ static long est_levels(uint8_t lst[10], const int *coeffs, int nc)
                 while (val >= (1 << kk)) { bits += 256; val -= (1 << kk); kk++; }
                 bits += 256 * (1 + kk);
             }
-            node = LVL_TRANS[1][node];
+            node = TALLY_NEXT[1][node];
         } else {
             bits += est_decision(&lst[ctx], 0);
-            node = LVL_TRANS[0][node];
+            node = TALLY_NEXT[0][node];
         }
         bits += 256;                                      /* sign, bypass */
     }
@@ -1052,31 +1062,41 @@ long y264_cabac_residual_bits(const y264_cabac_t *c, int cat, const dctcoef *l,
  * common case) touch the tree only at their coded coefficients. */
 typedef struct { uint16_t nxt; uint16_t lev; uint16_t pos; } tr_level;
 
-/* One trellis node: best cumulative RD score to reach a given level-context
- * "node" state at the current scan position, the head of that path's decision
- * chain, and the evolving level contexts on the path. Only 4 of the 10 level
- * contexts are path-dependent, so st.b = { ctx0, ctx4, ctx8, ctx9 } packed in
- * one word: the node determines the context. The other six are read at most
- * once per path at their block-initial value lst0[]:
- * bin0 (level>1?) uses ctx LVL1_CTX[node] in {0..4}: nodes 0/1/2 use the dead
- * idx 1/2/3 (lst0); node 3 loops on idx4 (b[1]); nodes >=4 loop on idx0 (b[0]).
- * suffix (gt1 unary) uses ctx gt1tab[node] in {5..9}: nodes <=5 use dead idx
- * 5/6/7 (lst0); idx8 (b[2]) and idx9 (b[3]) can loop/continue (node 6->7,
- * incl. the cat-5 422-DC case where gt1tab[7]==8) so both are carried. */
-union stword { uint32_t w; uint8_t b[4]; };
-typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
+/* One lattice state: the best path so far that ends in a given tally class
+ * (see GT1FLAG_INC), its cost, its decision-chain head, and the context
+ * states the path itself has moved. From the class rules, a path codes most
+ * level contexts at most once, so their block-initial state lst0[] prices
+ * them: bin 0 in classes 0..2 (each class is left as soon as it codes), and
+ * the prefix in classes 0..6 (classes 0..3 code it only on the move to 4;
+ * 4, 5 and 6 code it only on the move up). Two contexts repeat on a path:
+ *   flag  the bin-0 context of class 3 (inc 4: a run of ones loops there)
+ *         or of classes 4..7 (inc 0, shared by all four). The two never
+ *         meet on one path: entering class 4 starts flag at lst0[0].
+ *   run   the prefix context of class 7 (inc 9, looped by every further
+ *         level > 1). It starts at lst0[9] on entry from class 6, or, for
+ *         4:2:2 chroma DC where classes 6 and 7 share inc 8, at the state
+ *         class 6's prefix left behind.
+ * flag is valid in classes 3..7 and run in class 7 only; nothing else is
+ * written or read. */
+typedef struct {
+    long    cost;
+    int32_t chain;
+    uint8_t flag;
+    uint8_t run;
+} rq_state;
 
-/* Shared Viterbi over the 8 level-context nodes, reverse scan. Per position the
- * per-transition work is specialized on the candidate magnitude class -- drop
- * (a==0), one (a==1: only the level>1 flag), big (a>1: flag + unary via the
- * unary_bits table) -- with the node loop unrolled so each node's context class
- * (dead / b[1] / b[0] / carried gt1) is resolved at compile time, and the
- * per-position invariants (sig/last flag costs, candidate distortions, dead-ctx
- * bin0 and unary costs) hoisted out of the node loop. `sst`/`ltt` hold the n
- * read-only sig/last context states, `j7b` the carried gt1 byte for node 7 (3,
- * or 2 for the 422-DC table where gt1tab[7]==8). Picks the winner among
- * the live end nodes (zero_cost on the all-zero node 0, coded_cost on the
- * rest) and returns its chain head in `tree` for the caller to walk. */
+/* Shared Viterbi over the 8 tally classes, reverse scan. Per position the
+ * per-transition work is specialized on the candidate magnitude -- drop
+ * (a==0), one (a==1: bin 0 only), big (a>1: bin 0 + prefix via the
+ * unary_bits table) -- with the class loop unrolled so whether a class prices
+ * from lst0, its flag or its run is resolved at compile time, and the
+ * per-position invariants (sig/last flag costs, candidate distortions,
+ * lst0-priced bin 0 and prefix costs) hoisted out of the class loop.
+ * `sst`/`ltt` hold the n read-only sig/last context states; `run_shared` is
+ * set for 4:2:2 chroma DC, where class 7's prefix continues class 6's
+ * context. Picks the winner among the live end classes (zero_cost on the
+ * all-zero class 0, coded_cost on the rest) and returns its chain head in
+ * `tree` for the caller to walk. */
 /* Psy-in-Viterbi: psyp[i] = sign(coef) x
  * fdct(pred) per scan position, psy256 the strength. Each candidate level l
  * carries -psy256*|psyp[i] + unq(l)| -- the reconstruction-spectrum AC reward
@@ -1096,7 +1116,7 @@ _Atomic uint64_t y264_est_bins, y264_est_bypass;
 
 static int trellis_core(int n, const int *qn, const int *abscoef, const long *unmf,
                         const int *w2, long L, const uint8_t *lst0,
-                        const uint8_t *sst, const uint8_t *ltt, int j7b,
+                        const uint8_t *sst, const uint8_t *ltt, int run_shared,
                         int psy256, const int *psyp, int psy_lo,
                         long zero_cost, long coded_cost, tr_level *tree, int lastq)
 {
@@ -1105,11 +1125,9 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
     const int tl = y264_tl_on;
     unsigned long tl_coef = 0, tl_node = 0;
     if (tl) atomic_fetch_add_explicit(&y264_tl_calls, 1, memory_order_relaxed);
-    trellis_node A[8], B[8], *prev = A, *cur = B;
-    prev[0].score = 0;
-    prev[0].lidx = 0;
-    prev[0].st.b[0] = lst0[0]; prev[0].st.b[1] = lst0[4];
-    prev[0].st.b[2] = lst0[8]; prev[0].st.b[3] = lst0[9];
+    rq_state A[8], B[8], *prev = A, *cur = B;
+    prev[0].cost = 0;
+    prev[0].chain = 0;
     tree[0].nxt = 0; tree[0].lev = 0; tree[0].pos = 0;
     int used = 1;
 
@@ -1164,72 +1182,82 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
         b0c[k][1] = est_bits_noup(lst0[k + 1], 1);
     }
 
-/* accept a NONZERO-level transition (from node j, abs level a > 0, new packed
- * state w_) into cur node d; ties keep the earlier writer, so transition order
- * must stay j ascending with the lower candidate first */
-#define TACC(d, j, a, w_, sc_) do { \
+/* accept a NONZERO-level transition (from class j, abs level a > 0, moved
+ * context states fl_/rn_) into class d; only the fields class d keeps are
+ * stored. Ties keep the earlier writer, so transition order must stay j
+ * ascending with the lower candidate first */
+#define TACC(d, j, a, fl_, rn_, sc_) do { \
         if (tl) tl_node++; \
         long _s = (sc_); \
-        if (!((cl >> (d)) & 1u) || _s < cur[d].score) { \
+        if (!((cl >> (d)) & 1u) || _s < cur[d].cost) { \
             cl |= 1u << (d); \
-            cur[d].score = _s; \
-            cur[d].st.w = (w_); \
-            tree[used].nxt = (uint16_t)prev[j].lidx; \
+            cur[d].cost = _s; \
+            if ((d) >= 3) cur[d].flag = (fl_); \
+            if ((d) == 7) cur[d].run = (rn_); \
+            tree[used].nxt = (uint16_t)prev[j].chain; \
             tree[used].lev = (uint16_t)(a); \
             tree[used].pos = (uint16_t)i; \
-            cur[d].lidx = used++; \
+            cur[d].chain = used++; \
         } \
     } while (0)
 
-/* drop at a live node j >= 1: distortion + significant=0, contexts unchanged;
+/* drop at a live class j >= 1: distortion + significant=0, contexts unchanged;
  * zero levels are implicit in the chain, so no tree entry is appended */
 #define T_DROP(j) do { \
-        long _s = prev[j].score + dz + L * cs0; \
-        if (!((cl >> (j)) & 1u) || _s < cur[j].score) { \
+        long _s = prev[j].cost + dz + L * cs0; \
+        if (!((cl >> (j)) & 1u) || _s < cur[j].cost) { \
             cl |= 1u << (j); \
-            cur[j].score = _s; \
-            cur[j].st.w = prev[j].st.w; \
-            cur[j].lidx = prev[j].lidx; \
+            cur[j].cost = _s; \
+            if ((j) >= 3) cur[j].flag = prev[j].flag; \
+            if ((j) == 7) cur[j].run = prev[j].run; \
+            cur[j].chain = prev[j].chain; \
         } \
     } while (0)
 
-/* keep at magnitude 1: level>1 flag = 0 in the node's bin0 context */
+/* keep at magnitude 1: bin 0 = 0. Classes 0..2 price it at lst0 (b0c) and
+ * the move 2 -> 3 starts flag at inc 4's initial state; classes >= 3 price
+ * and advance their flag */
 #define T_ONE(j, d1_, dst) do { \
-        union stword _u = prev[j].st; \
         long _r; \
+        uint8_t _f; \
         if ((j) <= 2) { \
             _r = ((j) == 0 ? rl_last : rl_mid) + b0c[(j) <= 2 ? (j) : 0][0]; \
-        } else if ((j) == 3) { \
-            _r = rl_mid + est_bits_noup(_u.b[1], 0); \
-            _u.b[1] = ctx_next(_u.b[1], 0); \
+            _f = lst0[4]; \
         } else { \
-            _r = rl_mid + est_bits_noup(_u.b[0], 0); \
-            _u.b[0] = ctx_next(_u.b[0], 0); \
+            _r = rl_mid + est_bits_noup(prev[j].flag, 0); \
+            _f = ctx_next(prev[j].flag, 0); \
         } \
-        TACC(dst, j, 1, _u.w, prev[j].score + (d1_) + L * (_r + 256)); \
+        TACC(dst, j, 1, _f, (j) == 7 ? prev[7].run : 0, \
+             prev[j].cost + (d1_) + L * (_r + 256)); \
     } while (0)
 
-/* keep at magnitude a > 1: level>1 flag = 1, then the gt1 unary prefix (table)
- * plus any bypass suffix; uini_ is the table cost at the node's dead lst0 gt1
- * context (nodes <= 5), nodes 6/7 price and evolve their carried byte */
+/* keep at magnitude a > 1: bin 0 = 1, then the prefix (table) plus any
+ * bypass suffix. uini_ is the prefix cost at lst0 for classes <= 5; class 6
+ * prices at lst0[8] and seeds run, class 7 prices and advances run. Classes
+ * <= 3 land in class 4 with flag at inc 0's initial state */
 #define T_BIG(j, a_, d_, p_, sfx_, uini_, dst) do { \
-        union stword _u = prev[j].st; \
         long _r; \
+        uint8_t _f, _n = 0; \
         if ((j) <= 2) { \
             _r = ((j) == 0 ? rl_last : rl_mid) + b0c[(j) <= 2 ? (j) : 0][1] + (uini_); \
+            _f = lst0[0]; \
         } else if ((j) == 3) { \
-            _r = rl_mid + est_bits_noup(_u.b[1], 1) + (uini_); \
-            _u.b[1] = ctx_next(_u.b[1], 1); \
-        } else if ((j) <= 5) { \
-            _r = rl_mid + est_bits_noup(_u.b[0], 1) + (uini_); \
-            _u.b[0] = ctx_next(_u.b[0], 1); \
+            _r = rl_mid + est_bits_noup(prev[3].flag, 1) + (uini_); \
+            _f = lst0[0]; \
         } else { \
-            int _gi = ((j) == 6) ? 2 : j7b; \
-            _r = rl_mid + est_bits_noup(_u.b[0], 1) + unary_bits[p_][_u.b[_gi]]; \
-            _u.b[_gi] = unary_trans[p_][_u.b[_gi]]; \
-            _u.b[0] = ctx_next(_u.b[0], 1); \
+            _r = rl_mid + est_bits_noup(prev[j].flag, 1); \
+            _f = ctx_next(prev[j].flag, 1); \
+            if ((j) <= 5) { \
+                _r += (uini_); \
+            } else if ((j) == 6) { \
+                _r += unary_bits[p_][lst0[8]]; \
+                _n = run_shared ? unary_trans[p_][lst0[8]] : lst0[9]; \
+            } else { \
+                _r += unary_bits[p_][prev[7].run]; \
+                _n = unary_trans[p_][prev[7].run]; \
+            } \
         } \
-        TACC(dst, j, a_, _u.w, prev[j].score + (d_) + L * (_r + (sfx_) + 256)); \
+        TACC(dst, j, a_, _f, _n, prev[j].cost + (d_) + L * (_r + (sfx_) + 256)); \
     } while (0)
 
 /* live = reached by some path this position; a node's fields are only read
@@ -1261,7 +1289,7 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
                 } while (i >= 0 && qn[i] == 0);
                 long rz = L * rbs;
                 for (unsigned m = pl & ~1u; m; m &= m - 1)
-                    prev[__builtin_ctz(m)].score += rz;
+                    prev[__builtin_ctz(m)].cost += rz;
                 continue;
             }
             cl = 0;
@@ -1277,16 +1305,15 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
             int d = abscoef[i] - unq;
             long d1 = (long)d * d * w2[i];
             if (T_LIVE(0)) {
-                cur[0].score = prev[0].score + dz;
-                cur[0].st = prev[0].st;
-                cur[0].lidx = prev[0].lidx;
+                cur[0].cost = prev[0].cost + dz;
+                cur[0].chain = prev[0].chain;
                 cl |= 1u;
                 T_ONE(0, d1, 1);
             }
             if (T_LIVE(1)) { T_DROP(1); T_ONE(1, d1, 2); }
             if (T_LIVE(2)) { T_DROP(2); T_ONE(2, d1, 3); }
             if (T_LIVE(3)) { T_DROP(3); T_ONE(3, d1, 3); }
-            trellis_node *t = prev; prev = cur; cur = t;
+            rq_state *t = prev; prev = cur; cur = t;
             pl = cl;
             i--;
         }
@@ -1312,7 +1339,7 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
             } while (i >= 0 && qn[i] == 0);
             long rz = L * rbs;
             for (unsigned m = pl & ~1u; m; m &= m - 1)
-                prev[__builtin_ctz(m)].score += rz;
+                prev[__builtin_ctz(m)].cost += rz;
             continue;
         }
 
@@ -1340,9 +1367,8 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
             }
             if (T_LIVE(0)) {
                 /* node 0 stays all-zero: no flags, chain stays the zero loop */
-                cur[0].score = prev[0].score + dz;
-                cur[0].st = prev[0].st;
-                cur[0].lidx = prev[0].lidx;
+                cur[0].cost = prev[0].cost + dz;
+                cur[0].chain = prev[0].chain;
                 cl |= 1u;
                 T_ONE(0, d1, 1);
             }
@@ -1450,7 +1476,7 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
                 if (T_LIVE(7)) T_BIG(7, aup, dup, pup, sfup, 0, 7);
             }
         }
-        trellis_node *t = prev; prev = cur; cur = t;
+        rq_state *t = prev; prev = cur; cur = t;
         pl = cl;
         i--;
     }
@@ -1469,11 +1495,11 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
      * every coded node coded_cost; ties keep node 0, then the lower node.
      * Returns its chain head, 0 for the all-zero block. */
     int have = pl & 1u, best_l = 0;
-    long best = have ? prev[0].score + zero_cost : 0;
+    long best = have ? prev[0].cost + zero_cost : 0;
     for (unsigned m = pl & ~1u; m; m &= m - 1) {
         int j = __builtin_ctz(m);
-        long jc = prev[j].score + coded_cost;
-        if (!have || jc < best) { best = jc; best_l = prev[j].lidx; have = 1; }
+        long jc = prev[j].cost + coded_cost;
+        if (!have || jc < best) { best = jc; best_l = prev[j].chain; have = 1; }
     }
     return best_l;
 }
@@ -1512,7 +1538,7 @@ void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
     /* coded_block_flag: all-zero (node 0) vs any coded path (nodes 1..7) */
     uint8_t cbf = c->ctx[CBF_BASE[cat] + 2 * (nzb ? 1 : 0) + (nza ? 1 : 0)];
     int idx = trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt,
-                           cat == 5 ? 2 : 3, psy256, psyp, psy_lo,
+                           cat == 5, psy256, psyp, psy_lo,
                            L * est_bits_noup(cbf, 0), L * est_bits_noup(cbf, 1),
                            tree, lastq);
 
@@ -1633,7 +1659,7 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
     tr_level tree[1 + 16 * 64];
     /* no coded_block_flag: best over all nodes (node 0 = all-zero, 0 bits) */
-    int idx = trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 3, psy256, psyp,
+    int idx = trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 0, psy256, psyp,
                            psy_lo, 0, 0, tree, lastq);
 
     memset(absout, 0, (size_t)n * sizeof(int));
@@ -1654,7 +1680,7 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
         int node_ = 0; \
         for (int k_ = nc - 1; k_ >= 0; k_--) { \
             int co_ = coeffs[k_], a_ = co_ < 0 ? -co_ : co_; \
-            uint8_t *cx_ = (lvl_) + LVL1_CTX[node_]; \
+            uint8_t *cx_ = (lvl_) + GT1FLAG_INC[node_]; \
             if (a_ > 1) { \
                 E_DEC(cx_, 1); \
                 cx_ = (lvl_) + (gt1_)[node_]; \
@@ -1672,10 +1698,10 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                     x_ = (x_ << 1) | (uint64_t)(co_ < 0); \
                     E_BYPASS_N(nb_ + 1, x_); \
                 } \
-                node_ = LVL_TRANS[1][node_]; \
+                node_ = TALLY_NEXT[1][node_]; \
             } else { \
                 E_DEC(cx_, 0); \
-                node_ = LVL_TRANS[0][node_]; \
+                node_ = TALLY_NEXT[0][node_]; \
                 E_BYPASS(co_ < 0); \
             } \
         } \
@@ -1694,7 +1720,7 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
         int node_ = 0; \
         for (int k_ = nc - 1; k_ >= 0; k_--) { \
             int co_ = coeffs[k_], a_ = co_ < 0 ? -co_ : co_; \
-            int cx_ = (base_) + LVL1_CTX[node_]; \
+            int cx_ = (base_) + GT1FLAG_INC[node_]; \
             if (a_ > 1) { \
                 EST_DEC(cx_, 1); \
                 cx_ = (base_) + (gt1_)[node_]; \
@@ -1716,10 +1742,10 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                     EST_BYP(); \
                     while (kk_ > 0) { kk_--; EST_BYP(); } \
                 } \
-                node_ = LVL_TRANS[1][node_]; \
+                node_ = TALLY_NEXT[1][node_]; \
             } else { \
                 EST_DEC(cx_, 0); \
-                node_ = LVL_TRANS[0][node_]; \
+                node_ = TALLY_NEXT[0][node_]; \
             } \
             EST_BYP(); \
         } \
@@ -1799,7 +1825,7 @@ static void fz_extend8(y264_cabac_t *c, int upto)
             m_ &= m_ - 1; \
         } \
         coeffs[nc++] = get_(last_); \
-        eb_ += frz_levels(&c->ctx[426], LVLGT1_CTX, coeffs, nc, c->est_frozen); \
+        eb_ += frz_levels(&c->ctx[426], PFX_INC, coeffs, nc, c->est_frozen); \
         c->est_bits += eb_; \
     } while (0)
 
@@ -1869,7 +1895,7 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
     int ctx_sig = c->field ? SIG_OFF_F[cat] : SIG_OFF[cat];
     int ctx_last = c->field ? LAST_OFF_F[cat] : LAST_OFF[cat];
     const uint8_t *scm = cat == 5 ? SC422DC : SC_ID;
-    const uint8_t *gt1 = cat == 5 ? LVLGT1_CTX_422DC : LVLGT1_CTX;
+    const uint8_t *gt1 = cat == 5 ? PFX_INC_CDC422 : PFX_INC;
     int coeffs[16], nc = 0;
 
     if (c->est_mode && c->est_frozen) {
@@ -1955,7 +1981,7 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         int node = 0;
         for (int k = nc - 1; k >= 0; k--) {
             int co = coeffs[k], a = co < 0 ? -co : co;
-            int cx = LVL1_CTX[node];
+            int cx = GT1FLAG_INC[node];
             if (a > 1) {
                 uint32_t e = est_tab[lvl[cx]][1];
                 lvl[cx] = (uint8_t)e; eb += e >> 8;
@@ -1966,11 +1992,11 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
                 lvl[cx] = unary_trans[pf][s];
                 if (a >= 15)
                     eb += ueg0_bits(a - 15);
-                node = LVL_TRANS[1][node];
+                node = TALLY_NEXT[1][node];
             } else {
                 uint32_t e = est_tab[lvl[cx]][0];
                 lvl[cx] = (uint8_t)e; eb += e >> 8;
-                node = LVL_TRANS[0][node];
+                node = TALLY_NEXT[0][node];
             }
             eb += 256;                                    /* sign, bypass */
         }
@@ -2052,7 +2078,7 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
         }
         coeffs[nc++] = l[last];
         if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
-        EST_LEVELS(LVLGT1_CTX, 426);
+        EST_LEVELS(PFX_INC, 426);
         c->est_bits += eb;
         return nc;
     }
@@ -2070,7 +2096,7 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
     }
     coeffs[nc++] = l[last];
     if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
-    E_LEVELS(LVLGT1_CTX, &c->ctx[426]);
+    E_LEVELS(PFX_INC, &c->ctx[426]);
     E_STORE();
     return nc;
 }
@@ -2135,7 +2161,7 @@ int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr)
     }
     coeffs[nc++] = lr[SCAN8[last]];
     if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
-    E_LEVELS(LVLGT1_CTX, &c->ctx[426]);
+    E_LEVELS(PFX_INC, &c->ctx[426]);
     E_STORE();
     return nc;
 }
@@ -2244,22 +2270,22 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
     int node = 0;
     for (int k = nc - 1; k >= 0; k--) {
         int co = coeffs[k], a = co < 0 ? -co : co;
-        int cx = LVL1_CTX[node];
+        int cx = GT1FLAG_INC[node];
         if (a > 1) {
             uint32_t e = est_tab[lvl[cx]][1];
             lvl[cx] = (uint8_t)e; eb += e >> 8;
-            cx = LVLGT1_CTX[node];
+            cx = PFX_INC[node];
             int pf = a < 15 ? a - 1 : 14;
             uint8_t s = lvl[cx];
             eb += unary_bits[pf][s];
             lvl[cx] = unary_trans[pf][s];
             if (a >= 15)
                 eb += ueg0_bits(a - 15);
-            node = LVL_TRANS[1][node];
+            node = TALLY_NEXT[1][node];
         } else {
             uint32_t e = est_tab[lvl[cx]][0];
             lvl[cx] = (uint8_t)e; eb += e >> 8;
-            node = LVL_TRANS[0][node];
+            node = TALLY_NEXT[0][node];
         }
         eb += 256;                                        /* sign, bypass */
     }
