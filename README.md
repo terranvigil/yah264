@@ -34,7 +34,7 @@ yah264 has met and surprised speed, compression and quality parity with x264. Th
 | 2 | plain C, all cores | 1.41x to 1.96x | 1.27x |
 | 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.06x |
 
-Note that This is an Apple M5 is my primary development platform so most of the work was done for arm64. Once we reached parity, I also further optimized for additional plantforms and instruction sets.
+NOTE: An Apple M5 is my primary development platform so most of the work was done for arm64. Once we reached parity, I also further optimized for additional plantforms and instruction sets.
 
 ## Details
 
