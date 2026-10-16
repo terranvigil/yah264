@@ -5,6 +5,12 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # Cloud runs: estimate against actual
 
+**Superseded.** The plan below is for GCP and books some sessions on-demand.
+The owner has since ruled that cloud work runs on AWS spot instances only,
+under a price cap and never on-demand. The current rule and the rented-machine
+method are in `docs/x86-plan.md` ("Decisions" and "Measuring on rented
+machines"). The plan stays here as the record of what was estimated.
+
 This is the plan's session table (formerly in docs/x86-plan.md) with a column
 for what each session really cost. After the session, fill in the actual column
 from the instance's own billing page and commit it. An estimate nobody checks
