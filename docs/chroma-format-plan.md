@@ -1,12 +1,13 @@
 # 4:2:2 / 4:4:4 chroma-format support, phased plan
 
-10-bit lands first, then 4:2:2/4:4:4. Unlike 10-bit, chroma formats do **not**
-touch the luma pixel type, so they do not block the luma SIMD/optimization pass.
+10-bit ships first, then 4:2:2/4:4:4. Chroma formats do **not** touch the luma
+pixel type the way 10-bit does, so they do not block the luma SIMD/optimization
+pass.
 
 ## Non-negotiable invariant
 
-**4:2:0 output stays byte-identical at every step.** New format code is gated
-behind `cf_idc`/`sub_w`/`sub_h`; the 4:2:0 path produces identical `.264` and
+**4:2:0 output stays byte-identical at every step.** New format code sits
+behind `cf_idc`/`sub_w`/`sub_h`. The 4:2:0 path produces identical `.264` and
 passes conformance throughout. Each format is only *accepted at open* once its
 whole chain is wired and recon-matches ffmpeg.
 
@@ -24,14 +25,15 @@ whole chain is wired and recon-matches ffmpeg.
 
 1. **Chroma-DC transform.** 4:2:0 = 2x2 Hadamard (4 DC). 4:2:2 = 2x4 DC (8 DC,
    spec 8.5.11, a 2-point + 4-point transform with a `sqrt(2)`-scaled quant).
-   4:4:4 has **no** chroma-DC: chroma AC/DC are coded like luma (Intra16 chroma
-   uses a luma-style 4x4 DC only inside I_16x16; otherwise plain 4x4 residual).
+   4:4:4 has **no** chroma-DC. Chroma AC/DC are coded like luma: Intra16 chroma
+   uses a luma-style 4x4 DC only inside I_16x16, and otherwise a plain 4x4
+   residual.
 2. **Entropy coding of chroma residual.** CABAC ctxBlockCat: 4:2:0/4:2:2 use
-   cat 3 (ChromaDC) + cat 4 (ChromaAC), but ChromaDC coeff count differs (4 vs 8)
-   so `CNT_M1`/scan differ. 4:4:4 uses the luma cats per component (cat 5/6-ish
+   cat 3 (ChromaDC) + cat 4 (ChromaAC). The ChromaDC coeff count differs (4 vs
+   8), so `CNT_M1`/scan differ. 4:4:4 uses the luma cats per component (cat 5/6-ish
    model: Cb/Cr get their own 4x4/8x8 residual, no ChromaDC). CAVLC: 4:2:2
    chroma-DC uses `nC == -2` (Table 9-9(b), 8 coeffs); 4:4:4 chroma uses the luma
-   `nC` neighbour derivation. cbp semantics: 4:2:0/4:2:2 keep the 0/1/2
+   `nC` neighbor derivation. cbp semantics: 4:2:0/4:2:2 keep the 0/1/2
    chroma-cbp; 4:4:4 folds chroma into the luma cbp (no separate chroma cbp).
 3. **Deblocking edge geometry.** 4:2:2 chroma MB is 8x16, so horizontal edges sit
    at chroma rows 0,4,8,12 (vs 0,4). 4:4:4 chroma deblocks exactly like luma
@@ -72,7 +74,7 @@ Reuse the luma coding path on the chroma planes.
 
 **Coding model.** The 4 `CodedBlockPatternLuma` bits gate the 8x8 groups of ALL
 three planes; `CodedBlockPatternChroma` is 0. Intra: each Cb/Cr block reuses the
-co-located luma block's Intra4x4/8x8/16x16 mode (inherited, not signalled). I16
+co-located luma block's Intra4x4/8x8/16x16 mode (inherited, not signaled). I16
 chroma runs the luma-style 4x4 DC Hadamard per component. MC: chroma uses the
 **luma 6-tap** interpolation, quarter-pel (`xIntC=(mvx>>2)`, `xFracC=mvx&3`; same
 for y), because chroma MV == luma MV. Deblock: `chromaStyleFilteringFlag=0`, so
@@ -96,10 +98,10 @@ ctxIdx (frame-coded) per ctxBlockCat:
 cabac_init (m,n) for ctxIdx 460..1023: spec Tables 9-25..9-33 (spec.txt lines
 14514..15254); values identical across I and P/B slice columns except the idc
 sets. `cabac_context_init_I[1024][2]` and `_PB[3][1024][2]` carry them. The Cb/Cr
-ranges initialize by copying the luma contexts, which are identical and are the
-spec-correct init for 4:4:4 chroma-as-luma.
+ranges initialize by copying the luma contexts. Those values are identical
+and are the spec-correct init for 4:4:4 chroma-as-luma.
 
-**CAVLC.** Cb/Cr use luma-style nC (per-component neighbour, `(nA+nB+1)>>1`),
+**CAVLC.** Cb/Cr use luma-style nC (per-component neighbor, `(nA+nB+1)>>1`),
 normal 0<=nC coeff_token columns, and the 4x4 total_zeros tables (NOT nC==-1/-2,
 NOT chroma-DC tables).
 
@@ -110,16 +112,16 @@ from 4x4). Fallback rule set A.
 
 ## Verification
 
-Recon-match uses the same harness as 10-bit: `--dump-recon` writes Y4M
-(C422p/C444p), decode the `.264` with ffmpeg, compare via `framemd5` (not raw
-`cmp`, the Y4M header/FRAME markers differ). Thread determinism (1 vs 4) and a
-QP sweep per format, as with High 10.
+Recon-match uses the same harness as 10-bit. `--dump-recon` writes Y4M
+(C422p/C444p). Decode the `.264` with ffmpeg and compare via `framemd5`, not
+raw `cmp`, because the Y4M header/FRAME markers differ. Each format also gets
+thread determinism (1 vs 4) and a QP sweep, as with High 10.
 
 **Reliable recon-match test:** decode the .264 to a Y4M (`ffmpeg -i x.264
 dec.y4m`) and compare `framemd5` hash columns Y4M-to-Y4M. Do NOT compare
-framemd5 of a Y4M against framemd5 taken directly off the .264 (ffmpeg treats
-those asymmetrically), and beware that `--dump-recon` carries the source
-framerate while the decode defaults to 25fps (only the hash column matters).
+framemd5 of a Y4M against framemd5 taken directly off the .264, because ffmpeg
+treats those asymmetrically. Also beware that `--dump-recon` keeps the source
+framerate while the decode defaults to 25fps. Only the hash column matters.
 
 ## Diagnostic traps
 
@@ -134,17 +136,17 @@ These each cost real time while bringing up 4:4:4.
   a usage error and an empty output file.
 - **Rebuild cleanly** (touch the .c). Checkout dances for comparison binaries
   leave stale object files.
-- **`decode_errors` on a FULL-SIZE stream is the trustworthy signal**, not
-  framemd5 mismatch, for 4:4:4.
+- **For 4:4:4, `decode_errors` on a FULL-SIZE stream is the trustworthy
+  signal**, not framemd5 mismatch.
 
-Two classes of bug turned up during bring-up and both are worth watching for in
-any new format:
+Two classes of bug turned up during bring-up. Watch for both in any new
+format:
 
-- **Stack buffer overflows** from 4:2:0-sized scratch: `nzbuf[16+8]` was too
+- **Stack buffer overflows** from 4:2:0-sized scratch. `nzbuf[16+8]` was too
   small for the 4:2:2 32-entry nnz save and corrupted the luma recon in RD
-  trials; the 4:4:4 nz/nzbuf and `snap_*` recon buffers needed 16+32 and
-  `16*16+2*16*16`. AddressSanitizer catches these; nothing else did.
+  trials. The 4:4:4 nz/nzbuf and `snap_*` recon buffers needed 16+32 and
+  `16*16+2*16*16`. AddressSanitizer catches these. Nothing else did.
 - **Context-table edge cases**: the CABAC chroma-DC `coeff_abs_level` Gt1
-  context. The 8-coefficient 4:2:2 chroma DC block reaches node 7, where the
+  context. The 8-coefficient 4:2:2 chroma DC block reaches node 7. There the
   general table gives ctxIdxInc 9, which spills into the chroma-AC context. The
   4:2:2-DC variant caps it at 8 (the 4:2:2 chroma-DC greater-than-1 context row).
