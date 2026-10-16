@@ -1,6 +1,6 @@
 # What shipped in yah264, and what each piece bought
 
-A ledger of the work, 2026-06 to 2026-09-06, written so a sibling encoder
+A ledger of the work, 2026-06 to 2026-10, written so a sibling encoder
 can run the same program: same goals, same gates, same order of attack.
 Numbers are the ones recorded when each item shipped (BD-rate on VMAF-NEG at
 matched achieved bitrate unless said otherwise; "band" = the 12-clip CRF
@@ -744,7 +744,8 @@ reason. A translated ratio for a 256-bit kernel measures the translator.
 Under Rosetta the AVX2 rows read BELOW their own C reference while the SSE4.2
 rows read 1.2x to 4.9x, and neither figure says anything about silicon. The
 coverage inventory's new columns therefore carry the checkasm row name and
-leave the number to session A.
+leave the number to session A. Rented x86-64 machines have since run the
+build, and section 27 has what they measured.
 
 **The ubuntu job goes green (2026-09-19).** The third thing the kit found
 wasn't an x86 finding either. Three open-GOP recovery cells failed under the
@@ -1752,7 +1753,9 @@ on the old curve. It now lands on its target instead of 9% under.
 **What this did not fix is rate tracking.** Six cells still land more than 6%
 from their target on some rung, where the reference lands none. Meridian and
 Chimera open 4 to 8 QP above the level that would spend the target and walk
-down for the whole clip. That is the next item.
+down for the whole clip. That is the next item. Section 25 found this
+diagnosis wrong: the opening wasn't the cause, one multiplication in the
+correction window was.
 
 CRF, CQP, CBR and two-pass output is byte-identical to the previous build.
 Two data races found on the way are fixed in the same merge. The mb-tree warm
