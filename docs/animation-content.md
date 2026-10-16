@@ -5,6 +5,10 @@ against 0.82x to 1.16x on the six table clips. That looked like a defect. It is
 not. The reason is worth writing down because the same reasoning applies to any
 content class the corpus does not contain.
 
+Since then yah264 has reached parity with x264 (2026-10-12), so the 1.34x and
+0.82-1.16x readings below describe the encoder before that round. The current
+speed figures are in the README and `site/results.md`.
+
 ## The gap is content, not size or rate
 
 Three explanations were available, and two of them are wrong. Measured on the same clip:
@@ -64,8 +68,8 @@ They are the longest cut-free run in a flat-color sequence 35 minutes in, with
 Re-measured 2026-08-27 after the `Y264_MB_LAMBDA=5` default (the mb-tree-lambda
 fix this deficit led to), on the same ladder in one run: **bbb -25.24%, sita
 +7.76%**. The flip paid about 4.5 points of the CGI lead to take about 3 off
-the hand-drawn deficit. That is the accepted trade. Both README numbers now
-quote this pair.
+the hand-drawn deficit. That is the accepted trade. Both README numbers quoted
+this pair at the time. The README no longer quotes either clip.
 
 Corrected 2026-09-03: **the shipped form reads sita +5.89%**, from +10.66% on
 the same 30/34/38/42 ladder. The battery below records that pair.
