@@ -139,7 +139,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
-| `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ metric: 1 log2-variance, 2 autovariance. **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
+| `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level centre on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
 | `--abr-model` | `default`, `rf` | `default` | ABR bit allocation. `rf` (spelled `x264` in older scripts, still accepted) spends a given bitrate markedly better and hits it less reliably. See below. |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
@@ -1625,9 +1625,9 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_SUBPEL` | preset | The subpel pattern: 0 square, 1 diamond, 2 capped diamond. Promoted to `--subpel`, and still overrides it. |
 | `Y264_UMH_RANGE` | 16 | UMH search radius in integer pels. Promoted to `--merange`, and still overrides it. |
 | `Y264_ABR_QCOMP` | 0.6 | The ABR rate curve's compression, and the mb-tree strength derived from it. Promoted to `--qcomp`, and still overrides it. |
-| `Y264_AQ_DC` | 1.0 | The AQ frame-mean term's strength (x1.0397 like the per-MB AQ), added to the CRF base QP as its difference from the per-MB strength: the across-shot allocation term, at x264's AQ strength. `0.4` (= `--aq-strength`) reproduces the pre-2026-09-05 output. CRF only. |
+| `Y264_AQ_DC` | 1.04 | The AQ frame-level strength, added to the CRF base QP as its rate-equivalent difference from the per-MB field's strength: the across-shot allocation term. Fitted by sweep. CRF only. |
 | `Y264_DZ_INTRA` / `Y264_DZ_INTER` | unset | Quantizer rounding bias in 1/64 units. This is the encoder's own scale, **not** the CLI flag's, which is `32` minus this. Promoted to `--deadzone-intra`/`--deadzone-inter`, which do the inversion. Both still override. |
-| `Y264_AQ_MODE` | 2 | 1 is log2-variance AQ, 2 and above is x264 aq-mode 2. Promoted to `--aq-mode`, and still overrides it. |
+| `Y264_AQ_MODE` | 2 | 1 is plain log2-variance AQ, 2 and above is yah264's adaptive form (see `--aq-mode`). Promoted to `--aq-mode`, and still overrides it. |
 | `Y264_FAST_PSKIP` | 1 (on) | The cheap P_Skip pre-test at `--subme` 8 and below. Promoted to `--no-fast-pskip`, and still overrides it. |
 | `Y264_DCTDEC` | 1 (on) | Coefficient decimation. Promoted to `--no-dct-decimate`, and still overrides it. |
 | `Y264_AQ_DARK` | 0 (off) | Dark-region AQ bias, around 0.5 to 1.0. |
@@ -1645,7 +1645,7 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_LA_BUF` | auto = `bframes+1` (4 at medium) | Overrides `--sync-lookahead`, **in both directions**: the auto default resolves a lead of `bframes+1` whenever there is a pool, so `=1` and `=0` REDUCE it and cost 1-6% of wall. Costs latency, and changes no bits **while the decoupled chain is on**, which is whenever the knob has any effect. Forced together with `Y264_LA_THREAD=0`, it changes the bitstream deterministically. |
 | `Y264_NTP_SPIN` | 25 (us) | Thread-pool spin budget before sleeping. Worth tuning on unusual core counts. |
 | `Y264_CRF_CPLX` | 1 (on) | Behavior-matched CRF content adaptation, on by default. Narrows the equal-CRF spread against x264 from 100 points to 41, and improves 9 of 11 corpus clips at the tuned anchor, worst +1.54%. 0 turns it off. |
-| `Y264_CRF_FPS` | follows `CRF_CPLX`, so on | Frame-duration term, so CRF N is the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one. |
+| `Y264_CRF_LEVEL`, `Y264_CRF_FPS_SLOPE` | 2.3, 2.9 | The CRF base under mb-tree, `crf + level + slope * log2(fps / 30)`, fitted against the reference CLI's bytes at equal `--crf`. |
 | `Y264_AQ_CHROMA` | 0 (off) | Sums chroma into the AQ energy. Measured neutral: it costs 9% of the mb-tree bucket and buys +0.35..-0.29% BD. Off even under `CRF_CPLX`. |
 
 Two you should know exist so you never set them:
@@ -1676,10 +1676,10 @@ looking at if you find one in a script, not as a tuning surface.
 `Y264_PROBE_TRELLIS`, `Y264_RD_ADMIT`, `Y264_RD_ADMIT_MARGIN`, `Y264_MIDSKIP`,
 `Y264_MIDSKIP_MARGIN`, `Y264_ADME`.
 
-**AQ and rate control:** `Y264_AQ2_BIAS`, `Y264_AQ_BOOST`, `Y264_AQ_OCTILE`,
+**AQ and rate control:** `Y264_AQ2_SREF`, `Y264_AQ2_SPOW`, `Y264_AQ2_GMIN`, `Y264_AQ2_GMAX`, `Y264_AQ2_BFLOOR`, `Y264_AQ2_AFLOOR`, `Y264_AQ_BPULL`, `Y264_AQ_BREF`, `Y264_AQ_BOOST`, `Y264_AQ_OCTILE`,
 `Y264_AQ_ANCHOR`, `Y264_CRF_CL`, `Y264_CRF_AQABS`, `Y264_CRF_PB0`,
-`Y264_CRF_PED`, `Y264_CRF_PBSCALE`, `Y264_CRF_BASE`, `Y264_CRF_SLOPE`,
-`Y264_CRF_CAP`, `Y264_CRF_CL_SHIFT`, `Y264_RCP_GAIN`, `Y264_RCP_WARM`,
+`Y264_CRF_PBSCALE`, `Y264_CRF_BASE`, `Y264_CRF_SLOPE`,
+`Y264_CRF_CAP`, `Y264_CRF_MBT_CPLX`, `Y264_RCP_GAIN`, `Y264_RCP_WARM`,
 `Y264_RCP_QPD`, `Y264_VBV_RHI`, `Y264_VBV_QPD`, `Y264_VBV_CJUMP`,
 `Y264_TP_BEXP`,
 `Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`,

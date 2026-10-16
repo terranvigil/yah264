@@ -449,6 +449,8 @@ static double abr_scale_for(yah264_encoder_t *e, int type)
 #define CRF_BASE_CPLX  140.0    /* per-MB ME-compensated cost that sits at qp=crf */
 #define CRF_QP_SLOPE   1.8      /* QP per log2 of complexity (a 0.6 qcomp would be 2.4) */
 #define CRF_QP_CAP     1.5      /* max QP discount below crf for easy content */
+#define CRF_MBT_LEVEL      2.3  /* QP added to --crf under mb-tree (fitted, rc_set_qp_crf) */
+#define CRF_MBT_FPS_SLOPE  2.9  /* QP per doubling of the frame rate from 30 fps (fitted) */
 
 static double rc_tunable(const char *n, double def, int *set)
 {
@@ -603,7 +605,9 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
     k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
     k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
-    k->crf_cl_shift   = rc_tunable("Y264_CRF_CL_SHIFT", 0.0, &k->crf_cl_shift_set);
+    k->crf_level      = rc_tunable("Y264_CRF_LEVEL", CRF_MBT_LEVEL, NULL);
+    k->crf_fps_slope  = rc_tunable("Y264_CRF_FPS_SLOPE", CRF_MBT_FPS_SLOPE, NULL);
+    k->crf_mbt_cplx   = rc_tunable("Y264_CRF_MBT_CPLX", 0.0, NULL);
     k->rc_trace       = getenv("Y264_RC_TRACE") != NULL;
     k->dbg_cplx       = getenv("Y264_DBG_CPLX") != NULL;
 }
@@ -623,8 +627,11 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  * mobile for exactly that reason. Gate: ms_cif_30 / ms_720p_50 /
  * ms_1080p_25 -8.2 / -4.1 / -6.2% BD-VMAF-NEG vs flat (BD gap to the reference
  * encoder +13.4 / +4.9 / +7.3 -> +4.4 / +0.3 / +0.7); the 12-clip band at matched rate
- * median +0.30 / mean -0.26 / worst +0.94, sintel -5.73. Non-anchor paths
- * (mode-2 AQ on non-reference B) carry no DC of their own by design. */
+ * median +0.30 / mean -0.26 / worst +0.94, sintel -5.73. dcstr (Y264_AQ_DC)
+ * is the frame-level strength, fitted by sweep (0.9 / 1.0 / 1.04 / 1.2; 0.9
+ * costs bbb_720p 4%, 1.2 costs fourpeople and park_joy 1-1.7%); acstr is the
+ * field's own strength, aq-strength times the mode-2 gain. Non-reference B
+ * frames get their frame-level term from aq_analyze's centre pull instead. */
 /* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the
  * pre-2026-09-28 output): the frame DC as a RATE-EQUIVALENT
  * shift instead of the plain log-energy mean. Applied per macroblock, the
@@ -643,9 +650,19 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, n = wmb * hmb;
     int stride = e->pstride[0], cstride = e->pstride[1];
     int cw = e->aq_chroma && src[1] && src[2] ? 16 / e->sub_w : 0, ch = cw ? 16 / e->sub_h : 0;
-    double astr = (double)e->aq_strength * 1.0397;
-    double rqw = e->aq_dc_rqw;
-    double sum = 0, num = 0, den = 0;
+    double *lv = malloc((size_t)n * sizeof(double));
+    if (!lv) return 0.0;
+    /* The frame gain comes from the coded field's metric, log2(var + afloor)
+ * as in mbtree_invqscale. Under CRF the DC reads the same metric, since it
+ * sets the base QP the field sits on. Under ABR the DC is an input to the
+ * rate model instead, and there it reads log2(var + dcfloor) with a far lower
+ * floor, so a black or near-black frame reads as one: with the field's floor
+ * a black-leader cell (sintel_720p, 450-648 kbps) ran 4-17 points further
+ * over its target than the baseline, and with dcfloor 1/256 it runs 1-10
+ * points under it. Under CRF that floor costs akiyo and stefan 0.3-2%
+ * (three ladder shifts each), so CRF keeps the field's. */
+    double dfl = e->crf_on ? y264_aq_afloor() : e->aq_dcfloor;
+    double sum = 0, sum2 = 0;
     for (int mby = 0; mby < hmb; mby++)
         for (int mbx = 0; mbx < wmb; mbx++) {
             const pixel *s = src[0] + (mby * 16) * stride + mbx * 16;
@@ -653,21 +670,33 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
             y264_dsp.var16x16(s, stride, v2);
             double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
             if (var < 0) var = 0;
-            double en = var * 256.0;
-            if (cw)
-                en += blk_ac_energy(src[1] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch)
+            double l;
+            if (cw) {
+                double en = var * 256.0
+                    + blk_ac_energy(src[1] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch)
                     + blk_ac_energy(src[2] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch);
-            double l = log2(en < 1.0 ? 1.0 : en) - 8.0;
-            sum += l;
-            if (rqw > 0.0) {
-                double c = pow(2.0, rqw * l) + 1.0, d = l - e->aq_anchor;
-                num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
-                den += c * pow(2.0, -astr * d / 6.0);
+                l = log2(en < 1.0 ? 1.0 : en) - 8.0;
+            } else {
+                l = log2(var + dfl);
             }
+            lv[mby * wmb + mbx] = l;
+            double lg = cw ? l : log2(var + y264_aq_afloor());
+            sum += lg; sum2 += lg * lg;
         }
+    double fmean = sum / n, fsd2 = sum2 / n - fmean * fmean;
+    double astr = (double)e->aq_strength * y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0);
+    double rqw = e->aq_dc_rqw, num = 0, den = 0, lsum = 0;
+    for (int i = 0; i < n; i++) lsum += lv[i];
+    if (rqw > 0.0)
+        for (int i = 0; i < n; i++) {
+            double c = pow(2.0, rqw * lv[i]) + 1.0, d = lv[i] - e->aq_anchor;
+            num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
+            den += c * pow(2.0, -astr * d / 6.0);
+        }
+    free(lv);
     if (rqw > 0.0 && den > 0.0)
         return -6.0 * log2(num / den);
-    return (e->aq_dcstr - astr) * (sum / n - e->aq_anchor);
+    return (e->aq_dcstr - astr) * (lsum / n - e->aq_anchor);
 }
 
 static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
@@ -677,17 +706,26 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     if (type == 1) {
         e->crf_cblur = e->crf_cblur_init ? 0.6 * e->crf_cblur + 0.4 * C : C;
         e->crf_cblur_init = 1;
+        if (C > 0.0) {                          /* the clip's running level */
+            e->crf_lc_sum += log2(C); e->crf_lc_n++;
+            e->crf_cplx_ref = exp2(e->crf_lc_sum / e->crf_lc_n);
+        }
     }
     double qp;
     if (!e->crf_cblur_init) {
         qp = e->crf;                            /* leading I: no P track yet */
     } else if (e->crf_cl && e->mbtree_on) {
-        /* Reference-encoder device 2: with mb-tree ON its frame rate equation becomes duration-based
- * (constant per frame) -- frame-level complexity modulation is DROPPED
- * because mb-tree's per-MB offsets already carry the complexity/importance.
- * Keeping the complexity term would double-count it and overspend. So the
- * base is a flat crf; the shift below supplies the operating-point bias. */
+        /* Under mb-tree the per-MB field carries each frame's importance, and
+ * the frame-level content term is the AQ DC (crf_dc), so the base is flat.
+ * Y264_CRF_MBT_CPLX=k adds k QP per log2 of the blurred lowres cost
+ * against the clip's own running geometric mean. A/B at matched rate on
+ * six clips: k 0.6 / 1.2 cost sintel_720p 10% / 21% (its scene cuts read
+ * as complexity), k -0.6 buys sintel 4.9% and costs akiyo 1.6%. Neither
+ * sign is same-or-better on every clip, so the default is 0. */
         qp = e->crf;
+        double k = e->rck.crf_mbt_cplx;
+        if (k != 0.0 && e->crf_cplx_ref > 0.0)
+            qp += k * log2(e->crf_cblur / e->crf_cplx_ref);
     } else {
         double base_permb = e->rck.crf_base;
         double slope = e->rck.crf_slope;
@@ -701,36 +739,27 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
         if (adj < -cap) adj = -cap;
         qp = e->crf + adj;
     }
-    /* mb-tree operating-point shift: a fixed
- * uniform +(1-qcomp)*13.5 QP bias. mb-tree's mean-negative per-MB offsets net it
- * back out on average, so the DIFFERENTIAL survives -- static/heavily-referenced
- * anchors (more negative mean_off) net lower QP, motion anchors net higher. Fixed
- * (not per-frame) so it never centres-away the cross-frame benefit; and it aligns
- * our bitrate at a given --crf with the reference encoder's output at the same
- * value. */
+    /* The CRF operating point under mb-tree. mb-tree's offsets are mean
+ * negative (they lend QP to the referenced blocks), so at a flat base the
+ * encode would spend well above what --crf N spends in the reference
+ * encoder's output. A level and a frame-rate slope put it back, both
+ * fitted from outside measurement: our bytes against the reference CLI's
+ * bytes at the same --crf (--preset medium, 120 frames, 22 clips at 24 to
+ * 60 fps, CRF 20/24/28/32, 88 cells). A least-squares fit of the per-cell QP
+ * gap on log2(fps / 30) proposed level 2.3 and slope 2.6; encoding the grid
+ * around it (2.2/2.6, 2.3/2.9, 2.4/2.6, 2.5/3.3) picked 2.3/2.9 at a median
+ * |bytes ratio - 1| of 5.2% (worst cell 27.7%). The slope is there because
+ * that encoder's output at equal --crf codes higher-rate material at a
+ * higher QP. The form is a constant rather than a function of qcomp because
+ * the CRF path runs at a fixed qcomp. Y264_CRF_LEVEL and Y264_CRF_FPS_SLOPE
+ * override. */
     if (e->crf_cl && e->mbtree_on) {
-        double shift = (e->rck.crf_cl_shift_set ? e->rck.crf_cl_shift : (1.0 - e->crf_qcomp) * 13.5);
-        qp += shift;
-    }
-    /* Frame-duration term:
- * rceq = (base frame duration / clipped frame duration)^(1 - qcomp)
- * which lands on the base QP as +6*(1-qcomp)*log2(0.04/dur). It is zero at
- * 25 fps, +0.63 at 30, +2.4 at 50, -0.14 at 24. The reference encoder's output
- * at equal --crf shifts with frame rate by about these amounts (mean frame QP
- * read from its bitstreams: 31.03 on CIF at 30 fps, 32.80 on 720p50, 30.26 on
- * 720p24). Without it CRF N is a different operating
- * point at every frame rate, which is most of why yah264 overspends
- * park_joy and ducks (both 50 fps) at equal CRF. */
-    if (crf_fps_env() && e->crf_cl && e->mbtree_on) {
         double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
-                   ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 25.0;
-        double dur = fps > 0 ? 1.0 / fps : 0.04;
-        if (dur < 0.01) dur = 0.01;                 /* clip the duration to [0.01, 1] s */
-        if (dur > 1.00) dur = 1.00;
-        qp += 6.0 * (1.0 - e->crf_qcomp) * log2(0.04 / dur);
+                   ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 30.0;
+        if (fps < 1.0) fps = 1.0;
+        if (fps > 240.0) fps = 240.0;
+        qp += e->rck.crf_level + e->rck.crf_fps_slope * log2(fps / 30.0);
     }
-    if (crf_aqabs_env() && e->crf_cl && e->mbtree_on)
-        qp += crf_ped_env();
     qp += e->crf_dc;                            /* Y264_AQ_DC_BASE, 0 otherwise */
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
@@ -2768,18 +2797,12 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
  *
  * Y264_CRF_CPLX=0 disables it.
  *
- * With mb-tree on, this mode has no frame-level complexity term: the rate
- * equation is duration-only, so the base QP is the fixed pedestal
- * crf + 13.5*(1-qcomp). ALL of the content adaptation is the DC of the per-MB
- * offset field, and that DC exists only when the AQ offset is anchored to an
- * ABSOLUTE constant, strength*(log2(ac_energy) - anchor), rather than to the
- * frame mean. Centring on the frame mean removes exactly that DC, which is why
- * our CRF had resolved to a flat crf+5.4.
- *
- * This gate turns on two terms:
- * - the absolute AQ anchor (mbtree_invqscale), worth up to ~7 QP of spread;
- * - the frame-duration term in the base QP (rc_set_qp_crf), worth 0 at
- * 25 fps and +2.4 at 50.
+ * With mb-tree on, the base QP is crf plus the fitted level and frame-rate
+ * terms (rc_set_qp_crf), and the frame-level content adaptation is the DC of
+ * the per-MB AQ field. That DC exists only when the AQ offset is anchored to
+ * an ABSOLUTE constant, strength*(l - anchor), rather than to the frame mean:
+ * centring on the frame mean removes exactly that DC. crf_frame_dc carries
+ * the rest of it, at its own strength, onto the anchor's base QP.
  * Resolved in warm_lr_statics: read by the lookahead/mb-tree worker threads. */
 int crf_cplx_env(void)
 {
@@ -2805,40 +2828,6 @@ int crf_aqabs_forced(void)
 {
     const char *s = getenv("Y264_CRF_AQABS");
     return s && atoi(s);
-}
-
-
-int crf_fps_env(void)
-{
-    static int v = -3;
-    if (v == -3) { const char *s = getenv("Y264_CRF_FPS"); v = s ? (atoi(s) ? 1 : 0) : -1; }
-    return v < 0 ? crf_cplx_env() : v;
-}
-
-/* The CRF pedestal calibration, in QP. The absolute anchor replaces a
- * per-frame mean with a constant, so it shifts the whole corpus's operating
- * point as well as spreading it; this puts the level back so a given --crf
- * lands near the reference encoder's output size at the same value.
- * Separate from the anchor on purpose -- the anchor also feeds the mb-tree
- * intra-cost weight, so moving the level with it distorts the boost, while the
- * pedestal is linear and BD-neutral by construction.
- *
- * -3.0, and it is PAIRED WITH THE ANCHOR: the anchor sets how far the offsets
- * sit from zero, so re-tuning one re-levels the other. At anchor 7.5 the
- * pedestal wants -2.0 (mean +0.9% vs the reference encoder's output size at equal CRF); at anchor 5.5
- * that same -2.0 runs 5-24% under and -3.0 restores it (7 clips: mean -1.1%,
- * spread -14.0%..+8.7%). The knob is coarse because the base QP is rounded to an
- * integer per frame, so -2.0 and -2.5 land on the same
- * QP for most clips -- there is no rung between them.
- *
- * It is also the only part of the gate the BD table cannot see: a pure 1-QP
- * level move measures 0.00% BD-VMAF-NEG on ducks, samsung and foreman. */
-double crf_ped_env(void)
-{
-    static double v = -1e9;
-    if (v < -1e8) { const char *s = getenv("Y264_CRF_PED");
-                    v = s ? atof(s) : -3.0; }
-    return v;
 }
 
 

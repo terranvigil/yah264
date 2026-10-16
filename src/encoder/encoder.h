@@ -217,7 +217,7 @@ struct rc_knobs {
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
     int    vbv_exit_hard;      /* Y264_VBV_EXIT_HARD: a burst that could cross the exit corridor priced all-intra takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
-    double crf_cl_shift;        int crf_cl_shift_set;
+    double crf_level, crf_fps_slope, crf_mbt_cplx;
     int    rc_trace;            /* Y264_RC_TRACE */
     int    dbg_cplx;            /* Y264_DBG_CPLX */
 };
@@ -360,7 +360,10 @@ struct yah264_encoder {
     int      aq_chroma;
     double   aq_anchor;
     double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (Y264_AQ_DC_RQW, default 0.25), <=0 = plain mean */
-    double   aq_dcstr;                      /* the AQ frame-mean (DC) term's strength x1.0397 (Y264_AQ_DC, default 1.0) */
+    double   aq_dcstr;                      /* the AQ frame-level (DC) strength on the CRF base QP (Y264_AQ_DC) */
+    double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric (Y264_AQ_DCFLOOR) */
+    double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref (Y264_AQ_BPULL) */
+    double   aq_bref;                       /* the level aq_analyze's centre is pulled to (Y264_AQ_BREF) */
     double   crf_dc;                        /* this anchor's DC delta on the CRF base QP (crf_frame_dc) */
     /* Co-located motion of the list-1 anchor, saved for B direct modes. */
     int16_t *colmvx, *colmvy;
@@ -982,13 +985,12 @@ struct yah264_encoder {
  * yah264_2pass_stat_weight also reads */
     double   crf_cblur;         /* blurred anchor (P) complexity, absolute */
     int      crf_cblur_init;
-    /* mb-tree operating-point shift: CRF is open-loop
- * and never accounts for mb-tree lowering per-MB QP, so mb-tree redistribution
- * costs extra bits and hurts under CRF (helps under ABR). A fixed
- * rate-factor shift (~(1-qcomp)*13.5) lets mb-tree's negative offsets net back
- * out; the shift is UNIFORM so the cross-frame differential (static gets more,
- * motion less) survives. yah264 shifts the CRF base by the running-average
- * mb-tree reduction. Gated Y264_CRF_CL. */
+    double   crf_lc_sum, crf_cplx_ref;  /* running geometric-mean P complexity (Y264_CRF_MBT_CPLX) */
+    int      crf_lc_n;
+    /* CRF under mb-tree is open loop and mb-tree's offsets are mean negative,
+ * so the base QP carries a fitted level and frame-rate term
+ * (rc_set_qp_crf); the level is uniform, so the cross-frame differential
+ * (static gets more, motion less) survives. Gated Y264_CRF_CL. */
     int      crf_cl;            /* mb-tree operating-point devices active */
     double   mbtree_mean_off;   /* mean mb-tree QP offset of the frame being coded (<=0) */
 

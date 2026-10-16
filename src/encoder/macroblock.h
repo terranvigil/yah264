@@ -320,6 +320,8 @@ typedef struct {
     uint8_t *mbqp;              /* per-MB coded luma QP, for the deblock pass */
     uint8_t *mb_tr8;            /* per-MB: 1 if the 8x8 luma transform was used */
     float aq_strength;          /* variance-AQ strength (0 = off) */
+    float aq_pull;              /* how far aq_analyze's centre moves from the frame mean to aq_anchor */
+    float aq_anchor;            /* the absolute AQ anchor, in log2(variance + 1) */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
     int   psy4k;                /* Y264_PSY4K arm bits, nonzero only on the 2160p size tier */
     int   size_class;           /* y264_size_class of the picture */
@@ -519,6 +521,12 @@ void             y264_recs_cache_ref(int delta);
 /* Resolve env-gated analyze lazy statics on the main thread before workers run
  * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */
 void             y264_mb_warm_statics(void);
+/* aq-mode 2's per-frame gain on the AQ strength (from the spread of the
+ * frame's per-MB log2(variance + floor)), and the floors of that metric for
+ * the anchored field (afloor) and for aq_analyze (bfloor). */
+double           y264_aq_gain(double mean, double sd, int bpath);
+double           y264_aq_bfloor(void);
+double           y264_aq_afloor(void);
 int              y264_rb_trace_on(void);
 int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm);
 

@@ -6,7 +6,7 @@
 The ad-hoc `bdcompare --points` sweep compares at a matched CRF *number*, which
 is only sound while both arms' CRF-to-quality mapping is fixed. Any change that
 translates the CRF axis -- mb-tree on/off does exactly this, since it engages
-Y264_CRF_CL_SHIFT -- makes that comparison measure ladder placement instead of
+the CRF level under mb-tree -- makes that comparison measure ladder placement instead of
 the encoder (the local measurement records).
 
 So: for each target size, binary-search each arm's CRF onto it independently,

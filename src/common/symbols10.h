@@ -42,11 +42,9 @@
 #define crf_aqabs_env                   crf_aqabs_env_10
 #define crf_aqabs_forced                crf_aqabs_forced_10
 #define crf_cplx_env                    crf_cplx_env_10
-#define crf_fps_env                     crf_fps_env_10
 #define crf_max_clip                    crf_max_clip_10
 #define crf_pb0_env                     crf_pb0_env_10
 #define crf_pbscale_env                 crf_pbscale_env_10
-#define crf_ped_env                     crf_ped_env_10
 #define frame_complexity_ilr            frame_complexity_ilr_10
 #define frame_complexity_me             frame_complexity_me_10
 #define frame_qp                        frame_qp_10
@@ -300,6 +298,9 @@
 #define y264_machine_threads            y264_machine_threads_10
 #define y264_mb_dauto_stride            y264_mb_dauto_stride_10
 #define y264_mb_warm_statics            y264_mb_warm_statics_10
+#define y264_aq_gain                    y264_aq_gain_10
+#define y264_aq_bfloor                  y264_aq_bfloor_10
+#define y264_aq_afloor                  y264_aq_afloor_10
 #define y264_mc_build_hpel              y264_mc_build_hpel_10
 #define y264_mc_build_hpel_rows         y264_mc_build_hpel_rows_10
 #define y264_mc_chroma                  y264_mc_chroma_10

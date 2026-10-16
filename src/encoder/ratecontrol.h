@@ -36,8 +36,6 @@ double abr_qcomp_env(void);
 double abr_vbvov_frac(void);
 double blk_ac_energy(const pixel *p, int stride, int w, int h);
 int crf_aqabs_env(void);
-int crf_fps_env(void);
-double crf_ped_env(void);
 int frame_qp(const yah264_encoder_t *e, int type, int is_ref);
 int qp_bound(const yah264_encoder_t *e, int q);
 int rcp_dbg_on(void);

@@ -3587,6 +3587,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.mbqp = e->mbqp;
     f.mb_tr8 = e->mb_tr8;
     f.aq_strength = e->aq_strength;
+    f.aq_pull = (float)e->aq_pull;
+    f.aq_anchor = (float)e->aq_bref;
     f.psy_rd = e->param.psy_rd;
     f.psy4k = psy4k_bits(&e->param);
     f.size_class = y264_size_class(e->param.width, e->param.height);
@@ -6427,10 +6429,23 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     || (e->abr_rf2 && e->rck.abr_dc > 0 && (!e->vbv_cbr || e->rck.abr_dc > 1)));
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
-    /* The AQ frame-mean (DC) term at strength 1.0 x 1.0397 on the
- * CRF base QP: see crf_frame_dc. Y264_AQ_DC=<aq-strength> (0.4) reproduces
- * the pre-2026-09-05 output byte for byte. */
-    { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = (v ? atof(v) : 1.0) * 1.0397; }
+    /* The frame-level (DC) AQ strength on the CRF base QP: see crf_frame_dc.
+ * Fitted by sweep at matched rate (Y264_AQ_DC). */
+    { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = v ? atof(v) : 1.04; }
+    { const char *v = getenv("Y264_AQ_DCFLOOR"); e->aq_dcfloor = v ? atof(v) : 0.00390625; }
+    /* Frames with no mb-tree field (non-reference B) inherit the anchor's
+ * base QP, frame DC included, and centre their own AQ on their frame mean.
+ * aq_pull moves that centre toward a fixed level (aq_bref), so a B whose
+ * blocks are busier than that level codes coarser and a flatter one finer:
+ * a frame-level term of strength x pull x (mean - bref). Only where the
+ * absolute anchor is armed. Swept at matched rate and on the HD band:
+ * pull 0 / 0.5 / 0.7 / 1.0 / 1.3 (0 loses 1-2.7% on stefan, sintel and
+ * mobile; 1.3 gains nothing more), bref 5.5 / 6.0 / 6.5 / 7.0 / 8.0 (5.5
+ * costs fourpeople_720p, 6.5 and up give back ducks_720p's 1%). Pulling
+ * only frames above bref (0 or 0.5 below it) bought nothing on
+ * perseverance_720p and cost sintel 0.3-0.5%. */
+    { const char *v = getenv("Y264_AQ_BPULL"); e->aq_pull = e->aq_abs ? (v ? atof(v) : 1.0) : 0.0; }
+    { const char *v = getenv("Y264_AQ_BREF"); e->aq_bref = v ? atof(v) : 6.0; }
     { const char *v = getenv("Y264_AQ_DC_RQW"); e->aq_dc_rqw = v ? atof(v) : 0.25; }
     e->crf_dc = 0.0;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
@@ -7529,7 +7544,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
 {
     IP_SCOPE_B(IP_MBT_INVQ);
     int n = wmb * hmb;
-    double sum = 0;
+    double sum = 0, sum2 = 0;
     /* With chroma on, the per-macroblock AC-energy term sums every plane; the
  * chroma block is the MB's footprint at the subsampled resolution
  * (16/sub_w x 16/sub_h). */
@@ -7553,26 +7568,27 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
                     + blk_ac_energy(pl[2] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch);
                 l = log2(en < 1.0 ? 1.0 : en) - 8.0;
             } else {
-                l = log2(var + 1.0);
+                l = log2(var + y264_aq_afloor());
             }
             invq[mby * wmb + mbx] = l;
-            sum += l;
+            sum += l; sum2 += l * l;
         }
-    /* Absolute anchor instead of the frame mean under Y264_CRF_CPLX: the DC of
- * this field is the CRF complexity term (see crf_cplx_env). The 1.0397
- * scales the AQ strength. The propagation
- * weights are renormalised to mean 1 below, so a DC shift leaves them
- * untouched; it reaches the bitstream through aq_off only -- and through the
- * unnormalised intra-cost weight in the mb-tree
- * finish step, which is why a flat clip's AQ discount damps its own
- * mb-tree boost there. */
+    /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
+ * constant instead of the frame mean, so its DC is a frame-level complexity
+ * term. The propagation weights are renormalised to mean 1 below, so a DC
+ * shift leaves them untouched; it reaches the bitstream through aq_off --
+ * and through the unnormalised intra-cost weight in the mb-tree finish
+ * step, which is why a flat clip's AQ discount damps its own mb-tree boost
+ * there. aq-mode 2 scales the strength by the frame's gain. */
     int abs_aq = e->aq_abs;
-    double avg = abs_aq ? e->aq_anchor : sum / n, wsum = 0;
-    double astr = abs_aq ? strength * 1.0397 : strength;
+    double fmean = sum / n, fsd2 = sum2 / n - fmean * fmean;
+    double gain = y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0);
+    double avg = abs_aq ? e->aq_anchor : fmean, wsum = 0;
+    double astr = strength * gain;
     /* The weight half may run at its own strength (Y264_MBT_AQIN); aq_off --
  * the CODED field -- always uses the caller's strength. */
     float aqin = mbt_aqin();
-    double astr_w = aqin >= 0.0f ? (abs_aq ? aqin * 1.0397 : (double)aqin) : astr;
+    double astr_w = aqin >= 0.0f ? aqin * gain : astr;
     for (int i = 0; i < n; i++) {
         double base = invq[i] - avg;
         if (aq_off) aq_off[i] = (float)(astr * base);
@@ -11792,8 +11808,7 @@ static void warm_lr_statics(void)
     (void)vbv_segh_env();
     (void)mbt_ac_gain(); (void)aq_chroma_env();
     (void)crf_cplx_env(); (void)aq_anchor_env(); (void)crf_pbscale_env();
-    (void)crf_aqabs_env(); (void)crf_fps_env(); (void)crf_pb0_env();
-    (void)crf_ped_env();
+    (void)crf_aqabs_env(); (void)crf_pb0_env();
     (void)unsafe_no_nal();
     /* Resolved inline inside worker-called functions until 09-26, so no warm
  * could reach them: hoisted into accessors and warmed here. */

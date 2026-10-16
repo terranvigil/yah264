@@ -304,7 +304,7 @@ static void cabac_mb_qp_delta(y264_cabac_t *c, y264_frame_t *f, int cur_qp)
 /* AQ env overrides, as accessors rather than statics buried in aq_analyze: the
  * warm-up (y264_mb_warm_statics) can only reach a lazy static through a callable
  * accessor, and anything it cannot reach races on first use across GOP workers. */
-/* aq-mode: 2 (autovariance) is the default; 1 is variance AQ. */
+/* aq-mode: 2 (adaptive gain, below) is the default; 1 is plain variance AQ. */
 static int aq_mode_env(void)
 {
     static int v = -1;
@@ -312,17 +312,75 @@ static int aq_mode_env(void)
                  v = e ? atoi(e) : 2; }
     return v;
 }
-static float aq2_bias_env(void)
+
+/* aq-mode 2's constants, resolved once (y264_mb_warm_statics) so the AQ kernels
+ * on the lookahead and mb-tree pool only ever read them. Every value was fitted
+ * by sweep with band_at_rate.py (CRF band, matched achieved rate) and
+ * hd_band.py; see y264_aq_gain and aq_analyze for what each one does. */
+struct aq2_cfg { double sref, mref, spow, gmin, gmax, bfloor, afloor; };
+static const struct aq2_cfg *aq2_cfg(void)
 {
-    static float v = -1.0f;
-    if (v < 0.0f) { const char *e = getenv("Y264_AQ2_BIAS"); v = e ? (float)atof(e) : 14.0f; }
-    return v;
+    static struct aq2_cfg c;
+    static int init;
+    if (!init) {
+        const char *v;
+        v = getenv("Y264_AQ2_SREF");   c.sref   = v ? atof(v) : 2.5;
+        v = getenv("Y264_AQ2_MREF");   c.mref   = v ? atof(v) : 5.0;
+        v = getenv("Y264_AQ2_SPOW");   c.spow   = v ? atof(v) : 1.0;
+        v = getenv("Y264_AQ2_GMIN");   c.gmin   = v ? atof(v) : 0.5;
+        v = getenv("Y264_AQ2_GMAX");   c.gmax   = v ? atof(v) : 1.0;
+        v = getenv("Y264_AQ2_BFLOOR"); c.bfloor = v ? atof(v) : 16.0;
+        v = getenv("Y264_AQ2_AFLOOR"); c.afloor = v ? atof(v) : 2.0;
+        init = 1;
+    }
+    return &c;
+}
+
+/* The variance floor inside l = log2(variance + floor). Mode 1 uses 1 on
+ * every path. Mode 2 uses afloor for the anchored field (mb-tree frames and
+ * the CRF frame DC) and bfloor for aq_analyze, the frames that carry no
+ * mb-tree field (non-reference B): a raised floor there stops near-flat
+ * blocks, already cheap, from taking the deepest QP cuts. Swept 1 / 2 / 3 /
+ * 4 / 8 / 16 / 32: the field wants 2 (perseverance_720p +1.3% at 1, akiyo
+ * +1.0-1.4% at 3-4, stefan +0.5% at 16) and the non-reference B wants 16
+ * (bbb_720p -0.4% against +1.0% at 1). */
+double y264_aq_bfloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->bfloor : 1.0; }
+double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.0; }
+
+/* The per-frame gain aq-mode 2 puts on --aq-strength, from the frame's
+ * per-MB l: (x)^spow clamped to [gmin, gmax], x = sd / sref, the spread of l
+ * against a reference spread. A frame whose blocks all sit near one energy (a
+ * dark scene, a fade, a flat animation background) has little masking
+ * contrast to exploit, and moving its few outliers by the full slope only
+ * shifts bits between blocks that look alike, so its gradient eases. On the
+ * anchored field (bpath 0) a textured frame keeps the full gradient whatever
+ * its spread: x is at least mean / mref there. Swept at matched rate: spow
+ * 0 / 0.25 / 0.5 / 1 (0.5 and below lose 1.3-4.0% on sintel_720p); gmax 1.0 /
+ * 1.1 / 1.2 / 2.0 (above 1.0 costs perseverance_720p and akiyo 0.3-1.3%);
+ * sref 1.75 / 2.0 / 2.25 / 2.5 (below 2.5 costs sintel 0.7-1.6%); mref off /
+ * 7 / 6 / 5 on the field (touchdown_420 in the deep band +1.35 / +0.77 /
+ * -0.52 / -0.71%, the CRF band unmoved), and on the non-anchored path as well
+ * (sintel and stefan +0.4%, so not there). A gain that grows with the mean
+ * above 1 (2^(b * (mean - m0)), or mean / 7.5 up to 1.2) lost on stefan
+ * (+2.5%) and on the HD clips and is not used. Mode 1 is gain 1. */
+double y264_aq_gain(double mean, double sd, int bpath)
+{
+    if (aq_mode_env() < 2) return 1.0;
+    const struct aq2_cfg *c = aq2_cfg();
+    double x = (sd > 0.0 ? sd : 0.0) / c->sref;
+    if (!bpath && mean / c->mref > x) x = mean / c->mref;
+    double g = pow(x, c->spow);
+    if (g < c->gmin) g = c->gmin;
+    if (g > c->gmax) g = c->gmax;
+    return g;
 }
 
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
  * and banding are visible), raise it on busy ones (where distortion is masked).
- * The offset is strength * (log2 MB variance - frame mean), so it centres on
- * zero and leaves the average QP near the frame target. */
+ * The offset is strength * gain * (l - centre), l = log2(variance + bfloor). The
+ * centre is the frame mean, so the frame's average QP stays at its target,
+ * unless f->aq_pull moves it toward the absolute anchor (a frame-level term
+ * for frames that carry no mb-tree field of their own). */
 static void aq_analyze(y264_frame_t *f)
 {
     if (!f->aq_off) return;
@@ -331,17 +389,6 @@ static void aq_analyze(y264_frame_t *f)
         for (int i = 0; i < n; i++) f->aq_off[i] = 0;
         return;
     }
-    /* aq-mode: 1 = variance AQ, frame-mean-centred. 2 = auto-variance
- * (DEFAULT): the per-MB metric is the 8th root of AC energy
- * (gentler than log on busy MBs), the effective strength is scaled by the
- * frame-average metric, and the centring point is corrected by the second
- * moment -- so busy/high-spread frames get gentler AQ, which the flat mode
- * over-corrected (bus/coastguard/tempete resisted a flat strength at every
- * value; mode 2 turns those +0.2..0.4% regressions into -0.7..-1.5% wins).
- * mode-2 vs AQ-off measured a clean -1.05% VMAF-NEG corpus mean, no
- * regression. Env override Y264_AQ_MODE; centre bias Y264_AQ2_BIAS. */
-    int aqmode = aq_mode_env();
-    float aq2bias = aq2_bias_env();
     float *lv = malloc((size_t)n * sizeof(float));
     if (!lv) {
         for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
@@ -362,20 +409,14 @@ static void aq_analyze(y264_frame_t *f)
             }
             double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
             if (var < 0) var = 0;
-            /* mode 1: log2(var); mode 2: (AC energy + 1)^(1/8), energy = var*256. */
-            float metric = aqmode >= 2 ? powf((float)(var * 256.0) + 1.0f, 0.125f)
-                                       : log2f((float)var + 1.0f);
-            lv[mby * f->wmb + mbx] = metric;
-            sum += metric; sum2 += (double)metric * metric;
+            float l = log2f((float)(var + y264_aq_bfloor()));
+            lv[mby * f->wmb + mbx] = l;
+            sum += l; sum2 += (double)l * l;
         }
-    float avg = (float)(sum / n);
-    /* mode 2: second-moment-corrected centre and auto-scaled strength. */
-    float center = avg, strength = f->aq_strength;
-    if (aqmode >= 2) {
-        float avg2 = (float)(sum2 / n);
-        center = avg - 0.5f * (avg2 - aq2bias) / (avg > 1e-3f ? avg : 1e-3f);
-        strength = f->aq_strength * avg;
-    }
+    double avg = sum / n, sd2 = sum2 / n - avg * avg;
+    double sd = sd2 > 0 ? sqrt(sd2) : 0;
+    float strength = (float)(f->aq_strength * y264_aq_gain(avg, sd, 1));
+    float center = (float)(avg - f->aq_pull * (avg - f->aq_anchor));
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center));
         if (off < -8) off = -8;
@@ -13863,7 +13904,7 @@ void y264_mb_warm_statics(void)
         (void)part_earlyterm(); (void)lr_seed_on(); (void)p_ref0exit_on(); (void)p_ref0exit_minmb();     (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat();
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
-    (void)aq_mode_env(); (void)aq2_bias_env();
+    (void)aq_mode_env(); (void)aq2_cfg();
         (void)probe_deadzone_env();
     (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }

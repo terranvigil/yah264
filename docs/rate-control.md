@@ -515,7 +515,7 @@ the internal ones, is in [options.md](options.md#environment-variables).
 | --- | --- | --- |
 | `Y264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
 | `Y264_CRF_CPLX` | 1 (on) | CRF complexity term, and the reason `--crf N` costs about what it costs on x264 (2026-09-16, fifteen clips: median offset 0.4-0.8 of a CRF point with it, 1.5-1.9 without). Improves 9 of 12 clips on BD-VMAF-NEG; it still regresses samsung +9.30% and touchdown +10.71%, and 0 turns it off. |
-| `Y264_CRF_FPS` | follows `Y264_CRF_CPLX`, so on | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
+| `Y264_CRF_LEVEL`, `Y264_CRF_FPS_SLOPE` | 2.3, 2.9 | The CRF base under mb-tree: `crf + level + slope * log2(fps / 30)`. Both fitted so our bytes at `--crf N` match the reference CLI's at the same `--crf` across 22 clips at 24 to 60 fps (median miss 5.2%). |
 | `Y264_MBTREE_OFF` | 0 (off) | Disables mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
 
 ## Silent failures

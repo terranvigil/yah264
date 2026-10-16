@@ -82,16 +82,15 @@ DEFAULT_OVERRIDES = {
     "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
     "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
     "Y264_ABR_QPSTEP": "= --qpstep",     # the flag's value, itself defaulting to 4
-    "Y264_CRF_CL_SHIFT": "(1 - qcomp) * 13.5",  # resolved at open with a set flag
+    "Y264_CRF_LEVEL": "2.3", "Y264_CRF_FPS_SLOPE": "2.9",  # rc_tunable of a #define
     "Y264_SIMD_FORCE": "unset",          # none | sse4 | avx2 | avx512 (a string)
     # multi-value or computed defaults, read by a parser the idioms can't see
     "Y264_PSY_FLAT_GATE": "75,307,25",
     "Y264_TRELLIS_LAMBDA": "256,150,28,38",
     "Y264_DCTDEC_T4": "table", "Y264_DCTDEC_T8": "table", "Y264_DCTDEC_TAB4": "table",
     "Y264_AQ_ANCHOR": "= aq_anchor_default()",
-    "Y264_AQ_DC": "1.0",                 # times the 1.0397 calibration inside
+    "Y264_AQ_BPULL": "1.0",              # 0 wherever the absolute anchor is off
     "Y264_CRF_PBSCALE": "1.0",
-    "Y264_CRF_PED": "-3.0",
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
     # overrides of a public param or CLI flag: unset follows the param
@@ -124,7 +123,8 @@ OVERRIDES = {
     "Y264_DCTDEC_T4": "default", "Y264_DCTDEC_T8": "default",
     "Y264_DCTDEC_TAB4": "default", "Y264_AQ_ANCHOR": "default",
     "Y264_CRF_BASE": "default", "Y264_CRF_SLOPE": "default",
-    "Y264_CRF_CAP": "default", "Y264_CRF_CL_SHIFT": "default",
+    "Y264_CRF_CAP": "default", "Y264_CRF_LEVEL": "default",
+    "Y264_CRF_FPS_SLOPE": "default", "Y264_CRF_MBT_CPLX": "arm",
     "Y264_NTP_SPIN_ROW": "default", "Y264_NTP_SPIN_JOIN": "default",
     # -1 is its off sentinel
     "Y264_MBT_AQIN": "arm",

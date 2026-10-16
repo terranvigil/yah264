@@ -845,7 +845,7 @@ static void usage(const char *argv0)
         "                     the NEON quant path.\n");
     /* Fourth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
-        "  --aq-mode N        AQ metric: 1 = log2-variance, 2 = autovariance\n"
+        "  --aq-mode N        AQ form: 1 = log2-variance, 2 = adaptive gain\n"
         "                     (default; 1 under mb-tree's derived shape). N=0 is\n"
         "                     refused -- AQ off is --aq-strength 0 here.\n"
         "  --no-mbtree        skip mb-tree propagation entirely (x264's own policy\n"   /* x264-ok */
