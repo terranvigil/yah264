@@ -5,9 +5,9 @@ Every line number below was read from the tree. None is inferred.
 
 ## 0. Summary
 
-- The dsp layer has **67 public C entry points** across pixel/mc/transform/predict/deblock. **53 have a NEON twin** (8 of those only on a sub-range of shapes or inputs) and **14 do not**. `src/dsp/*_neon.c` export **61 NEON functions** in total.
-- Dispatch uses two mechanisms. The pixel metrics go through a **function-pointer table** (`y264_dsp`, filled once in `y264_dsp_init`). Everything else (mc, transform, predict, deblock, SSD) takes a **per-call flag check** (`y264_asm_on(class)`, an acquire-load plus a mask test). There is no x86 SIMD. The only SIMD path is `__aarch64__ && Y264_BIT_DEPTH == 8`.
-- `tools/checkasm/checkasm.c` covered 44 kernel groups and did **not** test `y264_dequant_4x4_neon`, `y264_dequant_8x8_neon`, `y264_ssd_16xh_neon` or `y264_ssd_8xh_neon`. **Fixed on 2026-09-17** (item `x86-checkasm`, x86 plan W0a). The harness is now `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` with a `{name, family, cpu_mask, fn}` registration table of 47 groups, and all four of those kernels have one. Two more kernels that were dark are covered too. On this box `y264_pixel_init` overwrites `sad_16x16` and `var16x16` with their FEAT_DotProd twins. The plain-NEON forms still ship and still run wherever dotprod is absent, yet no run on this machine had ever exercised them. The plain and dotprod forms are separate rows now. Every group compares the C reference against the kernel SYMBOL instead of going through the dispatcher, so `Y264_ASM_OFF` can no longer flatten a group into a C-against-C tautology. Guard buffers, a row-padding check and an mmap/mprotect page guard at both tails come with every comparison. The rest of this section's "checkasm" columns use pre-split group names. The live list is `checkasm --list`.
+- The dsp layer has **72 public C entry points** across pixel/mc/transform/predict/deblock, plus the encoder's SSD. **53 have a NEON twin** (10 of those only on a sub-range of shapes or inputs), the SSD has one too, and **19 do not**. `src/dsp/*_neon.c` export **61 NEON functions** in total. Section 1g has the per-family counts.
+- Dispatch uses two mechanisms. The pixel metrics go through a **function-pointer table** (`y264_dsp`, filled once in `y264_dsp_init`). Everything else (mc, transform, predict, deblock, SSD) takes a **per-call flag check** (`y264_asm_on(class)`, an acquire-load plus a mask test). The SIMD tiers are 8-bit only. On aarch64 that's NEON, with an SVE tier on top for 256-bit Linux parts. On x86-64 it's SSE4.2, AVX2 and AVX-512, capped at build time by meson's `simd` option (`src/common/cpu.h`, `meson.build`).
+- `tools/checkasm/checkasm.c` covered 44 kernel groups and did **not** test `y264_dequant_4x4_neon`, `y264_dequant_8x8_neon`, `y264_ssd_16xh_neon` or `y264_ssd_8xh_neon`. **Fixed on 2026-09-17** (item `x86-checkasm`, x86 plan W0a). The harness is now `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` with a `{name, family, cpu_mask, fn}` registration table, 47 groups at the split, and all four of those kernels have one. Two more kernels that were dark are covered too. On this box `y264_pixel_init` overwrites `sad_16x16` and `var16x16` with their FEAT_DotProd twins. The plain-NEON forms still ship and still run wherever dotprod is absent, yet no run on this machine had ever exercised them. The plain and dotprod forms are separate rows now. Every group compares the C reference against the kernel SYMBOL instead of going through the dispatcher, so `Y264_ASM_OFF` can no longer flatten a group into a C-against-C tautology. Guard buffers, a row-padding check and an mmap/mprotect page guard at both tails come with every comparison. The rest of this section's "checkasm" columns use pre-split group names. The live list is `checkasm --list`.
 - Since the second x86 tuning round, two more tiers are on top. An AVX-512 tier, built by default and used on CPUs that report AVX-512, has 18 pixel-table entries (`x86/pixel_avx512.c`, 8 checkasm groups). An SVE tier for 256-bit aarch64 Linux parts has 8 pixel entries and the forward quant (`arm/pixel_sve.c`, `arm/transform_sve.c`, 10 checkasm groups). Both are in the 1b and 1d tables.
 - Outside dsp, the remaining scalar pixel/coefficient loops are in three files:
   - `src/encoder/macroblock.c`: DC-only reconstruction, chroma DC transform + quant, weighted prediction, per-block 8x8 bipred average, scan-order level extraction, level nonzero counts, RD snapshot copies, greedy RDOQ residual rebuild.
@@ -42,11 +42,12 @@ The NEON kernels are declared in the C file that dispatches to them (e.g. pixel.
 
 The SSE4.2 and AVX2 columns arrived with wave 1 of docs/x86-plan.md. They
 carry the kernel and its checkasm row but NOT a multiple, and we record why.
-The only x86 this project can reach before the rented box is an emulator, which
-is why `x86-docker.sh` reads no clocks. A translated ratio for a 256-bit kernel
-measures the translator. Run under Rosetta, the AVX2 rows read below their own
-C reference while the SSE4.2 rows read 1.2x to 4.9x. Neither number is about
-silicon. The figures land here from session A.
+Under an emulator a translated ratio for a 256-bit kernel measures the
+translator, which is why `x86-docker.sh` reads no clocks. Run under Rosetta,
+the AVX2 rows read below their own C reference while the SSE4.2 rows read 1.2x
+to 4.9x. Neither number is about silicon. Rented x86 machines have since run
+the build, and their encoder-level readings, which are what decide, are in
+docs/x86-plan.md. No per-kernel x86 multiple has been recorded here.
 
 | table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | SSE4.2 | AVX2 | AVX-512 | SVE (256-bit) | checkasm group |
 |---|---|---|---|---|---|---|---|
@@ -154,9 +155,8 @@ and nothing else.
 
 The SSE4.2 and AVX2 columns arrived with wave 3a of docs/x86-plan.md. They
 carry the kernel and its checkasm row but NOT a multiple, for the reason
-recorded above the pixel table. The only x86 this project can reach before the
-rented box is an emulator, and a translated ratio measures the translator. The
-figures land here from session A.
+recorded above the pixel table: an emulated ratio measures the translator, and
+the rented-machine readings in docs/x86-plan.md are encoder-level.
 
 | public entry (transform.h) | C ref | NEON twin (transform_neon.c) | SSE4.2 | AVX2 | condition | checkasm |
 |---|---|---|---|---|---|---|
@@ -271,14 +271,23 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. The filters run per **four-line*
 | transform | 28 | 18 | 5 (quant/dequant: flat CQM only) | 10 | 17 |
 | predict | 6 | 4 | 2 | 2 | 4 (4 per x86 tier) |
 | deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 (4 per x86 tier) |
-| **total** | **72** | **54** | **10** | **19** | **61** |
+| **total** | **72** (+SSD) | **53** (+SSD) | **10** | **19** | **61** |
 
-Since 2026-09-17, checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}`, a registration table of **49 groups**. 41 are behind a cpu mask and 8 are portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list, with the ISA each row needs. The table is per ARCHITECTURE. An x86-64 build runs the portable rows plus the x86 ones: 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which is 52 x86 rows at a build that has both tiers.
+Since 2026-09-17, checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}`, a registration table that started at **47 groups**, 40 behind a cpu mask and 7 portable (commit 47e954f). The list below is the aarch64 set as it stood after HD stage 4, 48 groups. Today an Apple aarch64 build lists **71**: 57 NEON rows and 14 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list, with the ISA each row needs. The table is per ARCHITECTURE. An x86-64 build runs the portable rows plus the x86 ones: 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which was 52 x86 rows at a build that had both tiers before waves 2 and 3b.
+
+Beyond the four kernels that had no group, the split changed how quant and dequant are checked. Those groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT. The harness now builds it from the specification's normAdjust tables and hands it to the kernel. The reference derives its own from the library's tables through the weighted path with a flat matrix of 16, which gives identical multipliers by construction (`(16*mf + 8)/16 == mf`). The 4x4 forward row is also cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
+
+Groups that were C-against-C tautologies are gone, not renamed. The old `sad` and `sad_x4` rows ran all seven partition shapes, but 8x4/4x8/4x4 SAD and 4x8/4x4 `sad_x4` have no NEON twin. Those cells compared `ref.sad[pu]` with `opt.sad[pu]` where the two were the same function pointer. The NEON rows cover the shapes that have kernels, and the shapes that don't are recorded here instead.
+
+Three kernels became reachable as SYMBOLS for the first time, where before only a whole-plane build reached them. `mc_luma_win` and `mc_chroma_win` drive the interpolation window kernels at the contract the dispatcher promises them. `hpel_rows` drives `y264_hpel_hrow_neon` / `y264_hpel_outrow_neon` against the definitional six-tap at every column of the span. The whole-plane `hpel_build`, `mc_luma` and `mc_chroma` rows stay as portable ORACLES over the public entry point. The border body and the clamped tile gather are C on every architecture, and that's where a coordinate bug actually lives.
 
 On x86-64 that table is a different length, because the rows are per
 ARCHITECTURE. An x86 build runs the 8 portable rows plus the x86 ones. That's
-**84 groups** since wave 3b (15 pixel, 6 mc, 11 transform, 3 predict and 3
-deblock per tier, at two tiers), and 46 of them at `--isa sse4`. The mc rows
+**84 groups** after wave 3b (15 pixel, 6 mc, 11 transform, 3 predict and 3
+deblock per tier, at two tiers), and 46 of them at `--isa sse4`. The tuning
+rounds and the AVX-512 tier have grown it since: today's tables register 61
+groups per tier at SSE4.2 and AVX2, 8 at AVX-512 and 14 portable, so 144 in an
+x86-64 build and 75 at `--isa sse4`. The mc rows
 are `pred_copy_<tier>`, `pred_avg2_<tier>`, `pixel_avg_wt_<tier>`,
 `mc_luma_win_<tier>`, `mc_chroma_win_<tier>` and `hpel_rows_<tier>`. The
 predict rows are `intra16x16_<tier>`, `intra_chroma_<tier>` and
@@ -343,13 +352,6 @@ nonzero is the benchmark's shape, not the encoder's.
 The live transform item is the **batched forward**, which we lose at 1.29x on
 1.8-2.2% of the encode. `local/records/resid-batch-2026-09-19.md` has the
 census, the ceiling probe and the per-clip tables.
-
-
-Beyond the four kernels that had no group, the split changed how quant and dequant are checked. Those groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT. The harness now builds it from the specification's normAdjust tables and hands it to the kernel. The reference derives its own from the library's tables through the weighted path with a flat matrix of 16, which gives identical multipliers by construction (`(16*mf + 8)/16 == mf`). The 4x4 forward row is also cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
-
-Groups that were C-against-C tautologies are gone, not renamed. The old `sad` and `sad_x4` rows ran all seven partition shapes, but 8x4/4x8/4x4 SAD and 4x8/4x4 `sad_x4` have no NEON twin. Those cells compared `ref.sad[pu]` with `opt.sad[pu]` where the two were the same function pointer. The NEON rows cover the shapes that have kernels, and the shapes that don't are recorded here instead.
-
-Three kernels became reachable as SYMBOLS for the first time, where before only a whole-plane build reached them. `mc_luma_win` and `mc_chroma_win` drive the interpolation window kernels at the contract the dispatcher promises them. `hpel_rows` drives `y264_hpel_hrow_neon` / `y264_hpel_outrow_neon` against the definitional six-tap at every column of the span. The whole-plane `hpel_build`, `mc_luma` and `mc_chroma` rows stay as portable ORACLES over the public entry point. The border body and the clamped tile gather are C on every architecture, and that's where a coordinate bug actually lives.
 
 ---
 
