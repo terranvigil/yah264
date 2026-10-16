@@ -451,7 +451,7 @@ Lowres ME itself (`lr_me_block` :8737, `lr_fme_block` :8948, `blk8_inter_coh`) i
 
 **Lowres planes** are packed `lw x lh` with `lw = padded_w/2` (encoder.c:4323-4326) and no border. The 15 phase planes are each a separate `malloc(lw*lh)` (encoder.c:4383). The lowres search clamps MVs to the frame instead of reading a border (`lr_me_block` :8743-8744).
 
-**Macroblock scratch.** There's no persistent fenc/fdec cache. Every analysis function reads `f->src[c] + (mby*16)*ss + mbx*16` and writes `f->rec[c] + ...` **directly in the frame planes** (e.g. macroblock.c:1853-1855, 2004-2005, 3972-3973). Prediction and trial reconstruction live in stack arrays:
+**Macroblock scratch.** There's no persistent per-macroblock source or reconstruction cache. Every analysis function reads `f->src[c] + (mby*16)*ss + mbx*16` and writes `f->rec[c] + ...` **directly in the frame planes** (e.g. macroblock.c:1853-1855, 2004-2005, 3972-3973). Prediction and trial reconstruction live in stack arrays:
 
 | buffer | type | stride | where |
 |---|---|---|---|
@@ -559,7 +559,7 @@ Grouped by the kind of kernel a later round would write, with the call shape tha
 - `y264_mc_chroma` w=2 / odd h, `y264_intra_chroma` at 4:4:4 (cw=16), `y264_intra4x4` builder (refused by measurement), `intra8x8` HORIZ/DC/DDL/HU (auto-vectorised C by measurement), `intra8x8_edge_c`.
 
 **Copy traffic rather than arithmetic**
-- `save_mb_rec`/`load_mb_rec` 384 B per snapshot x 26 sites, `analyze_intra_g` tmp16/tmp8, `bpred_cache` 768 B x 2, est-context 460 B per trial, `encode_inter_res_tp` winner copy and 4:4:4 element copy (:4094). These are the `_platform_memmove` group in the profile. The fix already taken was compile-time lengths. The structural fix (an fdec scratch like x264's, so candidates never touch the frame plane) is a layout change and not a kernel.
+- `save_mb_rec`/`load_mb_rec` 384 B per snapshot x 26 sites, `analyze_intra_g` tmp16/tmp8, `bpred_cache` 768 B x 2, est-context 460 B per trial, `encode_inter_res_tp` winner copy and 4:4:4 element copy (:4094). These are the `_platform_memmove` group in the profile. The fix already taken was compile-time lengths. The structural fix (a per-macroblock reconstruction scratch, as x264 keeps, so candidates never touch the frame plane) is a layout change and not a kernel.
 
 **Not vectorisable, listed for completeness**
 - CABAC bin engine (`E_DEC`), residual writers, CAVLC length walk, greedy RDOQ, Viterbi trellis, `decimate_mask`, `y264_me_mc_luma`'s registry scan.
