@@ -51,7 +51,11 @@ On rented cloud machines:
 
 With every core busy, x86-64 is still slower than x264 on some clips. That's the next fix.
 
+## Verify
+
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
+
+## Hardware option?
 
 On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD build. Median over the ten clips of the [results page's hardware table](https://terranvigil.github.io/yah264/results.html#the-hardware-mode), same bitrate:
 
