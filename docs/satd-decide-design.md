@@ -154,6 +154,12 @@ correctness gates green. It measured **BD +2.35% for ~2% speed**. The
 deadzone-J decisions are worse, yah264 was leaning on trellis-in-trials, and
 the winner re-encode eats the savings. Closed.
 
+Since then W-C was reopened and shipped as the medium-tier default, as a
+measured trade: 1.18x faster at CIF and 1.29x at 720p in pure C for +1.42%
+VMAF-NEG BD (the trellis-at-commit comment in `src/encoder/macroblock.c`).
+Higher subme tiers keep trellis in every trial. The `Y264_TRELLIS_COMMIT`
+escape that restored the old placement has since been removed.
+
 So the quality-neutral half of the program is spent. What remains is E1
 (byte-identical, uncertain) plus the two margin-bound levers A3 (0-19%) and A5
 (0-15%), which the baseline's BD margin now permits.
