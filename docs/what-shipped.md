@@ -1976,3 +1976,49 @@ no measurable time.
 the Graviton3, 24 identity arms are byte-identical, and checkasm passes at 256
 and at 128 bits on the same chip. gcc's UBSan also flagged an unaligned
 four-byte load in the NEON 4x4 SATD, now fixed.
+
+## 28. AVX-512 on by default, and Intel measured
+
+The meson option `avx512` now defaults to true. Every x86-64 build carries the
+AVX-512 tier, and it runs only on CPUs that report avx512f, bw and vl.
+`-Davx512=false` leaves it out, and `-Dsimd=avx512` with `-Davx512=false` is an
+error. The kernels are still the 18 pixel-metric entries from section 27, with
+8 checkasm groups. There are no AVX-512 motion compensation or transform
+kernels yet. Output is byte-identical across tiers.
+
+The switch rests on an Intel reading. A spot c7i.8xlarge (Xeon Platinum 8488C,
+Sapphire Rapids, 16 cores with two threads each) ran the same build as the
+second AMD run, with identical output. Unit tests, checkasm with the 8 AVX-512
+groups on hardware, one-thread identity against the Mac on every cell and fast
+conformance all passed, for the AVX2 and AVX-512 builds.
+
+**One thread, CRF 23, against x264.** Instruction counts match the AMD run,
+since the binary is the same.
+
+| | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
+|---|--:|--:|
+| CPU time, AVX2 | 0.99x (4054 vs 4078 ms) | 0.88x (7512 vs 8584 ms) |
+| CPU time, AVX-512 | 0.97x (3969 ms) | 0.84x (7227 ms) |
+
+**AVX-512 against AVX2 on one binary,** interleaved, seven runs each on
+sunflower:
+
+| machine | one thread, CPU | one thread, wall | all threads, CPU | all threads, wall |
+|---|--:|--:|--:|--:|
+| AMD EPYC 9R14 | 0.966x | 0.966x | 0.982x | 0.990x |
+| Intel Xeon 8488C | 0.964x | 0.972x | 0.957x | 0.971x |
+
+**All threads, the first clean x86 reading.** Each encoder ran at its default
+thread count over the full 500-frame clips, with both reading one piped feed.
+These are medians of five runs at CRF 23:
+
+| clip | wall vs x264 | CPU vs x264 | CPU ms per frame, ours | CPU ms per frame, x264 |
+|---|--:|--:|--:|--:|
+| sunflower 1080p, AVX2 | 1.04x | 1.01x | 102.4 | 101.3 |
+| sunflower 1080p, AVX-512 | 1.04x | 0.98x | | |
+| crowd_run 4K, AVX2 | 0.90x | 0.76x | 541 | 714 |
+| crowd_run 4K, AVX-512 | 0.87x | 0.72x | | |
+
+At 1080p we're level on CPU time and 4% behind on wall time, and at 4K we're
+ahead. Threading at high core counts on x86 stays the open item, now sized on
+Intel. AMD still needs the x86 goal board.
