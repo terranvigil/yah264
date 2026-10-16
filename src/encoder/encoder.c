@@ -5990,17 +5990,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
              * runtime correction and the re-solve are always on; tp_plan_on
              * still drops to 0 when a plan cannot be built. */
             e->tp_plan_on  = 1;
-            e->tp_difflim  = 1;
             e->tp_corr     = 1;
             e->tp_bexp     = (ev = getenv("Y264_TP_BEXP"))     ? atof(ev) / 100.0 : 1.0;
-            /* complexity blur, the --cplxblur default of 20. Measured flat from 10 to 40 on
-             * foreman/samsung, so it is not a fitted constant
-             * -- and it is not a small term: it is worth -3 BD points on
-             * foreman and -8 on samsung, and it is what keeps the rate inside
-             * the mode's accuracy. */
+            /* complexity blur, the --cplxblur default of 20; the planner maps
+             * it to a gaussian sigma (tp_blur_cost in ratecontrol.c). */
             e->tp_cplxblur = (ev = getenv("Y264_TP_CPLXBLUR")) ? atof(ev)
                            : (e->tp_plan_on ? 20.0 : 0.0);
-            e->tp_qblur    = (ev = getenv("Y264_TP_QBLUR"))    ? atof(ev) : 0.0;
             e->tp_cwarm    = (ev = getenv("Y264_TP_CWARM"))    ? atoi(ev) : 4;
             e->tp_resolve  = 1;
             e->tp_dbg      = getenv("Y264_TP_DBG") != NULL;

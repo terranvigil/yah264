@@ -2102,8 +2102,8 @@ double yah264_2pass_stat_weight(double bits, int qp)
  * - NO FRAME-TYPE RELATION. cost^qcomp is monotone in cost, and a B frame's
  * cost is small, so B frames won the auction and the I frame lost it: the
  * planned QPs came out I 32 / P 27 / B 21, exactly upside down. The fix is
- * not to let the curve decide this at all: the cross-type limiter below
- * OVERWRITES the I and B qscales as fixed ratios off the P qscale
+ * not to let the curve decide this at all: the type shaping below
+ * PLACES the I and B qscales as fixed ratios off the P qscale
  * (--ipratio, --pbratio), and the complexity term only moves the P frames.
  * - NO BOUND. Spending against a remaining budget is a closed loop with unit
  * gain and a biased plant: every frame that overshoots its model takes the
@@ -2136,73 +2136,88 @@ double tp_bits_at(const yah264_encoder_t *e, int i, double q)
     return e->tp_cost[i] * pow(e->tp_qrec[i] / q, e->tp_bexp) / e->tp_qrec[i];
 }
 
-/* Cross-type qscale limiter. Forces the I and B qscales
- * off the P qscale and limits step between consecutive frames of one type.
+/* The plan's shape constants. Each was picked by a sweep on the two-pass band
+ * (scripts/tp_band.py: twelve 120-frame clips at five rates each, plus the
+ * LONG=1 set of 260-480-frame multi-GOP clips), against the planner this one
+ * replaced:
  *
- * Run in REVERSE record order. That is load-bearing rather
- * than a quirk: an I frame's quantiser should relate to the P frames it is
- * about to feed, not to the ones behind it, and reverse order is what puts the
- * following GOP's P average in ptrack_qp when the I frame is reached. Forward
- * order leaves the FIRST I frame of a slice with ptrack_norm == 0, which is
- * the fallback branch -- the I frame keeps its own complexity-derived qscale,
- * which is the whole defect. Under the threaded splitter every GOP section
- * starts with an I frame, so forward order would miss every one of them.
- *
- * A P frame that was mostly intra says little about "what did P cost here",
- * and could be down-weighted in the average. Our stats carry no intra count,
- * so ptrack_qp is a plain running mean of the P QPs since the I frame. The mask only ever matters at a scene cut,
- * where the P frame after the cut is nearly intra -- and yah264 puts an I
- * frame there anyway. */
-struct tp_dl {
-    double lastq[3];            /* last qscale per type, 0 I / 1 P / 2 B */
-    double ptrack_qp, ptrack_norm, last_accum_p_norm;
-    int    last_non_b;          /* -1 until a non-B has been seen */
-};
+ * TP_IWIN 8: P frames averaged for an I frame's level. Swept 2/4/8/16/all;
+ * 8 read best on the long set (median -0.27% BD-VMAF-NEG, all -0.14%)
+ * and held the short set (median -0.15%, worst +0.38% inside its null).
+ * 2 and 4 swung foreman +0.63% the wrong way.
+ * TP_BLUR_SIGMA 0.5: gaussian sigma in frames per unit of --cplxblur, so the
+ * default 20 is sigma 10. Swept 0.25/0.5/0.75/1.0; 0.75 and 1.0 helped
+ * sintel by 1.1-1.6% and cost akiyo 0.1-0.8%, 0.25 lost on most clips. */
+#define TP_IWIN       8
+#define TP_BLUR_SIGMA 0.5
 
-static double tp_diff_limited(const yah264_encoder_t *e, struct tp_dl *d,
-                              const struct tp_stat *s, double q, double lstep)
+/* Frame-type shaping. The complexity curve decides the P frames; the I and B
+ * frames are placed relative to them, because a frame's own coding cost does
+ * not say how much the frames that predict from it gain from its quality:
+ *
+ * - P: the curve's qscale, held within --qpstep of the previous P.
+ * - I: the mean QP of the P frames that FOLLOW it (the frames it feeds), over
+ * at most TP_IWIN of them and never past the next I, divided by --ipratio
+ * in the qscale domain. With no P after it in this slice the I looks back
+ * at the P frames before it; with none at all it takes the seed level.
+ * - B: the qscale of the first I or P coded AFTER it, in P terms (an I is
+ * multiplied back up by --ipratio), times --pbratio for a B nobody
+ * references; a B kept as a reference stays at that level, since the
+ * frames after it are built on it. A B with no anchor after it in the
+ * slice (the slice tail) takes the anchor before it. Taking the next
+ * anchor rather than the B's own later reference was a sweep result: on
+ * sintel_720p, which brightens through a fade, the band read +0.24%
+ * BD-VMAF-NEG against the old planner where the B's own reference read
+ * +2.66%; the geometric mean of both references read worse than either.
+ * Pricing a reference B at pbratio^0.25 or ^0.5 read +0.1% and +0.55%.
+ *
+ * Forward in coding order, in three sweeps (P, then I, then B) so every input
+ * a frame reads is final first. Under the threaded splitter each GOP section
+ * starts with its I frame and holds the P frames that follow it, so the I sees
+ * the window a serial run would give it. */
+static void tp_shape_types(const yah264_encoder_t *e, double *q, double seed_q,
+                           double lstep)
 {
-    int type = s->type;
-    if (type == 0) {
-        double iq = q;
-        if (d->ptrack_norm > 0) {
-            double pq = tp_qp2qscale(d->ptrack_qp / d->ptrack_norm);
-            q = d->ptrack_norm >= 1
-              ? pq / e->tp_ipf
-              : d->ptrack_norm * pq / e->tp_ipf + (1 - d->ptrack_norm) * iq;
-        }
-    } else if (type == 2) {
-        if (d->last_non_b >= 0)
-            q = d->lastq[d->last_non_b];
-        /* pbratio is charged only to a B that is NOT kept as a reference:
- * a pyramid ref-B carries the next frames and is held at its anchor's
- * qscale. is_ref comes off the stats record (5th field); a 4-field
- * record from an older pass 1 reads 0, i.e. the flat-B assumption. */
-        if (!s->is_ref)
-            q *= e->tp_pbf;
+    int n = e->tp_n;
+    const struct tp_stat *s = e->tp_stats;
+
+    double prev = 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i].type != 1) continue;
+        if (prev > 0) q[i] = rcstep_qscale(q[i], prev, lstep, 0, 0);
+        prev = q[i];
     }
-    /* Step limit between consecutive frames of the same type. */
-    if (d->last_non_b == type && (type != 0 || d->last_accum_p_norm < 1)) {
-        q = rcstep_qscale(q, d->lastq[type], lstep, 0, 0);
+
+    for (int i = 0; i < n; i++) {
+        if (s[i].type != 0) continue;
+        double acc = 0;
+        int cnt = 0;
+        for (int j = i + 1; j < n && s[j].type != 0 && cnt < TP_IWIN; j++)
+            if (s[j].type == 1) { acc += tp_qscale2qp(q[j]); cnt++; }
+        int ahead = cnt;
+        for (int j = i - 1; !ahead && j >= 0 && cnt < TP_IWIN; j--)
+            if (s[j].type == 1) { acc += tp_qscale2qp(q[j]); cnt++; }
+        double pq = cnt ? tp_qp2qscale(acc / cnt) : seed_q;
+        if (pq > 0) q[i] = pq / e->tp_ipf;
     }
-    d->lastq[type] = q;
-    if (type != 2) d->last_non_b = type;
-    if (type == 0) {
-        d->last_accum_p_norm = d->ptrack_norm;
-        d->ptrack_norm = 0;
-        d->ptrack_qp = 0;
+
+    int last = -1, next = 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i].type != 2) { last = i; continue; }
+        if (next <= i)
+            for (next = i + 1; next < n && s[next].type == 2; next++) ;
+        int a = next < n ? next : last;
+        if (a >= 0)
+            q[i] = s[a].type == 0 ? q[a] * e->tp_ipf : q[a];
+        if (!s[i].is_ref)
+            q[i] *= e->tp_pbf;
     }
-    if (type == 1) {
-        d->ptrack_qp += tp_qscale2qp(q);
-        d->ptrack_norm += 1;
-    }
-    return q;
 }
 
-/* One pass of the curve at a given rate factor: fill q[] and return the total
- * modelled bits. cplx[] is the (optionally blurred) complexity per record. */
+/* One evaluation of the curve at rate factor rf: fill q[] and return the
+ * modelled bits of the slice. */
 static double tp_solve(yah264_encoder_t *e, double rf, const double *cplx,
-                       double *q, double *scratch, double base_cplx)
+                       double *q, double seed_cost)
 {
     int n = e->tp_n;
     double icomp = 1.0 - e->crf_qcomp;
@@ -2211,37 +2226,7 @@ static double tp_solve(yah264_encoder_t *e, double rf, const double *cplx,
 
     for (int i = 0; i < n; i++)
         q[i] = pow(cplx[i], icomp) / rf;
-
-    if (e->tp_difflim) {
-        struct tp_dl d;
-        d.lastq[0] = d.lastq[1] = d.lastq[2] = pow(base_cplx, icomp) / rf;
-        d.ptrack_qp = 0;
-        d.ptrack_norm = 0;
-        d.last_accum_p_norm = 1;
-        d.last_non_b = -1;
-        for (int i = n - 1; i >= 0; i--)
-            q[i] = tp_diff_limited(e, &d, &e->tp_stats[i], q[i], lstep);
-    }
-
-    if (e->tp_qblur > 0 && scratch) {
-        /* QP blur (--qblur): a gaussian over the qscales of the SAME frame type, so
- * one cheap frame cannot drag its neighbours' quantisers with it. */
-        double qb = e->tp_qblur;
-        int half = (int)(qb * 2);
-        for (int i = 0; i < n; i++) {
-            double acc = 0, sum = 0;
-            for (int j = -half; j <= half; j++) {
-                int k = i + j;
-                if (k < 0 || k >= n) continue;
-                if (e->tp_stats[k].type != e->tp_stats[i].type) continue;
-                double c = exp(-(double)j * j / (qb * qb));
-                acc += q[k] * c;
-                sum += c;
-            }
-            scratch[i] = sum > 0 ? acc / sum : q[i];
-        }
-        memcpy(q, scratch, (size_t)n * sizeof(*q));
-    }
+    tp_shape_types(e, q, seed_cost > 0 ? pow(seed_cost, icomp) / rf : 0, lstep);
 
     double bits = 0;
     for (int i = 0; i < n; i++) {
@@ -2250,6 +2235,47 @@ static double tp_solve(yah264_encoder_t *e, double rf, const double *cplx,
         bits += tp_bits_at(e, i, q[i]);
     }
     return bits;
+}
+
+static int tp_cmp_dbl(const void *a, const void *b)
+{
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+/* Complexity blur (--cplxblur). A gaussian of sigma cplxblur * TP_BLUR_SIGMA
+ * frames over neighbouring costs, so the P curve follows the content's trend
+ * rather than each frame's noise; blurring costs rather than quantisers keeps
+ * one cheap frame from dragging a complex neighbour's quantiser down with it.
+ * Only P frames are written (I and B quantisers are placed off the P frames).
+ * They read P and B neighbours but not I: swept over the type sets, P alone
+ * read +7.6% on sintel_720p and +1.8% on samsung_720p (three of every four
+ * frames are B, so they carry most of the trend) and P+I+B lost 0.5-0.6% on
+ * foreman and akiyo, where the I frame's cost spike lifted the P frames after
+ * it. Costs enter as they are, not normalised per type: normalising read
+ * +6.4% on sintel. The window stops at 3 sigma, where a weight is under 1.2%
+ * of the centre's. */
+static void tp_blur_cost(const yah264_encoder_t *e, double *cplx, double sigma)
+{
+    int n = e->tp_n;
+    const struct tp_stat *s = e->tp_stats;
+    memcpy(cplx, e->tp_cost, (size_t)n * sizeof(*cplx));
+    if (sigma <= 0)
+        return;
+    int half = (int)ceil(3.0 * sigma);
+    double inv = 1.0 / (2.0 * sigma * sigma);
+    for (int i = 0; i < n; i++) {
+        if (s[i].type != 1) continue;
+        double acc = 0, wsum = 0;
+        int lo = i - half < 0 ? 0 : i - half, hi = i + half >= n ? n - 1 : i + half;
+        for (int k = lo; k <= hi; k++) {
+            if (s[k].type == 0) continue;
+            double w = exp(-(double)(k - i) * (k - i) * inv);
+            acc += e->tp_cost[k] * w;
+            wsum += w;
+        }
+        cplx[i] = acc / wsum;
+    }
 }
 
 /* Build the plan. Called once at open, on the API thread, after the records
@@ -2267,9 +2293,9 @@ void tp_build_plan(yah264_encoder_t *e)
     e->tp_q      = malloc((size_t)n * sizeof(*e->tp_q));
     e->tp_ebits  = malloc((size_t)(n + 1) * sizeof(*e->tp_ebits));
     double *cplx    = malloc((size_t)n * sizeof(double));
-    double *scratch = malloc((size_t)n * sizeof(double));
-    if (!e->tp_cost || !e->tp_qrec || !e->tp_q || !e->tp_ebits || !cplx || !scratch) {
-        free(cplx); free(scratch);
+    double *pcost   = malloc((size_t)n * sizeof(double));
+    if (!e->tp_cost || !e->tp_qrec || !e->tp_q || !e->tp_ebits || !cplx || !pcost) {
+        free(cplx); free(pcost);
         free(e->tp_cost); free(e->tp_qrec); free(e->tp_q); free(e->tp_ebits);
         e->tp_cost = e->tp_qrec = e->tp_q = e->tp_ebits = NULL;
         e->tp_plan_on = 0;
@@ -2281,34 +2307,22 @@ void tp_build_plan(yah264_encoder_t *e)
         e->tp_cost[i] = (e->tp_stats[i].bits + 1.0) * e->tp_qrec[i];
     }
 
-    /* Complexity blur : a two-sided gaussian over neighbouring
- * frames' costs. Reduces local QP fluctuation without blurring the QPs
- * themselves, which would let one simple frame drag down a complex
- * neighbour and waste bits on it. */
-    if (e->tp_cplxblur > 0) {
-        double cb = e->tp_cplxblur;
-        int half = (int)(cb * 2);
-        for (int i = 0; i < n; i++) {
-            /* Plain two-sided gaussian. Stopping the blur at the I frame
- * yah264 places at a cut was MEASURED and was a wash (sintel_720p,
- * the one corpus clip with hard cuts, read -26.38% with the cut
- * break and -27.14% without). Not carried. */
-            double acc = 0, sum = 0;
-            for (int j = -half; j <= half; j++) {
-                int k = i + j;
-                if (k < 0 || k >= n) continue;
-                double c = exp(-(double)j * j / 200.0);
-                acc += e->tp_cost[k] * c;
-                sum += c;
-            }
-            cplx[i] = sum > 0 ? acc / sum : e->tp_cost[i];
-        }
-    } else {
-        memcpy(cplx, e->tp_cost, (size_t)n * sizeof(double));
-    }
+    tp_blur_cost(e, cplx, e->tp_cplxblur * TP_BLUR_SIGMA);
 
-    int mbs = ((e->width + 15) / 16) * ((e->height + 15) / 16);
-    double base_cplx = (double)mbs * 120.0;      /* per-MB complexity scale, B frames on */
+    /* The seed level: the median blurred P cost of this slice, from pass 1's
+ * own records. It places an I frame that has no P frame anywhere in its
+ * slice. Also swept as a starting reference for the first P's step
+ * limit; that read the same or worse (sintel +0.17%), so the first P is
+ * free. A slice with no P frames at all has no seed, and its I frames
+ * keep their own curve value. */
+    int np = 0;
+    for (int i = 0; i < n; i++)
+        if (e->tp_stats[i].type == 1) pcost[np++] = cplx[i];
+    double seed = 0;
+    if (np) {
+        qsort(pcost, (size_t)np, sizeof(double), tp_cmp_dbl);
+        seed = np & 1 ? pcost[np / 2] : 0.5 * (pcost[np / 2 - 1] + pcost[np / 2]);
+    }
 
     /* Seed the bisection with the rate factor a flat scaling would need, so the
  * search range is content-independent. */
@@ -2320,18 +2334,18 @@ void tp_build_plan(yah264_encoder_t *e)
     double rf = 0;
     for (double step = 1e4 * step_mult; step > 1e-7 * step_mult; step *= 0.5) {
         rf += step;
-        if (tp_solve(e, rf, cplx, e->tp_q, scratch, base_cplx) > e->tp_target)
+        if (tp_solve(e, rf, cplx, e->tp_q, seed) > e->tp_target)
             rf -= step;
     }
     if (rf <= 0) rf = step_mult > 0 ? step_mult : 1.0;
-    tp_solve(e, rf, cplx, e->tp_q, scratch, base_cplx);
+    tp_solve(e, rf, cplx, e->tp_q, seed);
 
     e->tp_ebits[0] = 0;
     for (int i = 0; i < n; i++)
         e->tp_ebits[i + 1] = e->tp_ebits[i] + tp_bits_at(e, i, e->tp_q[i]);
 
     free(cplx);
-    free(scratch);
+    free(pcost);
 }
 
 

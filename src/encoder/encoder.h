@@ -1046,7 +1046,6 @@ struct yah264_encoder {
  * instead has no frame-type relation (so it inverts the cascade) and no
  * bound (so it runs away). */
     int      tp_plan_on;        /* master gate */
-    int      tp_difflim;        /* force I/B qscale off P (the cross-type limiter) */
     int      tp_corr;           /* runtime correction against the plan */
     int      tp_resolve;        /* correct by re-solving the remaining curve */
     int      tp_dbg;            /* Y264_TP_DBG: per-frame plan trace */
@@ -1055,7 +1054,6 @@ struct yah264_encoder {
  * predicted size, handed to the frame prep like e->qp */
     double   tp_bexp;           /* cost-to-bits exponent (1.0 = the baseline model) */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
-    double   tp_qblur;          /* qscale blur radius in frames, 0 = off */
     double   tp_ipf, tp_pbf;    /* qscale ip / pb factors */
     double  *tp_cost;           /* per record: QP-invariant cost, bits at qscale 1 */
     double  *tp_qrec;           /* per record: pass-1 qscale */

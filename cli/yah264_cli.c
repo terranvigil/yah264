@@ -859,10 +859,11 @@ static void usage(const char *argv0)
         "                     factors of the offline allocator (x264's numbers and\n"   /* x264-ok */
         "                     defaults, 1.4 and 1.3). The single-pass modes\n"
         "                     carry their own I/P/B anchoring and do not read these.\n"
-        "  --cplxblur F / --qblur F    2-PASS ONLY: the allocator's complexity and\n"
-        "                     qscale blur radii in frames (defaults 20 and 0)\n"
+        "  --cplxblur F       2-PASS ONLY: the allocator's complexity blur\n"
+        "                     (default 20; a gaussian of sigma F/2 frames).\n"
+        "                     --qblur is accepted and ignored\n"
         "  (--subme/--subpel override the preset; --merange, --qcomp, --aq-mode,\n"
-        "   the --no-* switches above, the ratio pair, the blur pair and the\n"
+        "   the --no-* switches above, the ratio pair, --cplxblur and the\n"
         "   deadzone pair reach the encoder through the Y264_* variable they were\n"
         "   promoted from, which still wins if it is set in the environment.)\n"
         "  --cabac / --cavlc  entropy coder (default CABAC)\n"
@@ -4940,8 +4941,12 @@ int main(int argc, char **argv)
             i++;
         }
         else if (!strcmp(argv[i], "--qblur") && i + 1 < argc) {
+            /* accepted for command-line compatibility only: a quantiser blur
+ * after the complexity blur measured no gain on the two-pass band, so
+ * the planner has none. */
             opt_num("--qblur", argv[i + 1], 0.0, 999.0);
-            opt_env("Y264_TP_QBLUR", argv[i], argv[i + 1], argv[i + 1]);
+            LOGF(LOG_WARN, "yah264: warning: --qblur is accepted and ignored "
+                 "(the two-pass planner has no quantiser blur)\n");
             i++;
         }
         /* the reference encoder's --no-psy is the psy pair set to zero, not a third knob.

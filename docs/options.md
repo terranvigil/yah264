@@ -144,7 +144,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
 | `--ipratio`, `--pbratio` | float | 1.4, 1.3 | **Two-pass only.** The I-to-P and P-to-B qscale factors of the offline allocator. They keep x264's names, numbers and defaults. The single-pass modes anchor I and B their own way and never read these. |
-| `--cplxblur`, `--qblur` | frames | 20, 0 | **Two-pass only.** The allocator's complexity and qscale blur radii. |
+| `--cplxblur` | | 20 | **Two-pass only.** Width of the planner's complexity blur: a gaussian over neighbouring frames' costs with sigma `--cplxblur`/2 frames. 0 turns it off. `--qblur` is accepted for compatibility and ignored, with a warning: the planner has no quantiser blur. |
 
 ### `--crf-max` buys quality with the buffer model
 
@@ -1681,7 +1681,7 @@ looking at if you find one in a script, not as a tuning surface.
 `Y264_CRF_CAP`, `Y264_CRF_CL_SHIFT`, `Y264_RCP_GAIN`, `Y264_RCP_WARM`,
 `Y264_RCP_QPD`, `Y264_VBV_RHI`, `Y264_VBV_QPD`, `Y264_VBV_CJUMP`,
 `Y264_TP_BEXP`,
-`Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`, `Y264_TP_QBLUR`,
+`Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`,
 `Y264_TP_CWARM`.
 
 **mb-tree and lookahead:** `Y264_MBTREE_WHOLEBUF`, `Y264_MBTREE_IPPP`,
