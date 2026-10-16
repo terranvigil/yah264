@@ -391,7 +391,7 @@ st_bd_at_rate() {
 
 # ---------------------------------------------------------------------------
 # checkasm --bench, per tier. A kernel multiple is NOT a ship criterion in this
-# project (docs/asm-research: necessary, not sufficient) and it is not a
+# project (a faster kernel is necessary, not sufficient) and it is not a
 # encoder-level speed claim either. It is recorded because it is the only place
 # a per-kernel x86 number exists at all, and because the AVX-512 decision needs
 # to see which kernels widen and which do not.

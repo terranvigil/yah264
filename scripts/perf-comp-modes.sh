@@ -80,7 +80,7 @@ for m in $MODES; do
     echo
     case "$m" in
         crf)   echo "== CRF (constant quality; each encoder at its own calibrated rate factor) ==" ;;
-        cqp)   echo "== CQP (fixed QP; yah264 Y264_MBTREE_OFF=1 to match x264's CQP policy) ==" ;;
+        cqp)   echo "== CQP (fixed QP; yah264 Y264_MBTREE_OFF=1) ==" ;;
         abr)   echo "== ABR/VBR (average bitrate target) ==" ;;
         cbr)   echo "== CBR (bitrate == VBV maxrate, 1s buffer) ==" ;;
         cvbr)  echo "== capped VBR (calibrated CRF + a BINDING VBV cap at 0.8x the ABR target) ==" ;;
