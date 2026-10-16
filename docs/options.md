@@ -439,6 +439,7 @@ worse at both offsets tried (3 and 6).
 | `--deadzone-inter` | 0..32 | 21 | Inter luma quantization deadzone, x264's flag and x264's value. |
 | `--deadzone-intra` | 0..32 | 11 | Intra luma quantization deadzone. |
 | `--no-psy` | | psy on | `--psy-rd 0 --psy-trellis 0`, which is how x264 spells it. An explicit `--psy-rd` anywhere on the line still wins, exactly as it wins over a `--tune`. |
+| `--nr` / `--nr-intra` / `--nr-inter` | 0..2000 | 0 (off) | Coefficient noise reduction: an offset toward zero, learned per transform position from the running coefficient energy, taken off every coefficient before quantization. `--nr` sets both block classes; the other two set one each. Pictures that read clean on a spatial noise gate get no offset. `--nr-inter 100` is the measured setting: neutral to better on the HD band, best on noisy live action. It stays off because it does not help on film grain. [denoise.md](denoise.md) has the numbers. |
 | `--no-dct-decimate` | | decimation on | Never drop a block whose coefficients are all marginal. |
 | `--no-fast-pskip` | | fast P-skip on | Drop the cheap P_Skip pre-test, so every P macroblock takes the full analysis path. Only reachable at `--subme` 8 and below, where that test runs. Slower, and it moves bits. |
 | `--no-asm` | | asm on | Force every scalar C path. Byte-identical output: every kernel is checkasm-equal to its C reference. |
@@ -1351,7 +1352,7 @@ across unchanged:
 
 `--preset`, `--tune` (the six names listed above), `--bitrate`, `--qp`,
 `--keyint`, `--min-keyint`, `--no-scenecut`, `--bframes`, `--b-adapt`, `--ref`,
-`--cabac`/`--cavlc`, `--no-transform-8x8`, `--psy-rd`, `--psy-trellis`,
+`--psy-rd`, `--psy-trellis`,
 `--aq-strength`, `--rc-lookahead`, `--sync-lookahead`, `--vbv-maxrate`,
 `--vbv-bufsize`, `--pass`, `--stats`, `--threads`, `--frames`, `--sar`,
 `--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`, `--nal-hrd`,
@@ -1367,10 +1368,21 @@ across unchanged:
 `--vbv-init`, `--sps-id`, `--slices`, `--crf-max`, `--ratetol`, `--partitions`,
 `-o`.
 
+Options x264 spells differently. Each does the same job under the name on
+the right:
+
+| x264 option | Here | Notes |
+| --- | --- | --- |
+| `--no-cabac` | `--cavlc` | `--cabac` turns it back on. |
+| `--no-8x8dct` | `--no-transform-8x8` | `--transform-8x8` turns it back on. |
+| `--dump-yuv` | `--dump-recon` | Writes the reconstruction as Y4M. |
+| `--psy-rd A:B` | `--psy-rd A --psy-trellis B` | `--psy-rd` takes one number here. The two-part form is refused. |
+
 Options that differ, and how:
 
 | Option | The difference |
 | --- | --- |
+| `--nr` | Same flag and range, but not the same tool. x264's noise reduction is one strength for every block. Here `--nr N` sets the intra and inter strengths together, `--nr-intra` and `--nr-inter` set one each, the offset is scaled by each transform position's gain, and pictures that read clean on a spatial noise gate are coded with no offset at all. See [denoise.md](denoise.md). |
 | `--qpfile` | Same file format and the same frame-type letters, with two differences. `i` (a non-IDR I frame) is refused, because that needs an open GOP. `I` and `K` both force an IDR. `b` codes a B slice but does not force it to be a non-reference one: whether a B is a reference stays the B-pyramid's. |
 | `--crf` | **The number is not comparable to x264's.** The same CRF value has measured a size difference from -54.6% to +45.3% against x264 across the corpus. Do not port a CRF setting across. See [rate-control.md](rate-control.md). |
 | `--crf` | Fractional values are accepted but largely inert. The quantizer rounds to an integer QP. |
@@ -1404,10 +1416,12 @@ Options that differ, and how:
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode. The single-pass modes here anchor I and B through the CRF track and never read them. |
 
 x264 options with **no equivalent at all**:
-`--muxer`/`--demuxer`. `--slice-max-size` and
-`--slice-max-mbs` are not here either: `--slices` takes a count, not a size
-cap. x264's `--interlaced` is `--tff`/`--bff` here, and it codes field
-pictures rather than MBAFF.
+`--muxer`/`--demuxer`. `--slice-max-size`, `--slice-max-mbs`,
+`--slice-min-mbs` and `--slices-max` are not here either: `--slices` takes a
+count, not a size cap. x264's `--interlaced` is `--tff`/`--bff` here, and it
+codes field pictures rather than MBAFF. The full list of x264 options with no
+flag here, and what was decided for each, is the census in
+[x264-parity-plan.md](x264-parity-plan.md).
 
 ## Calling it from C
 
