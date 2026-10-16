@@ -509,6 +509,23 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     target and higher in PSNR-Y than the old opening at both rates. With
  *     no lookahead at all (--rc-lookahead 0 and B frames) the intra fit
  *     opens unmodified: margins -3..4.8 there each cost some band clip more.
+ *   With no lookahead at all (--rc-lookahead 0 and B frames) the opening
+ *   comes from the intra fit, which cannot see motion, and two corrections
+ *   act over the first rfm_fb_t (2) seconds:
+ *   open_tex_t 6500 / open_tex_g 10 / open_tex_m 6: the opening I goes
+ *     g x log2(t / intra cost per MB) QP under the fit's level, at most m.
+ *     Flat, low-texture content keeps a good I as a reference for long
+ *     (touchdown, akiyo, samsung, foreman read 2..12% better with it);
+ *     textured, moving content does not (bus, park_joy and ducks lose 1..4%
+ *     with any flat offset). g 6 / 8 / 10, m 6 / 8: 10 / 6 is the only pair
+ *     with every band clip ahead of the old opening at no lookahead;
+ *   rfm_slew_fb 1 / rfm_slew_fb_up 0.35 (x qp_step): the ledger's slew while
+ *     the opening is unproven, falling and rising. A falling ledger is the
+ *     fit having opened too high and may follow at a full step; a rising one
+ *     is mostly the opening I's own spike, so it rises at 0.35, and not
+ *     faster than the normal slew after an I lowered on purpose. Symmetric
+ *     0.5 / 1 / 2 and rising 0.25 / 0.35 / 0.4 / 0.5 / 0.75 were read; 0.35
+ *     is the only rising value with every clip ahead.
  *   open_ioff, open_ip0: see the per-frame opening in rcp_decide.
  *   open_rfs: see the per-frame opening in rcp_decide.
  *   pf_slew 1, blur_decay 0.5: the per-frame rf model (--abr-model rf);
@@ -529,6 +546,9 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     and more instructions, 2 at +0.1%;
  *   vbv_fill_min 0.5: 0.25 and 0.75 inert from horizon 2 up. */
     k->rfm_slew       = rc_tunable("Y264_RFM_SLEW", 0.25, NULL);
+    k->rfm_slew_fb    = rc_tunable("Y264_RFM_SLEW_FB", 1.0, NULL);
+    k->rfm_fb_t       = rc_tunable("Y264_RFM_FB_T", 2.0, NULL);
+    k->rfm_slew_fb_up = rc_tunable("Y264_RFM_SLEW_FB_UP", 0.35, NULL);
     k->rfm_degen      = rc_tunable("Y264_RFM_DEGEN", 4.0, NULL);
     k->pf_slew        = rc_tunable("Y264_PF_SLEW", 1.0, NULL);
     k->ovc_gain       = rc_tunable("Y264_OVC_GAIN", 16.0, NULL);
@@ -546,6 +566,9 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->open_ic        = rc_tunable("Y264_OPEN_IC", -4.14, NULL);
     k->open_ioff      = rc_tunable("Y264_OPEN_IOFF", 4.0, NULL);
     k->open_imargin   = rc_tunable("Y264_OPEN_IMARGIN", 8.0, NULL);
+    k->open_tex_t     = rc_tunable("Y264_OPEN_TEX_T", 6500.0, NULL);
+    k->open_tex_g     = rc_tunable("Y264_OPEN_TEX_G", 10.0, NULL);
+    k->open_tex_m     = rc_tunable("Y264_OPEN_TEX_M", 6.0, NULL);
     k->open_ip0       = rc_tunable("Y264_OPEN_IP0", 28.0, NULL);
     k->open_rfs       = rc_tunable("Y264_OPEN_RFS", 30.0, NULL);
     k->vbv_fill_frac  = rc_tunable("Y264_VBV_FILL_FRAC", 0.5, NULL);
@@ -965,7 +988,13 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         /* The buffer law, actuals only. */
         {
             int empty = 0;
-            e->vbv.fill = rcbuf_step(&e->vbv, e->vbv.fill, p->bits, &empty);
+            /* The buffer is charged what crosses the wire: the payload and
+ * its framing (p->framing, the same charge the two-pass ledger takes).
+ * The payload alone undercounts by about 60 bits a picture, and the error
+ * only resets when the buffer runs full: after a few hundred pictures of
+ * drain the model read 30 kbit of occupancy the stream did not have
+ * (sintel, CBR). */
+            e->vbv.fill = rcbuf_step(&e->vbv, e->vbv.fill, p->bits + p->framing, &empty);
             if (empty) e->rcp_vbv_nclamp++;
             if (e->vbv_opt > e->vbv.size - e->vbv.fill)
                 e->vbv_opt = e->vbv.size - e->vbv.fill;
@@ -1420,7 +1449,13 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
             e->rcp_arr_cvi = e->rcp_bcvi[i];
     int tight = 1;
     double vs1 = rcp_vbv_scale_eff(e, 1);
-    if (!rcp_warm(e) && !is_idr && vs1 > 0.0) {
+    /* CBR runs every burst on the serial schedule. Its buffer has no
+ * headroom above the delivery, so one mispredicted anchor is an underflow,
+ * and only the serial emit can re-code a frame against its measured size:
+ * sintel at a 648 kbit CBR on four threads had a post-cut P predicted at
+ * 15 kbit code 480 kbit into a buffer half that full (main underflowed 16
+ * times there, by up to 441 kbit). One thread was already serial. */
+    if (!rcp_warm(e) && !is_idr && vs1 > 0.0 && !e->vbv_cbr) {
         /* Warm phase is serial-tight anyway; an IDR burst has no trailing B's
  * to ride predictions (pre-IDR B's flush as P frames, each deciding
  * on full actuals) and its intra spike is the classic underflow shape
@@ -1488,6 +1523,14 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * 615 kbit. The base QP read here is still the last anchor's. */
     if (!tight && e->rck.vbv_posti && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && (e->last_nonb_type == 0 || (e->abr_rf2 && e->abr_qp > 0 && e->qp - (e->abr_qp + e->crf_dc) >= 3.0)))
+        tight = 1;
+    /* The same anchor under CRF+VBV: the one after an anchor the buffer
+ * raised 3 QP or more over the rate factor's. samsung at a 480 kbit cap,
+ * four threads: an anchor raised from 26 to 44 by the budget, then the
+ * next decided at 30 from a scale measured at 44, predicted 42 kbit and
+ * coded 300 kbit into 281 kbit. */
+    if (!tight && e->rck.vbv_posti && !e->abr_on && e->crf_on && !e->tp_pass
+        && e->qp - e->crf_pre_qp >= 3)
         tight = 1;
     /* Y264_VBV_LOW (default 0.25; 0 = off, the output before 2026-10-12):
  * under capped VBR a burst that starts with less than this fraction of the
@@ -1647,6 +1690,12 @@ static double rfm_open_intra_qp(const yah264_encoder_t *e, double C)
         fprintf(stderr, "RFOPEN intra C/mb=%.0f bits/mb=%.1f -> qp %.2f\n", cpm, bpm, qp);
     if (qp < 10) qp = 10;
     if (qp > 48) qp = 48;
+    {   /* the opening I's offset under that level: see open_tex_* */
+        double o = e->rck.open_tex_g * log2(e->rck.open_tex_t / cpm);
+        if (o < 0) o = 0;
+        if (o > e->rck.open_tex_m) o = e->rck.open_tex_m;
+        ((yah264_encoder_t *)e)->rfm_open_ioff = o;
+    }
     return qp;
 }
 
@@ -1658,6 +1707,7 @@ static double rfm_open_qp(yah264_encoder_t *e, double C)
 {
     int flat = 0;
     double oq = rf2_open_qp(e, &flat);
+    e->rfm_open_fb = oq <= 0;
     return oq > 0 ? oq : rfm_open_intra_qp(e, C) - (flat ? e->rck.open_imargin : 0.0);
 }
 
@@ -1843,7 +1893,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * does not exist yet. */
                 int first = e->abr_cum_actual <= 0 && np == 0;
                 if (!e->rf2_opened && !shared) {
-                    e->rfm_work = pow(2.0, (rfm_open_qp(e, C) - dc - 12.0) / 6.0) * e->abr_target_bpf;
+                    double oq = rfm_open_qp(e, C);
+                    e->rfm_work = pow(2.0, (oq - dc - 12.0) / 6.0) * e->abr_target_bpf;
                     e->rfm_owed = e->abr_target_bpf;
                     e->rf2_opened = 1;
                     L_cplx = e->rfm_work;       /* the ledger read above predates the opening */
@@ -1902,13 +1953,22 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     qp = iq;
                     anch = 1;
                 } else {
-                    if (!first) qp_lim = rfm_slew_qp(e, qp_led, e->slew_ref[1], e->rck.rfm_slew);
+                    if (!first) {
+                        double sl = e->rck.rfm_slew;
+                        if (e->rfm_open_fb) {
+                            double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
+                            if (bps > 0 && wanted / bps < e->rck.rfm_fb_t)
+                                sl = qp_led < e->slew_ref[1] ? e->rck.rfm_slew_fb
+                                   : e->rfm_open_ioff > 0 ? e->rck.rfm_slew : e->rck.rfm_slew_fb_up;
+                        }
+                        qp_lim = rfm_slew_qp(e, qp_led, e->slew_ref[1], sl);
+                    }
                     e->slew_ref[1] = qp_lim;
                     qp = qp_lim + fb;
                 }
                 /* The opening I is coded at the opening QP itself; frame_qp
  * takes 3 off every I, so hand it the opening plus 3. */
-                if (type == 0 && first) qp += 3.0;
+                if (type == 0 && first) qp += 3.0 - (e->rfm_open_fb ? e->rfm_open_ioff : 0.0);
                 if (qp < 1) qp = 1;
                 if (qp > 51) qp = 51;
                 e->abr_qp = qp;

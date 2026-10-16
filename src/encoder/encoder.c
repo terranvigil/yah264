@@ -3975,6 +3975,19 @@ static size_t slice_map_bytes(const struct slice_map *sm)
     return t;
 }
 
+/* A picture's bits on the wire for the measured-size bound: the slices'
+ * payload and the framing append_nal_raw charges each slice NAL (its start
+ * code and header, Y264_NAL_START_BYTES). The buffer ledger takes the same
+ * framing through rcp_fill's p->framing; this is the picture's own share of
+ * it, read before the NALs are written. */
+static double sm_wire_bits(const struct slice_map *sm)
+{
+    size_t n = 0;
+    for (int s = 0; s < sm->n; s++)
+        n += sm->len[s] + Y264_NAL_START_BYTES;
+    return 8.0 * (double)n;
+}
+
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                       const uint8_t *rbsp, size_t rbsp_size);
 static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
@@ -14240,7 +14253,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         /* A forced QP is not a QP the buffer may move, so there is nothing
  * here to try: the re-encode would code the same frame four times. */
         for (int k = 0; k < 4 && limit > 0.0 && forced_qp(e) < 0; k++) {
-            double bits = 8.0 * (double)rbsp_size;
+            double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
             if (bits <= limit)
                 break;
             int bump = (int)ceil(6.0 * log2(bits / limit));

@@ -189,13 +189,15 @@ struct rc_buffer {
 struct rc_knobs {
     double abr_pbf;
     double rfm_slew;            /* the ledger QP's slew per anchor, x qp_step */
+    double rfm_slew_fb, rfm_slew_fb_up, rfm_fb_t;  /* after an intra-fit opening: the slew for the first rfm_fb_t seconds */
     double rfm_degen;           /* complexity per MB under which a frame stays out of the ledger (0 = none) */
     double pf_slew;             /* per-frame rf model: its per-type slew, x qp_step */
     double ovc_gain, ovc_gain_up, ovc_gain_cbr, ovc_gain_cbr_up, ovc_lo, ovc_hi;   /* feedback: QP per window of error (under, over, CBR), and its bounds */
     double ovc_win, ovc_t0;     /* feedback window: x ratetol seconds of target, sqrt growth past t0 s */
     double itrk_decay;          /* the mid-stream I frame's P track decay (0 = no track) */
     double blur_decay;          /* per-frame model: the complexity blur's decay */
-    double open_ia, open_ib, open_ic, open_imargin;  /* the opening QP's intra fit, and RF2's margin under it on flat content */
+    double open_ia, open_ib, open_ic, open_imargin;
+    double open_tex_t, open_tex_g, open_tex_m;  /* the opening I's offset on low-texture content, no lookahead */  /* the opening QP's intra fit, and RF2's margin under it on flat content */
     double open_ioff, open_ip0, open_rfs;  /* per-frame openings: fit offset, rf prior QP, rf ledger seed per sqrt(mbs) */
     double vbv_fill_frac, vbv_fill_h, vbv_fill_hup, vbv_fill_min;  /* CRF+VBV fill target, horizon below / above it, floor */
     double abr_qpstep;          int abr_qpstep_set;
@@ -1137,6 +1139,8 @@ struct yah264_encoder {
     double   rcp_bcplx[8];      /* buffered B lowres complexity (at arrival) */
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
+    int      rfm_open_fb;       /* the opening came from the intra fit (no lookahead fit) */
+    double   rfm_open_ioff;     /* the opening I's offset under the intra fit's level */
     /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
  * per-GOP instances of one encode (NULL = this instance's own). */
     struct yah264_rc_shared *rc_shared;

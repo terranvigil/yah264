@@ -288,13 +288,22 @@ on all six clips and was VBV-clean on all six. x264 on the same cells missed by
 as much as -23.2%, so five of those six comparison cells are recorded as
 unmatched.
 
+CBR codes every burst on the serial schedule, at any thread count, so each
+picture can be re-coded against its measured size before it goes out. Its
+buffer has no headroom above the delivery, and a pipelined burst is only ever
+checked against predictions: the first picture after a black run once coded
+30 times its prediction into a half-empty buffer. Frame threads still run
+inside each picture and GOP workers still run in parallel. The buffer model
+charges each picture its bytes on the wire, start codes and emulation
+prevention included, so it reads the occupancy a decoder's buffer holds.
+
 **Capped VBR** is `--bitrate N --vbv-maxrate M --vbv-bufsize B` with `M > N`,
 typically 1.5x to 2x. It hits the average while letting hard scenes borrow up
 to the cap. This is the traditional VOD mode and a reasonable choice. For most
 streaming work, though, capped CRF (below) is the better tool.
 
-The compliance gate is `scripts/cvbr_compliance.sh`. It last read 29 of its 36
-cells clean on 2026-09-03. Read that result with care. The gate drives each clip
+The compliance gate is `scripts/cvbr_compliance.sh`. It reads all 36 of its
+cells clean. Read that result with care. The gate drives each clip
 at a CRF with a cap instead of at a bitrate, so it never exercises the ABR path.
 The cells it does cover show a tendency on this corpus, not a guarantee.
 
