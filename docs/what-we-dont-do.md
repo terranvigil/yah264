@@ -24,7 +24,9 @@ still open.
 | `--lookahead-threads` `--mvrange-thread` | Absorbed | One thread budget. The staircase lag is the MV constraint. |
 | `--input-depth` | Auto | The input tag picks the library (C3). |
 | `--bluray-compat` | Refuse (decided) | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, strict B-pyramid, access-unit delimiters, picture structure) are each available on their own. |
+| `--slice-max-size` `--slice-max-mbs` `--slice-min-mbs` `--slices-max` | Refuse (decided) | Packet-sized slices only matter for RTP-style delivery, which isn't a target. `--slices N` covers the count form. |
+| `--asm` | Refuse (decided) | `--no-asm` and `Y264_SIMD_FORCE` cover testing. Every kernel already matches its C reference. |
+| `--avcintra-flavor` | Refuse (decided) | It picks the vendor variant of `--avcintra-class`, which is refused. |
 
-Everything else absent is built below.
-
-What is still to build is listed in docs/x264-parity-plan.md.
+Every other x264 option is built, under its own name or the one docs/options.md
+gives it. docs/x264-parity-plan.md has the census that checks this.

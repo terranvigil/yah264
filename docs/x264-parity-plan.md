@@ -1,13 +1,13 @@
 # x264 option parity
 
 The README says yah264 has roughly the same features and options as x264. A
-census of x264's full option list found about 60 options yah264 lacked. Most
-have shipped; `docs/what-shipped.md` has the history. This page lists what's
-left and what we won't build.
+census of x264's full option list found about 60 options yah264 lacked. All
+of them have shipped or been refused; `docs/what-shipped.md` has the history.
+This page records what we won't build and the census that closed the program.
 
 The work is done when a fresh census finds every x264 option either present,
 present under another name (listed in `docs/options.md`), or on the list
-below.
+below. The census below finds that, so the program is complete.
 
 ## What we won't build
 
@@ -31,20 +31,23 @@ below.
 | `--input-depth` | automatic | The library is picked from the input's own format tag. |
 | `--cqm8ic`, `--cqm8pc` | no seat | The 4:4:4 chroma 8x8 lists. 4:4:4 never picks the 8x8 transform here, so they would be read by nothing. |
 | `--bluray-compat` | refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, strict B-pyramid, access-unit delimiters, picture structure) are each available on their own. |
+| `--slice-max-size`, `--slice-max-mbs`, `--slice-min-mbs`, `--slices-max` | refused | Packet-sized slices only matter for RTP-style delivery, which isn't a target. `--slices N` covers the count form. |
+| `--asm` | refused | `--no-asm` and `Y264_SIMD_FORCE` cover testing. Every kernel already matches its C reference. |
+| `--avcintra-flavor` | refused | It picks the vendor variant of `--avcintra-class`, which is refused. |
 
 ## The closing census
 
-The census compared every option in x264's `--fullhelp` against yah264's
-`--help` and this page. Each x264 option was passed to the yah264 CLI, and
-any the parser rejected as an unknown argument counts as absent. It found
-165 options, short aliases and the help variants included.
+The census compares every option in x264's `--fullhelp` against yah264's
+parser and this page. Each x264 option is passed to the yah264 CLI, and any
+the parser rejects as an unknown argument counts as absent. It finds 165
+options, short aliases and the help variants included.
 
 | result | count |
 |---|--:|
-| present, same flag | 113 |
+| present, same flag | 128 |
 | renamed, with a row in `docs/options.md` | 3 |
-| refused or absorbed, on the list above | 28 |
-| unresolved | 21 |
+| refused or absorbed, on the list above | 34 |
+| unresolved | 0 |
 
 The three renames are `--no-cabac` (`--cavlc`), `--no-8x8dct`
 (`--no-transform-8x8`) and `--dump-yuv` (`--dump-recon`). `--video-filter`
@@ -52,17 +55,14 @@ counts as refused: it is the long spelling of `--vf`. The `--opencl-clbin`
 and `--opencl-device` flags count under `--opencl`, and `--tcfile-in` and
 `--tcfile-out` under `--tcfile-*`.
 
-The program isn't complete. These need an owner decision:
-
-| x264 option | what it does | suggestion |
-|---|---|---|
-| `-I`, `-i`, `-b`, `-r`, `-f`, `-q`, `-B`, `-p`, `-A`, `-m`, `-t` | Single-letter aliases for `--keyint`, `--min-keyint`, `--bframes`, `--ref`, `--deblock`, `--qp`, `--bitrate`, `--pass`, `--partitions`, `--subme` and `--trellis`. | Build. Each is an alias of a flag that is already present, so a ported command line works unchanged. |
-| `--longhelp`, `--fullhelp` | Longer help listings. | Rename: point both at `--help`, which already lists everything. |
-| `--zones` | Inline per-range QP force or bitrate multiplier. | Build it as a front end to the zone interface `--plan` uses. `--plan` takes QP offsets from a file, which is not the same thing, so it can't count as a rename yet. |
-| `--b-bias` | Biases the adaptive B-frame decision. | Build. It is one term in a decision that already exists. Refuse if the owner wants no unmeasured knobs. |
-| `--slice-max-size`, `--slice-max-mbs`, `--slice-min-mbs`, `--slices-max` | Cap slices by bytes or macroblocks. | Refuse unless someone asks for packetized delivery. `--slices` covers the count form. A byte cap would need the slice writer to cut mid-row. |
-| `--asm` | Overrides CPU feature detection. | Refuse. `--no-asm` covers the test need. Every kernel already matches its C reference. |
-| `--avcintra-flavor` | Picks the vendor variant of `--avcintra-class`. | Refuse along with `--avcintra-class`. |
+The last round built fifteen of the 21 options the previous census left open
+and refused six. The one-letter aliases `-I`, `-i`, `-b`, `-r`, `-f`, `-q`,
+`-B`, `-p`, `-A`, `-m` and `-t` are pure aliases for their long flags, and
+none of them collides with yah264's own `-o`, `-v` or `-h`. `--longhelp` and
+`--fullhelp` print what `--help` prints. `--zones` takes x264's inline syntax
+and feeds the zone list `--plan` uses. `--b-bias` leans the adaptive B
+placement, and docs/options.md has its measurement. The refused six are the
+four slice caps, `--asm` and `--avcintra-flavor`.
 
 `docs/denoise.md` has the `--nr` quality check. `--nr-inter 100` is neutral
 to better on the HD band, where no clip reads worse than the per-clip bar

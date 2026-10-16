@@ -1453,8 +1453,8 @@ Options that differ, and how:
 
 x264 options with **no equivalent at all**:
 `--muxer`/`--demuxer`. `--slice-max-size`, `--slice-max-mbs`,
-`--slice-min-mbs` and `--slices-max` are not here either: `--slices` takes a
-count, not a size cap. x264's `--interlaced` is `--tff`/`--bff` here, and it
+`--slice-min-mbs` and `--slices-max` are refused: `--slices` takes a count,
+not a size cap. x264's `--interlaced` is `--tff`/`--bff` here, and it
 codes field pictures rather than MBAFF. The full list of x264 options with no
 flag here, and what was decided for each, is the census in
 [x264-parity-plan.md](x264-parity-plan.md).
