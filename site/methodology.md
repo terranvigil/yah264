@@ -21,32 +21,33 @@ Pricing comes first because most ideas die there. Before writing an
 optimization, build the oracle that says what a perfect version of it would be
 worth. If a perfect early-skip decision is worth eleven percent and the
 realistic version captures a third of that, the idea is worth a day. If the
-ceiling comes back at half a percent, it is not, and no amount of implementation
+ceiling comes back at half a percent, it isn't. No amount of implementation
 skill changes that. Several of the ideas below were killed by their own ceiling
 before a line of encoder code was written.
 
 ## What decides whether work ships
 
-Three gates decide whether work ships, and none of them takes an argument.
+Three gates decide whether work ships. None of them takes an argument.
 
 Recon-match decides correctness. The encoder's reconstruction must equal
-ffmpeg's decoder output bit for bit, and it runs before a change counts as
+ffmpeg's decoder output bit for bit. The check runs before a change counts as
 done.
 
 BD-rate over a solved rate range decides quality, measured with full-frame [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion)
 v0.6.1 NEG at matched achieved bitrates. A change that improves one clip and
 costs two others is a refusal even when the mechanism is elegant.
 
-The table decides speed, as a ratio to x264's wall time at a matched operating
-point, so the bar is a ratio rather than an absolute time. That is not the same
-as reproducing anywhere. Repeating a board on the same machine moves a ratio by
-up to about 0.10, the multi-threaded rows depend on the core count, the pure-C
-rows need an x264 built the way the [results](results.md) page describes, and
-the headline board needs an ffmpeg that is not in this repository. That page
-names the machine and the builds for those reasons.
+The table decides speed. It measures our wall time as a ratio to x264's at a
+matched operating point, so the bar is a ratio and not an absolute time. That
+doesn't mean the numbers reproduce anywhere. Repeating a board on the same
+machine moves a ratio by up to about 0.10. The multi-threaded rows depend on
+the core count. The pure-C rows need an x264 built the way the
+[results](results.md) page describes, and the headline board needs an ffmpeg
+that isn't in this repository. That page names the machine and the builds for
+those reasons.
 
 Nothing ships on a plausible mechanism. The recurring failure mode of a language
-model is a confident explanation of why an idea should work, and I suspect that is
+model is a confident explanation of why an idea should work. I suspect that's
 the single most useful thing to know when pointing one at a problem like this.
 The gates exist because that explanation is worth nothing on its own.
 
@@ -62,9 +63,9 @@ window.
 produced results, organized by the question each one answers: where did the time
 go, what would a perfect version of X buy, is the idea any good, is it fast, is
 it correct. The environment knobs beside it are checked against the source by a
-census that fails the build when one goes missing; the instrument names are
+census that fails the build when one goes missing. The instrument names are
 checked by hand when the file is edited. Reading it is the first step of any
-measurement task, and that rule is written into the project instructions so it
+measurement task. That rule is written into the project instructions so it
 survives a fresh session.
 
 ## The ideas that were measured and dropped
@@ -81,15 +82,15 @@ bounded, measured, and dropped:
 - A pre-motion signal that would predict the B-skip verdict does not exist, and
   a kill test established that offline before anything was built around it.
 
-Each of those is a real number, and each closed a direction that would otherwise
-be reopened by the next session with the same good idea.
+Each of those is a real number. Each closed a direction that the next session
+would otherwise reopen with the same good idea.
 
 ## Traps that each cost a day
 
 - **Shell quoting.** The shell here is zsh, which does not word-split unquoted
   scalars. Building arguments in a variable and expanding it bare passes one
   argument instead of several, so an A/B loop runs both sides with the same
-  settings and reports a clean null result. It fails silently, and it invalidated
+  settings and reports a clean null result. It fails silently. It invalidated
   a whole measurement round before anyone checked the arguments reaching the
   binary.
 - **Ceilings built from two separate runs.** Subtracting one measurement from
