@@ -85,7 +85,8 @@ next 10-bit item's brief.
 Phases A-C are complete. `bit_depth=10` builds and produces conformant High 10
 (yuv420p10le) streams, and 8-bit stays byte-identical. Recon-match vs ffmpeg
 High 10 passes across CAVLC/CABAC/8x8/bframes plus a QP sweep 18-44. It is also
-thread-deterministic. D and E are deferred to the optimization pass.
+thread-deterministic. D has since been done (below). E is still deferred to the
+optimization pass.
 
 - **A. Foundation** (done): `src/common/bitdepth.h` with the typedef,
   `PIXEL_MAX`, `clip_pixel`, `Y264_BIT_DEPTH`. No behavior change.
