@@ -1,18 +1,19 @@
 # Ideas backlog
 
-A running list of optimizations, coding tools, and differentiating features worth
-building. Kept alongside the main-feature work so ideas that surface mid-implementation
-don't get lost. Not a plan of record; items graduate to `plan.md` when scheduled.
+A running list of optimizations, coding tools and differentiating features worth
+building. It sits beside the main-feature work so that ideas which surface
+mid-implementation don't get lost. It isn't the plan of record. Items move to
+`plan.md` when they're scheduled.
 
 Status tags: `idea` (unvetted), `planned`, `wip`, `done`, `dropped`. Benefit and
 effort are rough (S/M/L). "BD-rate" means quality-per-bit versus x264 unless noted.
 
 ## Implemented but sub-optimal (revisit when feature-complete)
 
-Features that work and are shipped, but were built bounded / simplified / with
+These features work and have shipped. Each was built bounded, simplified or with
 placeholder constants to keep scope contained. This is the "come back and tighten
-this" list -- kept current as features land so the shortcuts are not forgotten.
-Quality shortcuts first (BD-rate on the table), then speed, then tunables.
+this" list, kept current as features land so the shortcuts aren't forgotten.
+Quality shortcuts come first (BD-rate on the table), then speed, then tunables.
 
 | Feature | Current (shipped) | Optimization once feature-complete |
 |---|---|---|
@@ -46,42 +47,43 @@ Quality shortcuts first (BD-rate on the table), then speed, then tunables.
 ## Post-100%-parity: content-adaptive scaler selection
 
 For the convex-hull ladder (shot-based plan stage 4) and any resolution-
-switching mode: pick the downscale/upscale kernel per shot from content class
-instead of one fixed filter. Sharp-edged synthetic content (anime, screen
-capture, UI) keeps lines cleaner through kernels with less ringing and more
-edge preservation (area/box down, EWA/spline or even NNEDI-class up), while
-film/grain content favors Lanczos-3 down (matching Netflix/RCN-Hull
-methodology) and grain-aware handling; soft/low-detail content tolerates
-cheaper kernels. The stage-1 lookahead features already computed per shot
-(edge energy vs grain energy: high-frequency variance that is spatially
-structured vs temporally uncorrelated, plus the flat/animation content class
-in stage 3) are the natural selector inputs. Evaluate per (kernel, class)
-cell with the ladder harness: BD-rate on VMAF + VMAF-NEG (NEG matters here --
-sharpening kernels game plain VMAF), decided on the bench corpus with anime /
-screen-capture / film clips added. Also applies to the hull's quality-
-comparison upscale (currently specced as fixed Lanczos-3): the upsampler used
-for VMAF scoring should match what a player would do, or the hull tilts
-toward the wrong rungs.
+switching mode, pick the downscale/upscale kernel per shot from its content
+class instead of using one fixed filter. Sharp-edged synthetic content (anime,
+screen capture, UI) keeps lines cleaner through kernels with less ringing and
+more edge preservation: area/box down, EWA/spline or even NNEDI-class up.
+Film/grain content favors Lanczos-3 down (matching Netflix/RCN-Hull
+methodology) and grain-aware handling. Soft/low-detail content tolerates
+cheaper kernels. The selector's inputs already exist in the stage-1 lookahead
+features computed per shot. Those are edge energy vs grain energy
+(high-frequency variance that is spatially structured vs temporally
+uncorrelated), plus the flat/animation content class in stage 3. Evaluate each
+(kernel, class) cell with the ladder harness on BD-rate for VMAF and VMAF-NEG.
+NEG matters here because sharpening kernels game plain VMAF. Decide on the
+bench corpus with anime, screen-capture and film clips added. The same choice
+applies to the hull's quality-comparison upscale, currently specced as fixed
+Lanczos-3. The upsampler used for VMAF scoring should match what a player
+would do, or the hull tilts toward the wrong rungs.
 
 ## Performance
 
 **A matched per-stage ledger on samsung.** samsung is the one clip carrying
-goal 1 (five of six others read 0.84-1.08x CRF), and a >5% single mechanism was
-still hiding there after the corpus-wide decompositions called the area
-exhausted. Build the ledger on BOTH sides for this one clip: x264's actual
-per-stage spend on samsung (early-exit path lengths, how many MBs reach ME at
-all, per-MB entropy cost on near-empty MBs, behavior across its multi-IDR
-scene cuts) lined against ours stage by stage, instruction-counted so it is
-load-immune. Every prior differential was corpus-wide or mechanism-first; the
-remaining ~1.40x instruction ratio must live in a few stages of that table.
-Start from the Y264_BPROF buckets (B ME 10.3% of wall, RD survivors 9.5%,
-skip-eval 6.3%, direct RD 4.6%) and instrument x264 via the op-ledger patch
-(scripts/op-ledger-x264.patch) extended with stage timers.
+goal 1 (five of six others read 0.84-1.08x CRF). A single mechanism worth more
+than 5% was still hiding there after the corpus-wide decompositions had called
+the area exhausted. Build the ledger on BOTH sides for this one clip. Line
+x264's actual per-stage spend on samsung against ours stage by stage: early-exit
+path lengths, how many MBs reach ME at all, per-MB entropy cost on near-empty
+MBs, and behavior across its multi-IDR scene cuts. Count instructions so the
+ledger is load-immune. Every prior differential was corpus-wide or
+mechanism-first. The remaining ~1.40x instruction ratio must live in a few
+stages of that table. Start from the Y264_BPROF buckets (B ME 10.3% of wall, RD
+survivors 9.5%, skip-eval 6.3%, direct RD 4.6%) and instrument x264 via the
+op-ledger patch (scripts/op-ledger-x264.patch) extended with stage timers.
 
-The hottest current cost is the RD loop measuring bits by actually CAVLC-coding
-each candidate into a scratch bitstream (`eval_inter_part`, `eval_b_mode`,
-`rdoq_4x4`). x264 avoids this with precomputed bit-cost tables. Replacing scratch
-coding with a cost model is the single biggest encoder-speed win available.
+The hottest current cost is the RD loop, which measures bits by actually
+CAVLC-coding each candidate into a scratch bitstream (`eval_inter_part`,
+`eval_b_mode`, `rdoq_4x4`). x264 avoids this with precomputed bit-cost tables.
+Replacing scratch coding with a cost model is the biggest encoder-speed win
+available.
 
 | Item | Benefit | Effort | Status | Notes |
 |---|---|---|---|---|
@@ -100,148 +102,149 @@ coding with a cost model is the single biggest encoder-speed win available.
 ## Lookahead and adaptive structure
 
 The scene-cut detector and mb-tree already compute per-MB intra and best-inter
-(real ME) costs on lowres. A proper lookahead generalises this to a *window of
-future frames* and is the shared prerequisite for the items still open.
+(real ME) costs on lowres. A proper lookahead generalizes this to a *window of
+future frames*. That window is the shared prerequisite for the items still open.
 
 - **Sync-lookahead ring buffering (`done`, Y264_LA_BUF, default 0).**
- x264's --sync-lookahead does NOT shrink the window; it adds EXTRA input
- buffering in front of a window still held at full depth. Mapped onto
- yah264: grow the ring's CAPACITY to `la_depth + k` (`Y264_LA_BUF=k`) while
- every mb-tree/scene-cut walk stays capped at the original `la_depth`, so
- it's an ENGINEERING task gated on byte-identity, not a BD-rate call --
- confirmed by the gate itself (39/39 + a 36-cell deep sweep at every tested
- k, both mb-tree paths, determinism and TSan clean; one real off-by-one
- caught along the way, see docs/sync-lookahead-design.md). Measured with
- Y264_LA_THREAD combined (park_joy_720p 500f single-GOP, best-of-5): still
- flat, 0.99-1.01x at t18 and t8 -- the logical same-call coupling is
- genuinely gone, but wall-clock stays bounded by the la thread's chain work
- riding the SAME worker pool as the main analyze burst, which extra
- call-time slack can't free. Both envs stay default OFF.
+ x264's --sync-lookahead does NOT shrink the window. It adds EXTRA input
+ buffering in front of a window still held at full depth. In yah264 that
+ means growing the ring's CAPACITY to `la_depth + k` (`Y264_LA_BUF=k`) while
+ every mb-tree/scene-cut walk stays capped at the original `la_depth`. That
+ makes it an ENGINEERING task gated on byte-identity, not a BD-rate call. The
+ gate confirmed it: 39/39 plus a 36-cell deep sweep at every tested k, both
+ mb-tree paths, determinism and TSan clean. One real off-by-one was caught
+ along the way (see docs/sync-lookahead-design.md). Measured with
+ Y264_LA_THREAD combined (park_joy_720p 500f single-GOP, best-of-5), it's
+ still flat at 0.99-1.01x at t18 and t8. The logical same-call coupling is
+ genuinely gone. Wall-clock stays bounded by the la thread's chain work,
+ though, because it rides the SAME worker pool as the main analyze burst, and
+ extra call-time slack can't free that. Both envs stay default OFF.
 
-- Lowres lookahead pass (`done`). Half-res (2x2 average) copy of each frame with a
- cheap 8x8 diamond ME against the previous frame, caching per-MB intra/inter
- costs and the winning MV. Scene-cut runs on it (~4x cheaper) and mb-tree reuses
- it. Still only cur-vs-prev; a multi-frame window is the next step.
+- Lowres lookahead pass (`done`). A half-res (2x2 average) copy of each frame
+ gets a cheap 8x8 diamond ME against the previous frame, which caches per-MB
+ intra/inter costs and the winning MV. Scene-cut runs on it (~4x cheaper) and
+ mb-tree reuses it. It's still only cur-vs-prev. A multi-frame window is the
+ next step.
 - mb-tree (`done, windowed`). Mini-GOP B propagation plus anchor-chain
- propagation over the rc-lookahead window (bilinear splat, stops at IDRs);
- centred to zero mean so it redistributes rather than just spends bits. B
- configs only for now (IPPP offsets need the non-centred CRF/ABR model, see
- the sub-optimal table).
-- Multi-frame lookahead window (`done`). Input delayed rc-lookahead
- frames (default 40) through a ring in front of the core; frames are analysed
- and scene cuts flagged at push time via a push-side replica of the since_idr
+ propagation over the rc-lookahead window (bilinear splat, stops at IDRs). It's
+ centered to zero mean so it redistributes bits instead of just spending
+ them. B configs only for now: IPPP offsets need the non-centered CRF/ABR
+ model (see the sub-optimal table).
+- Multi-frame lookahead window (`done`). Input is delayed by rc-lookahead
+ frames (default 40) through a ring in front of the core. Frames are analyzed
+ and scene cuts flagged at push time by a push-side replica of the since_idr
  state machine, so the core just obeys flags. Per-GOP thread determinism holds
- because propagation stops at IDRs. Unlocks b-adapt below.
-- Adaptive B-frame placement (`done, bounded`). Frame typing moved
- to a one-push-lagged finalize on the window's push side, so the candidate B's
- *bidirectional* cost is measurable (the forward-only version was tried and
- reverted: on chaotic content it cost +7% / -2 dB). v1 rule is demote-only and
- conservative (bi-cost >= 0.9x intra), which in practice fires mainly on the
- dangling tail frames before an IDR/EOS (typed as proper reference anchors
- instead of non-ref P flushes); mid-stream demotion is largely pre-empted by
- the scene-cut IDR at ~0.6x intra forward cost. Note: with b-adapt on, the
- serial --dump-recon path and the per-GOP threaded path may type a GOP's last
- frame differently (the GOP instance sees no successor); same class of
- per-GOP shortcut as VBV.
+ because propagation stops at IDRs. This unlocks b-adapt below.
+- Adaptive B-frame placement (`done, bounded`). Frame typing moved to a
+ one-push-lagged finalize on the window's push side, so the candidate B's
+ *bidirectional* cost is measurable. (The forward-only version was tried and
+ reverted: on chaotic content it cost +7% / -2 dB.) The v1 rule is demote-only
+ and conservative (bi-cost >= 0.9x intra). In practice it fires mainly on the
+ dangling tail frames before an IDR/EOS, which it types as proper reference
+ anchors instead of non-ref P flushes. Mid-stream demotion is largely
+ pre-empted by the scene-cut IDR at ~0.6x intra forward cost. Note that with
+ b-adapt on, the serial --dump-recon path and the per-GOP threaded path may
+ type a GOP's last frame differently, because the GOP instance sees no
+ successor. It's the same class of per-GOP shortcut as VBV.
 - b-adapt structure-cost rule (`attempted twice, reverted`). Two
- formulations both over-demote and lose big: (1) pairwise STOP vs CONTINUE
- over raw lowres SATD sums, +8.4%/+8.9% BD even with the B term weighted
- 0.75; (2) the faithful B_ADAPT_FAST geometry -- path costs "B^k PP" vs
- "B^k BP" from the last anchor, re-costing the pending run B's under each
- path's list-1 anchor and evaluating true averaged biprediction per MB --
- still +8.8%/+11.5%. Diagnosis: with integer-pel lowres ME the bi/fwd costs
- at distance are systematically overestimated relative to x264's half-pel
- refined, lambda-MV-costed lowres search, so P always looks relatively
- cheaper and every cost-driven rule demotes B's that are actually fine. The
+ formulations both over-demote and lose big. (1) Pairwise STOP vs CONTINUE
+ over raw lowres SATD sums reads +8.4%/+8.9% BD even with the B term weighted
+ 0.75. (2) The faithful B_ADAPT_FAST geometry still reads +8.8%/+11.5%. It
+ prices path costs "B^k PP" vs "B^k BP" from the last anchor, re-costs the
+ pending run B's under each path's list-1 anchor and evaluates true averaged
+ biprediction per MB. With integer-pel lowres ME, the bi/fwd
+ costs at distance are systematically overestimated relative to x264's
+ half-pel refined, lambda-MV-costed lowres search. P always looks relatively
+ cheaper, so every cost-driven rule demotes B's that are actually fine. The
  prerequisite is lowres search fidelity (half-pel + lambda MV costs + the
  intra lowres penalty), not another decision formula. A third attempt built
  the full fidelity stack (half-pel lowres planes, lambda-MV lowres ME,
  MV-field cache, temporal-direct bidir, lowres penalty, path-cost decision)
- and STILL lost (NEG +5.7/+16.4/+12.5%). The real finding: x264 medium itself
- keeps the FULL 3-B cadence on all three corpus clips (foreman 198B/mobile
- 222B/akiyo 222B of 300f) and our conservative rule already reproduces that
- optimum -- so fixed 3-B is optimal here and ANY cost-driven deviation is
- pure downside. b-adapt cannot be measured to a win until variable-motion /
- partial-scene-cut / flash clips are added to the gate corpus; the blocker is
- the CORPUS, not the code. Typing machinery is in and gate-covered; the
- conservative demote rule ships meanwhile. Found and fixed on the way:
- without VUI max_num_reorder_frames, ffmpeg's adaptive reorder-depth
- heuristic silently drops a frame the first time a deeper mini-GOP follows
- shallower ones -- the SPS now signals the bitstream restriction.
+ and STILL lost (NEG +5.7/+16.4/+12.5%). The real finding is that x264 medium
+ itself keeps the FULL 3-B cadence on all three corpus clips (foreman
+ 198B/mobile 222B/akiyo 222B of 300f). Our conservative rule already
+ reproduces that optimum. Fixed 3-B is optimal here, and ANY cost-driven
+ deviation is pure downside. b-adapt can't be measured to a win until
+ variable-motion, partial-scene-cut and flash clips are added to the gate
+ corpus, so the blocker is the CORPUS and not the code. The typing machinery
+ is in and gate-covered, and the conservative demote rule ships meanwhile.
+ One bug was found and fixed on the way. Without VUI max_num_reorder_frames,
+ ffmpeg's adaptive reorder-depth heuristic silently drops a frame the first
+ time a deeper mini-GOP follows shallower ones. The SPS now signals the
+ bitstream restriction.
 - Whole-run B placement (`built 2026-09-27, Y264_BADAPT_RUN, default off`).
- The corpus blocker above is gone: on Cosmos Laundromat 1080p the reference
- encoder at medium codes about 38% of frames as anchors, and copying its
- frame types through us (Y264_TYPE_ORACLE) is worth +0.57 VMAF-NEG on six
+ The corpus blocker above is gone. On Cosmos Laundromat 1080p the reference
+ encoder at medium codes about 38% of frames as anchors. Copying its frame
+ types through us (Y264_TYPE_ORACLE) is worth +0.57 VMAF-NEG on six
  480-frame windows. A fourth path-cost attempt, on the lowres fields as
  mb-tree prices them, still demoted tempete to 65 anchors in 120 and found
- only +0.10 on Cosmos. So this round compared the COSTS instead of the rule:
- a per-frame-pair lowres cost dump from both encoders on the same frames
- (every anchor at distances 1-4, every B against every anchor pair up to span
- 4), with the reference's fast adaptive rule replayed on each side's dump.
- Replayed on the reference's own dump the rule reproduces its frame types
- exactly on all seven clips tried, so the rule is not the problem. Three cost
- terms were:
- (1) the lowres quarter-pel phases. Ours were bilinear from the lowres
- plane; on fine texture that over-reads every inter cost (P 1.2x on tempete,
- 1.6x on mobile) and more at longer distance, which is what demoted tempete.
+ only +0.10 on Cosmos. So this round compared the COSTS instead of the rule.
+ Both encoders dumped per-frame-pair lowres costs on the same frames (every
+ anchor at distances 1-4, every B against every anchor pair up to span 4),
+ and the reference's fast adaptive rule was replayed on each side's dump.
+ Replayed on the reference's own dump, the rule reproduces its frame types
+ exactly on all seven clips tried. The rule isn't the problem. Three cost
+ terms were.
+ (1) The lowres quarter-pel phases. Ours were bilinear from the lowres
+ plane. On fine texture that over-reads every inter cost (P 1.2x on tempete,
+ 1.6x on mobile), and more at longer distance, which is what demoted tempete.
  Phases built from the source at half-pixel offsets bring every triplet class
- within a few percent. (2) the subpel start: our lowres search rounds its
- candidates to whole pels, and one half- plus one quarter-pel step cannot
- reach the neighbours' exact vector, so the distance-one P cost read 3-8%
- high on Cosmos. The distance-one term matters most: the two-anchor path's
- second anchor sits at distance one, and swapping only that term for the
+ within a few percent. (2) The subpel start. Our lowres search rounds its
+ candidates to whole pels, and one half- plus one quarter-pel step can't
+ reach the neighbors' exact vector. The distance-one P cost read 3-8% high
+ on Cosmos as a result. That term matters most, because the two-anchor path's
+ second anchor sits at distance one. Swapping only that term for the
  reference's value moves the Cosmos replay from ~150 anchors to 190-260. (3)
- the composition: interior blocks only, a per-block floor, a light motion
+ The composition: interior blocks only, a per-block floor, a light motion
  rate, no intra escape inside a B, and the bi-prediction chosen among the
  searched pair, the distance-scaled anchor pair and the zero pair with the
  implicit weights. Our intra estimate still reads 4-18% high (four lowres
- intra modes to the reference's ten); it does not drive the decision.
+ intra modes to the reference's ten), but it doesn't drive the decision.
  Gated at t1 (CRF band, 12 clips, BD-VMAF-NEG at matched rate) and on the
- six Cosmos windows (VMAF-NEG interpolated to the reference's bytes):
- with no margin the rule gives Cosmos +0.85 (above the type oracle's +0.57;
- anchors 175-214 per 480 against the reference's 163-250) and ducks -4.2%,
- samsung -1.3%, but coastguard +6.8%, akiyo +1.7%, park_joy +1.4%.
- coastguard is a near-tie clip: 29 of its 98 decisions sit inside 1% on the
- reference's own costs, and the reference's own placement reads +2.6% through
- us, so matching it is not the target. Y264_BADAPT_HYST makes the two-anchor
- path win by a margin: at 0.01 the band reads median 0.00, mean -0.07, worst
- coastguard +3.6%, Cosmos +0.64; at 0.02 (the default under the arm) median
- 0.00, mean -0.07, worst coastguard +1.3%, samsung -2.6%, Cosmos +0.40. The
- arm stays off until a real-title round prices it; sub-knobs
- Y264_BADAPT_HPEL / _PSUB / _XC (default 1 under the arm) each restore the
- first form's pricing.
+ six Cosmos windows (VMAF-NEG interpolated to the reference's bytes), the
+ rule with no margin gives Cosmos +0.85. That's above the type oracle's
+ +0.57, with anchors 175-214 per 480 against the reference's 163-250. On the
+ band it gives ducks -4.2% and samsung -1.3%, but coastguard +6.8%, akiyo
+ +1.7% and park_joy +1.4%. coastguard is a near-tie clip: 29 of its 98
+ decisions sit inside 1% on the reference's own costs. The reference's own
+ placement reads +2.6% through us, so matching it isn't the target.
+ Y264_BADAPT_HYST makes the two-anchor path win by a margin. At 0.01 the band
+ reads median 0.00, mean -0.07, worst coastguard +3.6%, Cosmos +0.64. At 0.02
+ (the default under the arm) it reads median 0.00, mean -0.07, worst
+ coastguard +1.3%, samsung -2.6%, Cosmos +0.40. The arm stays off until a
+ real-title round prices it. Sub-knobs Y264_BADAPT_HPEL / _PSUB / _XC
+ (default 1 under the arm) each restore the first form's pricing.
  Follow-ups the same day: margin 0.03 (nine moving clips) reads worst bus
- +0.16, coastguard +0.12, samsung -2.53, Cosmos +0.28; margin 0.02 at
- --threads 8 (GOP threading types each GOP in its own encoder) reads the
- same as at t1 (worst coastguard +1.25, samsung -2.66).
+ +0.16, coastguard +0.12, samsung -2.53, Cosmos +0.28. Margin 0.02 at
+ --threads 8, where GOP threading types each GOP in its own encoder, reads
+ the same as at t1 (worst coastguard +1.25, samsung -2.66).
 - Corrected lowres costs for mb-tree (`first read 2026-09-27, Y264_LR_HPEL +
- Y264_LR_PSUB, default off`). The same two fidelity fixes applied to every
- lowres phase build and field-ME leg that mb-tree and the lookahead read,
- frame typing left alone. t1 CRF band: stefan -1.47, foreman -0.99, bus
+ Y264_LR_PSUB, default off`). These apply the same two fidelity fixes to every
+ lowres phase build and field-ME leg that mb-tree and the lookahead read, and
+ leave frame typing alone. t1 CRF band: stefan -1.47, foreman -0.99, bus
  -1.31, mobile -1.64, coastguard -1.68, park_joy -0.75, sintel -0.53,
  tempete -0.24, akiyo +1.38, touchdown +1.90, samsung and ducks flat: median -0.64,
  mean -0.45, 10 of 12 negative. Cosmos flat. Not yet split between the two
  knobs, and not yet read threaded, on the deep band or on the HD band.
- Split (2026-09-29): HPEL alone median -0.08 (mobile, coastguard -1.14; akiyo
- +1.87, touchdown +1.41, tempete +0.87), identical at t8; PSUB alone median
- -0.01 (akiyo +0.84). The two together beat either, and HPEL carries the
- akiyo/touchdown loss. It is not gross over-propagation (the anchors' mean
- mb-tree offset moves -0.76 to -1.10 on bus but only -4.32 to -4.36 on
- akiyo), and not the half-pel planes' double rounding (single rounding,
- Y264_LR_HPEL_R1, keeps akiyo +1.31, touchdown +1.66; with PSUB +1.74 /
- +2.08). Read with care: that one-rounding change
- moved stefan by 1.3 points, so a single clip swings about that much between
- near-identical forms, and akiyo/touchdown are the only clips positive in
- every form tried.
+ Split (2026-09-29): HPEL alone reads median -0.08 (mobile, coastguard -1.14;
+ akiyo +1.87, touchdown +1.41, tempete +0.87), identical at t8. PSUB alone
+ reads median -0.01 (akiyo +0.84). The two together beat either, and HPEL
+ carries the akiyo/touchdown loss. That loss isn't gross over-propagation: the
+ anchors' mean mb-tree offset moves -0.76 to -1.10 on bus but only -4.32 to
+ -4.36 on akiyo. Nor is it the half-pel planes' double rounding. Single
+ rounding (Y264_LR_HPEL_R1) keeps akiyo +1.31 and touchdown +1.66, or +1.74 /
+ +2.08 with PSUB. Read with care: that one-rounding change moved stefan by
+ 1.3 points, so a single clip swings about that much between near-identical
+ forms. akiyo and touchdown are the only clips positive in every form tried.
  Resolved (2026-10-03): the loss is the propagated share, 1 - inter/intra.
- The lowres intra estimate scores four modes and reads 4-18% high; the old
- bilinear inter costs read high too and partly cancelled it, so correcting
- inter alone raised every block's share, most on near-static content. By
- consumer, the half-pel planes at mb-tree's Phase A alone (Y264_LR_HPEL=2)
- are neutral and at the lookahead's legs alone (=3) carry both the gain and
- the loss; the full-resolution motion seeds taken from those legs are not
- the cause (rounding them, or taking them from a separate bilinear search,
- changes nothing). Y264_LR_INTRA10=1 adds the standard's six directional
+ The lowres intra estimate scores four modes and reads 4-18% high. The old
+ bilinear inter costs read high too and partly canceled it, so correcting
+ inter alone raised every block's share, most on near-static content. Split
+ by consumer, the half-pel planes at mb-tree's Phase A alone (Y264_LR_HPEL=2)
+ are neutral. At the lookahead's legs alone (=3) they carry both the gain and
+ the loss. The full-resolution motion seeds taken from those legs aren't the
+ cause: rounding them, or taking them from a separate bilinear search,
+ changes nothing. Y264_LR_INTRA10=1 adds the standard's six directional
  Intra8x8 modes to the lowres intra estimate. HPEL + PSUB + INTRA10, t1 CRF
  band, 12 clips: coastguard -1.30, mobile -1.24, bus -1.12, stefan -0.80,
  ducks -0.73, park_joy -0.62, samsung -0.16, foreman +0.04, tempete +0.42,
@@ -251,37 +254,37 @@ future frames* and is the shared prerequisite for the items still open.
  Instructions at meridian 1080p t12: +3.6% (INTRA10 alone +5.2%: six more
  SATDs per block; HPEL is free and PSUB +1.2%).
  Trimmed (2026-10-03, on main 1b527c5): buffered B's keep their intra
- estimate (Y264_BDINTRA, default on, byte-identical, -0.8% on the default)
- and Y264_LR_INTRA10=3 runs the six directional modes only where the zero-
- motion residual reaches a quarter of the four-mode intra. HPEL + PSUB +
- INTRA10=3 against the default: instructions +0.7% at meridian 1080p t12,
- +1.7% at 2160p (about one point of it PSUB). t1 band median -0.43, worst
- akiyo +0.68 (coastguard -1.68, mobile -1.55, foreman -1.49, bus -0.89);
- t4 band median -0.48, worst akiyo +0.72; multi-shot cif -0.65, 720p
- -2.46, 1080p -0.41; HD band sunflower +0.01, meridian 1080p segment
- +0.29, riverbed -0.68, pedestrian -0.85 (INTRA10=1 there: -0.56, -0.05,
- -0.70, -1.16; a live null control on meridian read +1.29, so the HD
- differences between the two are inside the band's spread). The default-
- flip candidate.
+ estimate (Y264_BDINTRA, default on, byte-identical, -0.8% on the default).
+ Y264_LR_INTRA10=3 runs the six directional modes only where the zero-motion
+ residual reaches a quarter of the four-mode intra. HPEL + PSUB + INTRA10=3
+ against the default costs +0.7% instructions at meridian 1080p t12 and
+ +1.7% at 2160p, about one point of it PSUB. The t1 band reads median -0.43,
+ worst akiyo +0.68 (coastguard -1.68, mobile -1.55, foreman -1.49, bus
+ -0.89). The t4 band reads median -0.48, worst akiyo +0.72. Multi-shot reads
+ cif -0.65, 720p -2.46, 1080p -0.41. The HD band reads sunflower +0.01,
+ meridian 1080p segment +0.29, riverbed -0.68, pedestrian -0.85 (INTRA10=1
+ there: -0.56, -0.05, -0.70, -1.16). A live null control on meridian read
+ +1.29, so the HD differences between the two are inside the band's spread.
+ This is the default-flip candidate.
  The shared run placement with INTRA10 (RUN + SHARE + HPEL + PSUB + INTRA10)
  reads t1 median -0.15, worst coastguard +0.97, samsung -2.39; Cosmos +0.29.
- Cost cut (2026-10-04, arms, all off): the pyramid's leaf-against-middle-B
- legs handed to mb-tree's Phase A (Y264_BADAPT_PYRSHARE), the
- previous-frame leg searched by the field ME and shared as the two-anchor
- path's distance-one leg (Y264_BADAPT_PREVFIELD; the diamond cost more than
- a field leg), the pyramid's later-half anchor field derived by scaling
- (Y264_BADAPT_PADERIVE), and the composition read in place. RUN + SHARE +
- PYRSHARE + PREVFIELD costs +3.5% instructions at t1 (of which the coded
- structure, replayed with the type oracle, is +1.6%) and, with
- Y264_MBT_SETTLE_LEAD on both sides, +6.0% at t6. Gated against the
+ Cost cut (2026-10-04, arms, all off). The pyramid's leaf-against-middle-B
+ legs go to mb-tree's Phase A (Y264_BADAPT_PYRSHARE). The previous-frame leg is searched by the field ME
+ and shared as the two-anchor path's distance-one leg
+ (Y264_BADAPT_PREVFIELD), since the diamond cost more than a field leg. The
+ pyramid's later-half anchor field is derived by scaling
+ (Y264_BADAPT_PADERIVE). And the composition is read in place. RUN + SHARE +
+ PYRSHARE + PREVFIELD costs +3.5% instructions at t1, of which the coded
+ structure (replayed with the type oracle) is +1.6%. With
+ Y264_MBT_SETTLE_LEAD on both sides it costs +6.0% at t6. Gated against the
  corrected-cost default: Cosmos +0.67; t1 band median -0.06 (samsung
  -2.38, sintel -1.85, coastguard +1.55); t6 median -0.02 (coastguard
  +0.94); multi-shot +0.31 / +0.99 / +0.23. Not a flip.
 - mb-tree reference planes (`2026-10-04, Y264_LR_HPEL_ALLREF`). Under
- Y264_LR_HPEL the half-pel planes came only with lookahead ring slots; the
+ Y264_LR_HPEL the half-pel planes came only with lookahead ring slots. The
  copies mb-tree reads as references (the coded frame, the coded anchor's
- copy, the buffered B's) built bilinear phases: 58 of 87 mb-tree phase
- builds on park_joy. ALLREF gives those copies source half-pel planes too.
+ copy, the buffered B's) built bilinear phases, which was 58 of 87 mb-tree
+ phase builds on park_joy. ALLREF gives those copies source half-pel planes too.
  akiyo (120 frames, BD-VMAF-NEG, corrected costs against the 0/0/0 escape):
  +0.72 at t4 and t8; with ALLREF +0.15; with Y264_MBT_SETTLE_LEAD on both
  sides -0.12. The threaded walk's re-searches over bilinear copies were
@@ -292,142 +295,151 @@ future frames* and is the shared prerequisite for the items still open.
  On by default since 2026-10-04.
 - The run placement sharing its legs (`2026-09-29, Y264_BADAPT_SHARE`, off).
  With the lookahead's pair legs made candidate-free, a leg the placement
- searched is the lookahead's leg (verified bit-exact), and each frame's
- cost against a reference pair is cached across decisions. Instructions at
- meridian 1080p t12: the placement +26% alone, +15% shared with the
- corrected costs on. Gated with RUN + SHARE + HPEL + PSUB (margin 0.02):
+ searched is the lookahead's leg (verified bit-exact). Each frame's cost
+ against a reference pair is cached across decisions. Instructions at
+ meridian 1080p t12 read +26% for the placement alone and +15% shared, with
+ the corrected costs on. Gated with RUN + SHARE + HPEL + PSUB (margin 0.02):
  Cosmos +0.52 at the reference's bytes (anchors 161-193 per 480); t1 band
  samsung -2.13, foreman -1.61, mobile -1.55, bus -0.69, ducks -0.66,
  sintel and park_joy -0.59, tempete +0.15, stefan +0.34, coastguard +0.76,
  akiyo +1.65, touchdown +2.16 (the half-pel planes single-rounded in this
- read, see the Y264_LR_HPEL_R1 note in the commit log). The remaining cost is the rejected
- path's legs and the per-block bi-prediction evaluation.
+ read, see the Y264_LR_HPEL_R1 note in the commit log). The remaining cost is
+ the rejected path's legs and the per-block bi-prediction evaluation.
 | threads=1-vs-N bit-identity | correctness S | S | done | threads=1 (non-recon) routes through the GOP-parallel path too, so per-GOP frame_num/POC match at any thread count. The serial streaming path stays only for --dump-recon. Conformance asserts threads 1/2/8 byte-identity across baseline/cabac/8x8/bframes |
 
 ## Apple Silicon (M5 Max) specific
 
-Runtime detect already reports FEAT_DotProd, i8mm, and SME on this hardware; only
-NEON is used today. The matrix and GPU units are untapped.
+Runtime detect already reports FEAT_DotProd, i8mm and SME on this hardware.
+Only NEON is used today. The matrix and GPU units are untapped.
 
 - SME / SME2 for transforms and SATD (`idea`, benefit M, effort L). The M-series
  scalable matrix extension suits 4x4/8x8 transform and Hadamard SATD. Detect
- is already wired; needs SME kernels and a dispatch path.
+ is already wired. It needs SME kernels and a dispatch path.
 - Metal GPU lookahead (`idea`, benefit M, effort L). Offload lookahead motion
- estimation and scene-cut detection to the GPU; unified memory makes the handoff
- cheap. This is the practical form of "GPU-assisted software encoding."
+ estimation and scene-cut detection to the GPU. Unified memory makes the
+ handoff cheap. This is the practical form of "GPU-assisted software encoding."
 - VideoToolbox hardware mode (`done`, benefit M for throughput, effort M).
  `--hw videotoolbox` wraps Apple's fixed-function H.264 encoder behind the
- yah264 options, warning for what it cannot honour. Its own site row, never
- a parity row. Design and what it maps: docs/videotoolbox-plan.md.
+ yah264 options and warns about what it can't honor. It gets its own site
+ row, never a parity row. Design and what it maps: docs/videotoolbox-plan.md.
 - GPU VMAF (`idea`, benefit S, effort M). Compute VMAF on the GPU for a
  VMAF-targeted rate-control mode without stalling the CPU encode.
 
 ## Compression tools (roadmap, become main features)
 
-These are standard H.264 tools that close the gap to and past x264. Most are
-already on the plan; listed here for the benefit/effort view.
+These are standard H.264 tools that close the gap to x264 and go past it. Most
+are already on the plan. They're listed here for the benefit/effort view.
 
 - CABAC entropy coding (`done`, BD-rate ~10-15%, effort L). Universal win.
- I, P, and B slices are all conformant: recon-matches ffmpeg across QP 0-51,
- varied content, and bframes 1-3. Arithmetic engine, 460 context-init tables,
- residual coder, and slice plumbing all done; P adds mb_skip_flag, P mb_type,
- mvd (UEGk k=3) and the inter residual; B adds base-24 skip, the B mb_type
- binarization, B_Direct, dual-list mvd, and intra-in-B. Opt-in via --cabac;
- CAVLC is the default. Two classes of bug were found and fixed along the way:
- the long I-slice desync was two one-digit typos in the engine state tables
- (rangeTabLPS[31][0], transIdxLPS[28]) shared by encoder, decoder, and the
- test's reference decoder so everything round-tripped; and P/B needed the
- inter-specific coded_block_flag rules (unavailable-neighbour condTermFlag is 0
- for inter, and an inter MB with no residual must clear the chroma nnz too).
- Verified two ways: recon-match against ffmpeg, and an encoder-oplog-vs-ffmpeg
- bin trace (the definitive check when recon dump is unavailable). The bin-trace
- harness (scratchpad/yah264_log + instrumented ffmpeg) is reusable for future
- CABAC tools. There is also a CABAC decode engine (y264_cabac_dec_*) worth
- growing into a real decoder.
+ I, P and B slices are all conformant and recon-match ffmpeg across QP 0-51,
+ varied content and bframes 1-3. The arithmetic engine, 460 context-init
+ tables, residual coder and slice plumbing are all done. P adds mb_skip_flag,
+ P mb_type, mvd (UEGk k=3) and the inter residual. B adds base-24 skip, the B
+ mb_type binarization, B_Direct, dual-list mvd and intra-in-B. It's opt-in
+ via --cabac, and CAVLC is the default. Two classes of bug were found and
+ fixed along the way. The long I-slice desync was two one-digit typos in the
+ engine state tables (rangeTabLPS[31][0], transIdxLPS[28]). Encoder, decoder
+ and the test's reference decoder all shared those tables, so everything
+ round-tripped. P/B also needed the inter-specific coded_block_flag rules:
+ the unavailable-neighbor condTermFlag is 0 for inter, and an inter MB with
+ no residual must clear the chroma nnz too. Two checks verify it:
+ recon-match against ffmpeg, and an encoder-oplog-vs-ffmpeg bin trace (the
+ definitive check when recon dump is unavailable). The bin-trace harness
+ (scratchpad/yah264_log + instrumented ffmpeg) is reusable for future CABAC
+ tools. There's also a CABAC decode engine (y264_cabac_dec_*) worth growing
+ into a real decoder.
 - 8x8 transform + Intra_8x8, High profile (`done`, BD-rate ~3-5%, effort M).
- Opt-in --transform-8x8. Normative 8x8 inverse + matched forward, six-category
- quant/dequant, Intra_8x8 (9 modes with the 8.3.2.2.1 reference filter),
- transform_size_8x8_flag, and the 8x8 luma residual for CAVLC (four interleaved
- 4x4 sub-blocks) and CABAC (ctxBlockCat 5, no cbf, SIG8/LAST8 maps). Deblock
- skips the internal 4x4 edges of an 8x8 MB. Recon-matches ffmpeg I/P/B across
- QP 0-51. **Inter 8x8 transform** (`done`): P and B inter MBs choose
- 4x4 vs 8x8 per MB by RD (real nC-context luma bits; the choice only affects the
- luma residual), with 8x8 RDOQ on the residual. Deblock derives the 8x8-block
- nonzero status by OR-ing the quadrant's per-4x4 nnz. Net -0.7..1.8% on foreman,
- -0.04..0.8% on mobile at equal PSNR; recon-matches ffmpeg (198/198).
+ Opt-in --transform-8x8. It covers the normative 8x8 inverse with a matched
+ forward, six-category quant/dequant, Intra_8x8 (9 modes with the 8.3.2.2.1
+ reference filter), transform_size_8x8_flag, and the 8x8 luma residual for
+ CAVLC (four interleaved 4x4 sub-blocks) and CABAC (ctxBlockCat 5, no cbf,
+ SIG8/LAST8 maps). Deblock skips the internal 4x4 edges of an 8x8 MB.
+ Recon-matches ffmpeg I/P/B across QP 0-51. **Inter 8x8 transform**
+ (`done`): P and B inter MBs choose 4x4 vs 8x8 per MB by RD, using real
+ nC-context luma bits, with 8x8 RDOQ on the residual. The choice only
+ affects the luma residual. Deblock derives the 8x8-block nonzero status by
+ OR-ing the quadrant's per-4x4 nnz. Net -0.7..1.8% on foreman and
+ -0.04..0.8% on mobile at equal PSNR. Recon-matches ffmpeg (198/198).
 - Multiple references (`done, partial`, BD-rate large on
- repetition/occlusion). CAVLC IPPP, per-MB reference (x264's default;
- --mixed-refs per-partition is the opt-in we skip). A most-recent-first ring of
- the N recent recons (default list-0 order, no reorder), ref_idx_l0 te(v),
- ref-aware MV prediction (mv_predict/partition_mvp take curref), deblock bS
- compares refIdx, sliding-window DPB. Recon-matches ffmpeg across ref 2-5, 8x8,
- AQ, crops (228/228). A per-partition different-ref predictor desynced on
- mixed-ref content, so partition 1 shares partition 0's ref (per-MB) -- exactly
- x264's non-mixed-refs behaviour. Remaining: CABAC ref_idx (ctxIdxOffset 54),
- B/b-pyramid multi-ref, mixed-refs, and WP-with-multi-ref (WP is disabled when
- nref>1 because the pred_weight_table is per-reference and our estimator is
- single-ref).
+ repetition/occlusion). CAVLC IPPP with a per-MB reference, which is x264's
+ default (--mixed-refs per-partition is the opt-in we skip). It keeps a
+ most-recent-first ring of the N recent recons (default list-0 order, no
+ reorder), codes ref_idx_l0 as te(v), and does ref-aware MV prediction
+ (mv_predict/partition_mvp take curref). Deblock bS compares refIdx, and the
+ DPB is a sliding window. Recon-matches ffmpeg across ref 2-5, 8x8, AQ and
+ crops (228/228). A per-partition different-ref predictor desynced on
+ mixed-ref content, so partition 1 shares partition 0's ref (per-MB). That's
+ exactly x264's non-mixed-refs behavior. Remaining: CABAC ref_idx
+ (ctxIdxOffset 54), B/b-pyramid multi-ref, mixed-refs, and WP-with-multi-ref.
+ WP is disabled when nref>1 because the pred_weight_table is per-reference
+ and our estimator is single-ref.
 - Weighted prediction: implicit weighted biprediction (`done`, BD-rate small
- except fades, measured ~6-8% on a fade, effort S). weighted_bipred_idc 2,
- auto-on with B-frames; POC-distance weights (8.4.2.3.2) in B bi-pred and
- direct/skip, no signalling. Explicit P-slice WP (`done`, ~11-12% on a P fade):
- per-frame luma weight+offset from the src/ref DC ratio, pred_weight_table,
- applied in P luma MC; activates only on a detected fade. Weighted motion search
- (searching against the weighted reference for better MVs on fades) still an idea.
+ except fades, measured ~6-8% on a fade, effort S). weighted_bipred_idc 2 is
+ auto-on with B-frames. POC-distance weights (8.4.2.3.2) apply in B bi-pred
+ and direct/skip, with no signaling. Explicit P-slice WP (`done`, ~11-12% on
+ a P fade) derives a per-frame luma weight+offset from the src/ref DC ratio,
+ writes pred_weight_table and applies it in P luma MC. It activates only on
+ a detected fade. Weighted motion search (searching against the weighted
+ reference for better MVs on fades) is still an idea.
 - B-pyramid / hierarchical B (`done`, ~1.3% at equal QP so far, effort L).
- Auto-on at bframes >= 2. General DPB with per-reference co-located motion,
- middle-first temporal-pyramid coding, running FrameNum, sliding window, P-list
- ref_pic_list_modification. Recon-matches ffmpeg (138/138). Per-temporal-layer
- QP offsets (ref B's lower QP) are the follow-up that grows the win; temporal
- direct (vs the current spatial direct) is still an `idea`.
+ Auto-on at bframes >= 2. It has a general DPB with per-reference co-located
+ motion, middle-first temporal-pyramid coding, running FrameNum, a sliding
+ window and P-list ref_pic_list_modification. Recon-matches ffmpeg (138/138).
+ Per-temporal-layer QP offsets (ref B's lower QP) are the follow-up that
+ grows the win. Temporal direct (vs the current spatial direct) is still an
+ `idea`.
 - Trellis for CABAC (`idea`, BD-rate S-M, effort M). Extends the current CAVLC
  RDOQ once CABAC lands.
 
 ## Perceptual and content-aware (the differentiators)
 
 This is where a new encoder earns its keep. All of these improve *perceived*
-quality per bit, which raw PSNR/SSIM understate and VMAF partly captures.
+quality per bit. Raw PSNR/SSIM understate that, and VMAF partly captures it.
 
 - Adaptive quantization, variance-based (`done`, subjective win large, effort M).
- Spend bits on flat/low-variance areas where blocking is visible, pull them from
- busy areas. Shipped as --aq-strength: per-MB QP = frame QP + strength*(log2 MB
- variance - frame mean), centred on zero. Required the per-MB QP machinery
- (real mb_qp_delta coding + prediction chain, per-edge deblock QP per 8.7.2.2),
- which mb-tree and rate control also need. Conformant (recon-match with AQ on,
- CAVLC/CABAC, P/B) -- a latent bug where the RD trials perturbed the mb_qp_delta
- chain (broke AQ on P/B) was found and fixed once AQ entered the conformance gate.
- Next: psy-RD-style tuning and coupling AQ with rate control.
-- Scene-cut detection (`done`, x264-style). Per-MB min(intra SATD-vs-DC, best
- inter from an integer diamond search vs the previous frame); cut when the frame
- P cost is not much below its intra cost (pcost >= (1-bias)*icost), bias adaptive
- on GOP length, with a min-keyint floor. The real motion search is essential --
- a zero-MV version conflated motion with cuts. +0.44-0.52 dB at ~+2% over a cut,
- no false positives on continuous motion. Follow-up: lowres frames for speed (it
- runs a full-res per-MB ME per frame now), and reuse the ME for adaptive B
- placement and mb-tree.
-- Single-pass ABR rate control (`done`, --bitrate). Reactive controller: per-frame
- base QP from a smoothed complexity estimate C = bits*qscale plus a buffer-error
- correction, swing-limited. Tracks within ~1% on a single GOP; recon-matches and
- is thread-deterministic. Follow-ups: CRF (constant quality), VBV (peak-rate cap
- with a leaky-bucket buffer model -- needed for streaming), 2-pass, and carrying
- the controller across GOPs (conflicts with GOP-parallel independence; needs a
- lookahead-driven pre-pass or a shared rate state).
+ Spend bits on flat/low-variance areas where blocking is visible, and pull them
+ from busy areas. Shipped as --aq-strength: per-MB QP = frame QP +
+ strength*(log2 MB variance - frame mean), centered on zero. It needed the
+ per-MB QP machinery (real mb_qp_delta coding + prediction chain, per-edge
+ deblock QP per 8.7.2.2), which mb-tree and rate control also need. It's
+ conformant (recon-match with AQ on, CAVLC/CABAC, P/B). A latent bug where the
+ RD trials perturbed the mb_qp_delta chain (and broke AQ on P/B) was found and
+ fixed once AQ entered the conformance gate. Next: psy-RD-style tuning and
+ coupling AQ with rate control.
+- Scene-cut detection (`done`, x264-style). Each MB costs min(intra
+ SATD-vs-DC, best inter from an integer diamond search vs the previous
+ frame). A cut fires when the frame's P cost isn't much below its intra cost
+ (pcost >= (1-bias)*icost), with the bias adaptive on GOP length and a
+ min-keyint floor. The real motion search is essential, because a zero-MV
+ version conflated motion with cuts. It gains +0.44-0.52 dB at ~+2% over a
+ cut, with no false positives on continuous motion. Follow-up: lowres frames
+ for speed (it runs a full-res per-MB ME per frame now), and reuse of the ME
+ for adaptive B placement and mb-tree.
+- Single-pass ABR rate control (`done`, --bitrate). A reactive controller sets
+ per-frame base QP from a smoothed complexity estimate C = bits*qscale plus a
+ swing-limited buffer-error correction. It tracks within ~1% on a single GOP,
+ recon-matches and is thread-deterministic. Follow-ups: CRF (constant
+ quality), VBV (a peak-rate cap with a leaky-bucket buffer model, needed for
+ streaming), 2-pass, and carrying the controller across GOPs. That last one
+ conflicts with GOP-parallel independence and needs a lookahead-driven
+ pre-pass or a shared rate state.
 - MB-tree (`idea`, BD-rate large, effort M). Lower QP on macroblocks that many
- future frames reference, propagating quality backward. Big objective win and
- pairs naturally with our GOP structure.
+ future frames reference, which propagates quality backward. It's a big
+ objective win and pairs naturally with our GOP structure.
 - Psy-RD (`idea`, subjective, effort M). Bias mode decision toward preserving
- detail/energy rather than minimizing SSD, countering the blur that pure SSD RD
+ detail/energy instead of minimizing SSD, to counter the blur that pure SSD RD
  produces.
 - VMAF-targeted rate control (`idea`, effort M). Drive per-frame QP to hit a VMAF
- target rather than a bitrate, using the v1 model. Novel as a built-in.
+ target instead of a bitrate, using the v1 model. Novel as a built-in.
 - Per-shot / convex-hull encoding (`idea`, effort L). Detect shots, and per shot
  pick the resolution/QP operating point on the rate-distortion convex hull.
- Netflix per-title/per-shot, built into the encoder rather than an orchestrator.
- The single-pass version is the interesting one: predict the hull point from
- cheap lookahead features (VCA-style DCT energy, spatial/temporal complexity)
- instead of trial encodes. Netflix's dynamic optimizer needs dozens of encodes
- per shot; published ML hull-prediction work gets most of the gain from features
- alone. Output could be a whole ABR ladder per shot in one pass.
+ This is Netflix per-title/per-shot built into the encoder instead of an
+ orchestrator. The single-pass version is the interesting one. It predicts the
+ hull point from cheap lookahead features (VCA-style DCT energy,
+ spatial/temporal complexity) instead of trial encodes. Netflix's dynamic
+ optimizer needs dozens of encodes per shot, while published ML
+ hull-prediction work gets most of the gain from features alone. The output
+ could be a whole ABR ladder per shot in one pass.
 - Saliency-driven AQ (`idea`, subjective win M-L, effort M-L). A small saliency
  model (or a cheap motion-contrast heuristic first) modulates per-MB QP offsets
  on top of variance AQ. Recent VVC work (PAVEN, SJ-PVC) reports 7-22% bitrate
@@ -436,31 +448,32 @@ quality per bit, which raw PSNR/SSIM understate and VMAF partly captures.
 - Scene-cut detection for IDR/B placement (`idea`, effort S-M). Place keyframes at
  cuts and avoid B frames across them.
 - Adaptive B-frame placement, b-adapt (`idea`, effort M). Decide per position
- whether a B frame helps; would fix the current high-motion B regression.
-- Live control plane (`planned`, differentiator, effort M-L). Settings a
- broadcast or live service can change while the encoder runs (bitrate and
- VBV, CRF, QP bounds, frame rate or decimation, keyframe request, speed
- preset, resolution at a keyframe), issued as per-frame events, applied at a
- defined boundary, echoed in the frame stats, coupled into the rate control
- rather than resetting it, with queue depth, lateness and a bit budget
- reported back for backpressure. A control log replays to byte-identical
- output. Same contract on yah265 and yaav1. Ships with an example live or
- camera encoder feeding a simulated network that drives the controls.
- Plan: docs/live-control-plan.md; beyond-parity.md section 2.
+ whether a B frame helps. This would fix the current high-motion B regression.
+- Live control plane (`planned`, differentiator, effort M-L). These are
+ settings a broadcast or live service can change while the encoder runs:
+ bitrate and VBV, CRF, QP bounds, frame rate or decimation, keyframe request,
+ speed preset, and resolution at a keyframe. Each is issued as a per-frame
+ event, applied at a defined boundary and echoed in the frame stats. Changes
+ couple into the rate control instead of resetting it. Queue depth, lateness
+ and a bit budget are reported back for backpressure. A control log replays
+ to byte-identical output. yah265 and yaav1 get the same contract. It ships
+ with an example live or camera encoder feeding a simulated network that
+ drives the controls. Plan: docs/live-control-plan.md; beyond-parity.md
+ section 2.
 - Differentiator research pass (`planned`, standing). A recurring survey and
- brainstorm to find features no other encoder offers: service engineering
- posts, codec conferences, open encoders' trackers, commercial feature
- lists, and the needs of each kind of user. Every candidate lands in
- beyond-parity.md with evidence or in the refused list with a reason. The
- process note is at the end of this file.
+ brainstorm to find features no other encoder offers. It reads service
+ engineering posts, codec conferences, open encoders' trackers and commercial
+ feature lists, and considers the needs of each kind of user. Every candidate
+ lands in beyond-parity.md with evidence, or in the refused list with a
+ reason. The process note is at the end of this file.
 
 ## Novel / research-flavored
 
 Higher risk, higher differentiation. Worth prototyping once the fundamentals are solid.
 
 - ML-guided mode pruning (`idea`, effort L). A tiny model predicts the likely-best
- modes per MB from cheap features, pruning the RD search. Speed win without the
- usual quality loss of heuristic early-exit.
+ modes per MB from cheap features and prunes the RD search. That's a speed win
+ without the usual quality loss of heuristic early-exit.
 - Content-adaptive lambda (`idea`, effort M). Tune the RD lambda per frame/region
  from complexity and temporal features instead of a fixed QP-derived value.
 - Learned quantization offsets (`idea`, effort M). Replace the fixed deadzone /
@@ -471,34 +484,34 @@ Higher risk, higher differentiation. Worth prototyping once the fundamentals are
  effort L). The film grain characteristics SEI *is* standard H.264 (Annex D
  since 2004; SMPTE RDD-5 defines the synthesis procedure) and FFmpeg's H.264
  decoder has applied it since 2021. Denoise the source, fit grain parameters
- (AR or frequency-filtering model), write the SEI. AV1-style grain synthesis,
- but no mainstream open H.264 encoder ships it. Playable today in FFmpeg-based
- players.
+ (AR or frequency-filtering model) and write the SEI. It's AV1-style grain
+ synthesis, but no mainstream open H.264 encoder ships it. It plays today in
+ FFmpeg-based players.
 - Reference-frame temporal filtering (`idea`, BD-rate M on noisy content,
  effort M). Motion-compensated temporal filtering of a frame before encoding it
- as a reference, so references are cleaner and residuals shrink (SVT-AV1 does
- this for its alt-ref). Encode-side only, fully standard-compliant, and pairs
- with the grain SEI item (filter the reference, resynthesize the grain).
+ as a reference makes references cleaner and shrinks residuals (SVT-AV1 does
+ this for its alt-ref). It's encode-side only and fully standard-compliant. It
+ pairs with the grain SEI item: filter the reference, resynthesize the grain.
 - Neural rate control / coded-size prediction (`idea`, effort M-L). Replace the
  heuristic bits model with a small learned predictor of coded size and
  distortion per MB or frame from lookahead features. Google shipped imitation-
- learned rate control and ML coded-size estimation in production encoders;
- accuracy gains show up directly as tighter VBV and less QP oscillation.
+ learned rate control and ML coded-size estimation in production encoders.
+ Accuracy gains show up directly as tighter VBV and less QP oscillation.
 - Encode-aware neural prefilter (`idea`, effort L). Google's "sandwiched
  compression" wraps a standard codec in pre/post networks trained through a
- codec proxy. The decoder-agnostic half alone (a prefilter trained to make
- content cheaper for H.264 specifically, not a generic denoiser) is compatible
- with every existing player and reported meaningful gains. Train once offline,
- run per-frame on the ANE/GPU at encode time.
+ codec proxy. The decoder-agnostic half alone is a prefilter trained to make
+ content cheaper for H.264 specifically, unlike a generic denoiser. It's
+ compatible with every existing player and reported meaningful gains. Train
+ once offline and run per-frame on the ANE/GPU at encode time.
 - Cross-rung analysis reuse for ABR ladders (`idea`, speed L for ladder use,
  effort M). When encoding the same content at several resolutions, encode the
- top rung, then scale and reuse its motion field, mode decisions, and shot
+ top rung, then scale and reuse its motion field, mode decisions and shot
  metadata to seed the lower rungs. x264 has analysis dump/load as a niche
- feature; making the ladder a first-class single-invocation output is the
- differentiator, and it composes with the per-shot hull item above.
+ feature. The differentiator is making the ladder a first-class
+ single-invocation output, which composes with the per-shot hull item above.
 - Per-shot content classification for tool selection (`idea`, effort M). Classify
  each shot (animation, film grain, screen content, sports) from lookahead
- features and switch psy strength, deadzone, deblock offsets, and B-depth per
+ features and switch psy strength, deadzone, deblock offsets and B-depth per
  shot. The per-shot machinery makes this nearly free once shots exist.
 
 ## Stream validation and conformance tooling (deferred to feature-complete)
@@ -506,47 +519,49 @@ Higher risk, higher differentiation. Worth prototyping once the fundamentals are
 Today `scripts/conformance.sh` does one kind of check: recon-match against a
 single decoder (ffmpeg). ffmpeg is lenient and decodes technically-nonconformant
 streams, so this misses whole classes of bugs. Build these out once the encoder
-feature set is complete (they are additive to the existing gate). Priority order:
+feature set is complete. They add to the existing gate. Priority order:
 
 1. Second decoder oracle: openh264 (`idea`, effort S). Decode every conformance
- stream with ffmpeg *and* Cisco openh264, assert both match the encoder recon.
- Independent codebase catches encoder bugs ffmpeg forgives. `brew install
- openh264` for the lib; the `h264dec` CLI needs a source build.
+ stream with ffmpeg *and* Cisco openh264, and assert both match the encoder
+ recon. An independent codebase catches encoder bugs ffmpeg forgives. `brew
+ install openh264` gets the lib. The `h264dec` CLI needs a source build.
 2. Bitstream syntax/structure validator (`idea`, effort S-M). Parse NAL/SPS/PPS/
  slice headers and assert on the syntax elements (profile_idc, level_idc,
- transform_8x8_mode_flag, num_ref_frames, VUI). Catches the
+ transform_8x8_mode_flag, num_ref_frames, VUI). This catches the
  nonconformant-but-decodable class recon-match can't. Tool: h264bitstream's
  `h264_analyze` (build from source). mediainfo and gpac/MP4Box (already
  installed) give a coarser structural view usable as a cheap sanity layer now.
 3. Level/profile conformance checker (`idea`, effort M). Annex A Table A-1 caps
- MB/s, frame size in MBs, DPB size, bitrate, CPB size, MV vertical range. Two
- validations: the encoder should *pick* the right level_idc from
- resolution/fps/bitrate (auto-level), and the stream must never *exceed* its
- declared level. No good off-the-shelf tool; write the checker against Table A-1.
- Relevant once RC and b-pyramid settle (both touch DPB size and bitrate).
+ MB/s, frame size in MBs, DPB size, bitrate, CPB size and MV vertical range.
+ There are two validations. The encoder should *pick* the right level_idc
+ from resolution/fps/bitrate (auto-level), and the stream must never
+ *exceed* its declared level. There's no good off-the-shelf tool, so write
+ the checker against Table A-1. It matters once RC and b-pyramid settle,
+ since both touch DPB size and bitrate.
 4. HRD/VBV leaky-bucket verifier (`idea`, effort M). Simulate the CPB from the
- buffering_period/pic_timing SEI, assert no underflow/overflow. ffmpeg won't
- verify this; JM's ldecod has an HRD verifier, or write a ~100-line checker.
- plan.md's always-on list already names this; needed to back the VBV/2-pass work.
-5. JM ldecod as the third, authoritative oracle (`idea`, effort M). The ITU/ISO
- reference decoder, definitive conformance authority. Build from JVT source
- (small C). Slow, so run on a reduced matrix in CI.
+ buffering_period/pic_timing SEI and assert no underflow/overflow. ffmpeg
+ won't verify this. JM's ldecod has an HRD verifier, or we write a
+ ~100-line checker. plan.md's always-on list already names this, and the
+ VBV/2-pass work needs it as backing.
+5. JM ldecod as the third, authoritative oracle (`idea`, effort M). It's the
+ ITU/ISO reference decoder and the definitive conformance authority. Build
+ from JVT source (small C). It's slow, so run it on a reduced matrix in CI.
 6. Generated parameter-coverage matrix (`idea`, effort S). Replace the
  hand-enumerated conformance cases with a generated sweep over
  {profile x entropy x bframes x 8x8 x AQ x RC-mode x geometry x QP x level}.
 
-Also relevant, non-encoder: the official JVT/AVC conformance bitstreams (reference
-streams + decoded MD5s) validate a *decoder* -- aimed at the `y264_cabac_dec_*`
-engine if it grows into a real decoder. h26forge generates adversarial/spec-edge
-H.264 for fuzzing the decode path.
+Also relevant, outside the encoder: the official JVT/AVC conformance bitstreams
+(reference streams + decoded MD5s) validate a *decoder*. They'd apply to the
+`y264_cabac_dec_*` engine if it grows into a real decoder. h26forge generates
+adversarial/spec-edge H.264 for fuzzing the decode path.
 7. Identification string, complete (`planned`, effort S). The settings SEI
- is on by default but carries no copyright or URL line and its UUID still
- spells the project's old name; bring it to the shared format in
+ is on by default but carries no copyright or URL line. Its UUID still
+ spells the project's old name. Bring it to the shared format in
  docs/stream-provenance.md (name, version, codec, copyright, URL, options).
 8. Stream fingerprint (`planned`, effort M). A signature in the choices the
  syntax leaves open (tie-breaks in the motion and mode search, the
- free-valued parameter-set fields), zero bits and no picture change, so a
- stream names its encoder after the SEI is stripped; ships with
+ free-valued parameter-set fields) costs zero bits and changes no picture.
+ It lets a stream name its encoder after the SEI is stripped. It ships with
  `scripts/provenance_check.py` and a re-baselined identity harness.
  docs/stream-provenance.md, same design on yah265 and yaav1.
 
@@ -556,59 +571,61 @@ Small, concrete follow-ups from the current code:
 
 - Intra I16-vs-I4 still uses a SATD threshold, not RD. Fold into the RD framework.
 - RDOQ covers 4x4 (luma, chroma AC, I16 luma AC) and 8x8 (I_8x8 and inter 8x8).
- 8x8 RDOQ is a no-op on intra-only 8x8 (I_8x8 is chosen on smooth blocks with
- nothing borderline to trim), but it is what makes the inter-8x8 transform a net
- win on detailed content: without it the plain-quant 8x8 loses to the RDOQ'd 4x4
- and the transform decision regresses mobile_cif; with it, mobile went from
- +0.6..1.4% to -0.04..0.8% and foreman to -0.7..1.8% at flat PSNR.
-- RDOQ is greedy (trailing-elimination + level-down); a full Viterbi trellis gains more.
-- B-frame deblocking (`done`). The bS derivation handles B's
- dual-list motion strength: different reference-picture set / MV
- count -> bS 1, else per-list MV-difference test; the L0/L1 pictures are distinct
- within a frame so the mixed-case pairing is unique). Deblock is enabled on every
- slice type; reference B's store their filtered recon into the DPB. Recon-matches
- ffmpeg across bframes 1-3, CAVLC/CABAC, 8x8, crops, QP 0-51.
+ 8x8 RDOQ is a no-op on intra-only 8x8, because I_8x8 is chosen on smooth
+ blocks with nothing borderline to trim. It's what makes the inter-8x8
+ transform a net win on detailed content. Without it the plain-quant 8x8 loses
+ to the RDOQ'd 4x4 and the transform decision regresses mobile_cif. With it,
+ mobile went from +0.6..1.4% to -0.04..0.8% and foreman to -0.7..1.8% at flat
+ PSNR.
+- RDOQ is greedy (trailing-elimination + level-down). A full Viterbi trellis gains more.
+- B-frame deblocking (`done`). The bS derivation handles B's dual-list motion
+ strength: a different reference-picture set or MV count gives bS 1, and
+ otherwise a per-list MV-difference test decides. (The L0/L1 pictures are
+ distinct within a frame, so the mixed-case pairing is unique.) Deblock is
+ enabled on every slice type, and reference B's store their filtered recon
+ into the DPB. Recon-matches ffmpeg across bframes 1-3, CAVLC/CABAC, 8x8,
+ crops, QP 0-51.
 - P_8x8 sub-partitions (sub_mb_type) not implemented; only 16x16/16x8/8x16.
-- --dump-recon emits B frames in display order (a per-frame recon callback);
- the recon-match invariant works for B. Fixing that immediately exposed a B
- mv-predictor bug (a non-list / intra neighbour must contribute mv 0 to the
- median, 8.4.1.3.2), fixed in nb_at/nb_at_f. Lesson: without recon-match
- working for B, B reconstruction bugs stay invisible.
+- --dump-recon emits B frames in display order (a per-frame recon callback),
+ so the recon-match invariant works for B. Fixing that immediately exposed a
+ B mv-predictor bug: a non-list / intra neighbor must contribute mv 0 to the
+ median (8.4.1.3.2). It was fixed in nb_at/nb_at_f. The lesson is that
+ without recon-match working for B, B reconstruction bugs stay invisible.
 - mb_qp_delta is always coded as 0 (constant QP within a frame). Per-MB QP for
  variance AQ / MB-tree needs the real qp_delta coding + prediction chain.
 
 ## Quality knobs assessed vs x264, support or doc-why-not
 
-Per owner directive: implement each remaining x264 knob unless it doesn't help
-quality/performance, then document why. Results:
+The owner's directive: implement each remaining x264 knob, or document why it
+doesn't help quality/performance. Results:
 
-- **aq-mode 2**: already have it. Our AQ centres per-MB log2(var) on the frame
- mean (auto-variance). **aq-mode 3** (dark bias) hook added (Y264_AQ_DARK) but
- OFF: negligible on the (bright) corpus; needs dark/banding clips + subjective
- eval. [SHIPPED hook / documented]
+- **aq-mode 2**: we already have it. Our AQ centers per-MB log2(var) on the
+ frame mean (auto-variance). The **aq-mode 3** (dark bias) hook is added
+ (Y264_AQ_DARK) but OFF. It's negligible on the (bright) corpus and needs
+ dark/banding clips + subjective eval. [SHIPPED hook / documented]
 - **Tunable deadzone** (x264 --deadzone-inter/intra): NOT worth a knob for us.
  Our naive quant uses a fixed rounding offset f=(1<<qbits)/(3 intra,6 inter),
- but **bidirectional RDOQ re-optimizes the rounding per-block by RD**: its
+ but **bidirectional RDOQ re-optimizes the rounding per-block by RD**. Its
  away-from-zero probe explicitly recovers deadzone-suppressed coefficients
  (measured -0.36/-0.93/-0.31% BD-PSNR when added). A global deadzone constant
  can't beat per-block RD, so exposing it would only affect RDOQ's start point.
  [DOC why-not: subsumed by RDOQ]
 - **weightp-2** (per-ref/region weighted P): we have frame-level DC weighted P
  (fade detection, one weight per ref) + implicit bi-pred weights. Per-ref/
- region WP is a refinement whose gain shows only on multi-ref fades/flashes,
- none in the gate corpus, so it is unmeasurable here. [DOC why-not:
+ region WP is a refinement whose gain shows only on multi-ref fades/flashes.
+ The gate corpus has none, so it's unmeasurable here. [DOC why-not:
  corpus-limited; revisit with a fade/flash corpus. Real remaining WP gap, but
  small.]
 - **RC knobs**: **ipratio/pbratio are implemented** as the temporal-layer QP
  cascade (I lower ~1.4, referenced-B higher by depth). qpmin/qpmax/
- chroma-qp-offset are user-control clamps with sane internal defaults, not
- quality/perf levers. [DOC: expose as CLI params for API parity on demand; no
- quality impact, not a blocker for the optimization phase.]
+ chroma-qp-offset are user-control clamps with sane internal defaults. They
+ aren't quality/perf levers. [DOC: expose as CLI params for API parity on
+ demand; no quality impact, not a blocker for the optimization phase.]
 
-Net: no shippable quality win among these; all either already present, subsumed
-by RDOQ, corpus-unmeasurable, or user-control-only. The feature set is settled
-for the optimization phase (the one real structural item left is 10-bit, see
-high-bit-depth-plan.md).
+There's no shippable quality win among these. Each one is already present,
+subsumed by RDOQ, unmeasurable on the corpus or user-control-only. The feature
+set is settled for the optimization phase. The one real structural item left is
+10-bit (see high-bit-depth-plan.md).
 
 ## Where the candidates come from
 
@@ -618,13 +635,13 @@ standing research pass runs every so often and asks three questions.
 What need does no encoder answer? The reading for that is what the streaming
 services publish, the codec conferences (PCS, ICIP, DCC, and the AOM and MPEG
 research tracks), the open encoders' changelogs and issue trackers, and the
-commercial encoders' feature lists. The point of reading them is the gap, so a
-feature every encoder already has is not a finding.
+commercial encoders' feature lists. We read them for the gap, so a feature
+every encoder already has isn't a finding.
 
 What does an orchestrator or a service have to build around the encoder today
-that the encoder could do better from inside? This is the question that
-produced the live control plane, and it is the one that pays best, because the
-answer is usually a thing the encoder knows and refuses to say.
+that the encoder could do better from inside? This question produced the live
+control plane. It pays best, because the answer is usually a thing the encoder
+knows and refuses to say.
 
 What does our architecture make cheap that is expensive elsewhere? The
 lookahead ring, the deterministic GOP pipeline, the per-frame stats channel
