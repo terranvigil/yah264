@@ -277,45 +277,19 @@ def stale_claims(knobs):
     return bad
 
 
-REMOVED = os.path.join(ROOT, "src", "encoder", "knobs_removed.inc")
 # A script or tool SETS a knob on an assignment (NAME=..., env words) or in a
 # Python env dict ("NAME": ...); a comment line only mentions it.
 SET_DIRS = [os.path.join(ROOT, "scripts"),
             os.path.join(ROOT, os.pardir, "yah264", "local", "tools")]
 
 
-def removed_load():
-    if not os.path.exists(REMOVED):
-        return [], ""
-    text = open(REMOVED).read()
-    return re.findall(r'^"(Y264_[A-Z0-9_]+)",', text, re.M), text
-
-
-def removed_append(names):
-    """Add knobs that left the census to knobs_removed.inc, kept sorted."""
-    have, text = removed_load()
-    new = sorted(set(names) - set(have))
-    if not new:
-        return
-    head = text[:text.find('"Y264_')] if '"Y264_' in text else text
-    allk = sorted(set(have) | set(new))
-    with open(REMOVED, "w") as f:
-        f.write(head + "".join(f'"{n}",\n' for n in allk))
-    print("knobs_removed.inc: added", *new)
-
-
-def removed_setters(names):
-    """Script lines (outside comments) that set a removed knob."""
-    if not names:
-        return []
-    pat = re.compile(r"(?<![A-Z0-9_])(" + "|".join(map(re.escape, names)) + r")(?:\s*=|[\"']\s*:)")
-    hits = []
+def _script_lines():
     for d in SET_DIRS:
         if not os.path.isdir(d):
             continue
         for dirpath, _, files in os.walk(d):
             for fn in files:
-                if fn.endswith((".pyc",)) or fn == os.path.basename(__file__):
+                if fn.endswith(".pyc") or fn == os.path.basename(__file__):
                     continue
                 path = os.path.join(dirpath, fn)
                 try:
@@ -323,13 +297,32 @@ def removed_setters(names):
                 except OSError:
                     continue
                 for i, ln in enumerate(lines, 1):
-                    st = ln.lstrip()
-                    if st.startswith(("#", "//", "*", "/*")):
-                        continue
-                    m = pat.search(ln)
-                    if m:
-                        hits.append(f"{os.path.relpath(path, ROOT)}:{i}: {m.group(1)}")
-    return hits
+                    yield path, i, ln
+
+
+def dead_setters(live):
+    """Script lines (outside comments) that set a Y264_* name nothing reads:
+    not an encoder knob, and not read by any script either. Setting one
+    measures nothing, so a sweep that does it reports noise as an effect."""
+    setp = re.compile(r"(?<![A-Z0-9_])(Y264_[A-Z0-9_]+)(?:\s*=|[\"']\s*:)")
+    readp = re.compile(r"(?:environ(?:\.get)?\(?\[?\s*[\"']|getenv\(\s*[\"']|\$\{?)(Y264_[A-Z0-9_]+)")
+    sets, read = [], set()
+    for path, i, ln in _script_lines():
+        read.update(readp.findall(ln))
+        if ln.lstrip().startswith(("#", "//", "*", "/*")):
+            continue
+        for m in setp.finditer(ln):
+            sets.append((m.group(1), f"{os.path.relpath(path, ROOT)}:{i}: {m.group(1)}"))
+    # build-time macros (meson defines, #if) and the do-nothing control arm
+    # that wall pairs set on purpose are live too
+    for d in ("src", "include"):
+        for dirpath, _, files in os.walk(os.path.join(ROOT, d)):
+            for fn in files:
+                if fn.endswith((".c", ".h", ".inc")):
+                    read.update(re.findall(r"#\s*(?:if|ifdef|ifndef|define)\s+.*?(Y264_[A-Z0-9_]+)",
+                                           open(os.path.join(dirpath, fn), errors="replace").read()))
+    read.add("Y264_NOP")
+    return [h for n, h in sets if n not in live and n not in read]
 
 
 def generate(knobs, instr_doc):
@@ -378,16 +371,9 @@ def main():
             print("docs/knobs.md missing"); rc = 1
         for b in bad:
             print("STALE DEFAULT COMMENT:", b); rc = 1
-        removed, _ = removed_load()
-        back = sorted(set(removed) & set(knobs))
-        if back:
-            print("REMOVED KNOB READ AGAIN (take it out of src/encoder/knobs_removed.inc):", *back); rc = 1
-        for h in removed_setters(removed):
-            print("SCRIPT SETS A REMOVED KNOB:", h); rc = 1
+        for h in dead_setters(set(knobs)):
+            print("SCRIPT SETS A KNOB NOTHING READS:", h); rc = 1
         sys.exit(rc)
-    if os.path.exists(OUT):
-        old = set(re.findall(r"^\| `(Y264_[A-Z0-9_]+)`", open(OUT).read(), re.M))
-        removed_append(old - set(knobs))
     generate(knobs, instr_doc)
     for b in bad:
         print("STALE DEFAULT COMMENT:", b)
