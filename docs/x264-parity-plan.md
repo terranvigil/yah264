@@ -1,6 +1,6 @@
 # x264 option parity
 
-The README says yah264 has roughly the same features and options as x264. A
+The README says yah264 has the same features and options as x264. A
 census of x264's full option list found about 60 options yah264 lacked. All
 of them have shipped or been refused; `docs/what-shipped.md` has the history.
 This page records what we won't build and the census that closed the program.

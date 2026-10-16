@@ -19,7 +19,7 @@ New tools now exist that can accelerate the iteration over a large number of alg
 
 We are making use of agentic tools to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
 
-1. Build a standard H.264 encoder with roughly the same feature set and options as x264.
+1. Build a standard H.264 encoder with the same feature set and options as x264.
 2. Capture x264's performance and quality baseline on a fixed test set of clips.
 3. Measure the speed and compression gaps between the two.
 4. Iterate over each H.264 coding tool, trying different techniques to determine how much of the gap can be closed.
