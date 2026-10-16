@@ -12,13 +12,13 @@ deblocking and intra prediction. They are C11 intrinsics, like the NEON
 kernels, with no hand-written assembly. AVX-512 has its first kernels, pixel
 metrics only, in a build that asks for them with `-Davx512=true`.
 
-Every kernel matches its C reference bit for bit, on two emulators and on
-rented x86-64 machines. On those machines the one-thread output of every build,
-pure C and AVX-512 included, is byte-identical to the Mac's, and the
-conformance suite passes.
+Every kernel matches its C reference bit for bit on two emulators and on
+rented x86-64 machines. On those machines the one-thread output of every build
+is byte-identical to the Mac's, pure C and AVX-512 included. The conformance
+suite passes there too.
 
-Two tuning rounds in, one thread on an AMD EPYC 9R14 (c7a.8xlarge) at CRF 23
-reads:
+After two tuning rounds, a one-thread run on an AMD EPYC 9R14 (c7a.8xlarge) at
+CRF 23 reads:
 
 | | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
 |---|--:|--:|
@@ -29,17 +29,21 @@ reads:
 | CPU time vs x264, default build | 0.96x | 0.86x |
 | CPU time vs x264, AVX-512 build | 0.93x | 0.84x |
 
-At the same bitrate (ABR at 2855 kbit/s) sunflower reads 0.94x x264's
-instructions and 1.02x its CPU time. crowd_run has no usable same-bitrate pair,
+At the same bitrate, ABR at 2855 kbit/s, sunflower reads 0.94x x264's
+instructions and 1.02x its CPU time. crowd_run has no usable same-bitrate pair
 because x264 overshot its target about 4.7 times.
 
 Threading is the open item. At the default thread count on that 32-vCPU
-machine, sunflower took 0.76 s where x264 took 0.53 s. It also used more CPU
-time than x264, 5456 ms against 4641, while retiring fewer instructions.
-crowd_run came closer, at 1.17 s against 1.14 s and 9749 ms of CPU time
-against 9728. Each is a single run that
-includes tool start-up, so it shows the problem without sizing it. The x86 goal
-board will size it.
+machine, sunflower took longer than x264 and used more CPU time while retiring
+fewer instructions. crowd_run came closer:
+
+| default threads | wall, ours | wall, x264 | CPU ms, ours | CPU ms, x264 |
+|---|--:|--:|--:|--:|
+| sunflower | 0.76 s | 0.53 s | 5456 | 4641 |
+| crowd_run | 1.17 s | 1.14 s | 9749 | 9728 |
+
+Each is a single run that includes tool start-up. It shows the problem without
+sizing it. The x86 goal board will size it.
 
 ## Decisions
 
@@ -95,8 +99,8 @@ Rules for the Docker kit:
 - Only one session can use the kit at a time. Switching to QEMU changes the
   Docker VM's binary-format registry for every container, so a second
   session's run can swap the interpreter under the first one's encoders. Check
-  `docker ps` for any container, not just your own.
-- Use Rosetta for routine runs, which is close to native speed, and QEMU for
+  `docker ps` for any container, including other sessions'.
+- Use Rosetta, which runs close to native speed, for routine runs. Use QEMU for
   each item's final gate.
 
 ## Kernel waves
@@ -139,7 +143,7 @@ waves 3a and 3b:
 - **Quant** runs in 16-bit lanes wherever the shift and rounding allow, with
   batched entry points so the per-block loops no longer call the dispatcher
   one block at a time.
-- **Scan** gained a kernel for the 4x4 absolute zigzag, and the 8x8 scan mask
+- **Scan** gained a kernel for the 4x4 absolute zigzag. The 8x8 scan mask now
   narrows each level to one byte before shuffling.
 - **Forward transforms** run columns first, which saves a transpose. AVX2
   takes two neighboring blocks per pass.
@@ -157,14 +161,15 @@ The second round worked on the encoder's C, where the first had worked on
 kernels, and wrote the first AVX-512 kernels. None of it changes output.
 
 - **Trellis and entropy coding.** CAVLC lengths come from a nonzero mask and
-  tables. 8x8 intra is priced in place from the quantizer's scan mask, and a
-  block whose only level is a single 1 has a closed form. RDOQ writes back only
-  at nonzero positions, the 4x4 trellis reads its contexts in place, and the
-  skip probe takes its operands from the scan kernels. Nonzero masks come from
-  a vector compare, SSE2 and NEON, the baseline on each architecture. The
+  tables. 8x8 intra is priced in place from the quantizer's scan mask. A block
+  whose only level is a single 1 has a closed form. RDOQ writes back only at
+  nonzero positions. The 4x4 trellis reads its contexts in place, and the skip
+  probe takes its operands from the scan kernels. Nonzero masks come from a
+  vector compare in SSE2 or NEON, the baseline on each architecture. The
   lattice tracks its live nodes with a bitmask. The trellis and entropy rows of
   the x86 profile each fell by about a quarter. Since this is C, arm64 gains
-  too: on the Mac it cuts instructions 2.0% on sunflower and 3.8% on a 4K clip.
+  too. On the Mac it removes 2.0% of instructions on sunflower and 3.8% on a 4K
+  clip.
 - **Lookahead.** Only a per-frame cached weight, which is worth very little.
   What the lookahead still costs is search volume, and cutting that would change
   output. That makes it a quality trade, so this round left it alone.
@@ -178,7 +183,7 @@ kernels, and wrote the first AVX-512 kernels. None of it changes output.
 The AVX-512 reading comes from one binary, the two tiers interleaved, seven
 runs each on sunflower. At one thread AVX-512 takes 0.966x AVX2's CPU time and
 wall time. At the default thread count it takes 0.982x the CPU time and 0.990x
-the wall time. That's AMD only, which is why the tier stays opt-in.
+the wall time. Those are AMD readings only. That's why the tier stays opt-in.
 
 The machine found two defects. gcc's UBSan caught a misaligned double store in
 the deblock row helper, now fixed. gcc's ThreadSanitizer needs
@@ -186,8 +191,8 @@ the deblock row helper, now fixed. gcc's ThreadSanitizer needs
 
 ## The ARM SVE tier
 
-AWS Graviton3 (Neoverse V1) has SVE at 256 bits and no SVE2. x264 runs its own
-SVE code there, and we ran NEON only. Graviton4 has SVE2 at 128 bits and
+AWS Graviton3, a Neoverse V1 part, has SVE at 256 bits and no SVE2. x264 runs
+its own SVE code there. We ran NEON only. Graviton4 has SVE2 at 128 bits and
 Graviton2 has neither. Apple parts have no SVE, so the Mac never sees this
 tier.
 
@@ -210,7 +215,7 @@ How the tier is built:
 - **Detection.** Linux only, from HWCAP. The vector length is read once.
   `Y264_CPU_SVE256` marks vectors of 256 bits or more.
 - **Dispatch.** The tier rides inside NEON the way DotProd does:
-  `y264_cpu_tier()` still answers NEON, so no dispatch site moved, and the SVE
+  `y264_cpu_tier()` still answers NEON, so no dispatch site moved. The SVE
   entries overwrite NEON ones in the pixel table and behind the NEON quant's
   call sites.
 - **Build.** meson `-Dsve=auto|enabled|disabled`, where auto means aarch64
@@ -224,9 +229,9 @@ How the tier is built:
 The pixel kernels are SATD at 16x16, 16x8 and 8x8, averaged SATD at 16x16 and
 16x8, SA8D 16x16, texture/AC 16x16 and SATD x4 8x8. The forward quant has SVE
 forms for 8x8, for a batch of 4x4 blocks and for a single 4x4. Every one is
-vector-length agnostic and exact at any length. They're installed only at 256 bits or more, because what they buy
-is width: at 128 bits they did no better than NEON. For the same reason
-Graviton4 runs the NEON code unchanged.
+vector-length agnostic and exact at any length. What they buy is width, so
+they're installed only at 256 bits or more. At 128 bits they did no better than
+NEON. For the same reason Graviton4 runs the NEON code unchanged.
 
 We refused the batched 16-wide SAD. NEON's loads post-increment and SVE's
 don't, so the SVE form executes more instructions than NEON.
@@ -251,8 +256,8 @@ four-byte load in the NEON 4x4 SATD that gcc's UBSan flagged.
   - Threading at high core counts. On the 32-vCPU AMD machine we lose to x264
     at the default thread count while retiring fewer instructions. This is the
     open x86 item.
-  - The x86 goal board, G1, G2 and G3. The first pass is planned, and it
-    measures the threading gap properly.
+  - The x86 goal board, G1, G2 and G3. The first pass is planned. It measures
+    the threading gap properly.
 
 ## When this is done
 
