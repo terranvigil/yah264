@@ -1,0 +1,98 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='900' height='450' viewBox='0 0 900 450'><rect width='100%' height='100%' fill='#fcfcfb'/>
+<text x='24' y='40' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='22' fill='#0b0b0b' text-anchor='start' font-weight='600'>Bitrate against quality, three real titles</text>
+<text x='24' y='64' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='14' fill='#52514e' text-anchor='start' font-weight='normal'>VMAF-NEG at five CRF rates (20 to 32). Up and to the left is better.</text>
+<line x1='24' y1='88' x2='44' y2='88' stroke='#2a78d6' stroke-width='2.5'/>
+<text x='50' y='93' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='start' font-weight='normal'>yah264</text>
+<line x1='124' y1='88' x2='144' y2='88' stroke='#8a8984' stroke-width='2.5'/>
+<text x='150' y='93' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='start' font-weight='normal'>x264</text>
+<text x='48.0' y='126' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='start' font-weight='600'>Chimera 1080p, 2 min</text>
+<text x='48.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-10.8% bits</text>
+<line x1='48.0' y1='380.0' x2='312.0' y2='380.0' stroke='#e6e5e1'/>
+<text x='44.0' y='384.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>75</text>
+<line x1='48.0' y1='338.0' x2='312.0' y2='338.0' stroke='#e6e5e1'/>
+<text x='44.0' y='342.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>80</text>
+<line x1='48.0' y1='296.0' x2='312.0' y2='296.0' stroke='#e6e5e1'/>
+<text x='44.0' y='300.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>85</text>
+<line x1='48.0' y1='254.0' x2='312.0' y2='254.0' stroke='#e6e5e1'/>
+<text x='44.0' y='258.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>90</text>
+<line x1='48.0' y1='212.0' x2='312.0' y2='212.0' stroke='#e6e5e1'/>
+<text x='44.0' y='216.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>95</text>
+<line x1='48.0' y1='170.0' x2='312.0' y2='170.0' stroke='#e6e5e1'/>
+<text x='44.0' y='174.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>100</text>
+<text x='48.0' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>0</text>
+<text x='125.53686974169146' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>2M</text>
+<text x='203.07373948338292' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>4M</text>
+<text x='280.6106092250743' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>6M</text>
+<text x='180.0' y='414' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>kbit/s</text>
+<polyline fill='none' stroke='#8a8984' stroke-width='2.5' points='90.0,344.5 112.4,294.5 148.0,257.2 206.2,230.3 299.4,211.4'/>
+<circle cx='90.0' cy='344.5' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='112.4' cy='294.5' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='148.0' cy='257.2' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='206.2' cy='230.3' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='299.4' cy='211.4' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<polyline fill='none' stroke='#2a78d6' stroke-width='2.5' points='85.2,343.9 106.8,292.7 141.4,254.7 195.7,227.7 281.1,208.9'/>
+<circle cx='85.2' cy='343.9' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='106.8' cy='292.7' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='141.4' cy='254.7' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='195.7' cy='227.7' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='281.1' cy='208.9' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<text x='342.0' y='126' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='start' font-weight='600'>Tears of Steel 1080p, 10 min</text>
+<text x='342.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-9.0% bits</text>
+<line x1='342.0' y1='380.0' x2='606.0' y2='380.0' stroke='#e6e5e1'/>
+<text x='338.0' y='384.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>75</text>
+<line x1='342.0' y1='338.0' x2='606.0' y2='338.0' stroke='#e6e5e1'/>
+<text x='338.0' y='342.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>80</text>
+<line x1='342.0' y1='296.0' x2='606.0' y2='296.0' stroke='#e6e5e1'/>
+<text x='338.0' y='300.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>85</text>
+<line x1='342.0' y1='254.0' x2='606.0' y2='254.0' stroke='#e6e5e1'/>
+<text x='338.0' y='258.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>90</text>
+<line x1='342.0' y1='212.0' x2='606.0' y2='212.0' stroke='#e6e5e1'/>
+<text x='338.0' y='216.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>95</text>
+<line x1='342.0' y1='170.0' x2='606.0' y2='170.0' stroke='#e6e5e1'/>
+<text x='338.0' y='174.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>100</text>
+<text x='342.0' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>0</text>
+<text x='437.9367411761027' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>2M</text>
+<text x='533.8734823522054' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>4M</text>
+<text x='474.0' y='414' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>kbit/s</text>
+<polyline fill='none' stroke='#8a8984' stroke-width='2.5' points='394.7,334.7 415.4,280.9 447.0,243.5 498.8,218.5 593.4,202.4'/>
+<circle cx='394.7' cy='334.7' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='415.4' cy='280.9' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='447.0' cy='243.5' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='498.8' cy='218.5' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='593.4' cy='202.4' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<polyline fill='none' stroke='#2a78d6' stroke-width='2.5' points='388.7,341.2 408.6,282.5 439.1,242.2 488.3,216.3 574.9,200.0'/>
+<circle cx='388.7' cy='341.2' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='408.6' cy='282.5' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='439.1' cy='242.2' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='488.3' cy='216.3' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='574.9' cy='200.0' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<text x='636.0' y='126' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='start' font-weight='600'>Meridian 1080p, 10 min</text>
+<text x='636.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-33.6% bits</text>
+<line x1='636.0' y1='380.0' x2='900.0' y2='380.0' stroke='#e6e5e1'/>
+<text x='632.0' y='384.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>75</text>
+<line x1='636.0' y1='327.5' x2='900.0' y2='327.5' stroke='#e6e5e1'/>
+<text x='632.0' y='331.5' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>80</text>
+<line x1='636.0' y1='275.0' x2='900.0' y2='275.0' stroke='#e6e5e1'/>
+<text x='632.0' y='279.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>85</text>
+<line x1='636.0' y1='222.5' x2='900.0' y2='222.5' stroke='#e6e5e1'/>
+<text x='632.0' y='226.5' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>90</text>
+<line x1='636.0' y1='170.0' x2='900.0' y2='170.0' stroke='#e6e5e1'/>
+<text x='632.0' y='174.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>95</text>
+<text x='636.0' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>0</text>
+<text x='710.7187318696269' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>1M</text>
+<text x='785.4374637392538' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>2M</text>
+<text x='860.1561956088807' y='396' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='middle' font-weight='normal'>3M</text>
+<text x='768.0' y='414' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>kbit/s</text>
+<polyline fill='none' stroke='#8a8984' stroke-width='2.5' points='675.2,356.4 693.5,301.1 723.8,259.4 779.3,228.4 887.4,205.5'/>
+<circle cx='675.2' cy='356.4' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='693.5' cy='301.1' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='723.8' cy='259.4' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='779.3' cy='228.4' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='887.4' cy='205.5' r='4' fill='#8a8984' stroke='#fcfcfb' stroke-width='1.5'/>
+<polyline fill='none' stroke='#2a78d6' stroke-width='2.5' points='664.5,346.1 678.1,292.4 700.8,251.1 740.7,221.1 816.4,199.5'/>
+<circle cx='664.5' cy='346.1' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='678.1' cy='292.4' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='700.8' cy='251.1' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='740.7' cy='221.1' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+<circle cx='816.4' cy='199.5' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
+</svg>

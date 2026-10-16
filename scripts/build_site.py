@@ -34,6 +34,10 @@ DOCS = ROOT / "docs"
 # under the same names so one set of paths serves both.
 BANNER_SRC = ROOT / "assets"
 
+# The published site's address. Social cards need absolute URLs, because
+# LinkedIn and the others fetch the image without the page as a base.
+SITE_URL = "https://terranvigil.github.io/yah264/"
+
 # Nav order. Left column is the source page (or a docs/ HTML file copied in
 # verbatim); right is the label in the top bar.
 NAV = [
@@ -46,6 +50,7 @@ NAV = [
     ("architectures.html", "Architectures"),
     ("results.html", "Results"),
     ("check-it-yourself.html", "Check it yourself"),
+    ("blog.html", "Blog"),
 ]
 
 # Hand-written standalone explainers. They are HTML rather than markdown, so
@@ -290,6 +295,21 @@ def readme_page(text):
     return {"title": "yah264", "description": "An H.264/AVC encoder."}, body
 
 
+def card_image(meta, target):
+    """og:image and its companions for a page whose front matter names an
+    `image:`. The image is 1200x627, the shape LinkedIn crops link cards to."""
+    if "image" not in meta:
+        return ""
+    img = html.escape(SITE_URL + meta["image"])
+    return (
+        f'<meta property="og:image" content="{img}">\n'
+        f'<meta property="og:image:width" content="1200">\n'
+        f'<meta property="og:image:height" content="627">\n'
+        f'<meta property="og:url" content="{html.escape(SITE_URL + target)}">\n'
+        f'<meta name="twitter:image" content="{img}">\n'
+    )
+
+
 def parse_front_matter(text):
     """Read a simple `key: value` block delimited by --- at the top of a file."""
     meta = {}
@@ -513,6 +533,9 @@ def build():
             .replace("{{nav}}", render_nav(target))
             .replace("{{toc}}", render_rail(target, toc))
             .replace("{{pager}}", render_pager(target))
+            .replace("{{og_type}}", meta.get("type", "website"))
+            .replace("{{twitter_card}}", "summary_large_image" if "image" in meta else "summary")
+            .replace("{{og_image}}", card_image(meta, target))
             .replace("{{root}}", "")
         )
         # Links written as page.md in source resolve to page.html when built.

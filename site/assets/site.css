@@ -480,3 +480,8 @@ nav.pager a:hover { color: var(--accent); background: none; }
   aside.toc ol.sections, aside.toc ul.sections { display: flex; flex-wrap: wrap;
     gap: 0 0.2rem; border-left: 0; margin: 0; }
 }
+
+/* ---------- blog charts ---------- */
+/* the charts are drawn on a light plate, like the live figures */
+figure.chart { margin: 32px 0; }
+figure.chart img { display: block; width: 100%; height: auto; border-radius: 8px; }
