@@ -74,10 +74,7 @@ The encoder cannot improve it. Ours reads spec-shaped.
 **Temporal direct is legal on only 11-24% of B frames**: blue_sky 3 of 28,
 coastguard 3 of 28, samsung 6 of 25. Clause 8.4.1.2.3 makes it a requirement of
 bitstream conformance that the picture referred to by `refIdxCol` be present in
-RefPicList0, and `build_slice_prep` enforces that frame-wide. x264 tests
-something narrower: that the list-1 reference's own first list-0 picture is this
-slice's first list-0 picture. That holds for it because of how it builds its
-lists.
+RefPicList0, and `build_slice_prep` enforces that frame-wide.
 
 **So `--direct temporal` collects -6.39% on blue_sky while engaging on about a
 ninth of its B frames.** Whatever those frames are doing, they are doing a lot
@@ -147,7 +144,7 @@ three was asking whether a number was POSSIBLE, not whether it was surprising.
 
 | instrument | answers |
 |---|---|
-| `Y264_DIRECT_SCORE=2` | both direct modes' skippability per B frame, x264's own auto signal. Also reports where temporal is not legal. md5-inert |
+| `Y264_DIRECT_SCORE=2` | both direct modes' skippability per B frame (the skippability vote). Also reports where temporal is not legal. md5-inert |
 | `Y264_BPROF=1` / `BPROF2=1` | per-stage wall inside the B tournament, binned by final verdict |
 | `scripts/b_census.py` | decoder-side B mode census: direct / L0 / L1 / Bi shares |
 | `scripts/bd_at_rate.py` | BD at matched achieved rate, mandatory for anything that moves the CRF mapping |

@@ -127,18 +127,18 @@ open item was mis-stated.
 
 The encoder does choose the SLICE-level mode flag, and whether a given
 macroblock uses direct at all. The only legal lever for the blue_sky gain is
-therefore a per-slice decision, ie an `auto` mode. x264 has one at
-`--preset slow` and above. Medium, which both encoders ran here, is fixed
-spatial.
+therefore a per-slice decision, ie an `auto` mode. The reference documents
+`--direct auto` at `--preset slow` and above. Medium, which both encoders ran
+here, is fixed spatial.
 
-### x264's auto, and why its signal is shaped the way it is
+### A skippability vote
 
-Per B macroblock it derives BOTH direct modes and runs the B skip probe on each,
-adding one to that mode's score when the probe passes. It counts how many
-macroblocks each mode would make SKIPPABLE. The next B slice takes the higher
-score, with a 9/10 decay once the total passes the macroblock count. That costs
-two direct derivations and two skip probes per B macroblock. It is a
-slow-preset feature for that reason.
+Our design for `auto`: per B macroblock, derive BOTH direct modes and run the B
+skip probe on each, adding one to that mode's score when the probe passes. The
+score counts how many macroblocks each mode would make SKIPPABLE. The next B
+slice takes the higher score, with a 9/10 decay once the total passes the
+macroblock count. That costs two direct derivations and two skip probes per B
+macroblock, which is why it belongs to the slower presets.
 
 ### The cheap signal does not work, measured
 
@@ -154,9 +154,8 @@ macroblock count. Run the same encode in each mode and diff:
 
 **Prediction error does not predict the outcome.** coastguard predicts better
 under temporal and codes worse. samsung predicts worse and codes better. Nor
-does the direct SHARE: it moves 86.41% to 86.74% while BD moves 6.4 points. An
-auto mode built on either cheap proxy would misfire on two of three clips here.
-x264's threshold-shaped skippability count is load-bearing, not incidental.
+does the direct SHARE: it moves 86.41% to 86.74% while BD moves 6.4 points. An auto mode built on either cheap proxy would misfire on two of three clips
+here. A threshold-shaped skippability count is the candidate worth building.
 
 ### The skippability score, built, and what it found instead
 
@@ -179,10 +178,7 @@ makes consistently more macroblocks skippable (6543 against 6143, 7300 against
 The guard is not ours to relax. Clause 8.4.1.2.3 makes it a requirement of
 bitstream conformance that the picture referred to by `refIdxCol` be present in
 RefPicList0. `build_slice_prep` enforces exactly that, frame-wide, and falls
-back to spatial when any co-located block's reference does not resolve. x264
-tests something narrower: that the list-1 reference's own first list-0 picture
-is this slice's first list-0 picture. That holds for x264 because of how it
-constructs its lists.
+back to spatial when any co-located block's reference does not resolve.
 
 **So `--direct temporal` collects -6.39% on blue_sky while engaging on about a
 ninth of its B frames.** Those frames do a disproportionate amount of the work,
@@ -230,12 +226,9 @@ references to anchors that our own three-entry list 0 has already dropped:
 **2.6% of the blocks demoted 100% of the frame.** Clause 8.4.1.2.3's
 conformance requirement binds where the derivation runs, not where the slice
 header points. A block that does not resolve should cost its own macroblock the
-direct mode and nothing else. x264 has always done it that way. Its
-temporal-direct derivation refuses the mode on exactly this condition (a
-co-located reference that is not in the current list 0) and drops direct for
-that macroblock alone.
-
-Ours now does the same. `temporal_direct` returns 0 when any of the four
+direct mode and nothing else: refuse the mode on exactly this condition (a
+co-located reference that is not in the current list 0) and drop direct for
+that macroblock alone. Ours now does that. `temporal_direct` returns 0 when any of the four
 sampled corners fails to resolve. `direct_ok` then goes down, the path the
 staircase MV clamp already used. The per-macroblock cost is 1-10% of
 macroblocks, median about 1.7%. The frames recovered are 89% of them.
@@ -282,11 +275,10 @@ So the next question is not "what does the per-macroblock gate break" but
 "**is temporal direct nondeterministic under threads even when it is fully
 legal, and did the frame-wide gate simply make it rare?**"
 
-x264 carries a guard here that we have no equivalent for. Above one thread its
-temporal-direct derivation refuses direct for a macroblock whose scaled vertical
-vector runs past the reference area a thread is allowed to read. We apply no
-range test to the derived vector at all. That looked like the answer and it is
-not: `Y264_DIAG_TDIRLIM=64` refuses direct on any derived vector beyond +/-64
+One candidate guard: above one thread, refuse direct for a macroblock whose
+scaled vertical vector runs past the reference area a thread is allowed to
+read. We apply no range test to the derived vector at all. That looked like
+the answer and it is not: `Y264_DIAG_TDIRLIM=64` refuses direct on any derived vector beyond +/-64
 pel. The output still moves between runs. The guard is worth having for its
 own sake. It is not this bug.
 
@@ -534,9 +526,8 @@ but incoherent motion, riverbed water, pedestrian a fixed camera, and sunflower
 a near-static close-up. Coherence matters, not magnitude: crowd_run and riverbed
 both move a great deal and both want spatial.
 
-**The signal that measures this already exists.** `Y264_DIRECT_SCORE=2` is
-x264's own: derive both modes per B macroblock, probe each for skippability,
-count. Its choice space used to be 11-24% of frames. Now it is all of them. Taking
+**The signal that measures this already exists.** `Y264_DIRECT_SCORE=2` is the skippability vote above: derive both modes per B
+macroblock, probe each for skippability, count. Its choice space used to be 11-24% of frames. Now it is all of them. Taking
 the per-clip majority of frames where temporal scores higher:
 
 **VOID, noted 2026-09-03.** This table and the twelve-gate-clip one below were
@@ -560,8 +551,8 @@ again against the rate-anchored table as well as the shared point set.
 
 ### Out-of-sample: the twelve gate clips
 
-The score is x264's and was fitted to nothing of ours, so the whole gate corpus
-is out-of-sample. It predicts spatial on all twelve. The closest calls are
+The score was fitted to nothing in the gate corpus, so the whole corpus is
+out-of-sample. It predicts spatial on all twelve. The closest calls are
 sintel at 44% and sita, which sits at 0% but with a near-unity ratio. Measured
 at points 22-34 (bus and bbb saturate there and are unusable):
 
@@ -694,7 +685,7 @@ Scored inside that one instrument, with no band or cross-instrument confound:
 seven. The rule's temporal calls cost **+9.04 BD points** where a working rule
 would have gained.
 
-**x264's own signal fails the same way.** `Y264_DIRECT_SCORE=2` at this
+**The skippability vote fails the same way.** `Y264_DIRECT_SCORE=2` at this
 operating point calls SPATIAL for station2 (13 of 34 frames vote temporal) and
 TEMPORAL for stockholm (26 of 34). It is wrong on both, in opposite directions.
 The "six of six" and "fourteen of sixteen" tables above were taken at a
@@ -758,7 +749,7 @@ rescue a rho of +0.000.
 
 ### The next item, and its hard part
 
-`--direct auto`, per slice, on x264's rule: score both modes, keep a running
+`--direct auto`, per slice, on the skippability vote: score both modes, keep a running
 total with 9/10 decay once it passes the macroblock count, and let the next B
 slice take the higher. The scoring code exists and is verified inert.
 

@@ -29,20 +29,15 @@ The tempting fix is to fence the mb-tree window walk at push `N-k` instead of
 to the propagation math (fewer frames of forward lookahead) and would need a
 BD-rate sweep.
 
-x264's sync-lookahead knob does not do that. Its delay budget is built in three
-additive parts: a base window that is the larger of the B-frame-driven delay
-and the configured lookahead depth; plus one frame per additional frame thread;
-plus the sync-lookahead value on top of both. The lookahead thread fires its
-frame-type decision once the queue is longer than that base window. The decision
-itself still walks a window of the lookahead depth.
-`--sync-lookahead` (default `bframes+1`) just means that many MORE frames sit
-buffered ahead of the window before the thread is required to have an answer
-ready. The window's depth is untouched.
+The reference documents `--sync-lookahead` as the number of buffer frames for
+a threaded lookahead (default `bframes+1`). Read that way, it adds buffering
+ahead of the decision window and leaves the window's depth untouched. That is
+the meaning we implement: that many MORE frames sit buffered ahead of the
+window before the lookahead thread is required to have an answer ready.
 
 ### How that maps onto our ring
 
-`yah264_encoder_encode`'s `la_depth > 0` branch already implements a
-fixed-depth ring exactly like x264's input ring. It does not pop (emit) a
+`yah264_encoder_encode`'s `la_depth > 0` branch already implements a fixed-depth ring. It does not pop (emit) a
 frame until `la_n` reaches the ring's capacity. Coupling capacity and window
 depth to the SAME number (`e->la_depth`) is the bug. The moment the ring is
 full, the newest entry is BOTH "just pushed this call" and "needed by this
@@ -100,8 +95,7 @@ computes:
 - The "window still filling" gate that decides whether an arrival call pops
   anything (`la_n < e->la_depth`) becomes `la_n < e->la_cap`. This is the one
   place the change is visible from outside. The encoder withholds the first `k`
-  frames' worth of output for an extra `k` calls, as x264 does when it holds
-  extra input frames back.
+  frames' worth of output for an extra `k` calls.
 - `la_th`'s own bookkeeping (`struct la_thread.q[64]`, the `% 64` indices in
   `la_th_enqueue`/`la_th_main`) was sized to the assumption that lag between
   "pushed" and "popped" never exceeds 64 (`la_depth`'s hard clamp). With

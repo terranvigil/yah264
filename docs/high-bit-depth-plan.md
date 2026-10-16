@@ -37,7 +37,7 @@ a defect and not a property. It is not a regression either, since that path
 was never measured before. It is recorded here as the first baseline and the
 next 10-bit item's brief.
 
-## Architecture: compile-time `pixel` typedef (x264-style)
+## Architecture: a compile-time sample type
 
 - `src/common/bitdepth.h`: `typedef uint8_t pixel` at `Y264_BIT_DEPTH 8`,
   `uint16_t` at 10/12. `PIXEL_MAX = (1<<BD)-1`; `clip_pixel(x)`. The header is
@@ -60,7 +60,7 @@ next 10-bit item's brief.
 1. **Transform intermediates.** `y264_fdct*/idct*` use `int16_t` intermediates.
    At 10-bit the residual is ±1023 and the butterfly sums overflow int16. The
    coefficient arrays (`dctcoef`) and DCT intermediates widen to `int32_t` for
-   BD>8 (x264 does exactly this). Quant/dequant clamp ranges widen too.
+   BD>8. Quant/dequant clamp ranges widen too.
 2. **NEON kernels.** SAD/SATD/MC/quant/dequant/(future deblock) NEON is
    8-bit-specific (`uint8x16`). 10-bit needs either 16-bit NEON variants or
    a scalar fallback selected by bit depth. Start with **scalar fallback for

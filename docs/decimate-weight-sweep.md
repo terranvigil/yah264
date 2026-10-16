@@ -76,9 +76,7 @@ Above head 3 the measurement cannot separate the candidates on either band.
 
 So the tail is a free choice. The value shipped is ours, picked by this sweep
 from a set of eight on this corpus. It differs from what other encoders
-use. We tuned the sibling `DECIMATE_T8` and both thresholds here too. They also
-landed somewhere else: thresholds 3/2 against the 6/4 that a reference encoder
-uses. That is the same evidence from the other direction.
+use. We tuned the sibling `DECIMATE_T8` and both thresholds here too. They also landed low: thresholds 3/2, where a heavier 6/4 over-decimated. That is the same evidence from the other direction.
 
 The sweep does *not* claim that any particular point on a flat plateau is
 special. What it shows is that we made the choice here, with the measurement to

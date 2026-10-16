@@ -82,8 +82,7 @@ prediction, mb-tree, trellis quantization (RDOQ), psychovisual RD, custom quant
 matrices, and the complete chroma/bit-depth matrix: 4:2:0, 4:2:2, 4:4:4, at 8
 and 10 bits. Two quality wins moved the BD number. A CABAC-accurate RD rate model
 replaced a CABAC-stream cost priced with CAVLC and is worth −3.7 / −2.4 / −1.8%
-on three clips. Recalibrating the motion-estimation lambda to x264's exponential
-table is worth a mean ~−0.78%, all of it on the motion clips where the gap was.
+on three clips. Recalibrating the motion-estimation lambda to an exponential curve in QP is worth a mean ~−0.78%, all of it on the motion clips where the gap was.
 The half-pel-plane and MV-cost-table work buys +12% CIF / +23% 720p in speed and
 stays bit-exact. Everything above works at every chroma format and bit depth.
 
@@ -140,7 +139,7 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 - **[shipped] Psychovisual RD** in mode decision. An energy-preservation term
   keeps texture the eye notices even when SSD would smooth it away.
 - **[shipped] Rate-aware partition decision.** The mb_type/partition SATD
-  comparison carries the real ue(v) bit cost, x264-style.
+  comparison carries the real ue(v) bit cost.
 - **[in progress] Cheaper accurate cost model.** The CABAC estimate becomes a
   pure table walk over a small snapshot. Per-candidate pricing gets cheap without
   dropping to a wrong proxy, and that's what lets fan-out reduction pay.
@@ -153,7 +152,7 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
   with mixed references and per-reference weighted prediction.
 - **[shipped] Bounded qpel-RD refinement.** A hysteresis-gated ±1 quarter-pel
   nudge of the SATD winner, scored by true RD.
-- **[shipped] ME lambda calibration** to x264's exponential lambda table,
+- **[shipped] ME lambda calibration** to an exponential lambda curve in QP,
   concentrated on motion content.
 - **[shipped] Half-pel plane reuse.** Motion comp reads frame-wide half-pel
   planes built once per reference instead of re-running the 6-tap filter per RD

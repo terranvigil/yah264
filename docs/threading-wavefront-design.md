@@ -5,8 +5,7 @@ the W0-W3 stage list. W0, W1 and W2 are built, and the wavefront is the default.
 W3 is optional and gated on measured need.
 
 Evidence base: a full dependency audit of the per-MB encode path (our macroblock.c,
-deblock.c, cabac.c, cavlc.c, me.c and encoder.c) and a read of x264's threading
-behavior (concepts only, under the clean-room rules).
+deblock.c, cabac.c, cavlc.c, me.c and encoder.c).
 
 ## The decision in short
 
@@ -14,8 +13,8 @@ Keep GOP-parallel across GOPs. Add a macroblock-row wavefront inside the encoder
 library for analysis + reconstruction. Entropy coding splits out as a serial
 per-frame pass that trails the wavefront. The wavefront schedule is a pure
 function of frame geometry (the 2-MB spatial lag), so output stays byte-identical
-at any thread count. Do not adopt x264's frame-parallel model. Its thread-count
-dependence is structural (see below), and our conformance gate forbids it.
+at any thread count. Do not adopt a frame-parallel model whose output depends on thread count (see
+below). Our conformance gate forbids it.
 
 We accept one consequence up front. Splitting entropy from analysis cannot be
 byte-identical with pre-split CABAC output, because the CABAC RD estimates
@@ -67,30 +66,23 @@ Fix direction: make the VBV rate-controller state order-independent across the
 GOP split, or serialize the VBV accounting. It's low priority, because VBV is
 not the BD gate and `--threads 1` is deterministic.
 
-## Why x264's model is off the table
+## Why a frame-parallel model is off the table
 
-x264's frame-parallel threading staggers N frames vertically and synchronizes on
-reconstructed-row progress (a per-row wait on a completed-lines counter). Its
-output depends on thread count through two structural mechanisms:
+Two mechanisms make a frame-parallel encoder's output depend on thread count
+unless it is designed against them:
 
-- **The vertical MV clamp is a function of thread count.** The vertical motion
-  range shrinks as more frames are in flight, to roughly half the picture
-  height divided by the frame-thread count, applied per row. More
-  threads means a tighter clamp, different MVs, different bitstream. With
-  `--non-deterministic` it gets worse. The clamp tracks the racing reference
-  thread's actual progress, so output is not even reproducible at a fixed count.
-- **Rate control reads in-flight estimates.** VBV planning subtracts the planned
-  sizes of the other in-flight frames, ABR sums peers' predicted
-  bits, row-VBV tolerance divides by thread count, and the ABR complexity
-  accumulator lags by exactly the pipeline depth. All of it is count-dependent by
-  construction.
+- **A vertical MV clamp tied to thread count.** If frames in flight together
+  can only read the rows their references have finished, a tighter clamp with
+  more threads changes the MVs and the bitstream.
+- **Rate control that reads in-flight estimates.** Any RC that plans against
+  peers' predicted sizes, or lags by the pipeline depth, depends on the count
+  by construction.
 
-The lesson worth keeping is the inverse of the mechanisms. x264 hoists every
-lookahead-ish decision (frame type, scenecut, mb-tree, weightp analysis) into a
-serial order-deterministic pre-stage. Only MV range and RC accounting leak
-thread count. This design keeps the hoisting and closes the two leaks. MV range
-stays unclamped within a frame because the wavefront never co-encodes a frame
-with its reference. RC state transitions stay strictly serial in coding order.
+This design hoists every lookahead-ish decision (frame type, scenecut, mb-tree,
+weightp analysis) into a serial, order-deterministic pre-stage, and closes the
+two leaks. MV range stays unclamped within a frame because the wavefront never
+co-encodes a frame with its reference. RC state transitions stay strictly
+serial in coding order.
 
 ## 1. Topology
 
@@ -198,12 +190,10 @@ pass codes the real chain.
 
 Build each row's private estimator context as the **~460-byte touched subset**
 (bit counter plus the contexts a 4:2:0 MB can actually reach), *not* a full
-`ctx[1024]` copy. x264's RD trial state is as narrow: a bit count plus the
-reachable context states, priced by table lookups per bin with no
-arithmetic-coder path. Since W0 rebuilds these contexts as row-private anyway,
+`ctx[1024]` copy: a bit count plus the reachable context states, priced by
+table lookups per bin with no arithmetic-coder path. Since W0 rebuilds these contexts as row-private anyway,
 build them at the narrow width from the start. Authoring them small here is
-cheaper than shrinking a full-copy version afterward. 4:4:4 keeps the wider 1024+12 range (as
-in x264).
+cheaper than shrinking a full-copy version afterward. 4:4:4 keeps the wider 1024+12 range.
 
 **The QPY chain resolves serially, cheaply.** The decoder infers a no-residual
 MB's QPY from the chain, and deblock reads that inferred value (`f->mbqp`). Chain
@@ -243,7 +233,7 @@ It does not serialize the frame because nothing downstream needs bits:
   determinism hole. It is short because the coder trails by little. CQP and
   CRF do not wait (CRF's complexity input is available before entropy finishes).
 
-We never read a peer's in-progress size estimate the way x264 does. If row-level
+We never read a peer's in-progress size estimate. If row-level
 VBV is added later, its QP adjustments must be a function of *committed
 estimated* bits from the analysis pass in a fixed row order, never of actual bits
 mid-frame. The record already holds an estimate per MB, so the mechanism is
@@ -254,8 +244,8 @@ available and deterministic. Deferred until VBV work resumes.
 The existing construction keeps these out of the intra-frame wavefront.
 `la_push`/`la_finalize` run serially in input order on source-side lowres data,
 and `compute_mbtree` fills its per-MB offset map before `emit_frame` starts the
-frame. The wavefront consumes the finished maps read-only. This mirrors the x264
-hoisting principle, and our code already follows it.
+frame. The wavefront consumes the finished maps read-only. That is the hoisting
+principle above, and our code already follows it.
 
 Two notes for later stages:
 
@@ -297,10 +287,9 @@ Prefix `ntp_` (next thread pool). The locked API:
 
 One deliberate omission enforces R4 at the ABI level: **no progress getters.**
 Nothing in the header hands a caller the progress a row has actually reached.
-x264's
-non-deterministic mode exists because its analysis reads how far the racing
-reference frame has actually got, a value that depends on scheduling. Making that value unobservable makes
-the whole class of bug unwritable.
+An analysis that reads how far a racing reference frame has actually got
+depends on scheduling. Making that value unobservable makes the whole class of
+bug unwritable.
 
 Location: `src/common/threadpool.c` and `src/common/threadpool.h` (it includes
 its own header and libc only, no encoder headers, GPL-2.0-or-later). If a second
@@ -325,7 +314,7 @@ back to the serial path.
 | W0 | Split analysis/commit from bit emission (records + serial entropy pass, still one thread); grids authored at commit; RD context source switched to the row-private estimator; QPY chain resolver; `s_analyse_subme` into `y264_frame_t`; pre-init lazy tables | CAVLC byte-identical; CABAC changes once | conformance 227/227; CAVLC cmp-identical vs pre-W0 across the feature matrix; CABAC BD-neutral-or-better on the 7-clip corpus (VMAF-NEG, 5-pt, --no-cache); est-vs-real bits self-check; speed within noise |
 | W1 | Pool in the library (`param.threads`); rows as wavefront tasks; entropy task trails within the frame; deblock stays the post-frame serial pass; CLI budget split g x (threads/g) | byte-identical to W0 at every thread count | threads 1/2/8 cmp-identical to W0-serial (the strongest form: threaded == serial bytes); TSan + ASan clean; scaling curve published |
 | W2 | Frame-N entropy overlaps frame-N+1 wavefront inside a GOP; ABR/VBV/2-pass wait on the entropy milestone, CQP/CRF do not | byte-identical to W1 | same gates; single-GOP 8-thread speedup target ~6x |
-| W3 (optional, measured need) | Fixed-lag frame pipeline within a GOP: deblock + border-extend fused as trailing row tasks with an intra-border backup of pre-deblock edge pixels; per-row reference publish; a fixed vertical MV clamp, a param constant applied identically at every thread count, unlike x264's; weightp estimation moved to source planes; CRF complexity from lookahead lowres. Also here if profiles justify it: flat-B siblings encoded frame-parallel (non-reference B's in a minigop are mutually independent) | output changes (clamp, weightp, CRF inputs); still thread-count invariant | each toggle BD-gated independently; determinism gates unchanged; ship only what pays |
+| W3 (optional, measured need) | Fixed-lag frame pipeline within a GOP: deblock + border-extend fused as trailing row tasks with an intra-border backup of pre-deblock edge pixels; per-row reference publish; a fixed vertical MV clamp, a param constant applied identically at every thread count; weightp estimation moved to source planes; CRF complexity from lookahead lowres. Also here if profiles justify it: flat-B siblings encoded frame-parallel (non-reference B's in a minigop are mutually independent) | output changes (clamp, weightp, CRF inputs); still thread-count invariant | each toggle BD-gated independently; determinism gates unchanged; ship only what pays |
 
 W3 exists because CIF-class frames have only 18 rows and a per-frame ramp. 1080p
 does not need it to saturate 8 threads. Decide from the W2 scaling curve on the

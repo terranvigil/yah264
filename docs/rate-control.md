@@ -84,8 +84,7 @@ byte-identity between two builds. It is not a delivery mode. On the corpus it
 misses a target rate by +12% (bus) and -9% (park_joy). Even in principle, the
 integer QP grid limits it to about ±7% at best.
 
-**yah264's `--qp` is not x264's `--qp`.** x264's parameter validation forces
-both mb-tree and AQ off whenever the RC method is CQP. yah264's mb-tree gate has
+**A bare `--qp` comparison is not like for like.** yah264's mb-tree gate has
 no rate-control term in it at all. Under `--qp`, mb-tree keeps running and keeps
 moving QP around per macroblock. AQ does get zeroed, though the CLI does it and
 the library doesn't: `aq_strength` defaults to 0 when `rc.method == 0`. A
@@ -202,16 +201,13 @@ nothing changed here.
 
 The complexity term buys nearly all of the alignment. Without it the scale
 sits a point and a half off with three times the spread, the state the
-historical table below describes. Raising AQ strength to the value x264 uses
-moves the level away and widens the spread. The shipped 0.4 is defended on
+historical table below describes. Raising AQ strength to 1.0, the reference's documented default, moves the level away and widens the spread. The shipped 0.4 is defended on
 BD-rate elsewhere and is also the better number here.
 
-The mechanism is unchanged from the earlier finding. Under mb-tree, x264's CRF
-base QP is a fixed pedestal with no content term at all. All of its content
-adaptation lives in the DC of its AQ field. yah264's mb-tree offsets subtract
-the frame mean, so their DC is exactly zero on every clip and the content
-adaptation x264 gets for free is missing. `Y264_CRF_CPLX` matches the behavior
-of those terms. It ships on, and `Y264_CRF_CPLX=0` turns it off. See
+The mechanism is unchanged from the earlier finding. yah264's mb-tree offsets
+subtract the frame mean, so their DC is exactly zero on every clip, and a
+frame-level content term has to come from somewhere else. `Y264_CRF_CPLX`
+supplies it. It ships on, and `Y264_CRF_CPLX=0` turns it off. See
 [the env section](#rate-control-env-gates).
 
 ### How it used to read, and why the old table is still here
@@ -509,7 +505,7 @@ the internal ones, is in [options.md](options.md#environment-variables).
 | `Y264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
 | `Y264_CRF_CPLX` | 1 (on) | CRF complexity term, and the reason `--crf N` costs about what it costs on x264 (2026-09-16, fifteen clips: median offset 0.4-0.8 of a CRF point with it, 1.5-1.9 without). Improves 9 of 12 clips on BD-VMAF-NEG; it still regresses samsung +9.30% and touchdown +10.71%, and 0 turns it off. |
 | `Y264_CRF_FPS` | follows `Y264_CRF_CPLX`, so on | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
-| `Y264_MBTREE_OFF` | 0 (off) | Applies x264's CQP policy of disabling mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
+| `Y264_MBTREE_OFF` | 0 (off) | Disables mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
 
 ## Silent failures
 

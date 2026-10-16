@@ -77,8 +77,7 @@ damage. It's why the pre/post share should be written off for decision work.
   the quantity the damage actually travels through, and it was never the guard.
 - **The money is in the middle of the tournament.** Mid-exit skips (paid ME,
   SATD, direct RD and 16x16 RD, then left) are 12-24% of all B macroblocks per
-  cell. Full-tournament skips are another 11-18%. The commit point that matters
-  is x264's post-ref0 position. The confirmation machinery already occupies it
+  cell. Full-tournament skips are another 11-18%. The commit point that matters is right after the ref-0 search. The confirmation machinery already occupies it
   with a decision that is too weak there.
 
 ## 4. The design: staged, evidence quality rising as cost is sunk
@@ -91,7 +90,7 @@ damage. It's why the pre/post share should be written off for decision work.
   `probe_skip_g`'s tolerant form, whose measured defect is that it runs on
   every macroblock (1.6-3.3% of wall). Under A it runs on about a third of
   entrants while keeping 55-68% of catches.
-- **Stage C, the commit, hoisted to x264's post-ref0 point.** At the existing
+- **Stage C, the commit, hoisted to the post-ref0 point.** At the existing
   `r == 0` confirmation site, commit B_SKIP when four things hold. The probe
   held. Direct is SATD-competitive with the **ref-0** costs (the `bexit_ok`
   shape, without needing refs 1..n or the SATD phase). The skip J still leads.
@@ -106,8 +105,7 @@ precondition needs the searches it's trying to save. It's **rate-blind**: SATD
 can't say whether residual survives the quantizer, and surviving the quantizer
 is what skip IS. It's also **future-blind**, which is why the ref-slice ban is
 a blanket. The staged form gets rate-awareness from the coder-consistent probe
-at the real QP and future-awareness from the propagation field. It gets
-competitiveness from the two searches x264 itself considers sufficient. And it
+at the real QP and future-awareness from the propagation field. It gets competitiveness from the two ref-0 searches. And it
 pays the speculative cost only where the neighborhood already says skip is
 likely.
 
@@ -174,7 +172,7 @@ arm armed.
 
 ### What the guard actually reads
 
-`f->mbtree_off` is **the COMBINED x264-style offset, not the propagation term.**
+`f->mbtree_off` is **the COMBINED offset, not the propagation term.**
 It's built as `aq_fold[i] - strength*ratio + boost_mean`. `mb_qp_pre` treats
 it as combined precisely so the standalone AQ offset is never added twice. So
 `mbtree_off >= 0` doesn't say "this macroblock propagates little". It says
@@ -255,7 +253,7 @@ disagrees with direct caps that conversion.
 ## 7. Conclusion
 
 We measured every evidence class that exists before and inside the tournament,
-singly and jointly, at the commit point x264 itself uses. That covers lookahead
+singly and jointly, at the post-ref0 commit point. That covers lookahead
 costs, lookahead MVs, propagation, neighbors, the coder-consistent probe at the
 real QP and the real ref-0 searches. **The remaining prize belongs to making the
 tournament cheaper, not to a better skip decision. The post-ref0 ceiling

@@ -55,8 +55,7 @@ skeleton at all. The next section handles this.
 We pressure-tested the axes against H.264, HEVC and AV1. These are the ones
 that actually vary:
 
-- **Analysis block size.** Lookaheads work on 8x8 blocks of half-res luma. That
-  is the x264 lineage yah264 implements in `lowres_analyse`. A CTU- or
+- **Analysis block size.** Lookaheads work on 8x8 blocks of half-res luma, which is what yah264's `lowres_analyse` does. A CTU- or
   superblock-based consumer aggregates those maps up to its own grid. The
   aggregation is caller-side summing and no kernel concern. The parameter is
   block dims from {4, 8, 16}, and output grid geometry derives from them.

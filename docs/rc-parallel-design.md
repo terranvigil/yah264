@@ -12,11 +12,10 @@ setting this frame's QP. `fpipe_ready` / `stair_clamp_on` refuse those modes
 outright. The bitrate-mode tiers therefore read flat while CRF single-GOP gains
 1.32x.
 
-x264 runs ABR fully frame-parallel. It re-estimates the rate model against
+This design runs ABR frame-parallel. It re-estimates the rate model against
 PREDICTED bits for in-flight frames and corrects when actuals arrive (an
 in-flight prediction, post-frame accounting and an overflow-buffer feedback).
-This design re-derives that mechanism with one hardening x264 does not have:
-**x264's threaded ABR output varies with thread count. Ours must not.** The
+**Its output must not vary with thread count.** The
 feedback schedule below is fixed by CONFIG (env + params + input), never by
 runtime timing, engagement, or thread count. RC_PIPE=1 output is therefore
 identical at t1 and t18 and run-to-run. That is the design's core invariant and
@@ -75,8 +74,7 @@ Three warm-up devices go with it:
   pipeline disengaged, pops at fill) so models calibrate in-domain before any
   lag. The CLI's per-GOP encoders restart the transient every keyint.
 
-In-flight predictions re-evaluate against the CURRENT model at every decide, as
-x264's predicted bits do. The re-calibration knobs are `Y264_RCP_WARM` (12),
+In-flight predictions re-evaluate against the CURRENT model at every decide. The re-calibration knobs are `Y264_RCP_WARM` (12),
 `Y264_RCP_GAIN` (0.1) and `Y264_ABR_QCOMP` (0.6). All are warmed statics.
 
 ### Why the pop rule makes output engagement-invariant
@@ -120,8 +118,7 @@ sequence and is identical at every thread count.
   the decision produced. This is the exact inverse of `rc_account`'s calibration
   (`s = bits * qscale / rceq`), so a perfectly-calibrated model predicts its own
   accounting. Prediction error is then exactly model error. The existing
-  correction absorbs it: `err * 0.1` against the virtual cumulative ledger, a
-  re-derivation of x264's overflow-buffer smoothing.
+  correction absorbs it: `err * 0.1` against the virtual cumulative ledger.
 - **2-pass**: `pred = scaleterm / qscale(qp)` with `scaleterm = (bits1 + 1) *
   qscale(qp1)` from the pass-1 stat. `rc_set_qp_2pass` plans with the same model.
   The virtual remaining budget is `tp_rem_target - sum(pending pred)` and

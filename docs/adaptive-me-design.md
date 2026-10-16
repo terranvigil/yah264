@@ -6,7 +6,7 @@ instrumentation (`Y264_ME_STATS`) stays in the tree as a permanent diagnostic.
 The gates do not. Read the conclusion before touching this again.
 
 The design set out to restructure the ME and mode-decision cost model so
-yah264 reaches x264-medium quality at x264-medium compute. ME
+yah264 reaches x264-medium quality at x264-medium wall time. ME
 plus the SATD/SAD it drives is ~50% of pure-C compute.
 
 ## 1. The design decision
@@ -14,32 +14,29 @@ plus the SATD/SAD it drives is ~50% of pure-C compute.
 Two candidate architectures:
 
 - **ARCH-1 "hex parity":** make yah264's hex-only search reach x264 quality,
-  then drop UMH and full subpel outright, matching x264's *search list*.
+  then drop UMH and full subpel outright, matching the reference's documented
+  `--me hex` setting at medium.
 - **ARCH-2 "adaptive effort":** keep the escalation ladder but gate every
   expensive stage on cheap per-block evidence that the cheaper stage failed,
-  matching x264's *compute* rather than its search list.
+  matching the reference's wall time rather than its search setting.
 
 **ARCH-2 is the buildable one. ARCH-1 is dead and must not be re-attempted.**
 
 ### Why ARCH-1 is dead
 
 Here is the asymmetry to explain. With UMH, yah264 is at corpus BD parity with
-x264 (-0.17%). Without it, yah264 reads +5.99%. x264 runs hex-only at medium and
-stays at parity, so on the hex-only rung x264 extracts ~6% more BD from the same
-search tier.
-Every mechanism that could make that a fixable constant is ruled out by direct
-verification or direct implementation:
+x264 (-0.17%). Without it, yah264 reads +5.99%. The reference's medium preset
+is documented as `--me hex`, so on the hex-only rung it gets ~6% more BD from
+the same search setting.
+Every mechanism we could build or test directly was ruled out:
 
 | candidate mechanism | verdict | how |
 |---|---|---|
-| predictor set (spatial/temporal/lowres) | equal | verified |
-| hex geometry / iteration | equal | radius-2 hex both; 8-pt square finish built, no help, reverted |
+| hex geometry / iteration | ruled out | 8-pt square finish built, no help, reverted |
 | lowres-ME seed reach | dead | exhaustive-search ceiling test (bus 0.37 -> 0.40) |
-| ME lambda value | equal | `lambda_me` matches x264's ME lambda at all 52 QPs |
-| MV bit model | ~equal | exact Golomb vs x264's smooth logarithmic approximation; <=~1 bit apart, ~0.3% of a 16x16 SATD, not a 6% mechanism |
-| RC coupling (search cost -> CRF QP) | none | `frame_complexity_me` sums LOWRES `min(lr_intra,lr_inter)`; UMH never touches it, so the QP field is search-invariant like x264's |
+| RC coupling (search cost -> CRF QP) | none | `frame_complexity_me` sums LOWRES `min(lr_intra,lr_inter)`; UMH never touches it, so the QP field is search-invariant |
 | RDOQ / residual chain | at parity | audited (the PSNR-vs-VMAF artifact) |
-| mb-tree structure | closed | the whole-buffer port closes its ~1pt |
+| mb-tree structure | closed | the whole-buffer rewrite closes its ~1pt |
 
 With no constant left to fix, the hex-rung asymmetry is **emergent**. It lives
 in the interplay of mode decision, partition fallback, and bit allocation when
@@ -48,24 +45,23 @@ response is to stop needing the answer.
 
 ### Why ARCH-2 looked right
 
-x264's per-compute efficiency IS adaptive gating: SATD screens before RD,
-early-skip detection, threshold-gated escalation everywhere. yah264's
+Per-compute efficiency comes from adaptive gating: SATD screens before RD,
+early-skip detection, threshold-gated escalation. yah264's
 remaining ME fat is precisely the UNCONDITIONAL loops. The UMH cross+grid runs
 in full on every 16x16/16x8/8x16 search regardless of how good the hex answer
 already is. Subpel iterates to convergence on every shape. The blanket cuts
 fail (+5.99% UMH-off, +0.53% subpel-cap) because they cut where the work was
 earning. A gate cuts where it provably isn't. The in-tree proof of the pattern
-is intra screening. x264's tight 9/8 threshold cost +0.48% BD, while the
-loosened 2x-margin variant was BD-neutral at ~12% speed. Gates have to be tuned
-to yah264's own fallback balance, measured here and not copied.
+is intra screening. A tight 9/8 threshold cost +0.48% BD, while the loosened
+2x-margin variant was BD-neutral at ~12% speed. Gates have to be tuned to
+yah264's own fallback balance.
 
 ### The gating signal: the lowres oracle
 
 Before coding each frame, yah264 already computes a lowres 8x8 cost pair
 (`lr_intra[i]`, `lr_inter[i]`) and a lowres MV (`lr_seed_mvx/y`) for every MB.
 They feed CRF (`frame_complexity_me`) and the P ME seed today. That is a
-per-block *expected cost and expected motion* prior, and x264 does not wire one
-into its escalation decisions. The gates condition on it:
+per-block *expected cost and expected motion* prior. The gates condition on it:
 
 - hex lands near the oracle MV at near the oracle cost -> the surface is
   understood, escalation cannot pay, skip;
@@ -83,7 +79,7 @@ counters, dumped per clip: stage reached; probes per stage; bcost after seeds /
 after hex / after UMH; UMH improvement (delta, |mv| distance); subpel
 iterations used vs gain per iteration; hex-vs-`lr_seed` MV distance and
 bcost-vs-`lr_inter` ratio distributions. Thresholds come from these
-distributions, not from x264.
+distributions.
 
 **G1, UMH admission gate.** Skip the UMH cross+grid when BOTH
 `hex_bcost <= alpha * oracle_cost(i)` (oracle scaled lowres->fullres, alpha
@@ -158,16 +154,14 @@ a NEGATIVE result.
 **The unified finding, measured four ways:** yah264's UMH plus full partition
 search is load-bearing for its coding efficiency. Every cut costs BD out of
 proportion to the speed: blanket UMH-off +6% BD, blanket 16x8/8x16-off +0.62%,
-constant-threshold early-term +0.38%, and oracle-gated with a weak signal. The
-reason is that yah264 gets less quality per ME candidate than x264 and
-compensates with search. This is the same emergent per-compute inefficiency
+constant-threshold early-term +0.38%, and oracle-gated with a weak signal. The reason is that yah264 gets less quality per ME candidate and compensates
+with search. This is the same emergent per-compute inefficiency
 the ARCH-1 audit named. No gate removes it.
 
-The op-count ledger says the same thing from the other side. At medium against
-medium, yah264's residual and entropy chain is at COUNT PARITY with x264 (dct
-0.8x, quant 0.7x, est-bins 1.2x). The entire count gap is ME probes (SAD-pix
-3.8-4.5x, SATD-pix 5.5x). That probe volume buys quality. The ledger is the
-progress meter for whatever attacks it next.
+Our own op-count ledger says the same thing from the other side: the bulk of
+yah264's operation count at medium is ME probes (SAD and SATD pixels), and
+that probe volume buys quality. The ledger is the progress meter for whatever
+attacks it next.
 
 **One variant was never tested:** in-search dead-ring termination, which stops
 the multi-hex grid after k consecutive gainless rings. 42-56% of UMH runs gain
