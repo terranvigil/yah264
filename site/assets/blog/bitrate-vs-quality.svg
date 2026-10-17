@@ -6,7 +6,7 @@
 <line x1='124' y1='88' x2='144' y2='88' stroke='#8a8984' stroke-width='2.5'/>
 <text x='150' y='93' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='start' font-weight='normal'>x264</text>
 <text x='48.0' y='126' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='start' font-weight='600'>Chimera 1080p, 2 min</text>
-<text x='48.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-10.5% bits</text>
+<text x='48.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-11.0% bits</text>
 <line x1='48.0' y1='380.0' x2='312.0' y2='380.0' stroke='#e6e5e1'/>
 <text x='44.0' y='384.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>75</text>
 <line x1='48.0' y1='338.0' x2='312.0' y2='338.0' stroke='#e6e5e1'/>
@@ -37,7 +37,7 @@
 <circle cx='208.0' cy='222.1' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
 <circle cx='299.4' cy='205.2' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
 <text x='342.0' y='126' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='start' font-weight='600'>Tears of Steel 1080p, 10 min</text>
-<text x='342.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-9.9% bits</text>
+<text x='342.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-10.3% bits</text>
 <line x1='342.0' y1='380.0' x2='606.0' y2='380.0' stroke='#e6e5e1'/>
 <text x='338.0' y='384.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>80</text>
 <line x1='342.0' y1='327.5' x2='606.0' y2='327.5' stroke='#e6e5e1'/>
@@ -65,7 +65,7 @@
 <circle cx='498.6' cy='222.7' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
 <circle cx='593.4' cy='204.5' r='4' fill='#2a78d6' stroke='#fcfcfb' stroke-width='1.5'/>
 <text x='636.0' y='126' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='start' font-weight='600'>Meridian 1080p, 10 min</text>
-<text x='636.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-35.0% bits</text>
+<text x='636.0' y='142' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>-35.4% bits</text>
 <line x1='636.0' y1='380.0' x2='900.0' y2='380.0' stroke='#e6e5e1'/>
 <text x='632.0' y='384.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#52514e' text-anchor='end' font-weight='normal'>75</text>
 <line x1='636.0' y1='327.5' x2='900.0' y2='327.5' stroke='#e6e5e1'/>

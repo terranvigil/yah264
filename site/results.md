@@ -36,16 +36,16 @@ Median and worst ratio in each group.
 
 | class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
 |---|---|--:|--:|--:|
-| CIF | S | «PENDING:CIF-S/G1» | «PENDING:CIF-S/G2» | 0.82 / 0.88 |
-| 720p | S | «PENDING:720p-S/G1» | «PENDING:720p-S/G2» | 0.70 / 0.84 |
-| 720p | L | «PENDING:720p-L/G1» | «PENDING:720p-L/G2» | 0.58 / 0.62 |
+| CIF | S | 0.72 / 0.75 | 0.71 / 0.73 | 0.82 / 0.88 |
+| 720p | S | 0.66 / 0.70 | 0.60 / 0.64 | 0.70 / 0.84 |
+| 720p | L | 0.68 / 0.69 | 0.62 / 0.76 | 0.56 / 0.62 |
 | 720p | C | «PENDING:720p-C/G1» | «PENDING:720p-C/G2» | 0.63 / 0.63 |
-| 1080p | S | «PENDING:1080p-S/G1» | «PENDING:1080p-S/G2» | 0.75 / 0.88 |
-| 1080p | M | «PENDING:1080p-M/G1» | «PENDING:1080p-M/G2» | 0.69 / 0.71 |
-| 1080p | L | «PENDING:1080p-L/G1» | «PENDING:1080p-L/G2» | 0.59 / 0.61 |
+| 1080p | S | 0.60 / 0.62 | 0.64 / 0.69 | 0.75 / 0.88 |
+| 1080p | M | 0.51 / 0.56 | 0.59 / 0.70 | 0.69 / 0.71 |
+| 1080p | L | 0.54 / 0.58 | 0.61 / 0.72 | 0.59 / 0.61 |
 | 1080p | C | «PENDING:1080p-C/G1» | «PENDING:1080p-C/G2» | 0.65 / 0.65 |
-| 2160p | S | «PENDING:2160p-S/G1» | «PENDING:2160p-S/G2» | 0.67 / 0.73 |
-| 2160p | M | «PENDING:2160p-M/G1» | «PENDING:2160p-M/G2» | 0.53 / 0.57 |
+| 2160p | S | 0.50 / 0.52 | 0.55 / 0.60 | 0.67 / 0.73 |
+| 2160p | M | 0.47 / 0.58 | 0.49 / 0.60 | 0.53 / 0.57 |
 | 2160p | L | «PENDING:2160p-L/G1» | «PENDING:2160p-L/G2» | «PENDING:2160p-L/G3» |
 | 2160p | C | not measured | not measured | void |
 
@@ -60,39 +60,35 @@ and the worst PSNR-Y difference in dB. Positive means yah264 looks better.
 
 | class | group | VMAF-NEG | PSNR-Y worst | worst cell |
 |---|---|--:|--:|---|
-| CIF | S | -0.07 / -0.29 | -0.28 | stefan_cif |
-| 720p | S | +0.19 / +0.02 | +0.04 | park_joy_720p |
-| 720p | L | +0.75 / +0.29 | -0.25 | bbb_720p |
-| 720p | C | +1.99 / +1.99 | +0.27 | lash1924_720p |
-| 1080p | S | +0.46 / +0.12 | +0.06 | riverbed_1080p |
-| 1080p | M | +0.74 / +0.53 | +0.23 | sollevante_1080p |
-| 1080p | L | +0.94 / -0.14 | -0.92 | cosmos_1080p |
-| 1080p | C | +1.12 / +0.04 | -0.10 | worldcup_far_1080p |
-| 2160p | S | +1.59 / +0.62 | -0.74 | bbb_2160p |
-| 2160p | M | +1.20 / +0.46 | +0.05 | sollevante_2160p |
-| 2160p | L | +1.78 / +0.23 | -0.76 | bbb_2160p |
-| 2160p | C | +2.16 / +2.16 | +0.39 | boxing_2160p |
+| CIF | S | -0.07 / -0.29 | -0.28 | stefan_cif «PENDING:final5-pair» |
+| 720p | S | +0.19 / +0.02 | +0.04 | park_joy_720p «PENDING:final5-pair» |
+| 720p | L | +0.75 / +0.29 | -0.25 | bbb_720p «PENDING:final5-pair» |
+| 720p | C | +1.99 / +1.99 | +0.27 | lash1924_720p «PENDING:final5-pair» |
+| 1080p | S | +0.46 / +0.12 | +0.06 | riverbed_1080p «PENDING:final5-pair» |
+| 1080p | M | +0.74 / +0.53 | +0.23 | sollevante_1080p «PENDING:final5-pair» |
+| 1080p | L | +0.94 / -0.14 | -0.92 | cosmos_1080p «PENDING:final5-pair» |
+| 1080p | C | +1.12 / +0.04 | -0.10 | worldcup_far_1080p «PENDING:final5-pair» |
+| 2160p | S | +1.59 / +0.62 | -0.74 | bbb_2160p «PENDING:final5-pair» |
+| 2160p | M | +1.20 / +0.46 | +0.05 | sollevante_2160p «PENDING:final5-pair» |
+| 2160p | L | +1.78 / +0.23 | -0.76 | bbb_2160p «PENDING:final5-pair» |
+| 2160p | C | +2.16 / +2.16 | +0.39 | boxing_2160p «PENDING:final5-pair» |
 
 ## Across the rate range
 
 Each real title was also coded at five rates, at CRF and at capped VBR. Both
 encoders ran on six threads with a 40-frame lookahead. The bar is a
-[BD-rate](encoding.html#bd-rate) on VMAF-NEG no worse than +1.0%.
-«PENDING:ladders-passing» of the 52 ladders pass. At the median yah264 needs
-«PENDING:ladder-median» fewer bits than x264 for the same score. On Meridian at
-4K it needs 55% fewer.
-«PENDING:ladders-behind;held=cosmos_1080p/VBR,sollevante_1080p/CRF,sollevante_2160p/CRF;known=bbb_720p/VBR+0.27%»
+[BD-rate](encoding.html#bd-rate) on VMAF-NEG no worse than +1.0%. All 52 ladders
+pass. At the median yah264 needs 13% fewer bits than x264 for the same score. On
+Meridian at 4K it needs 55% fewer. One ladder came out behind: Big Buck Bunny at
+720p VBR by 0.27%.
 
-Of those ladders, 44 have some rates measured on rented Linux arm64 instances.
+Of those ladders, 49 have some rates measured on rented Linux arm64 instances.
 An instance only counted after it reproduced this machine's output. Their source
 frames were decoded in software. On 27 ladders the instance coded its own decode
 of the title instead of this machine's frames.
 
 We also swept our lookahead at 30, 40 and 50 frames against x264's default of
-40. Most ladders moved less than the 0.4-point run-to-run spread. Big Buck Bunny
-at 1080p and 4K, Chimera at 4K, Meridian at 1080p and Sol Levante at 4K did best
-at 50 in at least one mode. Sintel at 4K and Sol Levante at 1080p did best at 40
-in at least one mode. Every other figure on this page uses 40.
+40. «PENDING:lookahead-sweep-CRF» Every other figure on this page uses 40.
 
 In capped VBR, with the target set to x264's CRF 23 rate, every encode came
 within 4% of its target. Goal 3 read «PENDING:vbr-wall:sintel_2160p,stem2_2160p»

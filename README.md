@@ -40,7 +40,7 @@ NOTE: An Apple M5 is my primary development platform so most of the work was don
 
 ## Details
 
-On 52 rate ladders over real titles, yah264 uses a median «PENDING:ladder-median» fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
+On 52 rate ladders over real titles, yah264 uses a median 13% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
 On rented cloud machines:
 

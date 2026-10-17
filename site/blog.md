@@ -1,13 +1,13 @@
 ---
 title: Introducing yah264
-description: An H.264/AVC encoder that runs «PENDING:speedup-range» faster than x264 and needs a median «PENDING:ladder-median» fewer bits for the same quality.
+description: An H.264/AVC encoder that runs «PENDING:speedup-range» faster than x264 and needs a median 13% fewer bits for the same quality.
 image: assets/blog/og-card-v3.png
 type: article
 ---
 
 # Introducing yah264
 
-yah264 is an H.264/AVC encoder that runs «PENDING:speedup-range» faster than x264 across a wide range of test video. It needs a median «PENDING:ladder-median» fewer bits for the same quality.
+yah264 is an H.264/AVC encoder that runs «PENDING:speedup-range» faster than x264 across a wide range of test video. It needs a median 13% fewer bits for the same quality.
 
 I've worked on video ingestion pipelines for over 15 years. The key goals are always "lowest cost" and "highest quality" for a given bitrate. And of course speed usually matters as well. This is my attempt at all three for anyone who would like to try yah264 out.
 
@@ -25,7 +25,7 @@ yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Ea
 
 On the Mac, each range runs from the slowest group's median to the fastest's.
 
-- A median «PENDING:ladder-median» fewer bits for the same quality over 52 rate ladders on real titles.
+- A median 13% fewer bits for the same quality over 52 rate ladders on real titles.
 - 8-bit and 10-bit in one binary.
 - CRF, ABR, capped CRF and CBR, with VBV and HRD signalling.
 - Presets from `ultrafast` to `placebo`.
@@ -34,11 +34,11 @@ Every number is on the [results page](results.md). The page explains the method 
 
 <figure class="chart"><img src="assets/blog/speed.svg" alt="Dot plot: median speedup over x264 for each resolution and length group, at three goals. Every dot sits between «PENDING:speedup-dot-range» faster."></figure>
 
-<figure class="chart"><img src="assets/blog/quality.svg" alt="Bar chart: VMAF-NEG points ahead of x264 at the same file size per group, from -0.07 at CIF to +1.99."></figure>
+<figure class="chart"><img src="assets/blog/quality.svg" alt="Bar chart: VMAF-NEG points ahead of x264 at the same file size per group, from -0.07 at CIF to +1.99. «PENDING:final5-pair»"></figure>
 
 <figure class="chart"><img src="assets/blog/bitrate-vs-quality.svg" alt="Rate-quality curves for Chimera, Tears of Steel and Meridian at 1080p. yah264's curve sits above and left of x264's on all three."></figure>
 
-<figure class="chart"><img src="assets/blog/bitrate-savings.svg" alt="BD-rate against x264 for 26 titles at CRF and capped VBR. «PENDING:ladders-behind-count» of the 52 ladders need fewer bits, by up to 55%."></figure>
+<figure class="chart"><img src="assets/blog/bitrate-savings.svg" alt="BD-rate against x264 for 26 titles at CRF and capped VBR. All but one of the 52 ladders need fewer bits, by up to 55%."></figure>
 
 ## Built for per-shot encoding
 
