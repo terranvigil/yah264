@@ -34,7 +34,7 @@ Every number is on the [results page](results.md). The page explains the method 
 
 <figure class="chart"><img src="assets/blog/speed.svg" alt="Dot plot: median speedup over x264 for each resolution and length group, at three goals. Every dot sits between «PENDING:speedup-dot-range» faster."></figure>
 
-<figure class="chart"><img src="assets/blog/quality.svg" alt="Bar chart: VMAF-NEG points ahead of x264 at the same file size per group, from -0.07 at CIF to +1.99. «PENDING:final5-pair»"></figure>
+<figure class="chart"><img src="assets/blog/quality.svg" alt="Bar chart: VMAF-NEG points ahead of x264 at the same file size per group, from -0.05 at CIF to +2.06. «PENDING:final5-pair»"></figure>
 
 <figure class="chart"><img src="assets/blog/bitrate-vs-quality.svg" alt="Rate-quality curves for Chimera, Tears of Steel and Meridian at 1080p. yah264's curve sits above and left of x264's on all three."></figure>
 

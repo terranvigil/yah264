@@ -34,16 +34,18 @@ Both encoders read the same 8-bit 4:2:0 frames on stdin.
 
 Median and worst ratio in each group.
 
+
+
 | class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
 |---|---|--:|--:|--:|
 | CIF | S | 0.72 / 0.75 | 0.71 / 0.73 | 0.82 / 0.88 |
 | 720p | S | 0.66 / 0.70 | 0.60 / 0.64 | 0.70 / 0.84 |
 | 720p | L | 0.68 / 0.69 | 0.62 / 0.76 | 0.56 / 0.62 |
-| 720p | C | «PENDING:720p-C/G1» | «PENDING:720p-C/G2» | 0.63 / 0.63 |
+| 720p | C | 0.60 / 0.60 | 0.64 / 0.64 | 0.63 / 0.63 |
 | 1080p | S | 0.60 / 0.62 | 0.64 / 0.69 | 0.75 / 0.88 |
 | 1080p | M | 0.51 / 0.56 | 0.59 / 0.70 | 0.69 / 0.71 |
 | 1080p | L | 0.54 / 0.58 | 0.61 / 0.72 | 0.59 / 0.61 |
-| 1080p | C | «PENDING:1080p-C/G1» | «PENDING:1080p-C/G2» | 0.65 / 0.65 |
+| 1080p | C | 0.62 / 0.62 | 0.66 / 0.66 | 0.65 / 0.65 |
 | 2160p | S | 0.50 / 0.52 | 0.55 / 0.60 | 0.67 / 0.73 |
 | 2160p | M | 0.47 / 0.58 | 0.49 / 0.60 | 0.53 / 0.57 |
 | 2160p | L | «PENDING:2160p-L/G1» | «PENDING:2160p-L/G2» | «PENDING:2160p-L/G3» |
@@ -60,18 +62,18 @@ and the worst PSNR-Y difference in dB. Positive means yah264 looks better.
 
 | class | group | VMAF-NEG | PSNR-Y worst | worst cell |
 |---|---|--:|--:|---|
-| CIF | S | -0.07 / -0.29 | -0.28 | stefan_cif «PENDING:final5-pair» |
-| 720p | S | +0.19 / +0.02 | +0.04 | park_joy_720p «PENDING:final5-pair» |
-| 720p | L | +0.75 / +0.29 | -0.25 | bbb_720p «PENDING:final5-pair» |
-| 720p | C | +1.99 / +1.99 | +0.27 | lash1924_720p «PENDING:final5-pair» |
-| 1080p | S | +0.46 / +0.12 | +0.06 | riverbed_1080p «PENDING:final5-pair» |
-| 1080p | M | +0.74 / +0.53 | +0.23 | sollevante_1080p «PENDING:final5-pair» |
-| 1080p | L | +0.94 / -0.14 | -0.92 | cosmos_1080p «PENDING:final5-pair» |
-| 1080p | C | +1.12 / +0.04 | -0.10 | worldcup_far_1080p «PENDING:final5-pair» |
-| 2160p | S | +1.59 / +0.62 | -0.74 | bbb_2160p «PENDING:final5-pair» |
-| 2160p | M | +1.20 / +0.46 | +0.05 | sollevante_2160p «PENDING:final5-pair» |
-| 2160p | L | +1.78 / +0.23 | -0.76 | bbb_2160p «PENDING:final5-pair» |
-| 2160p | C | +2.16 / +2.16 | +0.39 | boxing_2160p «PENDING:final5-pair» |
+| CIF | S | -0.05 / -0.28 | -0.29 | stefan_cif «PENDING:final5-pair» |
+| 720p | S | +0.19 / +0.06 | +0.02 | park_joy_720p «PENDING:final5-pair» |
+| 720p | L | +0.85 / +0.32 | -0.21 | bbb_720p «PENDING:final5-pair» |
+| 720p | C | +2.06 / +2.06 | +0.31 | lash1924_720p «PENDING:final5-pair» |
+| 1080p | S | +0.48 / +0.12 | +0.06 | riverbed_1080p «PENDING:final5-pair» |
+| 1080p | M | +0.72 / +0.71 | +0.24 | sollevante_1080p «PENDING:final5-pair» |
+| 1080p | L | +0.98 / -0.06 | -0.85 | cosmos_1080p «PENDING:final5-pair» |
+| 1080p | C | +1.13 / +0.04 | -0.10 | worldcup_far_1080p «PENDING:final5-pair» |
+| 2160p | S | +1.59 / +0.60 | -0.74 | bbb_2160p «PENDING:final5-pair» |
+| 2160p | M | +1.20 / +0.53 | +0.07 | sollevante_2160p «PENDING:final5-pair» |
+| 2160p | L | +1.78 / +0.27 | -0.72 | bbb_2160p «PENDING:final5-pair» |
+| 2160p | C | +2.18 / +2.18 | +0.39 | boxing_2160p «PENDING:final5-pair» |
 
 ## Across the rate range
 
@@ -88,11 +90,15 @@ frames were decoded in software. On 27 ladders the instance coded its own decode
 of the title instead of this machine's frames.
 
 We also swept our lookahead at 30, 40 and 50 frames against x264's default of
-40. «PENDING:lookahead-sweep-CRF» Every other figure on this page uses 40.
+40. Most ladders moved less than the 0.4-point run-to-run spread. Big Buck Bunny
+at 1080p and 4K, Chimera at 4K, Meridian at 1080p and 4K and Sol Levante at 4K
+did best at 50 in at least one mode. Sintel at 4K and Sol Levante at 1080p did
+best at 40 in at least one mode. Every other figure on this page uses 40.
 
 In capped VBR, with the target set to x264's CRF 23 rate, every encode came
-within 4% of its target. Goal 3 read «PENDING:vbr-wall:sintel_2160p,stem2_2160p»
-on every VBR cell.
+within 4% of its target. Goal 3 read between 0.49 and 0.67 on every VBR cell. On
+two of them the source couldn't be fed as fast as yah264 encoded, so those
+readings are upper bounds on our ratio.
 
 ## By processor
 
