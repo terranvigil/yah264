@@ -19,58 +19,45 @@
 <text x='767.142857142857' y='580' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>2x</text>
 <text x='535.0' y='608' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='middle' font-weight='normal'>times faster than x264</text>
 <text x='198' y='134.45454545454544' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>CIF short clips</text>
-<line x1='397.9518072289157' y1='130.45454545454544' x2='492.4949698189135' y2='130.45454545454544' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='457.6' cy='130.5' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='492.5' cy='130.5' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='398.0' cy='130.5' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='404.773519163763' y1='130.45454545454544' x2='404.773519163763' y2='130.45454545454544' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='404.8' cy='130.5' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='134.45454545454544' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='175.36363636363637' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p short clips</text>
-<line x1='483.4126984126983' y1='171.36363636363637' x2='599.6955503512879' y2='171.36363636363637' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='521.3' cy='171.4' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='599.7' cy='171.4' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='483.4' cy='171.4' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='501.83673469387753' y1='171.36363636363637' x2='501.83673469387753' y2='171.36363636363637' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='501.8' cy='171.4' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='175.36363636363637' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='216.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p 10-min films</text>
-<line x1='501.83673469387753' y1='212.27272727272725' x2='625.4963680387409' y2='212.27272727272725' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='501.8' cy='212.3' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='575.5' cy='212.3' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='625.5' cy='212.3' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='639.064039408867' y1='212.27272727272725' x2='639.064039408867' y2='212.27272727272725' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='639.1' cy='212.3' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='216.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='257.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p content types</text>
-<line x1='552.8571428571427' y1='253.1818181818182' x2='587.4193548387098' y2='253.1818181818182' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='587.4' cy='253.2' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='552.9' cy='253.2' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='564.0' cy='253.2' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='575.532879818594' y1='253.1818181818182' x2='575.532879818594' y2='253.1818181818182' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='575.5' cy='253.2' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='257.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='298.09090909090907' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p short clips</text>
-<line x1='441.53988868274575' y1='294.09090909090907' x2='599.6955503512879' y2='294.09090909090907' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='599.7' cy='294.1' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='542.0' cy='294.1' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='441.5' cy='294.1' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='457.61904761904754' y1='294.09090909090907' x2='457.61904761904754' y2='294.09090909090907' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='457.6' cy='294.1' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='298.09090909090907' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='339.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p 2-min segments</text>
-<line x1='483.4126984126983' y1='335.0' x2='731.4285714285713' y2='335.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='731.4' cy='335.0' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='612.4' cy='335.0' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='483.4' cy='335.0' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='511.4492753623189' y1='335.0' x2='511.4492753623189' y2='335.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='511.4' cy='335.0' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='339.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='379.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p 10-min films</text>
-<line x1='575.532879818594' y1='375.9090909090909' x2='682.7272727272727' y2='375.9090909090909' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='682.7' cy='375.9' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='575.5' cy='375.9' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='612.4' cy='375.9' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='625.4963680387409' y1='375.9090909090909' x2='625.4963680387409' y2='375.9090909090909' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='625.5' cy='375.9' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='379.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='420.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p content types</text>
-<line x1='542.034632034632' y1='416.8181818181818' x2='575.532879818594' y2='416.8181818181818' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='575.5' cy='416.8' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='542.0' cy='412.3' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='542.0' cy='421.3' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='552.8571428571427' y1='416.8181818181818' x2='552.8571428571427' y2='416.8181818181818' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='552.9' cy='416.8' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='420.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='461.7272727272727' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p short clips</text>
-<line x1='521.3445378151259' y1='457.7272727272727' x2='748.9355742296917' y2='457.7272727272727' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='748.9' cy='457.7' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='682.7' cy='457.7' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='521.3' cy='457.7' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='531.5351812366737' y1='457.7272727272727' x2='531.5351812366737' y2='457.7272727272727' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='531.5' cy='457.7' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='461.7272727272727' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='502.6363636363636' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 2-min segments</text>
-<line x1='667.6530612244896' y1='498.6363636363636' x2='786.0932944606413' y2='498.6363636363636' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='786.1' cy='498.6' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='748.9' cy='498.6' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='667.7' cy='498.6' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='714.5822102425875' y1='498.6363636363636' x2='714.5822102425875' y2='498.6363636363636' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='714.6' cy='498.6' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='502.6363636363636' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2</text>
 <text x='198' y='543.5454545454545' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 10-min films</text>
-<line x1='612.3809523809523' y1='539.5454545454545' x2='698.3597883597881' y2='539.5454545454545' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='698.4' cy='539.5' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='612.4' cy='539.5' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='625.5' cy='539.5' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
+<text x='860' y='543.5454545454545' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2, 3</text>
 </svg>

@@ -32,15 +32,15 @@ yah264 has met and surprised speed, compression and quality parity with x264. Th
 
 | goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
-| 1 | plain C, one thread | 1.33x to 2.04x | 1.30x |
-| 2 | plain C, all cores | 1.41x to 1.96x | 1.27x |
-| 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.06x |
+| 1 | plain C, one thread | «PENDING:G1-range» | «PENDING:G1-slowest» |
+| 2 | plain C, all cores | «PENDING:G2-range» | «PENDING:G2-slowest» |
+| 3 | fastest build (yah264 NEON vs x264's assembly), all cores | «PENDING:G3-range» | «PENDING:G3-slowest» |
 
 NOTE: An Apple M5 is my primary development platform so most of the work was done for arm64. Once we reached parity, I also further optimized for additional platforms and instruction sets.
 
 ## Details
 
-On 52 rate ladders over real titles, yah264 uses a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
+On 52 rate ladders over real titles, yah264 uses a median «PENDING:ladder-median» fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
 On rented cloud machines:
 

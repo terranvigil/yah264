@@ -17,36 +17,36 @@
 <text x='840.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+2.5</text>
 <text x='525.0' y='548' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='middle' font-weight='normal'>VMAF-NEG difference (higher is better for yah264)</text>
 <text x='198' y='112.63636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>CIF short clips</text>
-<rect x='308.7' y='98.4' width='6.3' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='302.7' y='112.63636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='end' font-weight='normal'>-0.03</text>
+<rect x='300.3' y='98.4' width='14.7' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='294.3' y='112.63636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='end' font-weight='normal'>-0.07</text>
 <text x='198' y='149.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p short clips</text>
-<rect x='315.0' y='135.7' width='35.7' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='356.70000000000005' y='149.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.17</text>
+<rect x='315.0' y='135.7' width='39.9' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='360.9' y='149.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.19</text>
 <text x='198' y='187.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p 10-min films</text>
-<rect x='315.0' y='172.9' width='144.9' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='465.9' y='187.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.69</text>
+<rect x='315.0' y='172.9' width='157.5' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='478.5' y='187.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.75</text>
 <text x='198' y='224.45454545454547' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p content types</text>
-<rect x='315.0' y='210.2' width='413.7' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='734.6999999999999' y='224.45454545454547' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.97</text>
+<rect x='315.0' y='210.2' width='417.9' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='738.9000000000001' y='224.45454545454547' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.99</text>
 <text x='198' y='261.72727272727275' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p short clips</text>
-<rect x='315.0' y='247.5' width='86.1' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='407.09999999999997' y='261.72727272727275' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.41</text>
+<rect x='315.0' y='247.5' width='96.6' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='417.6' y='261.72727272727275' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.46</text>
 <text x='198' y='299.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p 2-min segments</text>
-<rect x='315.0' y='284.8' width='128.1' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='449.09999999999997' y='299.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.61</text>
+<rect x='315.0' y='284.8' width='155.4' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='476.4' y='299.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.74</text>
 <text x='198' y='336.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p 10-min films</text>
-<rect x='315.0' y='322.0' width='170.1' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='491.1' y='336.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.81</text>
+<rect x='315.0' y='322.0' width='197.4' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='518.4' y='336.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.94</text>
 <text x='198' y='373.54545454545456' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p content types</text>
-<rect x='315.0' y='359.3' width='239.4' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='560.4' y='373.54545454545456' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.14</text>
+<rect x='315.0' y='359.3' width='235.2' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='556.2' y='373.54545454545456' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.12</text>
 <text x='198' y='410.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p short clips</text>
-<rect x='315.0' y='396.6' width='327.6' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='648.5999999999999' y='410.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.56</text>
+<rect x='315.0' y='396.6' width='333.9' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='654.9' y='410.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.59</text>
 <text x='198' y='448.0909090909091' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 2-min segments</text>
-<rect x='315.0' y='433.8' width='249.9' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='570.9000000000001' y='448.0909090909091' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.19</text>
+<rect x='315.0' y='433.8' width='252.0' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='573.0' y='448.0909090909091' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.20</text>
 <text x='198' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 10-min films</text>
-<rect x='315.0' y='471.1' width='359.1' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='680.1' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.71</text>
+<rect x='315.0' y='471.1' width='373.8' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='694.8000000000001' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.78</text>
 </svg>
