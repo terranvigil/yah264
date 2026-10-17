@@ -23,7 +23,7 @@ yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Ea
 | plain C, all cores | «PENDING:G2-range» | 2.27x |
 | SIMD-optimized, all cores (yah264 NEON vs x264's assembly) | «PENDING:G3-range» | 1.43x |
 
-On the Mac, each range runs from the slowest group's median to the fastest's.
+On the Mac, each range runs from the slowest group's median to the fastest's. Speed and capped VBR were timed on commit b715c6f4. Under a bitrate target its output is byte-identical to the current build's (commit 25c36e71). The current build changes CRF coding only, and at the same VMAF-NEG score its instruction count is within 0.5% of the timed build's. Where the source couldn't be fed as fast as yah264 encoded, the [results page](results.md) shows the reading as an upper bound.
 
 - A median 13% fewer bits for the same quality over 52 rate ladders on real titles.
 - 8-bit and 10-bit in one binary.

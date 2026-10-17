@@ -34,8 +34,6 @@ Both encoders read the same 8-bit 4:2:0 frames on stdin.
 
 Median and worst ratio in each group.
 
-
-
 | class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
 |---|---|--:|--:|--:|
 | CIF | S | 0.72 / 0.75 | 0.71 / 0.73 | 0.82 / 0.88 |
