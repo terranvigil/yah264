@@ -6433,9 +6433,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
-    /* The frame-level (DC) AQ strength on the CRF base QP: see crf_frame_dc.
- * Fitted by sweep at matched rate (Y264_AQ_DC). */
-    { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = v ? atof(v) : 1.3; }
+    /* The frame-level (DC) AQ strength: see crf_frame_dc. Fitted by sweep at
+ * matched rate (Y264_AQ_DC). The 1.3 sweep was CRF only; a bitrate target
+ * keeps the 1.04 its own bands and rate tracking were measured at. */
+    { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = v ? atof(v) : (e->crf_on ? 1.3 : 1.04); }
     { const char *v = getenv("Y264_AQ_DCFLOOR"); e->aq_dcfloor = v ? atof(v) : 0.00390625; }
     /* Frames with no mb-tree field (non-reference B) inherit the anchor's
  * base QP, frame DC included, and centre their own AQ on their frame mean.
