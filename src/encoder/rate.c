@@ -636,8 +636,19 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *   1.00  -0.50 +0.61; -0.72 +1.76     1.12  -0.50 +0.44; -0.50 +1.29
  *   1.02  -0.35 +0.41; -0.94 +0.60     1.14  -0.41 +0.68; -0.76 +1.61
  *   1.04  -0.47 +0.31; -0.94 +0.46
- * The medians are flat from 0.96 to 1.12 (centre 1.04), and the worst clip
- * over both bands is lowest at 1.04, so 1.04 it is. acstr is the
+ * Those medians are flat from 0.96 to 1.12, but the window stops short of
+ * where long multi-shot titles respond. A wider sweep (12-clip CRF band and
+ * 10-clip deep band at matched rate, against the pre-redesign build; median
+ * and worst clip, CRF; deep):
+ *   1.04  -0.52 +0.35; -1.23 +0.02     1.4   -0.34 +1.01; -0.69 +2.04
+ *   1.2   -0.58 +1.14; -1.10 +0.41     1.6   -0.08 +0.58; -0.78 -0.31
+ *   1.3   -0.41 +0.15; -0.91 +1.18
+ * and on long multi-shot titles (BD-VMAF-NEG vs the reference CLI): a 1080p
+ * animated feature -1.81 at 1.04, -4.08 at 1.2, -5.60 at 1.4 over the full
+ * ladder, the same on matched-quality windows; its 2160p cut -0.24 / -0.67 /
+ * -1.93 at 1.04 / 1.2 / 1.3; the multi-shot set gains 3.2-3.5% at 1.2. 1.3
+ * has the lowest worst clip on the CRF band and recovers the long titles;
+ * 1.4 starts to cost the static deep-band clip. So 1.3. acstr is the
  * field's own strength, aq-strength times the mode-2 gain. Non-reference B
  * frames get their frame-level term from aq_analyze's centre pull instead. */
 /* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the

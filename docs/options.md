@@ -1625,7 +1625,7 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_SUBPEL` | preset | The subpel pattern: 0 square, 1 diamond, 2 capped diamond. Promoted to `--subpel`, and still overrides it. |
 | `Y264_UMH_RANGE` | 16 | UMH search radius in integer pels. Promoted to `--merange`, and still overrides it. |
 | `Y264_ABR_QCOMP` | 0.6 | The ABR rate curve's compression, and the mb-tree strength derived from it. Promoted to `--qcomp`, and still overrides it. |
-| `Y264_AQ_DC` | 1.04 | The AQ frame-level strength, added to the CRF base QP as its rate-equivalent difference from the per-MB field's strength: the across-shot allocation term. Fitted by sweep. CRF only. |
+| `Y264_AQ_DC` | 1.3 | The AQ frame-level strength, added to the CRF base QP as its rate-equivalent difference from the per-MB field's strength: the across-shot allocation term. Fitted by sweep. CRF only. |
 | `Y264_DZ_INTRA` / `Y264_DZ_INTER` | unset | Quantizer rounding bias in 1/64 units. This is the encoder's own scale, **not** the CLI flag's, which is `32` minus this. Promoted to `--deadzone-intra`/`--deadzone-inter`, which do the inversion. Both still override. |
 | `Y264_AQ_MODE` | 2 | 1 is plain log2-variance AQ, 2 and above is yah264's adaptive form (see `--aq-mode`). Promoted to `--aq-mode`, and still overrides it. |
 | `Y264_FAST_PSKIP` | 1 (on) | The cheap P_Skip pre-test at `--subme` 8 and below. Promoted to `--no-fast-pskip`, and still overrides it. |

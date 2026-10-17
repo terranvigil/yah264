@@ -35,9 +35,9 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_AQ2_SPOW` | 1.0 | src/encoder/mbcode.c:329 |
 | `Y264_AQ2_SREF` | 2.5 | src/encoder/mbcode.c:327 |
 | `Y264_AQ_ANCHOR` | = aq_anchor_default() | src/encoder/encoder.c:449 |
-| `Y264_AQ_BPULL` | 1.0 | src/encoder/encoder.c:6454 |
+| `Y264_AQ_BPULL` | 1.3 | src/encoder/encoder.c:6454 |
 | `Y264_AQ_BREF` | 6.0 | src/encoder/encoder.c:6459 |
-| `Y264_AQ_DC` | 1.04 | src/encoder/encoder.c:6438 |
+| `Y264_AQ_DC` | 1.3 | src/encoder/encoder.c:6438 |
 | `Y264_AQ_DCFLOOR` | 0.00390625 | src/encoder/encoder.c:6439 |
 | `Y264_AQ_DC_RQW` | 0.25 | src/encoder/encoder.c:6460 |
 | `Y264_AQ_MODE` | 2 | src/encoder/mbcode.c:311 |
