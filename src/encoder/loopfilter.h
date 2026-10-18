@@ -11,7 +11,7 @@
 /* Apply the in-loop deblocking filter to f->rec in place (luma and chroma),
  * using the frame's per-4x4 intra/nnz/motion grids for boundary strength. */
 void y264_deblock_frame(y264_frame_t *f);
-void y264_deblock_warm(void);   /* resolve Y264_DB_CHUNK before any worker runs */
+void y264_deblock_warm(void);
 
 /* Deblock MB rows [mby0, mby1) serially, in raster order -- the staircase's
  * trailing per-row filter. Requires: analysis of every row < mby1 is complete

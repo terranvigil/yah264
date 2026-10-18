@@ -147,7 +147,7 @@ static void set_f64(VTCompressionSessionRef s, CFStringRef key, double v)
  * that CRF, the median over six clips (foreman, samsung, park_joy, sunflower,
  * pedestrian, riverbed; 150 frames; 2026-09-04): crf 20 -> 0.69, 24 -> 0.59,
  * 28 -> 0.50, 32 -> 0.41, 36 -> 0.30 (per-clip spread about +-0.1); linear
- * between, extrapolated at the same slope outside. Y264_HW_QUALITY overrides. */
+ * between, extrapolated at the same slope outside. */
 static double crf_to_quality(double crf)
 {
     static const double t[][2] = { {8, 0.98}, {12, 0.88}, {16, 0.79}, {20, 0.69}, {24, 0.59}, {28, 0.50}, {32, 0.41}, {36, 0.30}, {40, 0.20}, {44, 0.12}, {48, 0.06}, {51, 0.03} };
@@ -227,9 +227,7 @@ struct y264_hw *y264_hw_open(const yah264_param_t *p, char *why, size_t whylen)
             if (b) CFRelease(b); if (w) CFRelease(w);
         }
     } else if (p->rc.rf > 0) {
-        /* Y264_HW_QUALITY: the calibration harness's override of the table */
-        const char *qs = getenv("Y264_HW_QUALITY");
-        double q = qs && *qs ? atof(qs) : crf_to_quality(p->rc.rf);
+        double q = crf_to_quality(p->rc.rf);
         if (q < 0.0) q = 0.0; if (q > 1.0) q = 1.0;
         set_f64(h->sess, kVTCompressionPropertyKey_Quality, q);
     } else if (p->rc.qp > 0) {
@@ -353,16 +351,10 @@ int y264_hw_encode(struct y264_hw *h, yah264_nal_t **nal, int *count, const yah2
     CMTime dur = CMTimeMake(h->fps_den, h->fps_num);
     CFDictionaryRef fopts = NULL;
     {
-        /* per-frame options: our scene-cut's ForceKeyFrame, and the QP-hint
-         * PROBE (Y264_HW_QPHINT=N sets a base frame QP on every frame; whether
-         * the H.264 path honours it is what the probe measures, step 2) */
-        const void *k[2]; const void *v[2]; int n = 0;
-        CFNumberRef qn = NULL;
+        /* per-frame options: our scene-cut's ForceKeyFrame */
+        const void *k[1]; const void *v[1]; int n = 0;
         if (force_key) { k[n] = kVTEncodeFrameOptionKey_ForceKeyFrame; v[n] = kCFBooleanTrue; n++; }
-        const char *qh = getenv("Y264_HW_QPHINT");
-        if (qh && *qh) { int q = atoi(qh); qn = CFNumberCreate(NULL, kCFNumberIntType, &q); if (qn) { k[n] = CFSTR("BaseFrameQP"); v[n] = qn; n++; } }
         if (n) fopts = CFDictionaryCreate(NULL, k, v, n, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        if (qn) CFRelease(qn);
     }
     OSStatus st = VTCompressionSessionEncodeFrame(h->sess, pb, pts, dur, fopts, NULL, NULL);
     if (fopts) CFRelease(fopts);

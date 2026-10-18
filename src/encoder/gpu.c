@@ -215,13 +215,7 @@ int y264_gpq_mode(void)
     return v;
 }
 
-static int gpq_range(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_GPQ_RANGE"); v = s ? atoi(s) : 8;
-                 if (v < 1) v = 1; if (v > 32) v = 32; }
-    return v;
-}
+#define GPQ_RANGE 8
 
 struct gpq_round {
     long       key;                 /* boundary push this round submits at (0 = unused) */
@@ -265,13 +259,7 @@ static void gpq_die(y264_gpq *g, const char *why)
     g->dead = 1;
 }
 
-static int gpq_batch_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_GPQ_BATCH"); v = s ? atoi(s) : 4;
-                 if (v < 1) v = 1; if (v > 8) v = 8; }
-    return v;
-}
+#define GPQ_BATCH 4
 
 /* Pushes 1..W get no coverage BY ARITHMETIC, so the background init runs
  * behind the first W frames' encode instead of stalling the chain at push 1
@@ -299,7 +287,7 @@ y264_gpq *y264_gpq_open(int lw, int lh, int nslots, int reach)
     y264_gpq *g = calloc(1, sizeof *g);
     if (!g) return NULL;
     g->lw = lw; g->lh = lh; g->nblk = (lw / 8) * (lh / 8);
-    g->nslots = nslots; g->reach = reach; g->batch = gpq_batch_env();
+    g->nslots = nslots; g->reach = reach; g->batch = GPQ_BATCH;
     /* Strictly more table capacity than any consumer can reach back (gpu.h):
  * consumers live within nslots pushes of the newest. */
     g->npast   = nslots + 2 * reach + 4;
@@ -473,7 +461,7 @@ void y264_gpq_push(y264_gpq *g, long push, int slot, const pixel *lowres)
             j->ref = (ngc_plane){ ref, 0, (uint32_t)g->lw, (uint32_t)g->lh, (uint32_t)g->lw };
             j->out = r->out;
             j->out_offset = (uint32_t)((size_t)g->njob * legsz);
-            j->u.searchq.range = gpq_range();
+            j->u.searchq.range = GPQ_RANGE;
             r->legof[(rel * g->reach + (d - 1)) * 2 + dir] = (int16_t)g->njob;
             g->njob++;
         }
@@ -552,7 +540,7 @@ const y264_gpq_blk *y264_gpq_field(y264_gpq *g, long src_push, long ref_push,
 void y264_gpu_warm_statics(void)
 {
     (void)y264_gpu_lowres_mode(); (void)y264_gpq_mode();
-    (void)gpq_range(); (void)gpq_batch_env(); (void)gpq_warmup_env();
+    (void)gpq_warmup_env();
 }
 
 #else   /* library not linked, or a bit depth it does not serve */

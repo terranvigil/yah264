@@ -153,16 +153,13 @@ static _Thread_local struct me_tls {
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
     int mv_xlim, mv_ylim;            /* level limits (qpel, |mv| < lim; 0 = none) */
-    int stq;                         /* single-thread quality mode: ME_ET family
- * disengages (the Y264_ME_ET=0 escape,
- * keyed on width instead of env) */
+    int stq;                         /* single-thread quality mode: the
+ * integer early-out disengages,
+ * keyed on width */
     int et_class;                    /* frame-class of the current MB:
- * 1=P, 2=ref B, 4=nonref B, 0=unstamped.
- * Y264_ME_ET_FT masks which classes may
- * take the ME_ET early-out (default 7 =
- * all = byte-identical). */
+ * 1=P, 2=ref B, 4=nonref B, 0=unstamped */
     int ref16_valid, ref16x, ref16y; /* this MB's 16x16 winner (Y264_SUB_FAR) */
-    int noqpel;                      /* stop after half-pel (Y264_B_REFQ ref loop) */
+    int noqpel;                      /* stop after half-pel (the B reference loop) */
     int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
     int me_xmax, me_xmaxf;           /* --intra-refresh horizontal qpel caps:
  * whole-pel vectors, fractional vectors */
@@ -354,8 +351,7 @@ void y264_me_reset_hpel_thresh(void)
     s_met.noqpel = 0; s_met.qpo = 0;
 }
 
-/* Y264_B_REFQ (default 1; 0 restores the full search on every reference):
- * the B list-0 reference loop runs its searches to half-pel only, and the
+/* the B list-0 reference loop runs its searches to half-pel only, and the
  * winning reference alone is then refined at quarter-pel from its half-pel
  * vector. */
 void y264_me_set_noqpel(int on) { s_met.noqpel = on; }
@@ -366,9 +362,7 @@ void y264_me_set_qpel_only(int on, int mvx, int mvy)
 static int me_minw(void);
 int y264_me_b_refq(int pw)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B_REFQ"); v = e ? atoi(e) : 1; }
-    return v && pw >= me_minw();
+    return pw >= me_minw();
 }
 
 /* The 16x16 winner of the current macroblock's search, for the partition
@@ -499,31 +493,23 @@ static int me_et_stat_on(void)
     return v;
 }
 
-/* Y264_ME_ET=<K>: integer-search early-out. When the best SEED already costs
- * <= K per pixel, the block is predicted well enough that the hexagon, the wide
- * grid and the terminal diamond are unlikely to move it, so return the seed as
- * the integer result. SUBPEL STILL RUNS -- this deletes the integer refinement
- * only, which is the stage the ETSTAT histogram prices; half-pel and quarter-pel
- * are cheaper and carry more of the quality.
- *
- * K = 0 (default) makes the predicate dead and the encoder byte-identical.
+/* integer-search early-out. When the best SEED already costs <= K per pixel,
+ * the block is predicted well enough that the hexagon, the wide grid and the
+ * terminal diamond are unlikely to move it, so return the seed as the integer
+ * result. SUBPEL STILL RUNS -- this deletes the integer refinement only, which
+ * is the stage the ETSTAT histogram prices; half-pel and quarter-pel are
+ * cheaper and carry more of the quality.
  *
  * This is a search-level early-out, NOT a skip decision: the macroblock still
  * runs its whole tournament and can still come out inter. That distinction is
  * why it is worth trying at all -- committing to skip before ME is a
- * measured-refused route (docs/b-frames.md), and this does not
- * do it. */
-static int me_et_k(void)
-{
-    /* DEFAULT 48, paired with SHAPE=1 and ET16=4: K48 sub-16x16 plus a K=4
- * 16x16 exit reads the best board dVMAF of any swept arm (-0.51, bus
- * IMPROVED) for 2-3% of t12 wall; CRF band cost median +0.12% (foreman
- * +1.12 / bus +0.71 the exposed rows). Escape: Y264_ME_ET=0 kills the
- * whole family. */
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ET"); v = e ? atoi(e) : 48; }
-    return v;
-}
+ * measured-refused route (docs/b-skip-decision-design.md), and this does not
+ * do it.
+ *
+ * K = 48 sub-16x16 plus a K = 4 16x16 exit reads the best board dVMAF of any
+ * swept arm (-0.51, bus IMPROVED) for 2-3% of t12 wall; CRF band cost median
+ * +0.12% (foreman +1.12 / bus +0.71 the exposed rows). */
+#define ME_ET_K 48
 
 /* Which block shapes the early-out is allowed on: sub-16x16 only. The env that
  * selected all shapes or 16x16 only (Y264_ME_ET_SHAPE) was removed on
@@ -537,31 +523,10 @@ static int me_et_k(void)
  * same way: a partition whose seed is its parent's refined MV has little left to
  * find, while a 16x16 starting from a median predictor does. */
 
-/* Y264_ME_ET16=<K>: a SEPARATE, independent early-out threshold for the 16x16
- * search, so the two shape classes can run at different strengths (the sub-16x16
- * exits are the quality-safe half -- their seed is the refined parent MV -- while
- * a 16x16 exit is only safe when the seed is a near-perfect match, i.e. at a much
- * lower K). 0 leaves 16x16 without an early-out. */
-static int me_et_k16(void)
-{
-    /* Default 4, paired with ME_ET=48 SHAPE=1: the near-perfect-seed 16x16
- * exit that makes K48s1+ET16=4 the best-dVMAF arm of the sweep.
- * Y264_ME_ET=0 kills the family; =0 here restores the 16x16 search
- * alone. */
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ET16"); v = e ? atoi(e) : 4; }
-    return v;
-}
-/* Y264_ME_ET_FT: frame-class mask for the early-out (is the band cost
- * concentrated in the classes whose MVs propagate?). Bit 0 = P, bit 1 =
- * reference B, bit 2 = non-reference B. Default 7 = every class = the shipped
- * behaviour byte-exactly (the gate also ignores unstamped searches then). */
-static int me_et_ft(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ET_FT"); v = e ? atoi(e) : 7; }
-    return v;
-}
+/* the 16x16 search's own, much lower threshold: the sub-16x16 exits are the
+ * quality-safe half -- their seed is the refined parent MV -- while a 16x16
+ * exit is only safe when the seed is a near-perfect match. */
+#define ME_ET_K16 4
 static int dist_bucket(int d)
 {
     if (d <= 0) return 0; if (d <= 4) return 1; if (d <= 8) return 2;
@@ -1192,7 +1157,7 @@ static int me_search_core(const pixel *src, int ss,
     int bmx = 0, bmy = 0;
     int bcost = 0;
     const int stats = me_stats_on();
-    if (s_met.qpo) {                /* Y264_B_REFQ: refine a given vector */
+    if (s_met.qpo) {                /* refine a given vector */
         bmx = s_met.qpox; bmy = s_met.qpoy;
         goto qpel_only;
     }
@@ -1249,20 +1214,16 @@ static int me_search_core(const pixel *src, int ss,
     const int etst = me_et_stat_on();
     const int et_seed = bcost, et_sx = bmx, et_sy = bmy;
     long etp = 0;
-    /* Y264_ME_ET: the seed is already good enough per pixel -- skip the integer
- * refinement (hex, wide grid, terminal diamond) and go straight to subpel.
- * K = 0 leaves this dead, so the default is byte-identical. */
-    const int et_k = s_met.stq ? 0 : me_et_k();   /* stq = the family escape */
+    /* the seed is already good enough per pixel -- skip the integer
+ * refinement (hex, wide grid, terminal diamond) and go straight to subpel. */
+    const int et_k = s_met.stq ? 0 : ME_ET_K;
     /* the early-out runs on sub-16x16 shapes only: a partition seeded from its
      * refined parent MV has little left to find */
     const int et_small = (w < 16 && h < 16);
     const int et_ok = et_small;
-    /* Effective K for THIS shape: 16x16 takes its own threshold when armed
- * (Y264_ET16), else both classes run the shared Y264_ME_ET/SHAPE gate.
- * Y264_ME_ET=0 is the FAMILY escape: it kills the 16x16 exit too, so one
- * env disarms the whole family (a 16x16-only sweep is ME_ET=<K> SHAPE=2). */
+    /* effective K for THIS shape: 16x16 takes its own threshold */
     int et_keff = et_ok ? et_k : 0;
-    if (et_k && !et_small) { int k16 = me_et_k16(); if (k16) et_keff = k16; }
+    if (et_k && !et_small) et_keff = ME_ET_K16;
     /* the effort arms' size gate: pw is the padded luma width, a multiple of
      * 16 at or above the picture's */
     const int eff_on = pw >= me_minw();
@@ -1271,7 +1232,6 @@ static int me_search_core(const pixel *src, int ss,
      * end the integer stage grows with what the quantiser will discard. */
     const int hq = eff_on ? me_hq() : 0;
     const int et_hit = (et_keff
-                     && (me_et_ft() == 7 || (me_et_ft() & s_met.et_class))
                      && (long)bcost <= (long)et_keff * w * h)
                      || (hq && (long)bcost <= ((long)hq * lambda * w * h >> 8));
     /* Y264_ME_AGREE: every seed coincided with the predictor start (all
@@ -1879,9 +1839,8 @@ void y264_me_stats_dump(void)
 void y264_me_warm_statics(void)
 {
     (void)me_stats_on();
-    (void)me_et_stat_on(); (void)me_et_k();
-    (void)y264_me_b_refq(0); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far(); (void)qpsq_minw();
-    (void)me_et_k16(); (void)me_et_ft();
+    (void)me_et_stat_on();
+    (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far(); (void)qpsq_minw();
 
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();
     (void)y264_hpel_census_on();

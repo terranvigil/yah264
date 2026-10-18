@@ -206,72 +206,34 @@ void ntp_prio_hint(void) { ntp_tls_prio = 1; }
 static _Atomic uint64_t st_bg_wait_ns;
 static _Atomic long     st_bg_syncs;
 
-/* --- Spin-then-sleep (Y264_NTP_SPIN=<usec>, default 25, 0 = off) ------------
+/* --- Spin-then-sleep -------------------------------------------------------
  * At 18 threads the wait budget measures mid-row stalls averaging ~47 us
  * against ~9 us analyze cells, and row-start (ramp) waits in the same shape:
  * the condvar wake ROUND-TRIP (~30 us on this machine), not the dependency,
  * is the binding cost of every short wait -- and on small-cell grids
  * (lookahead fme, deblock chunks) it degenerates the wavefront to
- * serial-plus-overhead. So both wait sites spin briefly before committing to
- * the condvar:
- * - a stalled row polls its progress atomic (no lock, no wake needed);
- * - an idle worker polls `work_epoch`, bumped by every producer event that
- * can open a claim (job registration, kick, a row crossing its start
- * need, the cascade), then re-scans under the mutex.
+ * serial-plus-overhead. So a stalled row polls its progress atomic (no lock,
+ * no wake needed), and a joining submitter polls the job's `done`, briefly,
+ * before committing to the condvar.
  * The budget is ~the wake round-trip: spinning longer than a sleep+wake
  * costs can never pay. Scheduling-only: claim rules, wake protocol and the
  * lost-wakeup proof are untouched (a fruitless spin falls into the same
  * register+fence+re-scan+sleep path). Workers holding parked
  * rows never spin (their sleep must stay reachable by the owner-poke).
  * Bits cannot change: worker identity and timing never reach the bitstream
- * (the pool's determinism invariant, gated as always). */
-static int spin_budget_ns(void)
-{
-    static _Atomic int v = -1;
-    int x = atomic_load_explicit(&v, memory_order_relaxed);
-    if (x < 0) {
-        const char *e = getenv("Y264_NTP_SPIN");
-        x = (e ? atoi(e) : 25) * 1000;
-        if (x < 0) x = 0;
-        atomic_store_explicit(&v, x, memory_order_relaxed);
-    }
-    return x;
-}
-
-/* The three spin sites are priced separately because they are not the same
- * trade. A stalled ROW's spin is on the critical path -- the cell it is waiting
- * for is the next thing this worker runs, so a hit converts directly into
- * wall-clock. An IDLE worker's spin is speculative: it burns a core polling for
- * work that may never arrive, and when the grid is narrower than the pool it
- * never does. A JOIN spin burns the submitting thread while the pool it is
- * waiting on is already saturated, so it competes with its own workers.
- * Y264_NTP_SPIN sets all three; the per-site vars override it. */
-#define NTP_SPIN_SITE(fn, env, dflt)                                           \
-    static int fn(void)                                                        \
-    {                                                                          \
-        static _Atomic int v = -1;                                             \
-        int x = atomic_load_explicit(&v, memory_order_relaxed);                \
-        if (x < 0) {                                                           \
-            const char *e = getenv(env);                                       \
-            x = e ? atoi(e) * 1000 : (dflt);                                   \
-            if (x < 0) x = 0;                                                  \
-            atomic_store_explicit(&v, x, memory_order_relaxed);                \
-        }                                                                      \
-        return x;                                                              \
-    }
-NTP_SPIN_SITE(spin_row_ns,  "Y264_NTP_SPIN_ROW",  spin_budget_ns())
-NTP_SPIN_SITE(spin_join_ns, "Y264_NTP_SPIN_JOIN", spin_budget_ns())
-/* Idle defaults to 0, unlike its two siblings, on the CPU-vs-wall measurement
- * that split them: across twelve shapes a zero idle spin never costs wall --
- * four shapes come out ahead -- while CPU drops 13-28% on CIF and 3-5% on
- * 720p/1080p, and aggregate throughput under real oversubscription gains 7.1%
- * at four concurrent encodes. The row and join spins earn their budget
- * (zeroing either costs 13-15% of wall and RAISES CPU as absorbed stalls turn
- * back into condvar traffic); this one is speculative, polling work_epoch for
- * a claim that never opens when the grid is narrower than the pool.
- * Y264_NTP_SPIN_IDLE=25 gives this site a budget; plain Y264_NTP_SPIN does
- * not reach it, which is the point of the split. */
-NTP_SPIN_SITE(spin_idle_ns, "Y264_NTP_SPIN_IDLE", 0)
+ * (the pool's determinism invariant, gated as always).
+ *
+ * An idle worker does not spin. A ROW's spin is on the critical path -- the
+ * cell it is waiting for is the next thing this worker runs -- and so is a
+ * JOIN's. An idle spin is speculative: it burns a core polling for work that
+ * may never arrive, and when the grid is narrower than the pool it never
+ * does. Across twelve shapes a zero idle spin never cost wall -- four shapes
+ * came out ahead -- while CPU dropped 13-28% on CIF and 3-5% on 720p/1080p,
+ * and aggregate throughput under real oversubscription gained 7.1% at four
+ * concurrent encodes. The row and join spins earn their budget (zeroing
+ * either costs 13-15% of wall and RAISES CPU as absorbed stalls turn back
+ * into condvar traffic). */
+#define NTP_SPIN_NS 25000
 
 #if defined(__aarch64__)
 # define NTP_PAUSE() __asm__ __volatile__("isb" ::: "memory")
@@ -444,12 +406,6 @@ struct ntp_pool {
     _Atomic uint64_t wsig[NTP_CV_SLOTS];
     _Atomic int      idlers;                  /* workers registered as idle */
     _Atomic int      nparked;                 /* parked rows, pool-wide */
-    /* Bumped (relaxed) by every producer event that can open a fresh claim:
- * job registration, external kick, a row crossing its start need, the
- * cascade. Idle workers SPIN on it briefly before sleeping (see
- * spin_budget_ns); correctness never depends on it -- a missed bump just
- * means the pre-existing register+re-scan+sleep path. */
-    _Atomic unsigned work_epoch;
 
     int              shutdown;
     unsigned         seq_next;                /* job registration counter */
@@ -526,50 +482,6 @@ static void wake_all(struct ntp_pool *p)
 static inline int job_start_need(const struct ntp_job *j)
 {
     return (2 < j->ncols) ? 2 : j->ncols;
-}
-
-/* Escapes: Y264_NTP_FASTCLAIM=0 selects the locked per-unit claim/complete
- * for parallel-fors; Y264_NTP_WAKE1=0 selects wake_all at job registration.
- * Both are on unless escaped. */
-/* Both lazy statics below are WARMED in ntp_pool_create before any worker
- * exists -- the tsan-lazy-static class: an unlocked first-touch from two pool
- * workers is a (benign, idempotent) data race TSan rightly flags. */
-/* Y264_NTP_ROWFAST=1 (plan item E3): after a wavefront row completes, claim
- * the SAME job's next row lock-free when it is already runnable (its row
- * above is far enough along and the external row gate passes), no worker is
- * idle (so no cascade wake is owed) and no latency-critical job is ready
- * (which the locked picker would have preferred). Row completion is marked
- * with the same atomic exchange the locked path uses; the job's LAST row and
- * every other case take the locked path unchanged, so claim ORDER (next_row
- * is a monotonic CAS counter either way) and the done broadcast are
- * untouched -- only which worker runs a row can differ, which the wavefront
- * is deterministic under by design. Measured target: 1.0-1.8% of t12 CPU in
- * pool-mutex acquires (foreman 9.2k units, sunflower 44.7k).
- *
- * DEFAULT ON since 2026-09-25. It sat off pending an identity check, and
- * threaded output no longer has to repeat run to run (owner, same day), so
- * identity stopped being a precondition; it holds anyway: md5-identical on/off
- * at --threads 3 on sunflower_1080p and bbb_2160p, where the fast path took
- * 16.1k of 33.7k row claims (Y264_NTP_STATS=1 prints the rowfast count).
- * The pool does not exist at --threads 1, so one thread cannot move. =0
- * escapes. */
-static int ntp_rowfast_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_NTP_ROWFAST"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-static int ntp_fastclaim_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_NTP_FASTCLAIM"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
-static int ntp_wake1_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_NTP_WAKE1"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
 }
 
 /* Claim one parallel-for row. Safe with OR without the pool mutex: the CAS
@@ -786,11 +698,10 @@ static int run_row_from(struct ntp_pool *p, struct ntp_job *j,
                     ss->deficit[defbucket(need -
                         atomic_load_explicit(&j->progress[r - 1],
                                              memory_order_relaxed))]++;
-                int sb = spin_row_ns();
-                if (sb) {                   /* poll the dependency before sleeping */
+                {                           /* poll the dependency before sleeping */
                     int _sat = 0;
                     atomic_fetch_add_explicit(&st_spin_row, 1, memory_order_relaxed);
-                    NTP_SPIN_WAIT(sb,
+                    NTP_SPIN_WAIT(NTP_SPIN_NS,
                         atomic_load_explicit(&j->progress[r - 1],
                                              memory_order_acquire) >= need);
                     if (_sat) {
@@ -926,9 +837,6 @@ satisfied:
             if (hint || c + 1 == start_need) {
                 atomic_fetch_add_explicit(hint ? &st_hint_bc : &st_start_sig, 1,
                                           memory_order_relaxed);
-                if (!hint)          /* row r+1 became claimable: notify spinners */
-                    atomic_fetch_add_explicit(&p->work_epoch, 1,
-                                              memory_order_relaxed);
                 pthread_mutex_lock(&p->mtx);
                 if (hint &&
                     atomic_load_explicit(&j->parked_need[r + 1],
@@ -981,7 +889,6 @@ static void *worker_main(void *arg)
     free(arg);
     { char nm[24]; snprintf(nm, sizeof nm, "y264-w%d", idx); y264_thread_name(nm); }
     struct ntp_wctx w = {0};
-    int spun = 0;               /* last idle attempt already burned its spin */
 
     pthread_mutex_lock(&p->mtx);
     for (;;) {
@@ -996,35 +903,6 @@ static void *worker_main(void *arg)
             if (!j) {
                 if (p->shutdown)
                     break;
-                /* Spin on the work epoch before committing to the condvar --
- * but only once per miss (a fruitless spin falls through to
- * the real sleep next time around), and never while holding
- * parked rows (their sleep must stay owner-poke reachable).
- * The idlers count makes producers publish epoch bumps while
- * we spin; correctness never depends on catching one (the
- * sleep path re-scans under the mutex as always). */
-                int sb;
-                if (!spun && w.nheld == 0 && (sb = spin_idle_ns()) > 0) {
-                    unsigned e0 = atomic_load_explicit(&p->work_epoch,
-                                                       memory_order_relaxed);
-                    atomic_fetch_add_explicit(&p->idlers, 1, memory_order_relaxed);
-                    pthread_mutex_unlock(&p->mtx);
-                    atomic_fetch_add_explicit(&st_spin_idle, 1, memory_order_relaxed);
-                    int _sat = 0;
-                    uint64_t sp0 = p->prof ? prof_now() : 0;
-                    NTP_SPIN_WAIT(sb,
-                        atomic_load_explicit(&p->work_epoch,
-                                             memory_order_relaxed) != e0);
-                    if (_sat)
-                        atomic_fetch_add_explicit(&st_spin_idle_hit, 1,
-                                                  memory_order_relaxed);
-                    if (p->prof)
-                        p->wprof[idx].spin_ns += prof_now() - sp0;
-                    pthread_mutex_lock(&p->mtx);
-                    atomic_fetch_sub_explicit(&p->idlers, 1, memory_order_relaxed);
-                    spun = !_sat;
-                    continue;           /* re-scan under the mutex either way */
-                }
                 /* Register as an idler (idlers counter + own slot on the idle
  * stack) BEFORE the final re-scan; the fence pairs with the
  * producers': either they see idlers > 0 and name us (or some
@@ -1068,7 +946,6 @@ static void *worker_main(void *arg)
                         }
                     }
                     atomic_fetch_sub_explicit(&p->idlers, 1, memory_order_relaxed);
-                    spun = 0;           /* a wake is an event: spin again next miss */
                     continue;
                 }
                 stack_remove(p, idx);          /* found work: withdraw */
@@ -1118,12 +995,10 @@ static void *worker_main(void *arg)
  * events (job registration, a kick opening several rows). */
         if (atomic_load_explicit(&p->idlers, memory_order_relaxed) > 0 &&
             pick_fresh(p, NULL, NULL)) {
-            atomic_fetch_add_explicit(&p->work_epoch, 1, memory_order_relaxed);
             wake_one(p);
         }
         if (p->prof) p->wprof[idx].pick_ns += prof_now() - t_it;
         pthread_mutex_unlock(&p->mtx);
-        spun = 0;
 
         int parked_at = -1;
         unsigned run_seq = j->seq;          /* incarnation at dispatch (trap) */
@@ -1157,7 +1032,22 @@ static void *worker_main(void *arg)
                 }
             }
             parked_at = run_row_from(p, j, &w, idx, r, c0);
-            /* E3 row fast path. ORDER MATTERS: claim the next row BEFORE
+            /* Row fast path: after a wavefront row completes, claim the SAME job's next
+ * row lock-free when it is already runnable (its row above is far enough
+ * along and the external row gate passes), no worker is idle (so no cascade
+ * wake is owed) and no latency-critical job is ready (which the locked picker
+ * would have preferred). Row completion is marked with the same atomic
+ * exchange the locked path uses; the job's LAST row and every other case take
+ * the locked path unchanged, so claim ORDER (next_row is a monotonic CAS
+ * counter either way) and the done broadcast are untouched -- only which
+ * worker runs a row can differ, which the wavefront is deterministic under by
+ * design. Measured target: 1.0-1.8% of t12 CPU in pool-mutex acquires
+ * (foreman 9.2k units, sunflower 44.7k). md5-identical with and without it at
+ * --threads 3 on sunflower_1080p and bbb_2160p, where the fast path took
+ * 16.1k of 33.7k row claims (Y264_NTP_STATS=1 prints the rowfast count). The
+ * pool does not exist at --threads 1, so one thread cannot move.
+ *
+ * ORDER MATTERS: claim the next row BEFORE
  * counting this one's completion. While row r is uncounted the job
  * cannot reach rows_done == nrows, so its slot cannot be torn down
  * or re-registered under us; once r2 is claimed and unfinished, the
@@ -1166,7 +1056,7 @@ static void *worker_main(void *arg)
  * this loop still read it (a 1-in-12 segfault at 18 threads). Other
  * jobs are consulted by plain flags only, never through their
  * arrays. */
-            while (parked_at < 0 && w.nheld == 0 && ntp_rowfast_on() &&
+            while (parked_at < 0 && w.nheld == 0 &&
                    j->seq == run_seq &&
                    atomic_load_explicit(&p->idlers, memory_order_relaxed) == 0) {
                 int prio_live = 0;
@@ -1212,7 +1102,6 @@ static void *worker_main(void *arg)
  * mutex only to signal the job's completion or when the job runs
  * out. */
             unsigned s32 = j->seq;      /* stable: we hold an incomplete unit */
-            int fast = ntp_fastclaim_on();
             /* Cache the job's immutable-for-this-incarnation fields ONCE: a
  * seq-verified claim licenses them for the whole loop, and going
  * back to the struct each iteration turns a slot-reuse window into
@@ -1243,9 +1132,9 @@ static void *worker_main(void *arg)
                                                     memory_order_acq_rel) + 1;
                 if (fin >= fnrows)
                     break;              /* we completed the job: locked path */
-                int r2 = fast ? job_claim_pfor(j, s32, fnrows) : -1;
+                int r2 = job_claim_pfor(j, s32, fnrows);
                 if (r2 < 0)
-                    break;              /* exhausted (or escape): locked path */
+                    break;              /* exhausted: locked path */
                 r = r2;
             }
         }
@@ -1314,10 +1203,7 @@ ntp_pool_t *ntp_pool_create(int nthreads)
     if (nthreads < 1)
         return NULL;
     (void)park_on(); (void)ntp_stats_on();   /* resolve env statics up front */
-    (void)ntp_prof_env(); (void)spin_budget_ns(); (void)spin_row_ns();
-    (void)ntp_rowfast_on();
-    (void)spin_idle_ns(); (void)spin_join_ns();
-    (void)ntp_fastclaim_on(); (void)ntp_wake1_on();
+    (void)ntp_prof_env();
     struct ntp_pool *p = calloc(1, sizeof *p);
     if (!p)
         return NULL;
@@ -1664,7 +1550,6 @@ void ntp_pool_kick(ntp_pool_t *p)
 {
     if (!p)
         return;
-    atomic_fetch_add_explicit(&p->work_epoch, 1, memory_order_relaxed);
     pthread_mutex_lock(&p->mtx);
     if (p->prof) p->kicks++;
     wake_all(p);
@@ -1776,16 +1661,12 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
                           memory_order_release);
     atomic_store_explicit(&j->rows_done, 0, memory_order_relaxed);
     /* Row 0 (and for a parallel-for, every index) is claimable now.
- * Wake ONE worker, not all (Y264_NTP_WAKE1=0 escapes): only row 0 is
- * claimable on a kind-0 job anyway, and for parallel-fors the claim-time
- * cascade (runnable work + idler => wake in flight) fans out one wake per
- * claim. wake_all at every registration is the largest single wake source
- * -- it DOUBLES the wakes from t8 to t12 in width_prof. */
-    atomic_fetch_add_explicit(&p->work_epoch, 1, memory_order_relaxed);
-    if (ntp_wake1_on())
-        wake_one(p);
-    else
-        wake_all(p);
+ * Wake ONE worker, not all: only row 0 is claimable on a kind-0 job
+ * anyway, and for parallel-fors the claim-time cascade (runnable work +
+ * idler => wake in flight) fans out one wake per claim. wake_all at every
+ * registration is the largest single wake source -- it DOUBLES the wakes
+ * from t8 to t12 in width_prof. */
+    wake_one(p);
     pthread_mutex_unlock(&p->mtx);
     return j;
 }
@@ -1809,10 +1690,9 @@ static struct ntp_job *job_register(struct ntp_pool *p, int kind,
 static void job_wait(struct ntp_pool *p, struct ntp_job *j)
 {
     uint64_t t0 = p->prof ? prof_now() : 0;
-    int sb = spin_join_ns();
-    if (sb && !atomic_load_explicit(&j->done, memory_order_acquire)) {
+    if (!atomic_load_explicit(&j->done, memory_order_acquire)) {
         int _sat = 0;
-        NTP_SPIN_WAIT(sb, atomic_load_explicit(&j->done, memory_order_acquire));
+        NTP_SPIN_WAIT(NTP_SPIN_NS, atomic_load_explicit(&j->done, memory_order_acquire));
         (void)_sat;
     }
     pthread_mutex_lock(&p->mtx);
@@ -1989,10 +1869,9 @@ void ntp_bg_submit(ntp_bg_t *b, void (*fn)(void *), void *arg)
 }
 void ntp_bg_sync(ntp_bg_t *b)
 {
-    int sb = spin_join_ns();
-    if (sb && atomic_load_explicit(&b->have_task, memory_order_acquire)) {
+    if (atomic_load_explicit(&b->have_task, memory_order_acquire)) {
         int _sat = 0;
-        NTP_SPIN_WAIT(sb, !atomic_load_explicit(&b->have_task,
+        NTP_SPIN_WAIT(NTP_SPIN_NS, !atomic_load_explicit(&b->have_task,
                                                 memory_order_acquire));
         (void)_sat;
     }

@@ -79,10 +79,10 @@ void y264_me_reset_hpel_thresh(void);
 void y264_me_set_ref16(int valid, int mvx, int mvy);
 void y264_me_set_noqpel(int on);
 void y264_me_set_qpel_only(int on, int mvx, int mvy);
-int y264_me_b_refq(int pw);  /* Y264_B_REFQ, under the Y264_ME_MINW gate */
+int y264_me_b_refq(int pw);  /* B reference loop to half-pel, under the Y264_ME_MINW gate */
 void y264_me_set_isb(int b);   /* oracle attribution: current MB is in a B frame */
-void y264_me_set_et_class(int c); /* ME_ET frame class: 1=P, 2=ref B, 4=nonref B */
-void y264_me_set_stq(int q);      /* single-thread quality: ME_ET disengages */
+void y264_me_set_et_class(int c); /* frame class: 1=P, 2=ref B, 4=nonref B */
+void y264_me_set_stq(int q);      /* single-thread quality: the integer early-out disengages */
 void y264_me_set_list(int l);  /* reference list of the next search (the half-pel threshold is per list) */
 
 /* Staircase list-1 vertical MV cap, in quarter-pel, RELATIVE to
