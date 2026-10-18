@@ -20,13 +20,10 @@ Flags are in [options.md](options.md). Every `Y264_*` default quoted here is in
 
 | You are delivering to | Mode | Flags |
 | --- | --- | --- |
-| nothing constrains the rate: masters, archives, quality work | CRF | `--crf N` |
-| streaming VOD, ABR ladder rungs | capped CRF | `--crf N --vbv-maxrate M --vbv-bufsize B` |
-| a file-size target, one pass | ABR | `--bitrate N` |
-| a file-size target, whole clip available | two-pass | `--pass 1`, then `--pass 2 --bitrate N` |
-| average rate under a peak ceiling | capped VBR | `--bitrate N --vbv-maxrate M --vbv-bufsize B`, M > N |
-| a fixed-bandwidth link | CBR | `--bitrate N --vbv-maxrate N --vbv-bufsize B` |
-| measurement, debugging | CQP | `--qp N` |
+| `Y264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
+| `Y264_CRF_CPLX` | 1 (on) | CRF complexity term, and the reason `--crf N` costs about what it costs on x264 (2026-09-16, fifteen clips: median offset 0.4-0.8 of a CRF point with it, 1.5-1.9 without). Improves 9 of 12 clips on BD-VMAF-NEG; it still regresses samsung +9.30% and touchdown +10.71%, and 0 turns it off. |
+| `Y264_CRF_LEVEL` | 2.3 | The level of the CRF base under mb-tree: `crf + level + 2.9 * log2(fps / 30)`. Level and slope were both fitted so our bytes at `--crf N` match the reference CLI's at the same `--crf` across 22 clips at 24 to 60 fps (median miss 5.2%). |
+| `Y264_MBTREE_OFF` | 0 (off) | Disables mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
 
 `--qp`, `--bitrate` and `--crf` each name a mode, and the last one on the
 command line wins. A warning on stderr names the flag that lost. `--pass` sits

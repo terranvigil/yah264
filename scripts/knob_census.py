@@ -79,34 +79,19 @@ OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?
 DEFAULT_OVERRIDES = {
     "Y264_TP_DBG": "presence",           # any value arms it
     "Y264_SKIP_ORACLE_AT": "pre",        # pre | post | postr
-    "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
     "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
-    "Y264_ABR_QPSTEP": "= --qpstep",     # the flag's value, itself defaulting to 4
-    "Y264_CRF_LEVEL": "2.3", "Y264_CRF_FPS_SLOPE": "2.9",  # rc_tunable of a #define
+    "Y264_CRF_LEVEL": "2.3",             # rc_tunable of a #define
     "Y264_SIMD_FORCE": "unset",          # none | sse4 | avx2 | avx512 (a string)
-    # multi-value or computed defaults, read by a parser the idioms can't see
-    "Y264_PSY_FLAT_GATE": "75,307,25",
-    "Y264_TRELLIS_LAMBDA": "256,150,28,38",
-    "Y264_DCTDEC_T4": "table", "Y264_DCTDEC_T8": "table", "Y264_DCTDEC_TAB4": "table",
-    "Y264_AQ_ANCHOR": "= aq_anchor_default()",
+    # computed defaults, read by a parser the idioms can't see
     "Y264_AQ_DC": "= rate mode: 1.3 uncapped CRF, 1.04 capped CRF or bitrate target",
-    "Y264_AQ_BPULL": "1.3",              # 0 wherever the absolute anchor is off
-    "Y264_CRF_PBSCALE": "1.0",
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
     # overrides of a public param or CLI flag: unset follows the param
-    "Y264_LR_SETTLE": "= param", "Y264_LR_SUBGATE": "= param",
     "Y264_MBT_DEPFLOOR": "= param", "Y264_ABR_TOL": "= param",
 }
 
 OVERRIDES = {
     "Y264_MBT_REC": "instrument", "Y264_MBT_PLAY": "instrument",
-    # sub-knobs of the default-off whole-run B placement (Y264_BADAPT_RUN):
-    # they default to 1 but change nothing unless the arm is on
-    "Y264_BADAPT_HPEL": "arm", "Y264_BADAPT_PSUB": "arm", "Y264_BADAPT_XC": "arm",
-    "Y264_BADAPT_HYST": "arm",
-    "Y264_BADAPT_SHARE_VERIFY": "instrument",
-    "Y264_REFENC_CACHE": "instrument",
     # both exist so a thread-count sweep never needs a rebuild (encoder.c
     # ~3339): a pin and a ceiling over the resolved auto budget, not a
     # default-off feature waiting to be re-priced
@@ -119,28 +104,12 @@ OVERRIDES = {
     "Y264_MBT_BREF": "default", "Y264_MBT_PAIR_SCALE": "default",
     "Y264_MBT_BLEG_REUSE": "default", "Y264_GPQ_CONSUME": "default",
     "Y264_BSKIP_SCREEN": "default",
-    # shipped constants whose defaults are tables or computed
-    "Y264_PSY_FLAT_GATE": "default", "Y264_TRELLIS_LAMBDA": "default",
-    "Y264_DCTDEC_T4": "default", "Y264_DCTDEC_T8": "default",
-    "Y264_DCTDEC_TAB4": "default", "Y264_AQ_ANCHOR": "default",
-    "Y264_CRF_BASE": "default", "Y264_CRF_SLOPE": "default",
-    "Y264_CRF_CAP": "default", "Y264_CRF_LEVEL": "default",
-    "Y264_CRF_FPS_SLOPE": "default", "Y264_CRF_MBT_CPLX": "arm",
-    "Y264_NTP_SPIN_ROW": "default", "Y264_NTP_SPIN_JOIN": "default",
-    # -1 is its off sentinel
-    "Y264_MBT_AQIN": "arm",
+    # a shipped constant read through rc_tunable of a #define
+    "Y264_CRF_LEVEL": "default",
 }
 
-# knobs whose nearest default-claim is correct but beyond the detector:
-#   ABR_CGUARD     conditional default (ON iff the rf model is armed)
-#   GPU_RANGE      the flagged "Default OFF" belongs to Y264_SATDX4's block
-#                  directly above (comment adjacency, not staleness)
-#   PART_IMPORTANT sub-knob of the parked PART_EARLYTERM=2 mode; its numeric
-#                  default is that mode's tuning constant, inert otherwise
-#   PART_SLACK_X4  same block: the "PARKED, default OFF" verdict comment
-#                  describes that mode, not this tuning constant (default 4)
-CLAIM_OK = {"Y264_ABR_CGUARD", "Y264_GPU_RANGE",
-            "Y264_PART_IMPORTANT", "Y264_PART_SLACK_X4"}
+# knobs whose nearest default-claim is correct but beyond the detector
+CLAIM_OK = set()
 
 
 def helper_default(text):

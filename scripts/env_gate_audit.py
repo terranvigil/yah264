@@ -41,10 +41,10 @@ WARM_ROOTS = ["warm_lr_statics", "ntp_pool_create", "ntp_bg_create"]
 # no race, and warming them would be meaningless.
 NOT_A_GATE = {
     "auto_threads", "la_depth_for", "wf_width_for", "la_chain_prop",
-    "rc_set_qp", "yah264_encoder_open", "yah264_encoder_close",
+    "yah264_encoder_open", "yah264_encoder_close",
     "cpu_detect_once", "mbt_oracle_init", "dpbp_open", "skor_init",
     "mb_log_open", "blate_open", "trf_open", "tr_select",
-    "crf_aqabs_forced", "blk8_intra_dispatch", "warm_lr_statics",
+    "blk8_intra_dispatch", "warm_lr_statics", "compute_mbtree",
 }
 
 FUNC   = re.compile(r"^(?:static\s+)?[A-Za-z_][\w \t*]*?\b(\w+)\s*\([^;]*?\)\s*$", re.M)
