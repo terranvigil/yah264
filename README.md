@@ -19,7 +19,7 @@ A fun example of this was when we were trying to optimize the skip check for pre
 
 ## Plan
 
-We make use of coding to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
+We use coding agents to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
 
 1. Build a standard H.264 encoder with the same feature set and options as x264.
 2. Capture x264's performance and quality baseline on a fixed test set of clips.
