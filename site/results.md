@@ -8,8 +8,8 @@ description: The goal tables, the quality maps, the corpus, and how each number 
 yah264 reached full parity with x264. Both encoders code the
 same source at the same file size. Every speed figure here is yah264's wall
 time over x264's, so anything under 1.00 means yah264 finished first. x264 is
-version 0.165.3222 (commit b35605a) at `--preset medium`. Goals 1 and 2 run plain
-C on both sides. Our C runs against the same x264 commit built with its assembly
+version 0.165.3222 at `--preset medium`. Goals 1 and 2 run plain
+C on both sides. Our C runs against the same x264 version built with its assembly
 off and with `-fno-tree-vectorize` removed, so the compiler vectorizes its C the
 way it vectorizes ours. Goal 3 runs what each encoder ships: our NEON against
 x264's hand-written assembly. Quality is scored with the VMAF NEG model, which predicts
