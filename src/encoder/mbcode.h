@@ -78,7 +78,7 @@ typedef struct {
 /* The row brake's per-picture state (see y264_frame_t.brk). */
 struct y264_rowbrake {
     int8_t  *q;                 /* per MB row: QP offset, written when the row starts */
-    int      mode;              /* Y264_VBV_ROWBRAKE: 9 = forced ramp (test pattern) */
+    int      mode;              /* 1 = the rule, 9 = forced ramp (test pattern) */
     int      K;                 /* rows of lag between a row and the rows it reads */
     int      dmax;              /* largest offset */
     int      hmb;
@@ -299,9 +299,7 @@ typedef struct {
     const pixel *const *mbvar_src;
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
     /* B temporal-cascade share of this frame's QP (frame_qp's casc term, after
- * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply.
- * Read only by Y264_MB_LAMBDA=7: decide non-ref-B modes/motion at the
- * anchor-grade lambda (cur_qp - lambda_casc) while quantising at cur_qp. */
+ * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply. */
     int lambda_casc;
     /* Per-MB lookahead (lowres, vs this frame's ref0/anchor) MV, quarter-pel, as
  * an integer-search seed. NULL when no lookahead ran. Indexed mby*wmb+mbx.
@@ -425,7 +423,7 @@ typedef struct {
  * emit actually wrote. Allocated per picture by the frame prep, printed and
  * freed with the emit job. NULL = off. */
     int64_t *rb;
-    /* Row-level VBV brake (Y264_VBV_ROWBRAKE, item 3h): a per-row QP offset
+    /* Row-level VBV brake (item 3h): a per-row QP offset
  * added to the QP map, decided at the start of each row from coding-order
  * facts only. NULL = off. */
     struct y264_rowbrake *brk;
