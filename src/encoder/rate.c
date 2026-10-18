@@ -444,7 +444,7 @@ static double abr_scale_for(yah264_encoder_t *e, int type)
  * (mobile lost ~5 VMAF), so the swept 1.8 stands. The blur track follows P
  * anchors only: B frames inherit the anchor base (frame_qp adds the type
  * cascade) and I frames read the track without polluting it with intra-domain
- * magnitudes. Base/slope/cap stay env-overridable for re-calibration.
+ * magnitudes.
  * ABR/VBV/2-pass still use the self-calibrating zero-motion frame_complexity. */
 #define CRF_BASE_CPLX  140.0    /* per-MB ME-compensated cost that sits at qp=crf */
 #define CRF_QP_SLOPE   1.8      /* QP per log2 of complexity (a 0.6 qcomp would be 2.4) */
@@ -459,11 +459,9 @@ static double rc_tunable(const char *n, double def, int *set)
     return s ? atof(s) : def;
 }
 
-/* Every rate-control calibration knob the decides read (env-overridable so
- * the CRF base/cap/slope, the ABR steps and the opening fit can be swept
- * without a rebuild; the defaults are the baked-in calibration). Resolved
- * once at open: decides run on the stair driver thread and nothing on a
- * decide path calls getenv. */
+/* Every rate-control calibration constant the decides read. Resolved once
+ * at open: decides run on the stair driver thread and nothing on a decide
+ * path calls getenv. */
 void rc_knobs_resolve(yah264_encoder_t *e)
 {
     struct rc_knobs *k = &e->rck;
@@ -549,64 +547,64 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     four threads; 2, 3 and 6 clear all 36 and gain BD, 3 and 6 at +1.4%
  *     and more instructions, 2 at +0.1%;
  *   vbv_fill_min 0.5: 0.25 and 0.75 inert from horizon 2 up. */
-    k->rfm_slew       = rc_tunable("Y264_RFM_SLEW", 0.25, NULL);
-    k->rfm_slew_fb    = rc_tunable("Y264_RFM_SLEW_FB", 1.0, NULL);
-    k->rfm_fb_t       = rc_tunable("Y264_RFM_FB_T", 2.0, NULL);
-    k->rfm_slew_fb_up = rc_tunable("Y264_RFM_SLEW_FB_UP", 0.35, NULL);
-    k->rfm_degen      = rc_tunable("Y264_RFM_DEGEN", 4.0, NULL);
-    k->pf_slew        = rc_tunable("Y264_PF_SLEW", 1.0, NULL);
-    k->ovc_gain       = rc_tunable("Y264_OVC_GAIN", 16.0, NULL);
-    k->ovc_gain_up    = rc_tunable("Y264_OVC_GAIN_UP", 12.0, NULL);
-    k->ovc_gain_cbr   = rc_tunable("Y264_OVC_GAIN_CBR", 10.0, NULL);
-    k->ovc_gain_cbr_up = rc_tunable("Y264_OVC_GAIN_CBR_UP", 4.0, NULL);
-    k->ovc_lo         = rc_tunable("Y264_OVC_LO", 6.0, NULL);
-    k->ovc_hi         = rc_tunable("Y264_OVC_HI", 6.0, NULL);
-    k->ovc_win        = rc_tunable("Y264_OVC_WIN", 2.0, NULL);
-    k->ovc_t0         = rc_tunable("Y264_OVC_T0", 2.0, NULL);
-    k->itrk_decay     = rc_tunable("Y264_ITRK_DECAY", 0.9, NULL);
-    k->blur_decay     = rc_tunable("Y264_BLUR_DECAY", 0.5, NULL);
-    k->open_ia        = rc_tunable("Y264_OPEN_IA", 31.7, NULL);
-    k->open_ib        = rc_tunable("Y264_OPEN_IB", 1.41, NULL);
-    k->open_ic        = rc_tunable("Y264_OPEN_IC", -4.14, NULL);
-    k->open_ioff      = rc_tunable("Y264_OPEN_IOFF", 4.0, NULL);
-    k->open_imargin   = rc_tunable("Y264_OPEN_IMARGIN", 8.0, NULL);
-    k->open_tex_t     = rc_tunable("Y264_OPEN_TEX_T", 6500.0, NULL);
-    k->open_tex_g     = rc_tunable("Y264_OPEN_TEX_G", 10.0, NULL);
-    k->open_tex_m     = rc_tunable("Y264_OPEN_TEX_M", 6.0, NULL);
-    k->open_ip0       = rc_tunable("Y264_OPEN_IP0", 28.0, NULL);
-    k->open_rfs       = rc_tunable("Y264_OPEN_RFS", 30.0, NULL);
-    k->vbv_fill_frac  = rc_tunable("Y264_VBV_FILL_FRAC", 0.5, NULL);
-    k->vbv_fill_h     = rc_tunable("Y264_VBV_FILL_H", 2.0, NULL);
-    k->vbv_fill_hup   = rc_tunable("Y264_VBV_FILL_HUP", 1.0, NULL);
-    k->vbv_fill_min   = rc_tunable("Y264_VBV_FILL_MIN", 0.5, NULL);
-    k->abr_pbf        = rc_tunable("Y264_ABR_PBF", 1.3, NULL);
+    k->rfm_slew       = 0.25;
+    k->rfm_slew_fb    = 1.0;
+    k->rfm_fb_t       = 2.0;
+    k->rfm_slew_fb_up = 0.35;
+    k->rfm_degen      = 4.0;
+    k->pf_slew        = 1.0;
+    k->ovc_gain       = 16.0;
+    k->ovc_gain_up    = 12.0;
+    k->ovc_gain_cbr   = 10.0;
+    k->ovc_gain_cbr_up = 4.0;
+    k->ovc_lo         = 6.0;
+    k->ovc_hi         = 6.0;
+    k->ovc_win        = 2.0;
+    k->ovc_t0         = 2.0;
+    k->itrk_decay     = 0.9;
+    k->blur_decay     = 0.5;
+    k->open_ia        = 31.7;
+    k->open_ib        = 1.41;
+    k->open_ic        = -4.14;
+    k->open_ioff      = 4.0;
+    k->open_imargin   = 8.0;
+    k->open_tex_t     = 6500.0;
+    k->open_tex_g     = 10.0;
+    k->open_tex_m     = 6.0;
+    k->open_ip0       = 28.0;
+    k->open_rfs       = 30.0;
+    k->vbv_fill_frac  = 0.5;
+    k->vbv_fill_h     = 2.0;
+    k->vbv_fill_hup   = 1.0;
+    k->vbv_fill_min   = 0.5;
+    k->abr_pbf        = 1.3;
     k->abr_qpstep     = rc_tunable("Y264_ABR_QPSTEP", 0.0, &k->abr_qpstep_set);
-    k->abr_vbvov_grow = rc_tunable("Y264_ABR_VBVOV_GROW", 6.0, NULL);
-    k->abr_vbvov_pow  = rc_tunable("Y264_ABR_VBVOV_POW", 1.0, NULL);
-    k->abr_vbvov_vbr  = rc_tunable("Y264_ABR_VBVOV_VBR", 0.75, NULL);
+    k->abr_vbvov_grow = 6.0;
+    k->abr_vbvov_pow  = 1.0;
+    k->abr_vbvov_vbr  = 0.75;
     k->abr_dc         = (int)rc_tunable("Y264_ABR_DC", 1.0, NULL);
     k->rf2_iacc       = rc_tunable("Y264_ABR_RF2_IACC", 1.0, NULL);
     k->rf2_seed       = rc_tunable("Y264_ABR_RF2_SEED", 2.0, NULL);
     k->rf2_floorfb    = rc_tunable("Y264_ABR_RF2_FLOORFB", 1.0, NULL) != 0.0;
-    k->rf2_seed_a     = rc_tunable("Y264_ABR_RF2_SEED_A", 8.692, NULL);
-    k->rf2_seed_b     = rc_tunable("Y264_ABR_RF2_SEED_B", 2.924, NULL);
-    k->rf2_seed_c     = rc_tunable("Y264_ABR_RF2_SEED_C", -1.315, NULL);
-    k->vbv_plan_h     = rc_tunable("Y264_VBV_PLAN_H", 32.0, NULL);
-    k->vbv_plan_t     = rc_tunable("Y264_VBV_PLAN_T", 0.5, NULL);
+    k->rf2_seed_a     = 8.692;
+    k->rf2_seed_b     = 2.924;
+    k->rf2_seed_c     = -1.315;
+    k->vbv_plan_h     = 32.0;
+    k->vbv_plan_t     = 0.5;
     k->vbv_plan_pred  = (int)rc_tunable("Y264_VBV_PLAN_PRED", 2.0, NULL);
     k->vbv_entry_opt  = rc_tunable("Y264_VBV_ENTRY_OPT", 0.0, NULL);
-    k->vbv_entry_rsv  = rc_tunable("Y264_VBV_ENTRY_RSV", 0.1, NULL);
+    k->vbv_entry_rsv  = 0.1;
     k->vbv_exit_hard  = (int)rc_tunable("Y264_VBV_EXIT_HARD", 0.0, NULL);
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0, NULL);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25, NULL);
-    k->vbv_cbr_dive   = rc_tunable("Y264_VBV_CBR_DIVE", 2.0, NULL);
-    k->vbv_posti_raise = rc_tunable("Y264_VBV_POSTI_RAISE", 3.0, NULL);
-    k->vbv_posti_n    = rc_tunable("Y264_VBV_POSTI_N", 2.0, NULL);
-    k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
-    k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
-    k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
+    k->vbv_cbr_dive   = 2.0;
+    k->vbv_posti_raise = 3.0;
+    k->vbv_posti_n    = 2.0;
+    k->crf_base       = CRF_BASE_CPLX;
+    k->crf_slope      = CRF_QP_SLOPE;
+    k->crf_cap        = CRF_QP_CAP;
     k->crf_level      = rc_tunable("Y264_CRF_LEVEL", CRF_MBT_LEVEL, NULL);
-    k->crf_fps_slope  = rc_tunable("Y264_CRF_FPS_SLOPE", CRF_MBT_FPS_SLOPE, NULL);
+    k->crf_fps_slope  = CRF_MBT_FPS_SLOPE;
     k->crf_mbt_cplx   = rc_tunable("Y264_CRF_MBT_CPLX", 0.0, NULL);
     k->rc_trace       = getenv("Y264_RC_TRACE") != NULL;
     k->dbg_cplx       = getenv("Y264_DBG_CPLX") != NULL;
@@ -771,8 +769,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * |bytes ratio - 1| of 5.2% (worst cell 27.7%). The slope is there because
  * that encoder's output at equal --crf codes higher-rate material at a
  * higher QP. The form is a constant rather than a function of qcomp because
- * the CRF path runs at a fixed qcomp. Y264_CRF_LEVEL and Y264_CRF_FPS_SLOPE
- * override. */
+ * the CRF path runs at a fixed qcomp. Y264_CRF_LEVEL overrides the level. */
     if (e->crf_cl && e->mbtree_on) {
         double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
                    ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 30.0;
@@ -1313,7 +1310,7 @@ double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
  * through the buffer law. The base is the lowest QP at or above the rate
  * factor's whose walk keeps every frame inside 0.9 of what it is removed from
  * and ends the burst on a trajectory toward the target level -- half the
- * buffer -- closing the gap over Y264_VBV_PLAN_H frames rather than at once.
+ * buffer -- closing the gap over rck.vbv_plan_h frames rather than at once.
  * Above the target the burst may spend down to it, so a full buffer is spent
  * on hard content exactly as before; below it the raise arrives one burst at a
  * time instead of as a wall.
@@ -2008,14 +2005,14 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     if (e->vbv_on && e->vbv.size > 0 && abr_vbvov_frac() > 0 &&
                         (e->vbv_cbr || e->rck.abr_vbvov_vbr > 0)) {
                         /* The window is tied to the buffer under CBR (A6).
- * Capped VBR takes a wider one, Y264_ABR_VBVOV_VBR (0.75) of the
+ * Capped VBR takes a wider one, rck.abr_vbvov_vbr (0.75) of the
  * buffer, against its own bar (owner decision 2026-10-05: about +-6%
  * over a 6 s window; CBR keeps the tight one). 0.75 is the widest
  * that holds A6 inside it (stefan -4.8%, ducks +5.3% at the 1.5x
  * cap; 1.0 reads -6.6 / +6.1) and buys 0.7-2.7 BD points on tier S
  * VBR at one thread (foreman -8.0 -> -10.7%, stefan -7.9 -> -10.2%).
- * Both widen with the coded duration past Y264_ABR_VBVOV_GROW
- * seconds as (t / grow)^Y264_ABR_VBVOV_POW. */
+ * Both widen with the coded duration past rck.abr_vbvov_grow (6)
+ * seconds as (t / grow)^rck.abr_vbvov_pow (1). */
                         double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                         double t = bps > 0 ? wanted / bps : 0.0;
                         double cap = (e->vbv_cbr ? abr_vbvov_frac() : e->rck.abr_vbvov_vbr) * e->vbv.size;
