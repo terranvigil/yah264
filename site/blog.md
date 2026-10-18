@@ -84,5 +84,5 @@ x86-64 support (AVX2, plus AVX-512 where the chip has it) is working and verifie
 
 yah265 (HEVC) and yaav1 (AV1) are on the way. They share yah264's many-core pipeline and its correctness gate. Both build on what we learned here. Both will be released soon.
 
-- [yah265](https://github.com/terranvigil/yah265)
-- [yaav1](https://github.com/terranvigil/yaav1)
+- yah265: coming soon
+- yaav1: coming soon
