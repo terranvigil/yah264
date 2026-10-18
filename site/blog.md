@@ -11,7 +11,7 @@ yah264 is an H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 across a 
 
 I've worked on video ingestion pipelines for over 15 years. The key goals are always "lowest cost" and "highest quality" for a given bitrate. And of course speed usually matters as well. This is my attempt at all three for anyone who would like to try yah264 out.
 
-I started development on my MacBook Pro M5 Max, so most of the initial optimization was arm64 based. That worked for me because I've found that the lowest-cost instances for encoding are currently arm64. Graviton4 is generally in the range of 10-30% cheaper per byte encoded.
+I started development on my MacBook Pro M5 Max, so most of the initial optimization was arm64 based. That worked for me because I've found that the lowest-cost instances for encoding are currently arm64. Graviton4 is generally in the range of 10-30% cheaper per frame encoded.
 
 ## Highlights
 
@@ -23,7 +23,7 @@ yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Ea
 | plain C, all cores | 1.41x to 2.04x | 2.27x |
 | SIMD-optimized, all cores (yah264 NEON vs x264's assembly) | 1.22x to 1.89x | 1.43x |
 
-On the Mac, each range runs from the slowest group's median to the fastest's. Speed and capped VBR were timed on commit b715c6f4. Under a bitrate target its output is byte-identical to the current build's (commit 25c36e71). The current build changes CRF coding only, and at the same VMAF-NEG score its instruction count is within 0.5% of the timed build's. Where the source couldn't be fed as fast as yah264 encoded, the [results page](results.md) shows the reading as an upper bound.
+On my Mac, each range runs from the slowest group's median to the fastest's. Speed and capped VBR were timed on commit 06a94fb4. Under a bitrate target its output is byte-identical to the current build's (commit 8f92edff). The current build changes CRF coding only, and at the same VMAF-NEG score its instruction count is within 0.5% of the timed build's. Where the source couldn't be fed as fast as yah264 encoded, the [results page](results.md) shows the reading as an upper bound.
 
 - A median 13% fewer bits for the same quality over 52 rate ladders on real titles.
 - 8-bit and 10-bit in one binary.

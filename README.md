@@ -3,7 +3,7 @@
   <img alt="yah264" src="assets/yah264-logo-light-v2.png" width="454">
 </picture>
 
-[What](#what) · [Plan](#plan) · [Status](#status) · [Details](#details) · [Verify](#verify) · [Hardware](#hardware-option) · [Shot-aware](#shot-aware-support) · [Up next](#up-next) · [Docs](#documentation) · [Build](#build) · [Contributing](#contributing) · [License](#license)
+[Docs](#documentation) · [What](#what) · [Plan](#plan) · [Status](#status) · [Details](#details) · [Verify](#verify) · [Hardware](#hardware-option) · [Shot-aware](#shot-aware-support) · [Up next](#up-next) · [Build](#build) · [Contributing](#contributing) · [License](#license)
 
 ## What
 
@@ -11,9 +11,9 @@ A super-fast, highly efficient H.264/AVC FLOSS encoder.
 
 ## YAH264?
 
-A fast open-source H.264 encoder exists. For 20 years x264 has been the leading software implementation for speed and quality. Beyond coding tool algorithms, its hottest code (the motion search, deblocking, CABAC) is hand-written assembly, tens of thousands of lines of it.
+A fast open-source H.264 encoder exists. For 20 years x264 has been the leading software implementation for speed and quality. Beyond highly optimized coding tool algorithms, its hottest code (motion search, deblocking, CABAC) is hand-written assembly. Tens of thousands of lines of it.
 
-In the past, when working on formats and codecs, I'd pull up the specs and spend weeks for small gains. Today, you can use coding agents to accelerate the iteration over a large number of algorithmic optimizations. Prompt with a long list of ideas to try out and in minutes or hours, you have an answer.
+In the past, when working on formats and codecs, I'd start by pulling up the specs and spend weeks worthing features for small gains. Today, you can use coding agents to accelerate the iteration over a large number of algorithmic optimizations. Prompt with a long list of ideas to try out and in minutes or hours, you have an answer.
 
 A fun example of this was when we were trying to optimize the skip check for prediction reuse. Beyond brute force, there are some simple methods for this. But after iterating through a number of options, the Cauchy–Schwarz inequality turned out to be a clear winner. We can bound every transform coefficient by the energy of the residual with its mean removed. If every bound is under the quantizer’s threshold, the block must be zero, and we skip the transform. On our “sunflower” test clip, 79% of the skip check’s transforms disappeared.
 
@@ -82,9 +82,8 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 ## Up next
 
-With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice; the open item is speed with every core busy. There we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
-
-Every x264 option is now built or deliberately left out, with the reasons in [x264-parity-plan.md](docs/x264-parity-plan.md). Next come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice. The open item is speed with every core busy. There we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
+Next come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 
