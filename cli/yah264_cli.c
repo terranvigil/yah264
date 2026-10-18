@@ -650,7 +650,7 @@ static void apply_video_signal(yah264_encoder_t *e)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "yah264 %s - H.264 encoder (Phase 0: I_PCM)\n"
+        "yah264 %s - H.264/AVC encoder\n"
         "usage: %s --input-y4m <in.y4m|-> [-o <out.264|->] [options]\n"
         "  --input-y4m PATH   Y4M input, '-' for stdin\n"
         "  --input-raw PATH   headerless planar YUV, '-' for stdin. Needs\n"
@@ -670,8 +670,8 @@ static void usage(const char *argv0)
         "  --no-progress      no progress line (it only appears on a terminal)\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
         "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"   /* x264-ok */
-        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `yah264 in.y4m` is\n"
-        "   directly comparable to `x264 in.y4m`.)\n"   /* x264-ok */
+        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `yah264 --input-y4m\n"
+        "   in.y4m` is directly comparable to `x264 in.y4m`.)\n"   /* x264-ok */
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme +\n"
         "                     subpel tier. Default = medium (x264-match). Omit for\n"   /* x264-ok */
         "                     medium; pass veryslow/placebo for the max-quality tier.\n"
@@ -717,8 +717,8 @@ static void usage(const char *argv0)
     /* Split here only because one literal for the whole thing runs past the
  * 4095 bytes ISO C99 guarantees a compiler will take. */
     fprintf(stderr,
-        "  --threads N        GOP-parallel worker threads (0/auto = cores). The\n"
-        "                     threaded path streams the input. From a file each\n"
+        "  --threads N        GOP-parallel worker threads (0/auto = min(cores, 16)).\n"
+        "                     The threaded path streams the input. From a file each\n"
         "                     GOP in flight holds 16 frames of read-ahead; from a\n"
         "                     pipe the window is (--threads + 1) x --keyint frames\n"
         "                     at w*h*1.5 bytes each (Y264_STREAM_WINDOW overrides\n"
