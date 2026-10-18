@@ -13,7 +13,7 @@ first with `pixel = uint8_t`. Conformance (recon-match + thread determinism +
 *enabled* once the abstraction is complete. That lets the large mechanical
 change go in safely, one subsystem at a time.
 
-## Status, 2026-09-16 (item C3-10bit)
+## Status
 
 Phases A-D are done. E is still deferred. The depth is a compile-time type
 inside the encoder and always will be. It is no longer a BUILD choice for the

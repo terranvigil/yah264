@@ -1149,7 +1149,7 @@ frames it actually owns, and prints what it chose:
 yah264: encoded 250 frame(s) in 2 GOP(s) on 2 GOP-worker(s) x 4 frame-thread(s)
 ```
 
-**Determinism is guaranteed only at one thread (owner, 2026-09-25).** At
+**Determinism is guaranteed only at one thread.** At
 `--threads 1` the same input and config give the same output bit for bit. The
 test gates hold it. With more threads the same input, config and thread count
 usually repeat too. Neither run-to-run nor cross-thread-count identity is

@@ -19,7 +19,7 @@ shipped (NEON) multi-thread. Read 2026-09-05: G1 0.92x / 1.15x, G2 0.84x /
 the CRF band: CIF -5.7%, 720p -14%, 1080p +0.4%; deep band (VMAF-NEG 55-83)
 9/10 clips, median about -12%.
 
-**The PSNR-Y floor** was added on 2026-09-14 (owner) as a fifth reading on
+**The PSNR-Y floor** was added as a fifth reading on
 the same legs. It is the first one that is a floor to stay above instead of
 a bar to reach: PSNR-Y at equal bytes against x264 FAILs at more than 1.0 dB
 below on any clip. A clip 0.5 dB below is recorded as debt and listed, not
@@ -134,8 +134,7 @@ with our scene cut. The 2026-09-04 review's fixes: two memory bugs, a DPB
 wrap crash, a thread-dependent opening, wavefront OOM commit, races in the
 profiler counters, six cold statics, two leaks.
 
-## 8. Shot-based and the engine interface (2026-09-05/06)
-
+## 8. Shot-based and the engine interface
 Shot table from the pre-scan (`--shot-table`), cut-split IDRs, per-shot CRF
 (`--shot-crf`: -6..-11% vs cut-split, +2.6% vs flat on the BBB window, so
 measure before trusting it); the across-shot term in the default path; the
@@ -145,8 +144,7 @@ control; the orchestrator design and its P1 prototype (measured hull -3.4 /
 -4.6% over per-shot CRF, -11.7 / -2.2% over flat). Per-shot tool selection
 closed at a ~1% perfect-selector ceiling.
 
-## 9. The x264 parity program, wave 1 (2026-09-16)
-
+## 9. The x264 parity program, wave 1
 **A-plumb.** Fifty-one options promoted from a `Y264_*` variable, a
 hard-coded literal, or nothing at all. Env to flag: `--aq-mode`,
 `--no-mbtree`, `--no-dct-decimate`, `--no-fast-pskip` (which needed a gate
@@ -184,8 +182,7 @@ authority; owner-decision items are not todos. Every report leads with the
 goals. Negative results are recorded with their numbers so they are not
 re-run.
 
-## 10. One binary, both bit depths (2026-09-16, item C3-10bit)
-
+## 10. One binary, both bit depths
 The sample width stays a compile-time type inside the encoder, so there are
 still two libraries. There are no longer two binaries. Every build compiles
 both libraries, the 10-bit one under a generated `_10` symbol namespace, and
@@ -206,8 +203,7 @@ x264 High 10, where the SAME clips at 8 bits read +3.5% and +0.3%
 (docs/data/board10-2026-09-16.md). This isn't a regression, since that path
 had never been measured. It is the next 10-bit item's brief.
 
-## 11. The x264 parity program, wave 2 (2026-09-17)
-
+## 11. The x264 parity program, wave 2
 **B-cintra.** `--constrained-intra` writes the PPS
 `constrained_intra_pred_flag` and holds the encoder to it. In a P or B slice
 an intra macroblock reads neither the reconstructed samples nor the intra
@@ -345,8 +341,7 @@ best at. The leg that would answer the question is an interlaced board
 against a field-coded reference. The plan schedules it with the B-field
 item.
 
-## 12. The x264 parity program, wave 3 (2026-09-17)
-
+## 12. The x264 parity program, wave 3
 **B-hrd.** `--nal-hrd vbr|cbr` writes the buffer model into the stream:
 `hrd_parameters` in the VUI, a `buffering_period` SEI at each buffering
 period, a `pic_timing` SEI on every picture carrying `cpb_removal_delay` and
@@ -1504,8 +1499,7 @@ kernel against `y264_mc_luma_c` at all sixteen phases and all seven partition
 shapes, from the far border to the far border. It adds the row-padding check
 and a page guard sized to exactly the window each plane declares.
 
-## 21. Residual batching, measured and refused (2026-09-19)
-
+## 21. Residual batching, measured and refused
 Stage 4's kernel list left one shape unbuilt and ranked it third: a batched
 inverse 4x4 transform, on a transform class worth 4.2% and 4.5% of a low-rate
 1080p encode. Collecting it needed a call-site restructure instead of a kernel
@@ -1544,8 +1538,7 @@ Nothing was committed to `src/`. `docs/dsp-coverage-inventory.md` has the
 repriced rows, and `local/records/resid-batch-2026-09-19.md` has the census,
 the ceiling probe and the per-clip tables.
 
-## 22. Band-level decisions in the tournament (2026-09-19)
-
+## 22. Band-level decisions in the tournament
 Two stages of the HD parity plan refused a per-macroblock bound for the same
 reason. A threshold scaled by lambda widens as the rate falls, so it is most
 generous exactly where a wrong verdict costs most. This stage asked whether the
@@ -1618,8 +1611,7 @@ counts. The two 1080p cells read +0.001% and -0.002% of instructions against
 main. `local/records/tournament-band-2026-09-19.md` has the offline tables,
 the band leg and the gate.
 
-## 23. The fast presets take the low-rate arms (2026-09-20)
-
+## 23. The fast presets take the low-rate arms
 Stage 2 and stage 3 refused five speed arms at medium, each on a bar of +0.2%
 BD-VMAF-NEG per clip on a twelve-clip 720p/1080p band. Medium keeps that bar,
 because it is the preset the parity claim is read on. The presets below it
@@ -1681,8 +1673,7 @@ threads, for a measured load average of 74 that the harness believed was
 six. `local/records/lowrate-presets-2026-09-20.md` has the per-clip tables,
 both controls, and the staircase measurement.
 
-## 24. One-pass rate control on real titles (2026-10-10)
-
+## 24. One-pass rate control on real titles
 The parity bar asks a real-title cell to hold its five-rung curve at capped
 VBR as well as at CRF. The first 10-minute ladder failed it. Big Buck Bunny
 720p read +2.5% BD-VMAF-NEG against the reference's VBR (maxrate 1.5x, buffer
@@ -1763,8 +1754,7 @@ read lookahead ring slots the driver had already handed back, and a CLI
 worker read the GOP split's state outside its lock. Neither could change a
 bit.
 
-## 25. The correction window belongs to the stream (2026-10-10)
-
+## 25. The correction window belongs to the stream
 Section 24 left six real-title cells landing more than 6% from their VBR
 target. The parity bar now asks every rung of every tier M and tier L VBR
 cell to land within 10% of its target over the whole cell. The cause was one
@@ -1826,8 +1816,7 @@ CRF, CQP, CBR and two-pass output is byte-identical to the previous build. So
 is every mode at one thread, where there is one instance and no shared
 ledger.
 
-## 26. The frame the buffer model cannot price (2026-10-12)
-
+## 26. The frame the buffer model cannot price
 Scored on every frame, the capped-VBR ladder of the 10-minute 720p title of
 section 24 read +1.07% BD-VMAF-NEG against the reference (16 pairings of four
 ladders a side, sd 0.06). That is on the bar, not under it. Scored on every

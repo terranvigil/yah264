@@ -25,7 +25,7 @@ speedup and don't claim it as a lead over anyone.
    a TSan floor of zero and per-feature byte-identity escapes. The check count
    is built at run time, so quote what `scripts/conformance.sh` prints instead
    of a number written down here. Output determinism is claimed only at one
-   thread. Since 2026-09-25 (owner), repeatable byte-exact output isn't required
+   thread. Repeatable byte-exact output isn't required
    for threaded encodes, and their determinism checks report differences
    without failing on them.
 

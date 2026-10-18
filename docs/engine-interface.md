@@ -33,7 +33,7 @@ encoder has to make:
    whole-machine budget and the bytes move. Without the promise, assembling
    the title from the probes of each shot's curve gives a different stream.
    Every partial re-encode then becomes a re-encode of everything.
-   *2026-09-25 (owner): the promise is guaranteed at `--threads 1`. With more
+   *The promise is guaranteed at `--threads 1`. With more
    threads it is best effort, since byte-exact repeatable output is no longer a
    requirement there. `T=1 scripts/shot_determinism.sh` fails on a mismatch,
    and the threaded default only reports it. With threads, an orchestrator must

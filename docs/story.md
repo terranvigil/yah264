@@ -40,7 +40,7 @@ the lead fades to nothing at the top of the range. The open item is low-bitrate
 HD, where the worst clip runs 1.16 to 1.18x. The rest of this document says which
 line each piece sits on.
 
-Since then yah264 has reached parity with x264 (2026-10-12): faster at the same
+Since then yah264 has reached parity with x264: faster at the same
 file size with the same or better quality, from CIF to 4K and across short
 clips, 2-minute segments and 10-minute excerpts. The current figures are in the
 README and `site/results.md`.

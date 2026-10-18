@@ -1,11 +1,11 @@
 # Hardware mode: VideoToolbox H.264 behind the yah264 option surface
 
-Status: STEP 1 AND THE CORE OF STEP 2 BUILT 2026-09-04 (see "Where it
-stands" below the step-0 answers). STARTED 2026-09-04. The owner asked for a
+Status: STEP 1 AND THE CORE OF STEP 2 BUILT (see "Where it
+stands" below the step-0 answers). The owner asked for a
 mode that uses the Mac's encode hardware when it is present. It maps the yah264
 options as far as they go and warns about the rest.
 
-**Step 0 answers (owner, 2026-09-04: "recommendations"):**
+**Step 0 answers (the owner took the recommendations):**
 
 1. CRF mapping: (a). `--crf` maps onto the quality key with a fixed monotone
    table and a one-line warning that the scale is not ours. (b), emulation, is
@@ -19,7 +19,7 @@ options as far as they go and warns about the rest.
 5. ffmpeg exposure: CLI and API only.
 6. `auto` fall-back: warn once and fall back to our encoder.
 
-## Where it stands (2026-09-04, first PR)
+## Where it stands
 
 Built:
 
