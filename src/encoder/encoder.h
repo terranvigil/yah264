@@ -51,7 +51,7 @@ typedef struct y264_lr_blk {
  *
  * That 559/433 measurement moved THREE gates at once, so it prices them
  * jointly and attributes nothing to any one. The lookahead lead is separated
- * out (la_pool_min): a pool of 2 running its own lookahead thread measures
+ * out (LA_POOL_MIN in encoder.c): a pool of 2 running its own lookahead thread measures
  * -3.8% to -5.4%, so "a dedicated thread is pure overhead" is false for the
  * lead. It may still be true for the other two; nobody has separated those.
  *
@@ -202,7 +202,7 @@ struct rc_knobs {
     double vbv_cbr_dive;        /* CBR: rate factor this far under the bits model's QP regime -> serial burst */
     double vbv_fill_frac, vbv_fill_h, vbv_fill_hup, vbv_fill_min;  /* CRF+VBV fill target, horizon below / above it, floor */
     double abr_vbvov_grow, abr_vbvov_pow;
-    double abr_vbvov_vbr;      /* Y264_ABR_VBVOV_VBR: capped VBR's window, as a fraction of the buffer (0 = none) */
+    double abr_vbvov_vbr;      /* capped VBR's overflow window, as a fraction of the buffer */
     double rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
     int    vbv_posti;          /* Y264_VBV_POSTI (default 1): under capped VBR the anchor after an intra frame, or after one the buffer raised, takes the serial schedule */
@@ -218,8 +218,8 @@ struct rc_knobs {
  * as bits * qscale / complexity (the rcbm_* helpers in encoder.c). The
  * complexity domain differs by user -- full-resolution SATD for the serial
  * ABR and VBV, the lowres arrival sums for the pipelined ones -- but the model
- * and its update are the same: an EMA of per-frame ratios, or (Y264_VBV_CW)
- * the ratio of decayed sums num/den, which weighs each frame by its
+ * and its update are the same: an EMA of per-frame ratios, or (the pipelined
+ * VBV model) the ratio of decayed sums num/den, which weighs each frame by its
  * complexity. qp and cplx hold the regime it was measured in (EMAs, read by
  * the extrapolation guards); have[] says k holds a value (measured or
  * seeded), meas[] that it has been measured. */
@@ -349,7 +349,7 @@ struct yah264_encoder {
     int      aq_abs;
     double   aq_anchor;
     double   aq_dcstr;                      /* the AQ frame-level (DC) strength on the CRF base QP (Y264_AQ_DC) */
-    int      aq_rabr;                       /* AQ takes its bitrate-target constants (ABR; two-pass per Y264_AQ2_TP_ABR) */
+    int      aq_rabr;                       /* AQ takes its bitrate-target constants (1 = ABR, 3 = two-pass) */
     double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric */
     double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref */
     double   aq_bref;                       /* the level aq_analyze's centre is pulled to */
@@ -359,7 +359,7 @@ struct yah264_encoder {
     int8_t  *colref;
     int16_t *colpoc;            /* per-4x4 referenced-picture POC (temporal) */
     int      colframepoc;       /* POC of the frame colmv came from (temporal seed) */
-    int      col_l0poc0;        /* that frame's own list-0[0] POC (Y264_TDIR_LEGAL) */
+    int      col_l0poc0;        /* that frame's own list-0[0] POC (temporal legality) */
     int      mv_stride;
     /* The most recently coded frame's reference-list POCs (captured in
  * build_slice), used to resolve colpoc when it enters the DPB / col grid. */
@@ -402,7 +402,7 @@ struct yah264_encoder {
  * from list 1 only (its POC is the list-1 one). */
         int      col_l0poc0;/* this picture's own list-0[0] POC when it was
  * coded (-1 for an I picture): the slice-level
- * temporal-direct legality test (Y264_TDIR_LEGAL) */
+ * temporal-direct legality test */
         int      poc;
         int      frame_num;
         int      used;
@@ -462,7 +462,7 @@ struct yah264_encoder {
  * streaming picture an anchor reads, not the furthest.
  *
  * Only [0] is read (the immediate predecessor's, which is the only burst
- * whose reference B an anchor row-gates against -- see stair_refbgate_on).
+ * whose reference B an anchor row-gates against -- see stair_refbgate_elig).
  * A P anchor preps BEFORE its own launch pushes, so [0] names its
  * predecessor there. The array is K deep because that is what the push
  * costs anyway and a future round that reaches further wants the history to
@@ -831,7 +831,7 @@ struct yah264_encoder {
  * 0 = none. Fixed at open and handed to the quantiser through each frame, so
  * encoders in one process never share it. */
     int      lev_max;
-    /* --weightp / Y264_WEIGHTP, resolved once at open: 0 off, 1 the frame-level
+    /* --weightp, resolved once at open: 0 off, 1 the frame-level
  * estimate, 2 the refined estimate plus a duplicate list-0 slot. */
     int      weightp;
     /* Mode 2's search oracle. The duplicate slot predicts from a reference the
@@ -922,8 +922,8 @@ struct yah264_encoder {
                                  * would drag a bad seed across ~2x more frames),
                                  * qp = the accounted-QP regime, read only by the
                                  * Y264_RCP_LAG guard */
-    int      abr_rf;            /* the rate-factor ABR allocation model (param.rc.abr_model
- * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
+    int      abr_rf;            /* the rate-factor ABR allocation model (param.rc.abr_model);
+ * resolved once at open */     /* per-type scale has been calibrated at least once */
     int      abr_rf2;           /* the rate-factor model on the CRF path (mb-tree on) */
     /* The rate-factor ledger (rate.c, "The RF2 model"): the qscale at
  * which the frames coded so far would have spent their target is
@@ -1040,7 +1040,7 @@ struct yah264_encoder {
         double  dcq;            /* the frame-DC term inside base_qp (abr_dc_on), 0 otherwise */
         double  acc_qp;         /* RF2 accounting base: the P-domain QP the decide
  * was current at (an anchored I: the last P base,
- * not its own track-derived QP); see abr_rf2_basedom_on */
+ * not its own track-derived QP); see the base-domain note in encoder.c */
         double  rceq;           /* ABR: rate-compressed complexity at decide */
         double  cplx;           /* pass-1 stat complexity */
         double  cq;             /* pass 2: complexity^qcomp share */
@@ -1113,15 +1113,14 @@ struct yah264_encoder {
  * rc_waits forced, entries pop at fill), i.e. exact serial VBV behavior. */
     int      rcp_vbv_tight;     /* current burst decides on actuals, serially */
     /* Pipelined VBV bits models, in the lowres decide-complexity domain.
- * bm_rvbv: per type; first calibration snaps, later EMA (have = meas). Under
- *   Y264_VBV_CW its k is num/den, decayed sums of bits*qscale and of
- *   complexity. Its qp[] is the EMA of the ACCOUNTED coded QP, the regime
+ * bm_rvbv: per type; first calibration snaps, later EMA (have = meas). Its
+ *   k is num/den, decayed sums of bits*qscale and of complexity. Its qp[] is the EMA of the ACCOUNTED coded QP, the regime
  *   the scale is calibrated at: the model cannot extrapolate far below it (a
  *   static-content scale calibrated at skip-all QPs under-predicts a low-QP
- *   frame 40x), so pipelined B decides floor their QP at qp - Y264_VBV_QPD --
+ *   frame 40x), so pipelined B decides floor their QP at qp - VBV_QPD (rate.c) --
  *   serial feedback recovers per frame; a flying burst must not dive blind.
  *   Its cplx[] is the content regime: the burst gate goes tight when a coming
- *   frame jumps Y264_VBV_CJUMP past it (the missed-cut / fade-end shape).
+ *   frame jumps VBV_CJUMP past it (the missed-cut / fade-end shape).
  * bm_rvbvs: the SHARED cross-type scale (serial's shape) in slot 0: a regime
  *   shock (a 1 Mbit IDR at a missed cut) snaps it up, so the very next B's
  *   clip prediction inflates too. Predictions use max(per-type, shared) --

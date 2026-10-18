@@ -55,8 +55,8 @@ void y264_me_set_method(int method);
  * (encoder.c) so they switch together. */
 int y264_me_hex_features(void);
 
-/* Set the subpel refinement pattern (-1 = auto/square). Presets drive this; the
- * Y264_SUBPEL env overrides it. Call once per encode before any worker runs ME. */
+/* Set the subpel refinement pattern (-1 = auto/square). Presets drive this.
+ * Call once per encode before any worker runs ME. */
 void y264_me_set_subpel(int subpel);
 
 /* Lowres oracle for the escalation gates (docs/motion-and-modes.md). Set

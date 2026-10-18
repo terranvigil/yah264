@@ -438,8 +438,8 @@ static int rcp_lag_env(void)
      * lag 0 (VMAF-NEG, 120-250f): sintel -1.9, foreman -1.2, samsung -0.1,
      * ducks +0.1, park_joy +0.2, riverbed +0.5, crowd_run +0.7, stockholm
      * +1.4, inside the +-1.7 the instrument shows. What made this shippable
-     * is the in-flight prediction from each frame's own complexity
-     * (Y264_ABR_RF2_INFLIGHT): with the type-mean form the lag cost sintel
+     * is the in-flight prediction from each frame's own complexity: with
+     * the type-mean form the lag cost sintel
      * +14.4%. At one thread every actual is staged before the decide, so lag
      * 1 is byte-identical to lag 0 there; under a VBV the lag is inert.
      *
@@ -624,7 +624,7 @@ static int stair_direct_blocks(const yah264_encoder_t *e)
     return direct_may_be_temporal(e) && !stair_tdir_on();
 }
 
-/* Y264_ABR_RF2_BASEDOM: default ON. The rate factor accumulates every frame's
+/* The base domain. The rate factor accumulates every frame's
  * bits at the frame's BASE (anchor-domain) QP, not its coded QP. The coded QP
  * carries the type offset (I -3, B +cascade), and crediting a B's bits at
  * base+3 overstates the P-domain rate factor by the B's qscale ratio: on
@@ -632,8 +632,7 @@ static int stair_direct_blocks(const yah264_encoder_t *e)
  * the bits-weighted qscale read 0.77 QP above the P track, and the loop
  * settled with the stream 15% under target and only the overflow term
  * pulling (2026-09-04). At the base the sum equals wanted x q exactly when
- * the bits equal wanted, whatever the type mix. Always on; its
- * Y264_ABR_RF2_BASEDOM escape is gone. */
+ * the bits equal wanted, whatever the type mix. */
 
 
 /* "Could this encoder instance ever run a wide ring, IGNORING rate control?"
@@ -2434,7 +2433,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         auto_said = 1;
         fprintf(stderr, "yah264: Y264_DIRECT_AUTO needs Y264_DIRECT_PERMB; not engaging\n");
     }
-    /* The slice-level temporal legality guard (Y264_TDIR_LEGAL, C2): the
+    /* The slice-level temporal legality guard (C2): the
  * colocated picture's own list-0[0] must be this slice's list-0[0], else the
  * colocated motion spans a different interval than the derivation assumes.
  * It bounds a PINNED temporal only. Applying it to the auto rule was tried
@@ -2478,7 +2477,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                     fw->dauto_valid ? " (burst)" : "");
     } else if (type == 2 && permb) {
         temporal_legal = 1;             /* per-MB from here; the scorer's alt too */
-        /* Y264_TDIR_LEGAL (plan C2): the slice-level guard the auto rule
+        /* The slice-level guard (plan C2) the auto rule
  * needs before its score can be trusted. Temporal is legal for the
  * slice only when the list-1 reference's own first list-0 picture is
  * this slice's first list-0 picture; otherwise the colocated motion
@@ -4814,7 +4813,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * frames at medium, enough to push a 720p stream from level 3.1 (what the
  * reference encoder's output declares) to 4.0. The window's SIZE times decoder-side eviction, so the tight
  * window changes which references the pyramid's lists can offer (bits moved
- * when it shipped); its Y264_DPB_TIGHT escape is gone. */
+ * when it shipped). */
     {
         int nrefb = e->b_pyramid ? e->param.bframes : 0;
         /* The tight window is NOT applied where the wide staircase can engage
@@ -5278,11 +5277,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         }
     }
     /* Deterministic fixed-lag RC feedback: every mode with a bitrate, a pass or
-     * a VBV rides the frame pipeline (the serial controller and its
-     * Y264_RC_PIPE / Y264_RC_PIPE_VBV escapes were removed 2026-10-04); VBV
-     * uses the conservative virtual buffer + per-burst serial fallback. Pure
-     * CRF and CQP decide in the serial head. Was: sub-gate off keeps VBV fully
-     * serial. */
+     * a VBV rides the frame pipeline; VBV uses the conservative virtual buffer
+     * + per-burst serial fallback. Pure CRF and CQP decide in the serial
+     * head. */
     /* Resolved here, not in the per-frame path: rcp_account runs on the stair
  * driver under the pipeline. */
     e->tp_rctrace = getenv("Y264_RC_TRACE") != NULL;
@@ -11613,12 +11610,12 @@ static void y264_note_emit(yah264_encoder_t *e, int disp)
 static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                          int is_ref, pixel *const src[3])
 {
-    /* Y264_RCP_NODRAIN (default 1): with a lag budget the decide runs on
+    /* With a lag budget the decide runs on
  * in-flight predictions and the ring's pop bound retires actuals in order,
  * so the anchor-side drain of the pending emit buys the decide nothing and
  * costs the emit its overlap: ducks 720p ABR t12 read emit_sync_wait 52 ms
  * (CRF 3), riverbed 130 ms (CRF 5.5), all pool-empty (2026-09-04). At zero
- * lag, in the warm and under VBV the drain stays. =0 restores it for A/B. */
+ * lag, in the warm and under VBV the drain stays. */
     int rc_waits = (e->abr_on || e->vbv_on || e->tp_pass)
                  && (!e->rcp_on || rcp_warm(e)
                      || (type != 2 && !(e->rcp_lag > 0 && !e->vbv_on))
@@ -12268,7 +12265,7 @@ struct fpipe_leaf {
     int16_t        *colmvx, *colmvy;    /* frozen colocated field snapshot */
     int8_t         *colref;
     int16_t        *colpoc;
-    int             col_l0poc0;         /* the snapshot picture's own list-0[0] POC (Y264_TDIR_LEGAL) */
+    int             col_l0poc0;         /* the snapshot picture's own list-0[0] POC (temporal legality) */
     y264_hpel_ref_t hpel_ctx[17];   /* private half-pel registry (points at DPB) */
     int16_t        *bseed_cur[4];   /* private POC-scaled B-seed grids */
     ntp_pool_t     *pool;           /* the shared pool this leaf's jobs run on */

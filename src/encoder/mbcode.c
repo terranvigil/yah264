@@ -354,7 +354,7 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? AQ2_AFLOOR : 1.0; }
  * non-anchored path takes gain 1: the spread gain there cost
  * mobile_cif's ABR band 1.2-2.4% at three ladder shifts, where it was fitted
  * on CRF. Also under a bitrate target, every path's gain is scaled by
- * abr_k, swept 1.00-1.10 in steps of 0.02 on the ABR band at three ladder
+ * AQ2_ABR_K, swept 1.00-1.10 in steps of 0.02 on the ABR band at three ladder
  * shifts. Means over the shifts, stefan / akiyo / mobile, and the band
  * median at x1.0:
  *   1.00  +0.81 / +0.60 / -0.79   -0.83
@@ -365,10 +365,10 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? AQ2_AFLOOR : 1.0; }
  *   1.10  -0.51 / +1.63 / -0.08   -0.70
  * akiyo reads +0.3 to +0.8 from 1.00 to 1.08 with no trend, so 1.02 (best
  * three-clip mean and best band median) is the optimum.
- * Two-pass (abr bit 2) takes the bitrate-target path without abr_k, with a
- * B-frame floor of 1 and a B-frame pull of 1.3 (Y264_AQ_TP_PULL), fitted on
+ * Two-pass (abr bit 2) takes the bitrate-target path without AQ2_ABR_K, with a
+ * B-frame floor of 1 and a B-frame pull of 1.3, fitted on
  * tp_band.py at rate scales 0.9 / 1.0 / 1.1: the one-pass settings put bus,
- * akiyo, mobile and park_joy 0.35-1.9% over main; without abr_k, bus stayed
+ * akiyo, mobile and park_joy 0.35-1.9% over main; without AQ2_ABR_K, bus stayed
  * +0.5% and park_joy +0.1%; the floor and a pull of 1.0 / 1.3 brought every
  * clip to or under the band's own null (pull 0.5 left akiyo at +0.14, 1.3 has
  * the lowest rate error). Mode 1 is gain 1. */
@@ -1065,10 +1065,10 @@ static int tr_pre_on(int subme)
  * the aligned skip probe; shipped-config corpus mean -2.8%, park_joy -6.7%,
  * no clip regressing). DEFAULT 32 (behaviour-matched round-to-nearest; a value
  * sweep confirmed 32 over 24/40). The legacy deadzone seed (-1) is reached
- * only by the deadzone probe now; the env override is gone. */
+ * only by the deadzone probe. */
 static int rdoq_seed64(void)
 {
-    return 32;                 /* frozen; its Y264_RDOQ_SEED64 override is gone */
+    return 32;
 }
 
 static int viterbi_rdoq(int subme)
@@ -1081,8 +1081,8 @@ static int viterbi_rdoq(int subme)
  * is re-encoded with the full RDOQ before commit. That is what --trellis 1
  * means; running the Viterbi in EVERY trial is 31% of the pure-C
  * profile. DEFAULT ON at the medium tier for the measured trade: 1.18x CIF /
- * 1.29x 720p pure-C for +1.42% VMAF-NEG BD. Y264_TRELLIS_COMMIT=0 restores
- * trellis-in-trials; subme>=9 is untouched (byte-identical max quality).
+ * 1.29x 720p pure-C for +1.42% VMAF-NEG BD. subme>=9 is untouched
+ * (byte-identical max quality).
  * Thread-local: set/cleared inside one MB's analysis, which runs whole on one
  * worker; the emit and I-frame paths never set it, so they keep the full RDOQ. */
 static _Thread_local int s_rd_trial = 0;
@@ -1633,7 +1633,7 @@ static void qp_load(y264_frame_t *f, const struct qp_chain *s)
  * is our form of the same rebalance, applied to the distortion side. */
 static int psy_chroma_x256(void)
 {
-    return 256;                 /* frozen; its Y264_PSY_CHROMA_X256 override is gone */
+    return 256;
 }
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. Its sum is the
  * block's SSD exactly, so a caller that wants the map gets the SSD for free. */
@@ -2928,7 +2928,7 @@ static long ssd_luma_mb(y264_frame_t *f, int mbx, int mby)
  * (I frames, or the callers that don't pass one) always runs the full search. */
 static int intra_fine_m16(void)
 {
-    return 16;                 /* frozen; its Y264_INTRA_FINE_M override is gone */
+    return 16;
 }
 
 /* The 1080p class (y264_size_class 2). */
@@ -3004,7 +3004,7 @@ static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
  * screen it out. inter_satd<0 (unknown / subme>=9) always admits. */
 static int intra_admit_m16(void)
 {
-    return 24;                 /* frozen; its Y264_INTRA_ADMIT_M override is gone */
+    return 24;
 }
 
 
@@ -3021,11 +3021,10 @@ static int intra_admit_m16(void)
  * The curve saturates here: 8 reads the same wall on three of the four clips
  * and harms tempete as well (worst +0.71%), and 0 -- never admitting B intra
  * at all -- buys nothing beyond 8, so the trials still admitted are cheap.
- * (8 was the animation-heavy arm and -1 the shared P-side margin; the
- * Y264_B_INTRA_ADMIT_M override that reached them is gone.) */
+ * (8 was the animation-heavy arm and -1 the shared P-side margin.) */
 static int intra_admit_m16_b(void)
 {
-    return 12;                 /* frozen; its Y264_B_INTRA_ADMIT_M override is gone */
+    return 12;
 }
 
 static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
@@ -3271,8 +3270,7 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
 
 /* B intra with the fine gate armed (see analyze_b_mb). DEFAULT ON: ABR band
  * improves on 11/12 clips (median -1.0%, worst sintel +0.98%), CRF band
- * neutral within +-0.61%, samsung-lo wall -5.65%. Y264_B_INTRA_FINE=0 is the
- * escape back to the ungated trial. */
+ * neutral within +-0.61%, samsung-lo wall -5.65%. */
 /* Mid-tournament B_SKIP commit (see analyze_b_mb). DEFAULT ON at 1 (non-ref
  * B's only): CRF band byte-identical 12/12, ABR band worst +0.89.
  * 0 = full tournament, 2 = also exit reference B's under the absolute-SSD
@@ -4303,7 +4301,7 @@ static _Atomic uint64_t g_rs_n[RS_NB], g_rs_4win[RS_NB], g_rs_agree[RS_NB], g_rs
  * Swept: 103 -1.11%, 105 -1.30%, 107 -0.96%, 110 -0.88% (band median). */
 static int tr_pre_bias(void)
 {
-    return 105;                 /* frozen; its Y264_TR_PRE_BIAS override is gone */
+    return 105;
 }
 static int trprof_on(void)
 {
@@ -4371,7 +4369,7 @@ static int direct_score_on(void)
  * temporal decisions. Below 8 not swept further. */
 static int dauto_stride_env(void)
 {
-    return 8;                 /* frozen; its Y264_DIRECT_AUTO_STRIDE override is gone */
+    return 8;
 }
 int y264_mb_dauto_stride(void) { return dauto_stride_env(); }
 static inline int dauto_sampled(int mbx, int mby)
@@ -4594,9 +4592,8 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
  * conventional scale, while sa8d_c_8x8 carries the conventional
  * ((sum+2)>>2) normalisation and is 1x. Comparing them directly makes the
  * pre-decision degenerate: 8x8 wins 81114/81114 calls on bus, i.e. the
- * 4x4 transform is unreachable at the medium tier. Y264_TR_PRE_FIX=1
- * puts both on our scale before the compare, and is the DEFAULT. Set 0
- * to recover the degenerate behaviour byte-exactly.
+ * 4x4 transform is unreachable at the medium tier. So both go on our
+ * scale before the compare.
  *
  * Do NOT treat this screen as an approximation to be improved toward
  * full RD: measured head-to-head, encode-both-and-RD-pick is WORSE
@@ -5397,10 +5394,6 @@ static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
 }
 
 
-/* CABAC-accurate RD rate is on by default for CABAC streams; Y264_CABAC_RD=0
- * disables it (A/B testing), reverting to the CAVLC bit-count proxy. */
-
-
 /* Y264_P_SKIP_EXIT: the P-side late-skip class. 35% of P_Skip verdicts fail
  * the zero-residual early probe, run the full tournament and end skip by RD
  * anyway. Two bracketing
@@ -5431,16 +5424,16 @@ static int fast_pskip_on(void)
 }
 
 
-/* Early-termination partition gate. The CONSTANT-threshold modes are KILLED,
- * default OFF, kept env-gated as a documented negative + a reproducer (like
- * Y264_ADME / midskip). The gate runs p16x16 and p8x8, then runs 16x8/8x16 ONLY
+/* Early-termination partition gate. The CONSTANT-threshold modes are KILLED
+ * and kept env-gated as a documented negative + a reproducer (like
+ * midskip). The gate runs p16x16 and p8x8, then runs 16x8/8x16 ONLY
  * when the 8x8 split looks promising vs 16x16: the 8x8 cost < the 16x16 cost +
  * a rectangle threshold. Without it yah264 runs all four shapes
  * unconditionally -- extra ME work (two partition searches over all refs) when
  * 16x16 or 8x8 is clearly best.
  *
  * WHY KILLED: a genuine quality/speed trade, not a quality-free win, with a
- * SHARP frontier. At the constant-threshold sweep (mlam units; knob removed 2026-10-04):
+ * SHARP frontier. At the constant-threshold sweep (mlam units):
  * thresh 0 -> ~6% faster (foreman CIF pure-C 1t), but +0.55% VMAF-NEG mean
  * over 6 CIF clips (foreman +0.84, mobile +0.69, coastguard +1.02,
  * stefan +0.35, bus +0.32, tempete +0.09) -- fails the <=0 gate,
@@ -5497,7 +5490,7 @@ static int part_earlyterm(void)
 #define PART_IMPORTANT_OFF 2    /* mb-tree offset (QP) that marks an MB important */
 static int part_hetero_pct(void)          /* protect when CoV^2*100 exceeds this */
 {
-    return 16;                 /* frozen; its Y264_PART_HETERO override is gone */
+    return 16;
 }
 /* True when the 3x3 lowres-inter-cost neighbourhood around (mbx,mby) is dispersed
  * (relative variance above the CoV^2 threshold) -- a motion/texture boundary the
@@ -5771,7 +5764,7 @@ static int part_search_rect(y264_frame_t *f, int mbx, int mby,
  * margin would prune. The BD the gate spends should concentrate exactly
  * on propagation-heavy MBs, so rescuing them aims to buy back most of
  * the band cost (bus -2.50 at matched rate) for a
- * minority of the pruned searches. Threshold = Y264_PART_IMPORTANT (the
+ * minority of the pruned searches. Threshold = PART_IMPORTANT_OFF (the
  * parked mode-2 machinery, same units). */
     if (part_earlyterm() >= 3) {
         if (cost8_raw < cost16_raw + mv_slack) return 1;
@@ -5985,7 +5978,7 @@ static void mru_dump(void)
 }
 static void mru_reg(void){ static int d = 0; if (!d) { d = 1; atexit(mru_dump); } }
 
-/* v3 staircase (Y264_STAIR_DEPTH): does this slice's list-0 reference r need
+/* v3 staircase: does this slice's list-0 reference r need
  * the fixed vertical clamp? True for any (possibly in-flight) recent anchor in
  * the clamp SET, keyed by POC -- a machine-invariant function, never of thread
  * count. The set is packed, so the loop exits on the first empty slot and the
@@ -6007,7 +6000,7 @@ long y264_pstat_part[4], y264_pstat_srch[4];   /* BPROF: eval_inter_part calls /
  * Plain globals: counted only under Y264_BPROF, which is t1-only (TSan caught
  * the ungated version racing across the wavefront). */
 static int bprof_env(void);
-/* Y264_RECT_REFS: the rect reference set. A 16x8 or 8x16 partition is
+/* The rect reference set. A 16x8 or 8x16 partition is
  * searched only on the list-0 references its two 8x8 halves chose, not on
  * every reference. Only meaningful in the 8x8-first partition order (8x8 before the
  * rects, PART_EARLYTERM), which is where the 8x8 refs exist; the single-thread
@@ -6018,11 +6011,10 @@ static int bprof_env(void);
  * sunflower_1080p; t12 wall sunflower -7.5%, shields -3.5%, pedestrian -3.1%,
  * park_joy -3.5%, samsung -3%, foreman -3% (medians of 5, control inside 1%).
  * CRF band (both arms in the threaded order, 14 clips, 150f): median +0.06%,
- * range -0.43 (pedestrian) .. +0.72 (bus, saturated). Y264_RECT_REFS=0 escapes
- * to the all-refs rect search. */
+ * range -0.43 (pedestrian) .. +0.72 (bus, saturated). */
 static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NULL */
 
-/* Y264_P8_REFCLAMP=1: the 8x8-stage reference clamp (plan item B2). When
+/* The 8x8-stage reference clamp (plan item B2). When
  * the 16x16 search chose ref 0 and both the top and left neighbours are
  * coded inter, the P_8x8 stage searches only refs 0..max(neighbour refs)
  * over the six neighbour positions (top-left, top, top+2,
@@ -6036,8 +6028,7 @@ static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NUL
  * -2.2%; t12 -2.2 / -1.6 / -1.0 / -1.3 / -1.5 / -0.6%. CRF band, 14 clips,
  * 150f, t1: median -0.04% (stq order) / -0.07% (threaded order), worst clip
  * +0.19 / +0.27, best -1.04 / -0.65. Record:
- * local/records/p8-refclamp-2026-09-02.md. Y264_P8_REFCLAMP=0 escapes to the
- * unclamped all-refs 8x8 search. */
+ * local/records/p8-refclamp-2026-09-02.md. */
 static _Thread_local int tl_ref16 = -1;         /* the 16x16 winner's ref for the 8x8 clamp, -1 = none */
 /* --no-mixed-refs: the one list-0 slot the partition searches of this P
  * macroblock visit, or -1 when each partition picks its own. Under --weightp 2
@@ -6078,7 +6069,7 @@ static int mixref_slot(const y264_frame_t *f, int ref16)
 #define P_REF0EXIT_MINMB 1200
 static long p_ref0exit_k(void)
 {
-    return 1200;                 /* frozen; its Y264_P_REF0EXIT_K override is gone */
+    return 1200;
 }
 static _Thread_local int tl_rx_armed, tl_rx_hit, tl_rx_smvx, tl_rx_smvy;   /* the exit's skip MV, per P MB */
 static int mvd_bits(int d);
@@ -7118,13 +7109,12 @@ struct bpart_mo {
  * partition's per-list winner into that list's grid so partition 1's
  * predictors see partition 0 (both grids restored before returning). List 0
  * searches all active references with ref bits in the cost (mixed refs). */
-/* Y264_B_RECT_SEED: search each rectangular partition from the 16x16 winner
+/* Search each rectangular partition from the 16x16 winner
  * instead of cold and over every reference. The cold form is what made
  * the B rectangles unaffordable -- two partitions x two splits x nref list-0
  * searches per macroblock, ~12 at --ref 3, none of them seeded, on top of the
- * 16x16 work that had already found a winner per list.
- * 1 = seed + pin list 0 to the 16x16 winner's reference (default), 0 = the
- * cold form, for the A/B. */
+ * 16x16 work that had already found a winner per list. List 0 is pinned to
+ * the 16x16 winner's reference. */
 /* Y264_B_8X8: code B macroblocks as four independently predicted 8x8 quadrants
  * (B_8x8, sub_mb_types B_Direct/L0/L1/Bi_8x8). The same analysis yields the
  * estimates that make the rectangular searches affordable. */
@@ -7173,7 +7163,7 @@ static int b8_direct_on(void)
  * decide to skip. */
 static long b_skip_exit_ssd(void)
 {
-    return 512;                 /* frozen; its Y264_B_SKIP_EXIT_SSD override is gone */
+    return 512;
 }
 
 /* Ref-B readmission to the mid-tournament exit: is THIS reference B macroblock
@@ -7219,7 +7209,7 @@ static uint64_t b8s_mb, b8s_search, b8s_gated, b8s_rd, b8s_win, b8s_skipexit, b8
 /* Mid-tournament skip-exit population, for Y264_B_SKIP_EXIT: macroblocks
  * reaching the check, and why each is or is not admitted. */
 static uint64_t bx_reach, bx_exitok, bx_isref, bx_mode0, bx_taken, bx_refblocked, bx_refadmit;
-/* E2 stages A/C population, for Y264_BSKIP_ADMIT / _CGUARD. The whole arm is a
+/* E2 stages A/C population, for the B-skip admission. The whole arm is a
  * population argument -- the confirmation's decision is not the problem, the
  * number of macroblocks paying for it is -- so every stage prints its own
  * count and no null is believed without them. */
@@ -8465,7 +8455,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * range checks, and the ME seed list), so an uninitialised dmv feeds STACK
  * GARBAGE into the motion search. That is deterministic exactly as long as the
  * worker's stack history is -- and two sibling B leaves sharing the pool's
- * workers (Y264_FPIPE) make it not, which is why per-macroblock temporal
+ * workers (fpipe) make it not, which is why per-macroblock temporal
  * direct was irreproducible above one thread. Zero it once: an 84-byte stack
  * clear per B macroblock, against the RD tournament that follows, and it closes
  * the class rather than the one reader that happened to show it. */
@@ -8766,7 +8756,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long c_ref0 = -1;
     struct pred_nb pn0;             /* list-0 predictor neighbours, every ref */
     pred_nb_fetch(f, mbx * 4, mby * 4, 4, 0, 0, &pn0);
-    /* Y264_B_REFQ: every reference searched to half-pel; the winner alone is
+    /* every reference searched to half-pel; the winner alone is
      * taken on to quarter-pel after the loop */
     const int refq = f->nref > 1 && y264_me_b_refq(pw);
     if (refq) y264_me_set_noqpel(1);
@@ -9227,7 +9217,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
 b8_done: ;
     }
 
-    /* Y264_B_INTRA_FINE: arm the i4/i8 fine gate on the B side by passing the
+    /* Arm the i4/i8 fine gate on the B side by passing the
  * inter SATD reference instead of -1, symmetric with the P path. */
     if ((!b_intra_band_refuses(f, mby) && intra_admit_g(f, mbx, mby, b_isatd, 1))
         || best >= 1e29) {
@@ -12054,7 +12044,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int s4 = trellis_commit_on(f->subme, f->trellis);
     s_rd_trial = s4;                /* S4: deadzone quant in the RD trials below */
 
-    /* v3 staircase (Y264_STAIR_DEPTH): P_Skip predicts from ref 0. When ref 0
+    /* v3 staircase: P_Skip predicts from ref 0. When ref 0
  * is the (possibly in-flight) previous anchor, its reads must respect the
  * fixed clamp -- but the derived skip MV is a median that can include
  * neighbours coded against OTHER (unclamped) references, so it may exceed

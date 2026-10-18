@@ -127,7 +127,7 @@ double frame_complexity_ilr(const yah264_encoder_t *e)
  *
  * Self-BD against the unfloored build on the band ladders: samsung -4.94%,
  * sintel -0.36%, and the other eight clips byte-identical. Always on, at
- * 0.2 x cvi (the Y264_ABR_CFLOOR / _CFLOORF overrides are gone). */
+ * 0.2 x cvi. */
 
 
 /* The RF2 model: one-pass ABR as the CRF path plus a slowly adapted rate
@@ -713,7 +713,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
         if (fps > 240.0) fps = 240.0;
         qp += e->rck.crf_level + e->rck.crf_fps_slope * log2(fps / 30.0);
     }
-    qp += e->crf_dc;                            /* Y264_AQ_DC_BASE, 0 otherwise */
+    qp += e->crf_dc;                            /* the frame DC (crf_frame_dc), 0 otherwise */
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
     e->qp = (int)lround(qp);
@@ -2600,7 +2600,7 @@ double abr_vbvov_frac(void)
  * DEFAULT ON (2026-09-03). ABR ladders vs the unscaled controller, t1,
  * 120f: ducks -7.50%, riverbed -1.52, crowd_run -1.17, park_joy -0.24;
  * samsung, sintel, foreman, stockholm +0.00 (scale 1 there, byte-identical).
- * Always on; the Y264_ABR_PBRATE switch and its _LO/_HI overrides are gone. */
+ * Always on. */
 double abr_pbrate_scale(const yah264_encoder_t *e)
 {
     const double lo = 0.10, hi = 0.40;   /* bits per pixel per frame */

@@ -496,9 +496,8 @@ static int me_et_stat_on(void)
  * +0.12% (foreman +1.12 / bus +0.71 the exposed rows). */
 #define ME_ET_K 48
 
-/* Which block shapes the early-out is allowed on: sub-16x16 only. The env that
- * selected all shapes or 16x16 only (Y264_ME_ET_SHAPE) was removed on
- * 2026-10-04; the sweep it served is recorded below and in the refused index.
+/* Which block shapes the early-out is allowed on: sub-16x16 only. The sweep
+ * over all shapes and 16x16 only is recorded below and in the refused index.
  *
  * The split is not arbitrary. The UMH note above records that the wide grid is
  * "valuable for 16x16 (no tight seed) but redundant for 8x8-and-smaller shapes,
@@ -919,10 +918,10 @@ static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
     return 1;
 }
 
-/* On by default: skipping the UMH wide grid for 8x8-and-smaller shapes is
- * ~6-7% faster single-thread and BD-neutral-to-better on VMAF-NEG across the
- * motion corpus (stefan -0.75%, foreman -0.15%, bus +0.21%, mobile -0.18%,
- * coastguard -0.06%). Set Y264_ME_SMALL_NOUMH=0 to restore the full grid. */
+/* Skipping the UMH wide grid for 8x8-and-smaller shapes is ~6-7% faster
+ * single-thread and BD-neutral-to-better on VMAF-NEG across the motion corpus
+ * (stefan -0.75%, foreman -0.15%, bus +0.21%, mobile -0.18%, coastguard
+ * -0.06%). */
 
 /* Legacy hex-only predicate for the oracle diagnostic below: true when the wide
  * grid is off, so the oracle can re-run it as a reference. (The shipping gates
@@ -1380,7 +1379,7 @@ static int me_search_core(const pixel *src, int ss,
             }
     }
     /* NOTE: a behaviour-matched 8-point square refine here does NOT replace
- * UMH. Built and BD-tested (Y264_SQ_REFINE + --me hex), it captures 95%
+ * UMH. Built and BD-tested (with --me hex), it captures 95%
  * of UMH's near-hex SATD-gain (umh_improved 44%->3.3%) yet dropping UMH
  * still costs +15.9% BD on bus, +8.2% stefan (VMAF-NEG). Integer-SATD-gain
  * VOLUME (mostly tiny 1px near-hex moves) does NOT predict BD; UMH's few
@@ -1401,7 +1400,7 @@ static int me_search_core(const pixel *src, int ss,
     /* The UMH wide grid escapes local minima the local hex stalls in -- valuable
  * for 16x16 (no tight seed) but redundant for 8x8-and-smaller shapes, whose
  * predictor is the already-refined parent MV. Skipping UMH for small blocks
- * (env Y264_ME_SMALL_NOUMH) removes the bulk of the per-MB ME fan-out. */
+ * removes the bulk of the per-MB ME fan-out. */
     int umh = umh_allowed() && !et_hit && !esa;
     if (umh && w < 16 && h < 16) umh = 0;
     /* Oracle diagnostic: same eligibility the real UMH would have had. */

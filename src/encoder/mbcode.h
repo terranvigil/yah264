@@ -32,7 +32,7 @@ static inline int y264_size_class(int w, int h)
  * Plus one for the IMMEDIATE predecessor's REFERENCE B, which a deep list 0
  * reaches ahead of both anchors (it is coded after its anchor, so it outranks
  * them on FrameNum). Only the immediate predecessor's, not every live burst's --
- * see the row-gate reasoning in encoder.c's stair_refbgate_on.
+ * see the row-gate reasoning at encoder.c's stair_refbgate_elig.
  *
  * The set is therefore not "newest-first" in any meaningful sense -- a
  * reference B is NEWER than its own anchor -- and it is PACKED, which is the
@@ -303,7 +303,7 @@ typedef struct {
     int   size_class;           /* y264_size_class of the picture */
     int   uhdlite;              /* the 2160p size tier's tighter P and B intra admission */
     int stq;                    /* single-thread quality mode: at wf_width==1 the
- * speed trades (ME_ET family, PART early-term)
+ * speed trades (ME early-out family, PART early-term)
  * disengage -- single-thread has the speed margin
  * and needs the quality. Thread-variant output by
  * policy; t2+ byte-identical. */

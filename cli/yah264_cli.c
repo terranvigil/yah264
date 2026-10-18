@@ -2130,8 +2130,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
  * buffers to the end. Both live inside the headroom the share leaves. */
 #define Y264_INPUT_MEM_SHARE 0.50
 /* The input store's ceiling under hungry GOP workers, as a share of physical
- * RAM, for frames above 1080p (Y264_STREAM_STORE_MB overrides at any size;
- * 0 = no ceiling). */
+ * RAM, for frames above 1080p. */
 #define Y264_STORE_SHARE 0.125
 /* Frames at or below this many luma pixels (1920x1088) take no default
  * store ceiling. */
