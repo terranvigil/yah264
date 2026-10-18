@@ -82,9 +82,8 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 ## Up next
 
-With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice; the open item is speed with every core busy. There we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
-
-Every x264 option is now built or deliberately left out, with the reasons in [x264-parity-plan.md](docs/x264-parity-plan.md). Next come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice. The open item is speed with every core busy. There we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
+Next come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 
