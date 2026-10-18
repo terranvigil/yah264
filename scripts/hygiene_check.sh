@@ -101,9 +101,8 @@ if [ -n "$hits" ]; then
     printf '  %s\n' "$hits"; fail=1
 fi
 
-# 8. No naming the reference encoder in shipped code. CONTRIBUTING.md's
-#    clean-room rule says to write "the reference encoder" and describe the
-#    behaviour: what it emits, costs and decides is observable, what it does
+# 8. No naming the reference encoder in shipped code. Write "the reference
+#    encoder" and describe the behavior: what it emits, costs and decides is observable, what it does
 #    inside to get there is not something this project asserts. The name is
 #    still legitimate in two places -- user-facing text where it IS the product
 #    name (CLI help, error messages, the "x264" rate-control alias) and the
