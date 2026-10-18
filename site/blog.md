@@ -11,7 +11,7 @@ yah264 is an H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 across a 
 
 I've worked on video ingestion pipelines for over 15 years. The key goals are always "lowest cost" and "highest quality" for a given bitrate. And of course speed usually matters as well. This is my attempt at all three for anyone who would like to try yah264 out.
 
-I started development on my MacBook Pro M5 Max, so most of the initial optimization was arm64 based. That worked for me because I've found that the lowest-cost instances for encoding are currently arm64. Graviton4 is generally in the range of 10-30% cheaper per byte encoded.
+I started development on my MacBook Pro M5 Max, so most of the initial optimization was arm64 based. That worked for me because I've found that the lowest-cost instances for encoding are currently arm64. Graviton4 is generally in the range of 10-30% cheaper per frame encoded.
 
 ## Highlights
 
