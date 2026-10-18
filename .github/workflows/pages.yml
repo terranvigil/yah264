@@ -1,5 +1,7 @@
 name: Pages
 
+# rebuilds the site on a push to main that touches it; dispatch by hand otherwise
+
 on:
   push:
     branches: [main]
