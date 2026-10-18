@@ -7,17 +7,19 @@
 
 ## What
 
-A super-fast, highly efficient H.264/AVC encoder. 
+A super-fast, highly efficient H.264/AVC FLOSS encoder. 
 
-## Do we need another?
+## YAH264?
 
-Fast open-source H.264 encoders exist today. x264 has always been the leading software implementation for speed. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
+A fast open-source H.264 encoder exists. For 20 years x264 has been the leading software implementation for speed and quality. Beyond coding tool algorithms, its hottest code (the motion search, deblocking, CABAC) is hand-written assembly, tens of thousands of lines of it.
 
-New tools now exist that can accelerate the iteration over a large number of algorithmic optimizations. Now is a good time to take advantage of this.
+In the past, when working on formats and codecs, I'd pull up the specs and spend weeks for small gains. Today, you can use coding agents to accelerate the iteration over a large number of algorithmic optimizations. Prompt with a long list of ideas to try out and in minutes or hours, you have an answer.
+
+A fun example of this was when we were trying to optimize the skip check for prediction reuse. Beyond brute force, there are some simple methods for this. But after iterating through a number of options, the Cauchy–Schwarz inequality turned out to be a clear winner. We can bound every transform coefficient by the energy of the residual with its mean removed. If every bound is under the quantizer’s threshold, the block must be zero, and we skip the transform. On our “sunflower” test clip, 79% of the skip check’s transforms disappeared.
 
 ## Plan
 
-We are making use of agentic tools to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
+We make use of coding to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
 
 1. Build a standard H.264 encoder with the same feature set and options as x264.
 2. Capture x264's performance and quality baseline on a fixed test set of clips.
