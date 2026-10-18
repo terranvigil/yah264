@@ -382,7 +382,7 @@ label.sw { display: inline-flex; gap: 0.4rem; align-items: center; cursor: point
 /* A board table has more columns than a phone has room for. On desktop it
    wraps (nothing clipped); below this it becomes its own scroll region, so the
    table pans instead of the page. */
-@media (max-width: 40rem) {
+@media (max-width: 62rem) {
   table { display: block; overflow-x: auto; max-width: 100%; }
 }
 @media (max-width: 62rem) {

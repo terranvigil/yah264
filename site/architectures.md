@@ -1,6 +1,6 @@
 ---
-title: Architectures, yah264
-description: The processors and instruction sets yah264 is tuned for today, the ones planned next, where the speed comes from.
+title: Architectures - yah264
+description: The processors and instruction sets yah264 is tuned for today, the ones planned next, and where the speed comes from.
 ---
 
 # Architectures
@@ -135,8 +135,8 @@ live values at once, which fits on ARM and spills to memory on SSE4.2.
 
 **Two halves that don't talk.** An AVX2 register is really two 128-bit halves.
 Shuffles and packs work inside a half. Moving data across the seam costs an
-extra instruction. NEON registers have no seam. That's why the AVX2 twin of a
-kernel is never just the SSE4.2 twin at double width.
+extra instruction. NEON registers have no seam. That's why a good AVX2 kernel is
+rarely just the SSE4.2 one at double width, though many of ours still are (see below).
 
 **Table lookups.** Both families can rearrange bytes by a table, but NEON's
 instruction reaches across 64 bytes in one go and the x86 one reaches 16. The

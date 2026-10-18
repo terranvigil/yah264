@@ -70,7 +70,8 @@ gradients than to fine texture. Spend bits where they are seen.</li>
 <p class="aside-title">Where the loss actually happens</p>
 <p>
 The first three don't lose anything. A residual, or prediction error, is exact. A motion vector is exact. And entropy coding is reversible. Quantization throws the data away. It rounds the residual before coding it.
-
+</p>
+<p>
 So the fourth bullet is the interesting one. It's based on judgment about human vision. Two encoders at the same bitrate are partly disagreeing about it and partly just predicting better or worse than each other. Viewers settle the perceptual half. A <a href="https://en.wikipedia.org/wiki/Mean_opinion_score">MOS</a> panel is how you ask them. We will get to MOS later.
 </p>
 </div>
@@ -158,7 +159,7 @@ a `SAD`, the sum of absolute differences.
       <div class="ctrls">
         <button id="meplay">Pause</button><button id="mestep">Step ›</button>
         <label class="sw"><input id="meslow" type="checkbox"> half speed</label>
-        <label class="sw" for="merange">Search range</label> <input id="merange" type="range" min="6" max="22" value="14" style="width:110px" aria-label="Search range, in pixels"> <b id="merangeout">±14</b></span>
+        <label class="sw" for="merange">Search range</label> <input id="merange" type="range" min="6" max="22" value="14" style="width:110px" aria-label="Search range, in pixels"> <b id="merangeout">±14</b>
         <label class="sw"><input id="memode" type="checkbox"> hexagon pattern, seeded from the neighbors</label>
       </div>
       <div class="nums">
@@ -311,7 +312,7 @@ Every mode below picks which one to let go.
 ### Constant QP
 
 QP is the number that sets the quantization step. In H.264 it runs from 0 to 51.
-Six steps doubles the step size.
+Every six steps double the step size.
 
 Set one QP and never change it. Quality stays even. The bitrate follows the
 content and runs up to five times higher in the action than in the calm. It's

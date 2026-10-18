@@ -1,6 +1,6 @@
 ---
 title: Results - yah264
-description: The goal tables, the quality maps, the corpus, and how each number reproduces.
+description: The goal tables, quality across the rate range, the corpus, and how each number reproduces.
 ---
 
 # Results
@@ -17,7 +17,7 @@ how good video looks to people.
 
 Every figure in this section comes from the current parity measurement, timed on
 one Apple M5 Max with 18 cores. A group passes when its median ratio is at or
-under 1.00 and its worst cell at or under 1.15, with its quality holding. All 27 of the groups that count toward parity pass.
+under 1.00 and its worst cell at or under 1.15, with its quality holding. All 27 group-and-goal readings that count toward parity pass.
 
 ## The test set
 
@@ -166,7 +166,7 @@ will fill them in.
 
 Which rented machine encodes a frame most cheaply? Multiplying yah264's CPU time
 per frame by the price of a vCPU-hour gives a rough answer. On sunflower 1080p
-at every thread, Graviton4 comes out cheapest on both price bases:
+with every thread busy, Graviton4 comes out cheapest on both price bases:
 
 | price basis | Graviton4 | AMD EPYC | Intel Xeon |
 |---|--:|--:|--:|
@@ -179,18 +179,18 @@ The inputs:
 |---|---|--:|--:|--:|
 | AWS Graviton4 | c8g.8xlarge | 70.9 | $1.276 | $0.384 |
 | AMD EPYC | c7a.8xlarge | 90.9 | $1.642 | $0.334 |
-| Intel Xeon | c7i.8xlarge | 102.4 | $1.428 | $0.356, paid |
+| Intel Xeon | c7i.8xlarge | 102.4 | $1.428 | $0.356 |
 
 Treat it as an estimate, because the three CPU times don't come from one run.
 Graviton4's comes from the parity run's full-thread rows on a c8g.24xlarge. That
-was two builds earlier. AMD's comes from the short 60-frame run, which is why its
+was an earlier build. AMD's comes from the short 60-frame run, which is why its
 ratios say "about". Only Intel's is the reading above. The on-demand prices are AWS's published rates,
 not fetched live. Intel's vCPUs are hyperthreads, and a measure per unit of CPU
 time absorbs that. For x264 the order differs: at spot, AMD is cheapest.
 
 ## The earlier ten-clip board
 
-Until October this page read a ten-clip board of Xiph clips from CIF to 1080p,
+Before parity this page read a ten-clip board of Xiph clips from CIF to 1080p,
 timed on the same machine. The sections below still come from that board. They
 show how the encoder got here. The hardware mode, the other encoders and the
 multi-shot sequences have no parity-report reading yet.
@@ -274,7 +274,7 @@ x264's 5.6% and 4.0%. We fitted the opening on seventeen non-board cells and
 held the board out. Matched-rate BD-rate gained 2% at the median. That board
 moved the ratios by 0.01 to 0.04. The old resolution-only seed opened the
 high-bitrate cells near QP 6 to 17 against operating points of 27 to 34.
-samsung opened five QP too high. Those openings caused the earlier −14% and
+One high-rate demo clip opened five QP too high. Those openings caused the earlier −14% and
 +18% rate misses. The staircase alone took the multi-threaded rows from 1.06x
 and 1.26x to 0.94x and 1.11x. Before it, multi-threaded ABR had cost 0.3 to 0.4
 of a ratio point over CRF. Earlier still, both encoders got the same target and the
@@ -416,8 +416,7 @@ fixed-function silicon with their own trade-offs. They stay out of scope here.
 The numbers: openh264 comes in 15.2 VMAF-NEG points below us at the median. Its
 wall against ours at auto threads reads 1.09x. The withdrawn cell read 0.47x
 against the 0.98x beside it. An earlier five-clip BD-rate with B-frames off on
-x264 read +63.7%. That figure is in our local records and was not re-measured
-here. Its
+x264 read +63.7%. It wasn't re-measured for this page. Its
 gap against x264 comes from a different measurement again, so the two do not
 subtract to the +0.22 in the yah264 row above.
 
@@ -443,7 +442,7 @@ Taken one at a time, the same clips are ahead of x264 on two of the three
 sizes. So the whole swing came from allocation across shots. Coding efficiency
 wasn't the cause. The fix puts the frame-mean part of adaptive quantization on
 the frame's base QP, on every input path including streaming. Its strength is
-1.3 under CRF and 1.04 under a bitrate target. The single-shot board did not move. `--shot-crf` goes further on file input
+1.3 under uncapped CRF and 1.04 under a VBV cap or a bitrate target. The single-shot board did not move. `--shot-crf` goes further on file input
 by sizing each shot against the whole title. Four CRF points fitted with a
 cubic is thinner than the five-point sweeps our own rule asks for. Read the
 table for the direction and rough size of the effect. Reproduce it with:

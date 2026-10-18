@@ -38,7 +38,7 @@ Every number is on the [results page](results.md). The page explains the method 
 
 <figure class="chart"><img src="assets/blog/bitrate-vs-quality.svg" alt="Rate-quality curves for Chimera, Tears of Steel and Meridian at 1080p. yah264's curve sits above and left of x264's on all three."></figure>
 
-<figure class="chart"><img src="assets/blog/bitrate-savings.svg" alt="BD-rate against x264 for 26 titles at CRF and capped VBR. All but one of the 52 ladders need fewer bits, by up to 55%."></figure>
+<figure class="chart"><img src="assets/blog/bitrate-savings.svg" alt="BD-rate against x264 for 26 title and resolution cells (nine titles) at CRF and capped VBR. All but one of the 52 ladders need fewer bits, by up to 55%."></figure>
 
 ## Built for per-shot encoding
 

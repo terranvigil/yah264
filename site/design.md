@@ -56,7 +56,7 @@ is 352 by 288 pixels, so its wavefront runs out of independent rows quickly. A
 
 So the thread count is picked in two steps. Auto takes the smaller of the core
 count and 16. Then the picture caps it: 12 threads for CIF, 21 for 720p, 32 for
-1080p. Under auto only the CIF cap ever bites. The others apply when a caller
+1080p. Under auto only the CIF-and-smaller caps ever bite. The others apply when a caller
 asks for a count, which we honor and then clamp.
 
 Nobody measured a knee at 16. It's a default that's safe on an unknown machine,
@@ -106,8 +106,8 @@ counts aren't one ratio.
 Across shots, the base quantizer under CRF is flat per frame type and moves with
 the frame mean of the per-macroblock offsets. That mean holds the
 macroblock-tree boost and the adaptive quantization's energy term. We apply the
-energy term's frame mean on the anchor frame's base QP, scaled by 1.3 under CRF
-and 1.04 under a bitrate target. B
+energy term's frame mean on the anchor frame's base QP, scaled by 1.3 under uncapped CRF
+and 1.04 under a VBV cap or a bitrate target. B
 frames predict from an earlier and a later picture, so they inherit the shift
 through the offsets under the anchor. A busy shot then codes a little cheaper and a quiet one a little better. The
 term's within-frame part keeps the gentler strength that won on single-shot
