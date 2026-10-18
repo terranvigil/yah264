@@ -6434,11 +6434,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
     /* The frame-level (DC) AQ strength: see crf_frame_dc. Fitted by sweep at
- * matched rate (Y264_AQ_DC). The 1.3 sweep was CRF only; a bitrate target
- * keeps the 1.04 its own bands and rate tracking were measured at. Under a
- * bitrate target only one-pass ABR and capped VBR read it (abr_dc_on); CBR
- * by default, two-pass and CQP never do. Capped CRF takes 1.3 with plain CRF. */
-    { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = v ? atof(v) : (e->crf_on ? 1.3 : 1.04); }
+ * matched rate (Y264_AQ_DC). The 1.3 sweep was uncapped CRF only. A bitrate
+ * target keeps the 1.04 its own bands and rate tracking were measured at, and
+ * so does capped CRF: at 1.3 its CBR-declared HRD read 68/72 on the capped-VBR
+ * compliance gate (park_joy and ducks overflow at the loosest cap), 72/72 at
+ * 1.04. Under a bitrate target only one-pass ABR and capped VBR read it
+ * (abr_dc_on); CBR by default, two-pass and CQP never do. */
+    { const char *v = getenv("Y264_AQ_DC");
+      e->aq_dcstr = v ? atof(v) : (e->crf_on && !e->vbv_on ? 1.3 : 1.04); }
     { const char *v = getenv("Y264_AQ_DCFLOOR"); e->aq_dcfloor = v ? atof(v) : 0.00390625; }
     /* Frames with no mb-tree field (non-reference B) inherit the anchor's
  * base QP, frame DC included, and centre their own AQ on their frame mean.

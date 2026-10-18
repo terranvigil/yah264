@@ -1,9 +1,9 @@
 // Copyright (c) 2026, the yah264 authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// The frame-level AQ strength each rate mode opens with: 1.3 under CRF (a
-// buffer cap included), 1.04 when a bitrate target drives rate control, and
-// Y264_AQ_DC above both. Opening is enough; nothing is encoded.
+// The frame-level AQ strength each rate mode opens with: 1.3 under uncapped
+// CRF, 1.04 under capped CRF and whenever a bitrate target drives rate
+// control, and Y264_AQ_DC above both. Opening is enough; nothing is encoded.
 #include <yah264.h>
 #include "../src/encoder/encoder.h"
 #include <math.h>
@@ -44,7 +44,7 @@ int main(void)
 
     base(&p); p.rc.method = YAH264_RC_CRF; p.rc.rf = 23.0;
     p.rc.vbv_maxrate = 400; p.rc.vbv_bufsize = 800;
-    CHECK(near(strength(&p), 1.3));                       /* capped CRF */
+    CHECK(near(strength(&p), 1.04));                      /* capped CRF */
 
     base(&p); p.rc.method = YAH264_RC_ABR; p.rc.bitrate = 300;
     CHECK(near(strength(&p), 1.04));                      /* ABR */
