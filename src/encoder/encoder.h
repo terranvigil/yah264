@@ -1347,15 +1347,6 @@ struct yah264_encoder {
  * a fixed thread count holds. See stair_wide_capable in encoder.c. */
     int              rcp_lag;
 
-    /* The launch-split PROBE (env Y264_ABR_EARLY; mode 1 is the probe, the
- * shipped default is 2, the drain split, and 0 restores the prologue drain). Unsafe by
- * construction: it drops the zero-lag prologue drain so the anchor's jobs
- * register before its predecessor is retired, which means the decide runs
- * on a FIFO missing that predecessor's actuals. Measurement only -- it
- * bounds what drain placement is worth and is never a shipping path. See
- * abr_early_env in encoder.c. */
-    int              abr_early;
-
     /* W2 emit-overlap (env Y264_W2, on whenever there is a pool). Frame N's entropy emit runs on
  * a background thread (bg) concurrent with frame N+1's analyze. Recon never
  * reads entropy output, so emit can trail; only the deferred NAL-append + RC

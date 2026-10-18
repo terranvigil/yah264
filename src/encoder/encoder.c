@@ -77,7 +77,7 @@ static double g_enc_inside_ms;
 static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, int *count, const yah264_picture_t *pic);
 static int encode_push(yah264_encoder_t *e, const yah264_picture_t *pic, size_t *offp);
 static int mcstf_pop_push(yah264_encoder_t *e, size_t *offp);
-static int g_cfg[12];                         /* Y264_THREAD_PROF: the resolved configuration at open */
+static int g_cfg[11];                         /* Y264_THREAD_PROF: the resolved configuration at open */
 static int g_tprof_on = -1;
 static double g_tprof_wall0;
 /* Per-bucket POOL-EMPTY attribution: how much of each driver stage ran with no
@@ -321,8 +321,8 @@ static void tprof_dump(void)
     for (int i = 0; i < TP_NUM; i++) emp += g_tprof_empty[i];
     fprintf(stderr, "\n=== Y264_THREAD_PROF (wall %.1f ms) ===\n", wall);
     fprintf(stderr, "  api: %ld encode calls, %ld with pic == NULL (flush polls), %.1f ms inside the calls\n", g_enc_calls, g_enc_null_calls, g_enc_inside_ms);
-    fprintf(stderr, "  cfg: threads %d wf_width %d la_depth %d la_buf %d sync_lookahead %d rcp_lag %d abr_early %d bframes %d keyint %d rc.lookahead %d fps %d/%d\n",
-            g_cfg[0], g_cfg[1], g_cfg[2], g_cfg[3], g_cfg[4], g_cfg[5], g_cfg[6], g_cfg[7], g_cfg[8], g_cfg[9], g_cfg[10], g_cfg[11]);
+    fprintf(stderr, "  cfg: threads %d wf_width %d la_depth %d la_buf %d sync_lookahead %d rcp_lag %d bframes %d keyint %d rc.lookahead %d fps %d/%d\n",
+            g_cfg[0], g_cfg[1], g_cfg[2], g_cfg[3], g_cfg[4], g_cfg[5], g_cfg[6], g_cfg[7], g_cfg[8], g_cfg[9], g_cfg[10]);
     fprintf(stderr, "  %-20s %9s  %5s   %9s\n", "", "ms", "", "pool-idle");
     for (int i = 0; i < TP_NUM; i++)
         fprintf(stderr, "  %-20s %9.1f ms  %5.1f%%   %8.1f ms\n",
@@ -474,95 +474,8 @@ static int rcp_lag_for(const yah264_encoder_t *e)
 
 
 
-/* Y264_ABR_EARLY: 1 = the unsafe launch-split PROBE, 2 = the shipped DRAIN
- * SPLIT. DEFAULT 2.
- *
- * MODE 1 IS UNSAFE BY CONSTRUCTION and must never be the default -- it is
- * measurement scaffolding, described below. Mode 2 is the safe form: it
- * retires the ANCHOR half of every burst it is about to leave flying, so the
- * decide is short only the B leaves, where the tail lives. B->size is final
- * when a burst's runner returns; the chain driver holds the leaves. Splitting
- * the wait there keeps the overlap without pricing the burst off a FIFO
- * missing its own actuals.
- *
- * THE TRADE, measured, because this one is not free: ~+1.3% BD-VMAF-NEG at
- * --ref 3 and +0.14-0.7% at --ref 1 on cut-heavy content (sintel; 9 of 12
- * clips are byte-identical), for 1.04-1.11x on the ABR board. Rate accuracy is
- * equal-or-better than shipped on every clip including sintel, so the RC
- * failure that killed Y264_RCP_LAG does not reproduce here.
- *
- * ENGAGEMENT is threads-per-GOP-worker, not GOP count: it needs a worker pool
- * reaching Y264_MT_POOL_MIN (2 today, 8 when this was written), and the CLI splits --threads across GOP
- * workers, so roughly --threads >= 8*ceil(frames/keyint). Verified by output
- * hash -- sintel 1152f is inert at t18 and engages at t36 with the same 5
- * GOPs. An encode that gets no speedup is byte-identical and takes no risk,
- * because engagement and speedup share the same staircase. This is NOT rare on
- * wide machines, and it is not GOP-poor-only.
- *
- * Y264_ABR_EARLY=0 restores the zero-lag prologue drain.
- *
- * The probe's own description follows, since mode 1 still exists:
- *
- * It answers one question and nothing else: what is the whole drain-placement
- * overlap worth when the anchor's analysis starts against a still-draining
- * predecessor? It skips stair_run_burst's zero-lag prologue drain so the
- * launch happens first and the late drain at the bottom retires the
- * predecessor after this anchor's jobs are already registered -- the CRF
- * ordering, under ABR. The anchor's decide then runs BEFORE its predecessor's
- * rcp_fill, so it prices the burst off a FIFO that is missing the actuals it
- * is supposed to account for. Bits move, rate control is not what it claims to
- * be, and none of that matters to the wall clock this exists to read.
- *
- * It differs from Y264_RCP_LAG_NOWIDE by deliberately NOT moving
- * rcp_pop_ready's seq bound with it: this isolates the ORDERING from the
- * accounting change, so the number is drain placement alone.
- *
- * Resolved in warm_lr_statics; the encoder reads e->abr_early, resolved once at
- * open, so nothing on a decide path calls getenv. */
-static int abr_early_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_ABR_EARLY"); v = s ? atoi(s) : 2; }
-    return v;
-}
-
 static int wf_narrow_frame(int width, int height);   /* defined with the cap */
 
-/* MEASUREMENT GATE, DEFAULT OFF. Resolved in warm_lr_statics.
- *
- * The lag budget is handed out by stair_wide_capable, whose --ref term exists
- * for WIDTH: a wide ring recycles DPB slots, so it needs the bag pool, so it
- * needs nref <= 1. But the overlap a lag buys does not need width. On the
- * non-wide path stair_run_burst retires the predecessor AFTER the new anchor's
- * jobs are registered, which is exactly what CRF does at --ref 3 and exactly
- * what the zero-lag prologue drain takes away from ABR there. Granting the
- * budget on async capability alone keeps one burst live across the
- * launch.
- *
- * THIS IS A PROBE, NOT A SHIPPABLE FEATURE. It answers one question -- does the
- * lag alone recover the --ref 3 cost, without opening the --ref gate and
- * without a DPB bag pool -- and the answer is yes: -10.4% on foreman and -13.4%
- * on park_joy, against -10.8% and -13.8% for the same shape with width also
- * switched on. Width is worth roughly nothing at --ref 3.
- *
- * What stops it shipping is the price, not the mechanism. It moves bits at
- * --ref > 1, so byte-identity does not cover it; it needs QPD 6 alongside,
- * because at the shipped Y264_RCP_QPD 0 the lagged ABR ladder winds up and
- * costs +48.3% BD-NEG on park_joy; and even with the guard the corpus reads
- * mixed (foreman +1.22%, bus +2.15%, park_joy -5.58% against the shipped
- * default). Flipping it means moving two defaults at once. */
-static int rcp_lag_nowide_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RCP_LAG_NOWIDE");
-                 v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
-
-/* stair_wide_capable minus the width-only --ref term, for the gate above. Same
- * static-configuration discipline: every term is fixed for the life of one
- * encoder_open, so a decide never asks what is currently in flight. */
-static int stair_lag_capable(const yah264_encoder_t *e);
 /* Y264_DIRECT_PERMB: the temporal-direct legality check is per macroblock
  * (default) rather than per slice. See docs/b-frames.md, third round. */
 static int direct_permb_env(void)
@@ -661,33 +574,15 @@ static int direct_may_be_temporal(const yah264_encoder_t *e)
  * repeat-identical under load at 12 and 18 threads, and TSan clean, after the
  * uninitialised direct-MV seed that produced the 14/32 reading was fixed.
  * The wall with temporal allowed is identical to spatial-only. */
-/* Y264_DAUTO_FOLD (default 2): how far behind its own seq a launch folds
- * the auto-rule counts. 0 = the structural bound, bursts <= n - K - 1, which
- * the slot recycling proves drained (four bursts stale at K = 3: blue_sky
- * decided temporal on 6 slices at twelve threads against 24 at one).
- * d >= 1 = fold bursts <= n - d, WAITING at launch for burst n - d's chain
- * end, where its counts are final; the wait makes the fold set a function of
- * n alone. The wait blocks on a condition variable (it was a sched_yield
- * spin until 2026-09-25, which cost 6-8% of the instructions at three
- * threads, since the launch waited on every burst).
- * -1 = ARM, not default: the structural bound plus every later burst whose
- * chain has ALREADY ended, in order, with no wait. The fold set then depends
- * on scheduling, which threaded output is allowed to (owner, 2026-09-25), but
- * it is usually STALER than 2, since n - 2 is still running at nearly every
- * launch, and at 3 threads it read +0.8% BD on blue_sky_1080p and
- * station2_1080p against a +0.1..+0.7% control. Kept for the wall A/B. */
-static int dauto_fold_env(void)
-{
-    static int v = INT_MIN;
-    if (v == INT_MIN) {
-        const char *e = getenv("Y264_DAUTO_FOLD");
-        int t = e ? atoi(e) : 2;
-        if (t < 0) t = -1;
-        if (t > Y264_STAIR_K + 1) t = Y264_STAIR_K + 1;
-        v = t;
-    }
-    return v;
-}
+/* How far behind its own seq a launch folds the auto-rule counts: bursts
+ * <= n - 2, WAITING at launch for burst n - 2's chain end, where its counts
+ * are final; the wait makes the fold set a function of n alone. The wait
+ * blocks on a condition variable (a sched_yield spin cost 6-8% of the
+ * instructions at three threads, since the launch waited on every burst).
+ * The structural bound alone, bursts <= n - K - 1, is four bursts stale at
+ * K = 3: blue_sky decided temporal on 6 slices at twelve threads against 24
+ * at one. */
+#define DAUTO_FOLD_LAG 2u
 static int stair_tdir_on(void)
 {
     static int v = -1;
@@ -740,13 +635,6 @@ static int stair_direct_blocks(const yah264_encoder_t *e)
  * the bits equal wanted, whatever the type mix. Always on; its
  * Y264_ABR_RF2_BASEDOM escape is gone. */
 
-static int stair_lag_capable(const yah264_encoder_t *e)
-{
-    return stair_wide_on()
-        && e->b_pyramid && !stair_direct_blocks(e)
-        && !e->vbv_on
-        && e->wf_width >= Y264_MT_POOL_MIN;
-}
 
 /* "Could this encoder instance ever run a wide ring, IGNORING rate control?"
  *
@@ -853,72 +741,7 @@ static int stair_wide_rc_ok(const yah264_encoder_t *e)
  *
  * DEFAULT ON, and it CHANGES BITS, like the multi-hop clamp: two more clamped
  * list-0 references, and unlike hop 2 these bind often (a burst's reference B
- * sits at index 0 or 1 of every later P list 0). Resolved in warm_lr_statics. */
-static int stair_refbgate_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_STAIR_REFBGATE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-
-/* Launch the reference B EARLY -- at its own prep, inside phase 1, instead of
- * in phase 2 after every sibling leaf has also been prepped and
- * stair_serial_fire has released the next anchor's launch. Without this, the
- * row gate above recovers only a fifth of its own measured ceiling, because the
- * thing it gates on starts late: a reference B has NEGATIVE publish lead time
- * on the anchor that reads it, being launched in its burst's phase 2, AFTER the
- * stair_serial_fire that releases the next anchor's launch. This moves the
- * launch itself (ntp_bg_submit of the runner + trailer, not just the
- * stair_prog_reset arm) to right after the
- * reference B's own prep completes, so it starts producing rows while its
- * OWN burst's remaining sibling preps are still running on the driver
- * thread, rather than after all of them.
- *
- * Safe for the same reason the v5 pipeline is safe running
- * alongside phase 2: the runner + trailer tasks touch only the reference
- * B's own leaf (L, fully populated by the prep that just ran), the chain's
- * rprog (armed on the line directly above) and thread-local ME state
- * (y264_me_set_hpel) -- never a shared e-> field. A sibling leaf's LATER
- * prep, still to come in phase 1, writes e-> on the driver thread same as
- * always; nothing the runner/trailer read is among those writes. A sibling
- * prep failing after this launch still reaches stair_join_compute
- * unconditionally at the bottom of stair_chain, which knows how to
- * sync a launched-but-abandoned reference B via stair_refb_join -- that
- * path is independent of this flag (it also covers a phase-2 sibling failing
- * after the unmodified launch).
- *
- * DEFAULT OFF. It changes no bits at any --ref (it moves WHEN existing async
- * work starts, not what it computes), but it is new concurrent-execution
- * surface against the same burst's own remaining preps, so it gets its own
- * flag and its own TSan pass rather than riding STAIR_BDEPTH silently.
- * Resolved in warm_lr_statics. */
-static int stair_refbearly_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_STAIR_REFBEARLY"); v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
-
-/* Frame-concurrency probe: defer a wide chain's previous-anchor
- * full-publish wait until AFTER
- * stair_serial_fire, so the next launch's serial_wait stops transitively
- * waiting for the predecessor's predecessor to fully publish. The wait itself
- * is unchanged -- phase 2's B reads still see a fully-published previous
- * anchor -- it just no longer sits between a launch and the launch after it.
- * Phase 1 preps read DPB bookkeeping (final at the predecessor's own
- * serial_done, which launch ordering already guarantees) and never the
- * predecessor's pixels, so the move is an ORDER change: byte-identity is the
- * gate, not an argument.
- *
- * DEFAULT OFF. Applies only to wide async bursts -- on the non-wide path the
- * API thread drains the predecessor right after the launch, so there is
- * nothing for a deeper launch window to overlap. Resolved in warm_lr_statics. */
-static int stair_freelaunch_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_STAIR_FREELAUNCH"); v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
+ * sits at index 0 or 1 of every later P list 0). */
 
 /* Run ANY two consecutive non-reference plan entries as the concurrent pair,
  * not only the two the `b - a == 3` shortcut in stair_plan_hier marks.
@@ -964,25 +787,16 @@ static int stair_freelaunch_on(void)
  * same coding order, same recon replay order -- only which thread runs the
  * second analyze. Byte-identity is the gate, not a BD sweep.
  *
- * DEFAULT ON. Byte-identical at bframes 2/3/4 x t1/t18, so it cannot move a
+ * Byte-identical at bframes 2/3/4 x t1/t18, so it cannot move a
  * bitstream; it pays where a plan actually holds two adjacent non-reference
  * leaves, which is bframes 4 (-6.4% foreman, -5.0% park_joy_720p, controls
  * within 0.7%), and is a measured wash at bframes 2 and 3 where the plan has no
- * such pair to generalize. Resolved in warm_lr_statics. */
-static int stair_leafrun_on(void)
-{
-    static int v = -1;
-    /* 1 = generalize (default); 0 = the b-a==3 shortcut only; 2 = MEASUREMENT
-     * ONLY, suppress every pair including the shortcut's own, to price what the
-     * pair is actually worth at nbuf 3/7. */
-    if (v < 0) { const char *s = getenv("Y264_STAIR_LEAFRUN"); v = s ? atoi(s) : 1; }
-    return v;
-}
+ * such pair to generalize. The rule lives in stair_chain's phase 2. */
 
 /* The DPB EVICTION GUARD is redundant once the bag pool
  * serves the recycle, and it is the launch-side wait that serializes the chains
- * at bframes 2/4/6 (82% of the bframes-4 encode). With this on, the guard runs
- * only where the pool cannot cover it.
+ * at bframes 2/4/6 (82% of the bframes-4 encode). So the guard runs only
+ * where the pool cannot cover it.
  *
  * WHAT THE GUARD IS FOR. `stair_dpb_begin` evicts the lowest-FrameNum picture
  * and then hands ITS BUFFER to the incoming anchor as the write target -- so a
@@ -1009,19 +823,12 @@ static int stair_leafrun_on(void)
  * Pure scheduling: it deletes a wait and writes nothing, so byte-identity is the
  * gate rather than a BD sweep.
  *
- * DEFAULT ON. Byte-identical at bframes 2/3/4/6 x t1/t18, so it cannot move a
+ * Byte-identical at bframes 2/3/4/6 x t1/t18, so it cannot move a
  * bitstream. It pays only where the wide path engages, i.e. --ref <= 1:
  * foreman_cif t18 bframes 4 -34.6%, bframes 2 -15.3%, duplicate-build control
  * within 0.3%. At --ref 3 it is a measured no-op (+0.2%/-0.1%) because the
  * guard is not on the critical path there, so it does not move the parity
- * scoreboard either (that runs at the preset default --ref 3).
- * Y264_STAIR_EVICTPOOL=0 restores the guard. Resolved in warm_lr_statics. */
-static int stair_evictpool_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_STAIR_EVICTPOOL"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
+ * scoreboard either (that runs at the preset default --ref 3). */
 
 /* Y264_UNSAFE_NO_REFBWAIT=1: drop the launch-side reference-B content wait
  * entirely. NOT a candidate and never will be -- the wait holds a real
@@ -1346,8 +1153,8 @@ static int la_buf_env(void)
  * stair_ready, fpipe_ready and the lookahead thread off AT ONCE (559 ms vs
  * 433 ms on foreman_cif) -- that measurement
  * prices the three together and says nothing about any one of them. Three of
- * the constant's consumers reach the bitstream (stair_lag_capable and
- * stair_wide_capable's rcp_lag grant, the pool-failure withdrawal, and the
+ * the constant's consumers reach the bitstream (stair_wide_capable's rcp_lag
+ * grant, the pool-failure withdrawal, and the
  * thread-scaled stair_lag whose non-engagement below the floor is a stated
  * CORRECTNESS requirement); those keep the shared constant and are not touched
  * here. The lead's two gates -- la_lead_for and the la-thread creation -- are
@@ -2280,12 +2087,6 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
 
 static int stair_clamp_on(const yah264_encoder_t *e);
 static int stair_clamp_t1_env(void);
-static int stair_refbgate_rc_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_STAIR_REFBGATE_RC"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
 
 /* v6 eligibility, in ONE place because two sides have to agree exactly: the
  * clamp set built in build_slice_prep, and the launch-side decision to replace a
@@ -2305,11 +2106,10 @@ static int stair_refbgate_elig(const yah264_encoder_t *e)
  * open) the decide runs a burst ahead and the launch-side content wait was
  * the whole ABR penalty: foreman 180f t12, 0 of 41 launches gated and 59 ms
  * of a 110 ms encode blocked on reference-B content, against 44 of 44 gated
- * and 12 ms under CRF (2026-09-04, Y264_STAIR_STAT). Y264_STAIR_REFBGATE_RC=0
- * restores the refusal for A/B. */
-    return stair_refbgate_on() && stair_bdepth_on() && stair_wide_on() &&
+ * and 12 ms under CRF (2026-09-04, Y264_STAIR_STAT). */
+    return stair_bdepth_on() && stair_wide_on() &&
            stair_clamp_on(e) && e->nref >= 2 &&
-           (!e->rcp_on || (e->rcp_lag > 0 && stair_refbgate_rc_on()));
+           (!e->rcp_on || e->rcp_lag > 0);
 }
 
 /* The per-POC source-DC cache a clamped list-0 reference is estimated against
@@ -6115,15 +5915,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * currently in flight, only what this configuration was opened with. VBV is
  * refused inside stair_wide_capable and again in stair_wide_rc_ok. */
     e->wf_width = wf_width_for(param);
-    e->rcp_lag = (rcp_lag_nowide_on() ? stair_lag_capable(e)
-                                      : stair_wide_capable(e))
-                 ? rcp_lag_for(e) : 0;
+    e->rcp_lag = stair_wide_capable(e) ? rcp_lag_for(e) : 0;
     if (g_tprof_on > 0) {
         g_cfg[0] = e->param.threads; g_cfg[1] = e->wf_width; g_cfg[2] = e->la_depth; g_cfg[3] = e->la_buf;
-        g_cfg[4] = e->param.sync_lookahead; g_cfg[5] = e->rcp_lag; g_cfg[6] = e->abr_early; g_cfg[7] = e->param.bframes;
-        g_cfg[8] = e->param.keyint; g_cfg[9] = e->param.rc.lookahead; g_cfg[10] = e->param.timebase.fps_num; g_cfg[11] = e->param.timebase.fps_den;
+        g_cfg[4] = e->param.sync_lookahead; g_cfg[5] = e->rcp_lag; g_cfg[6] = e->param.bframes;
+        g_cfg[7] = e->param.keyint; g_cfg[8] = e->param.rc.lookahead; g_cfg[9] = e->param.timebase.fps_num; g_cfg[10] = e->param.timebase.fps_den;
     }
-    e->abr_early = abr_early_env();             /* probe; see abr_early_env */
 
     e->mv_stride = e->width_in_mbs * 4;
     size_t mvcount = (size_t)e->mv_stride * e->height_in_mbs * 4;
@@ -11249,21 +11046,17 @@ static void warm_lr_statics(void)
     (void)mbt_misswhy_env();         /* read on the pool beside mbt_split_env */
     (void)stair_bdepth_on(); (void)la_buf_env(); (void)la_pool_min();
     (void)stair_wide_on();
-    (void)stair_unsafe_no_refbwait(); (void)stair_refbgate_on();
+    (void)stair_unsafe_no_refbwait();
     (void)stair_unsafe_no_rowgate(); (void)stair_unsafe_gate_arow();
     (void)stair_unsafe_no_prevpwait();
-    (void)stair_refbearly_on(); (void)stair_leafrun_on();
-    (void)stair_freelaunch_on();
-    (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)sc_jump_env(); (void)sc_floor_env(); (void)lr_hint_verify_env(); (void)stq_env(); (void)badapt_demote_thr();
     (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env(); (void)la_prevfield_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)abr_qcomp_env(); (void)rcp_dbg_on(); (void)rb_walk_env();
     (void)sc_early_on();
     (void)mbt_bref_probe();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_fold_env(); (void)stair_clamp_t1_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)stair_clamp_t1_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_vbvov_frac();
-    (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)czw_stat_on();
     (void)direct_permb_env(); (void)y264_direct_auto_env(); (void)mbt_sub_retain_on(); (void)lrset_share_on();
     (void)mbt_settle_wait_on(); (void)mbt_sub_verify_on();
@@ -14776,7 +14569,7 @@ struct stair_burst {
     struct { pixel *pl[3]; int disp; } replay[9];
     int      nreplay;
     int      anchor_out_rec;        /* anchor replay event recorded */
-    int      anchor_billed;         /* Y264_ABR_EARLY=2: this burst's ANCHOR
+    int      anchor_billed;         /* the drain split: this burst's ANCHOR
  * actual is already in the rcp ledger, taken
  * from the runner alone. The NAL is NOT out:
  * it is appended at the drain like every
@@ -14997,25 +14790,19 @@ struct stair_ctx {
  * the recycled-watermark (arow) wait below it, so attributing the pooled
  * total to this wait -- as the --ref round did -- overstates it. */
     double   stat_refb_ms;
-    /* Y264_DAUTO_FOLD: launches that blocked on an earlier burst's chain end
- * (the d >= 1 forms), their total blocked time, and bursts the default
- * form folded ahead of the structural bound because they had finished. */
-    int      stat_dfold_waits, stat_dfold_early;
+    /* the direct-auto fold: launches that blocked on an earlier burst's chain
+ * end, and their total blocked time. */
+    int      stat_dfold_waits;
     double   stat_dfold_ms;
     int      stat_wide, stat_nwide;  /* wide launches, and the high-water mark
  * of bursts genuinely in flight at once --
  * the one number that says the gate is
  * doing anything at all */
-    /* The launch-split probe's own engagement, same discipline: stat_early is
- * the number of launches that reached the prologue with a burst still live
- * and therefore had a drain to defer, and stat_late the number that then
- * retired it after the anchor's jobs were registered. Both zero means the
- * probe changed no ordering and its wall clock says nothing. */
+    /* The drain split's own engagement, same discipline: stat_early is the
+ * number of launches that reached the prologue with a burst still live and
+ * therefore had a drain to defer, and stat_late the number that then
+ * retired it after the anchor's jobs were registered. */
     int      stat_early, stat_late, stat_earlyfill;
-    _Atomic int stat_flaunch;       /* Y264_STAIR_FREELAUNCH: chains whose
- * prev-anchor publish wait was deferred
- * past serial_fire (engagement counter;
- * bumped on chain drivers, hence atomic) */
     /* Y264_STAIR_STAT=2: the chain event trace. Every scheduling transition a
  * chain, an anchor runner or the API thread makes, timestamped, tagged with
  * the ring slot. Aggregates cannot answer "were two chains ENCODING at the
@@ -15217,14 +15004,13 @@ static void stair_free(yah264_encoder_t *e)
                 "slot-recycle waits %d\n",
                 st->stat_wide, st->stat_nwide, st->stat_slotwait);
     if (stair_stat_on())
-        fprintf(stderr, "stair-stat: direct-auto fold (mode %d): %d launches waited "
-                "%.2f ms for a chain end, %d bursts folded early\n",
-                dauto_fold_env(), st->stat_dfold_waits, st->stat_dfold_ms,
-                st->stat_dfold_early);
+        fprintf(stderr, "stair-stat: direct-auto fold: %d launches waited "
+                "%.2f ms for a chain end\n",
+                st->stat_dfold_waits, st->stat_dfold_ms);
     if (stair_stat_on())
-        fprintf(stderr, "stair-stat: launch-split probe mode %d -- %d launches had "
+        fprintf(stderr, "stair-stat: launch split -- %d launches had "
                 "a drain to defer, %d retired it after the launch, %d took the "
-                "anchor's actual early\n", e->abr_early, st->stat_early,
+                "anchor's actual early\n", st->stat_early,
                 st->stat_late, st->stat_earlyfill);
     if (stair_stat_on())
         fprintf(stderr, "stair-stat: hop-2 clamp on %d slices, %d list-0 "
@@ -15257,9 +15043,8 @@ static void stair_free(yah264_encoder_t *e)
     }
     if (stair_stat_on())
         fprintf(stderr, "stair-stat: chain waited %.2f ms total for the previous "
-                "anchor's publish (%d of those waits deferred past serial_fire)\n",
-                atomic_load_explicit(&st->stat_prevp_ms, memory_order_relaxed),
-                atomic_load_explicit(&st->stat_flaunch, memory_order_relaxed));
+                "anchor's publish\n",
+                atomic_load_explicit(&st->stat_prevp_ms, memory_order_relaxed));
     if (stair_stat_on())
         fprintf(stderr, "stair-stat: dpb pool %d bags, %d recycles served, "
                 "peak %d parked, %d exhausted\n",
@@ -15793,44 +15578,10 @@ static struct dpb_entry *stair_dpb_begin(yah264_encoder_t *e, int poc)
             if (e->dpb[i].used && (victim < 0 || fn_wrap(e, e->dpb[i].frame_num) < minfn)) {
                 victim = i; minfn = fn_wrap(e, e->dpb[i].frame_num);
             }
-        /* v3 eviction safety: the victim's buffer becomes the NEXT coding
- * target (its planes swap with e->rec below) -- if an in-flight burst
- * still READS it (multi-ref lists reach old pictures), wait for those
- * readers first. Readsets are complete and stable here (the caller held
- * the serial_done handshake); nread < 0 = overflowed, treat as "reads
- * everything". Never fires at nref 1 (lists only reach the two newest
- * pictures).
- *
- * The guard is the UNION over every live ring slot, not over the fly
- * alone: with one chain in flight the two sets are the same (`live` is
- * raised at the end of a launch, after this function, and cleared at
- * the drain, so the burst being launched is never in its own union),
- * and with K chains it is the K-way readset the design doc calls for.
- * The driver is still one, so it is synced once for the whole union;
- * runners are per burst. */
-        if (victim >= 0 && e->st && !stair_evictpool_on()) {
-            struct stair_ctx *st = e->st;
-            for (int b = 0; b < Y264_STAIR_K; b++) {
-                struct stair_burst *F = &st->bur[b];
-                if (!atomic_load_explicit(&F->live, memory_order_acquire))
-                    continue;
-                int hit = F->nread < 0;
-                for (int k = 0; !hit && k < F->nread; k++)
-                    if (F->readset[k] == e->dpb[victim].plane[0])
-                        hit = 1;
-                if (!hit)
-                    continue;
-                /* Per burst now, not once for the union: each live burst has
- * its own driver, and syncing one says nothing about another's
- * leaves. */
-                stair_tr(st, (int)(F - st->bur), STE_WAIT, STW_EVICT,
-                         (int)atomic_load(&F->seq));
-                ntp_bg_sync(stair_ch(st, F)->driver);   /* B chain reads */
-                ntp_bg_sync(F->runner);                 /* the anchor's own */
-                stair_tr(st, (int)(F - st->bur), STE_WAIT_E, STW_EVICT,
-                         (int)atomic_load(&F->seq));
-            }
-        }
+        /* The victim's buffer is never handed to a writer while a live burst
+ * reads it: dpbp_recycle (below) gives the slot a fresh bag, and where
+ * the pool cannot serve, stair_slot_readers_wait syncs every reader of
+ * the entry actually handed out. */
         if (victim >= 0) e->dpb[victim].used = 0;
     }
     int slot = -1;
@@ -16044,7 +15795,7 @@ static int stair_join_compute(yah264_encoder_t *e, struct stair_burst *B)
 /* Retire the fly burst on the API thread: wait for its chain, then emit
  * everything in coding order -- any pending prior W2 emit, the anchor's NAL,
  * the stashed B NALs, and the recon replay events (rec_out + recon_cb). */
-/* Y264_ABR_EARLY=2: retire the ANCHOR half of a burst without retiring the
+/* The drain split: retire the ANCHOR half of a burst without retiring the
  * burst. The decide that follows needs actuals, not a finished chain, and the
  * two are not the same wait: B->size is final when the RUNNER returns, while
  * the chain driver additionally holds the mini-GOP's B leaves -- which is where
@@ -16964,10 +16715,6 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
     size_t mvcount = (size_t)e->mv_stride * e->height_in_mbs * 4;
     int rb = 0;
     const int tsl = (int)(B - e->st->bur), tsq = (int)atomic_load(&B->seq);
-    int refb_launched = 0;          /* v7 (Y264_STAIR_REFBEARLY): set once the
- * reference B's runner+trailer are
- * submitted, whichever phase does it, so
- * phase 2 never launches it twice */
     /* WIDE: the one dependency the leaf machinery does NOT gate. A burst's B's
  * take the PREVIOUS anchor as their nearest past reference (list 0), and
  * unlike the anchor's own list-0 search that read is neither clamped nor
@@ -17014,11 +16761,7 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
  * the same reason the wait was blocking. scripts/stair_prevp_sweep.sh,
  * scripts/stair_prevp_1080.sh and scripts/stair_prevp_stat.sh reproduce
  * all of it. */
-    /* FREELAUNCH (probe, default off): defer this wait past serial_fire so it
- * stops sitting between launch n and launch n+1. Wide async chains only;
- * phase 2 still runs behind the identical wait either way. */
-    int defer_prevp = stair_freelaunch_on() && B->async && B->wide;
-    if (B->prev_P && !defer_prevp && !stair_unsafe_no_prevpwait()) {
+    if (B->prev_P && !stair_unsafe_no_prevpwait()) {
         double t0 = stair_stat_on() ? tprof_ms() : 0.0;
         stair_tr(e->st, tsl, STE_PREVP, tsq, 0);
         stair_pub_wait_all(B->prev_P, B->prev_P->hmb);
@@ -17058,19 +16801,6 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
  * the anchor's own pub, arriving one ring deeper. */
                     stair_prog_reset(&C->rprog, &L->f, L->commit_slot,
                                      L->l0poc, L->l0n, L->l1poc0, B);
-                    if (stair_refbearly_on()) {
-                        /* v7: LAUNCH here too, not just arm -- start the
- * producer while this burst's own
- * remaining sibling preps are still running on the
- * driver, instead of after every one of them plus
- * serial_fire. See stair_refbearly_on for the safety
- * argument (no shared e-> write either task makes or
- * reads, and a later sibling prep bailing still
- * reaches stair_join_compute's unconditional
- * stair_refb_join). */
-                        stair_launch_refb(e, B, L);
-                        refb_launched = 1;
-                    }
                 }
             }
         }
@@ -17078,25 +16808,6 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
         if (rb == 0) {
             stair_serial_fire(e, B);   /* the arrival phase may start NOW */
             stair_tr(e->st, tsl, STE_FIRE, tsq, 0);
-            /* FREELAUNCH: the deferred previous-anchor publish wait, verbatim.
- * Phase 2's B reads still see a fully-published predecessor; only
- * the next launch's serial_wait no longer sits behind it. */
-            if (defer_prevp && B->prev_P && !stair_unsafe_no_prevpwait()) {
-                double t0 = stair_stat_on() ? tprof_ms() : 0.0;
-                if (stair_stat_on())
-                    atomic_fetch_add_explicit(&e->st->stat_flaunch, 1,
-                                              memory_order_relaxed);
-                stair_tr(e->st, tsl, STE_PREVP, tsq, 0);
-                stair_pub_wait_all(B->prev_P, B->prev_P->hmb);
-                stair_tr(e->st, tsl, STE_PREVP_E, tsq, 0);
-                if (stair_stat_on()) {
-                    double d = tprof_ms() - t0;
-                    double o = atomic_load_explicit(&e->st->stat_prevp_ms, memory_order_relaxed);
-                    while (!atomic_compare_exchange_weak_explicit(
-                               &e->st->stat_prevp_ms, &o, o + d,
-                               memory_order_relaxed, memory_order_relaxed)) { }
-                }
-            }
             /* v6: the leaf half of what the launch-side wait holds. A
  * leaf's list 0 reaches past its own mini-GOP into an older live
  * burst's reference B -- 58 to 142 of 169 checks at --ref 2 to 4 --
@@ -17140,13 +16851,10 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
             /* Phase 2: the encodes, coding order; sibling pairs concurrent. */
             for (int i = 0; i < B->nplan && rb == 0; i++) {
                 if (B->bdepth && B->plan[i].is_ref) {
-                    if (!refb_launched)          /* v5: streams; v7 may already
- * have done this in phase 1 */
-                        stair_launch_refb(e, B, C->leaf[i]);
-                } else if (stair_leafrun_on() != 2 &&
-                           (B->plan[i].pair == 1 ||
-                            (stair_leafrun_on() == 1 && !B->plan[i].is_ref &&
-                             i + 1 < B->nplan && !B->plan[i + 1].is_ref))) {
+                    stair_launch_refb(e, B, C->leaf[i]);   /* v5: streams */
+                } else if (B->plan[i].pair == 1 ||
+                           (!B->plan[i].is_ref &&
+                            i + 1 < B->nplan && !B->plan[i + 1].is_ref)) {
                     stair_tr(e->st, tsl, STE_PAIR, tsq, B->plan[i].m);
                     rb = stair_run_pair(e, B, C->leaf[i], C->leaf[i + 1]);
                     stair_tr(e->st, tsl, STE_PAIR_E, tsq, B->plan[i + 1].m);
@@ -17167,7 +16875,7 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
     if (stair_join_compute(e, B) < 0 || rb < 0) /* always join (even on error) */
         B->err = 1;
     {   /* the burst's auto-rule counts are final here (every analyze joined):
- * publish them for the launch fold (Y264_DAUTO_FOLD) */
+ * publish them for the launch fold (DAUTO_FOLD_LAG) */
         unsigned sq = atomic_load(&B->seq);
         long *c = e->st->dauto_fifo[sq % (2 * Y264_STAIR_K)];
         c[0] = B->dauto[0]; c[1] = B->dauto[1];
@@ -17627,23 +17335,13 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
  * dropped, which the slot pick acquires). n - K may still be draining
  * below this point; one more burst of lag keeps the fold ahead of it. */
         {
-            int d = dauto_fold_env();
-            /* d < 0 (arm): fold up to the structural bound, which needs no
- * wait, then keep folding in order through every later burst whose
- * chain has already ended, stopping at the first that has not.
- * Which bursts those are depends on scheduling, so the decision can
- * differ run to run above one thread; the staircase never runs at
- * --threads 1, so one-thread output cannot move. */
-            unsigned lag = d > 0 ? (unsigned)d : (unsigned)Y264_STAIR_K + 1;
+            const unsigned lag = DAUTO_FOLD_LAG;
             while (st->dauto_folded + 1 < n) {                  /* never this burst */
                 unsigned sq = st->dauto_folded + 1;
                 _Atomic unsigned *rd = &st->dauto_ready[sq % (2 * Y264_STAIR_K)];
-                if (sq + lag > n) {                             /* past the bound */
-                    if (d >= 0 || atomic_load_explicit(rd, memory_order_acquire) != sq)
-                        break;
-                    if (stair_stat_on()) st->stat_dfold_early++;
-                } else if (d > 0 &&                             /* wait for that burst's chain end */
-                           atomic_load_explicit(rd, memory_order_acquire) != sq) {
+                if (sq + lag > n)                               /* past the bound */
+                    break;
+                if (atomic_load_explicit(rd, memory_order_acquire) != sq) {   /* wait for its chain end */
                     double t0 = stair_stat_on() ? tprof_ms() : 0.0;
                     pthread_mutex_lock(&st->dauto_mx);
                     while (atomic_load_explicit(rd, memory_order_acquire) != sq)
@@ -17860,23 +17558,24 @@ static int stair_run_burst(yah264_encoder_t *e, size_t *off,
  * wrong frame. Both terms are counts in coding order, so which drains
  * happen here is a function of the launch sequence and never of when a
  * chain finished. */
-        /* The probe drops the first term only: the ring bound stays, because a
- * silently-unpushed rcp entry slides every later fill onto the wrong
- * frame and that would distort the wall clock this is measuring. */
+        /* The DRAIN SPLIT: rather than retire every burst it is about to leave
+ * flying, retire only their ANCHOR halves (oldest first, the order the
+ * ledger is filled in), so the decide below is short only the B leaves,
+ * where the tail lives. B->size is final when a burst's runner returns;
+ * the chain driver holds the leaves. Measured: ~+1.3% BD-VMAF-NEG at
+ * --ref 3 and +0.14-0.7% at --ref 1 on cut-heavy content (9 of 12 clips
+ * byte-identical), for 1.04-1.11x on the ABR board, with rate accuracy
+ * equal-or-better on every clip. The ring bound stays: a silently-unpushed
+ * rcp entry slides every later fill onto the wrong frame. */
         int keep = e->rcp_lag;
         if (stair_stat_on() && e->st->nlive > keep) st->stat_early++;
-        /* Mode 2 retires the anchor half of everything it is about to leave
- * flying, so the decide below is short only the B's. Oldest first, the
- * order the ledger is filled in. */
-        if (e->abr_early == 2)
-            for (int n = st->nlive; n > keep; n--) {
-                int k = (st->cur - n + 1) % Y264_STAIR_K;
-                if (k < 0) k += Y264_STAIR_K;
-                if (stair_drain_anchor(e, off, &st->bur[k]) < 0)
-                    return -2;
-            }
-        while ((!e->abr_early && e->st->nlive > keep) ||
-               (e->st->nlive > 0 && e->rcp_n + e->nbuf + 1 > RCP_MAX))
+        for (int n = st->nlive; n > keep; n--) {
+            int k = (st->cur - n + 1) % Y264_STAIR_K;
+            if (k < 0) k += Y264_STAIR_K;
+            if (stair_drain_anchor(e, off, &st->bur[k]) < 0)
+                return -2;
+        }
+        while (e->st->nlive > 0 && e->rcp_n + e->nbuf + 1 > RCP_MAX)
             if (stair_drain(e, off) < 0)
                 return -2;
         if (!(e->rcp_lag > 0 && !e->vbv_on)) {
@@ -18687,7 +18386,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * stair_launch swaps the arrival-side B planes out to the chain's
  * spare bank: after that e->bplane names the next burst's memory.
  * Index 1 because stair_refb_poc's shape test is bpoc[1]. */
-            if (stair_refbgate_on() && stair_bdepth_on() && !is_idr)
+            if (stair_bdepth_on() && !is_idr)
                 refbpoc = stair_refb_poc(e->nbuf, e->bpoc);
             if (refbpoc >= 0)
                 refbsum = src_luma_sum(e, e->bplane[1][0]);
