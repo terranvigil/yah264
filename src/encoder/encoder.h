@@ -359,12 +359,12 @@ struct yah264_encoder {
     int      aq_abs;
     int      aq_chroma;
     double   aq_anchor;
-    double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (Y264_AQ_DC_RQW, default 0.25), <=0 = plain mean */
+    double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (0.25), <=0 = plain mean */
     double   aq_dcstr;                      /* the AQ frame-level (DC) strength on the CRF base QP (Y264_AQ_DC) */
     int      aq_rabr;                       /* AQ takes its bitrate-target constants (ABR; two-pass per Y264_AQ2_TP_ABR) */
-    double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric (Y264_AQ_DCFLOOR) */
-    double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref (Y264_AQ_BPULL) */
-    double   aq_bref;                       /* the level aq_analyze's centre is pulled to (Y264_AQ_BREF) */
+    double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric */
+    double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref */
+    double   aq_bref;                       /* the level aq_analyze's centre is pulled to */
     double   crf_dc;                        /* this anchor's DC delta on the CRF base QP (crf_frame_dc) */
     /* Co-located motion of the list-1 anchor, saved for B direct modes. */
     int16_t *colmvx, *colmvy;
@@ -802,7 +802,6 @@ struct yah264_encoder {
                                  * mb-tree reads it instead of re-estimating */
     int      bdintra_valid[8];
     int      lr_intra_pen;      /* the lowres intra penalty (lr_intra_penalty) */
-    int      lr_i10;            /* the lowres intra mode set (LR_I10_MODE; 0 on the 2160p tier under Y264_UHD_LITE) */
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
@@ -972,7 +971,7 @@ struct yah264_encoder {
     /* CRF under mb-tree is open loop and mb-tree's offsets are mean negative,
  * so the base QP carries a fitted level and frame-rate term
  * (rc_set_qp_crf); the level is uniform, so the cross-frame differential
- * (static gets more, motion less) survives. Gated Y264_CRF_CL. */
+ * (static gets more, motion less) survives. */
     int      crf_cl;            /* mb-tree operating-point devices active */
     double   mbtree_mean_off;   /* mean mb-tree QP offset of the frame being coded (<=0) */
 
@@ -1253,7 +1252,7 @@ struct yah264_encoder {
     int64_t frame_count;
     int     headers_done;
 
-    /* In-frame row-wavefront pool (NULL unless Y264_WF_THREADS>1). Separate
+    /* In-frame row-wavefront pool (NULL unless the wavefront width is >1). Separate
  * from CLI GOP-parallelism (--threads) to avoid N*N oversubscription. The
  * first frame runs serial (wf_warmed=0) to initialise every lazy static
  * cache (CPU detect, config, tables) on one thread before any parallel frame
