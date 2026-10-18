@@ -1,6 +1,6 @@
 # yah264 pixel-work inventory: NEON vs scalar C
 
-A read-only survey of this tree at commit 7cd92bd (main, 2026-09-02).
+A read-only survey of this tree (main, 2026-09-02).
 Every line number below was read from the tree. None is inferred.
 
 ## 0. Summary
@@ -273,7 +273,7 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. The filters run per **four-line*
 | deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 (4 per x86 tier) |
 | **total** | **72** (+SSD) | **53** (+SSD) | **10** | **19** | **61** |
 
-Since 2026-09-17, checkasm is `tools/checkasm/{main.c,checkasm.h,metrics.c,transform.c,interp.c,intrapred.c,loopfilter.c}`, a registration table that started at **47 groups**, 40 behind a cpu mask and 7 portable (commit 47e954f). The list below is the aarch64 set as it stood after HD stage 4, 48 groups. Today an Apple aarch64 build lists **71**: 57 NEON rows and 14 portable. pixel: sad, sad_dotprod, sad_quad, satd4x4, satd8x8, satd16x16, satd_quad_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4_mode_search, intra16_satd_trio, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list, with the ISA each row needs. The table is per ARCHITECTURE. An x86-64 build runs the portable rows plus the x86 ones: 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which was 52 x86 rows at a build that had both tiers before waves 2 and 3b.
+Since 2026-09-17, checkasm is `tools/checkasm/{main.c,checkasm.h,metrics.c,transform.c,interp.c,intrapred.c,loopfilter.c}`, a registration table that started at **47 groups**, 40 behind a cpu mask and 7 portable. The list below is the aarch64 set as it stood after HD stage 4, 48 groups. Today an Apple aarch64 build lists **71**: 57 NEON rows and 14 portable. pixel: sad, sad_dotprod, sad_quad, satd4x4, satd8x8, satd16x16, satd_quad_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4_mode_search, intra16_satd_trio, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list, with the ISA each row needs. The table is per ARCHITECTURE. An x86-64 build runs the portable rows plus the x86 ones: 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which was 52 x86 rows at a build that had both tiers before waves 2 and 3b.
 
 Beyond the four kernels that had no group, the split changed how quant and dequant are checked. Those groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT. The harness now builds it from the specification's normAdjust tables and hands it to the kernel. The reference derives its own from the library's tables through the weighted path with a flat matrix of 16, which gives identical multipliers by construction (`(16*mf + 8)/16 == mf`). The 4x4 forward row is also cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
 
@@ -483,7 +483,7 @@ Because the recon is written straight into the frame plane, every RD candidate t
 
 This tree's `docs/` has no `archive/` directory and no per-symbol coverage table. A grep for `uncovered|self-time|encode_inter_res|analyze_b_mb|_platform_memmove` hits only the parity review's prose. The table lives in the old tree:
 
-**`docs/archive/goal3-coverage-ranking.md` in the old tree (yah264old), dated 2026-08-17 in its heading, last committed 2026-08-25 (3702c5a).** Method: `bench/lowrate/coverage.sh` on both shipped binaries at `--threads 1`, with samsung_720p at 1200 kbps and bus_cif looped x6 at 400 kbps. Both scripts still exist here (`bench/coverage_gap.sh`, `bench/lowrate/coverage.sh`).
+**`docs/archive/goal3-coverage-ranking.md` in the old tree (yah264old), dated 2026-08-17 in its heading, last committed 2026-08-25.** Method: `bench/lowrate/coverage.sh` on both shipped binaries at `--threads 1`, with samsung_720p at 1200 kbps and bus_cif looped x6 at 400 kbps. Both scripts still exist here (`bench/coverage_gap.sh`, `bench/lowrate/coverage.sh`).
 
 Coverage on those runs:
 

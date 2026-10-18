@@ -383,7 +383,7 @@ direct, `temporal_direct` can therefore never return 0, and `dmv` is always
 fully written. Per-macroblock gating is exactly the change that lets a refusal
 happen inside a temporal frame, so it makes the partial fill reachable.
 Measured: with `Y264_DIRECT_PERMB=0` the reproducer is byte-identical between
-`77c8b46` and the fix, and deterministic on both.
+the pre-fix build and the fix, and deterministic on both.
 
 It explains every negative result above as well. Recon-match passes because the
 garbage reaches a SEARCH SEED, never the reconstruction: the encoder builds
@@ -412,13 +412,13 @@ with the gate on.
 Measured: the reproducer becomes identical across runs AND across
 `--threads 2/4/8/18`. Under six busy-loop spinners, `scripts/stair_determ.sh`
 reads 48/48 at t4, t8 and t18 with `--direct temporal` (0/32 for the same
-command on `77c8b46`). `scripts/determ_repeat.sh` with
-`ARGS='--direct temporal'` reads 8/8 configs over 8 runs each, where `77c8b46`
+command on the pre-fix build). `scripts/determ_repeat.sh` with
+`ARGS='--direct temporal'` reads 8/8 configs over 8 runs each, where the pre-fix build
 with the gate forced on reads 0/8. Seven of those eight emit five to eight
 distinct bitstreams in eight runs.
 
 `Y264_DIRECT_PERMB` therefore **defaults on at every thread count** as of
-2026-09-01. Byte-identity against `77c8b46` holds 32/32 on the shipped default,
+2026-09-01. Byte-identity against the pre-fix build holds 32/32 on the shipped default,
 over a CIF/720p/1080p x CABAC/CAVLC x CQP/CRF/ABR x t1/t2/t8/t18 matrix.
 `--direct spatial` always fills `dmv` and never touched this. Only
 `--direct temporal` moves.
@@ -591,7 +591,7 @@ sign, same conclusion, smaller numbers.
 
 **Nothing here flips a default.** When this was written, bare yah264 was still
 x264 medium and still spatial. It has run `--direct auto` by default since (see
-the note at the top). Every default-path encode is byte-identical to be88345 at threads 1
+the note at the top). Every default-path encode is byte-identical to the build before this work at threads 1
 and 8. What changed is that `--direct temporal` now does what its name says.
 
 ### Does a per-slice choice beat a per-clip one? Mostly no, and that is the useful answer
