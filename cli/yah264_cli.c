@@ -621,7 +621,6 @@ static void frame_stats_emit(FILE *out, yah264_encoder_t *e, const yah264_nal_t 
                 r ? r->is_ref : -1, r ? r->qp : -1, (int)nal[i].size, k);
     }
 }
-static double shot_tunable(const char *n, double def) { const char *v = getenv(n); return v ? atof(v) : def; }
 static int g_vs_set, g_y4m_full_range = -1;
 static int colour_code(const char *opt, const char *v)
 {
@@ -982,7 +981,7 @@ static void usage(const char *argv0)
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream).\n"
         "                          From a file the pre-scan is a pass of its own and the encode streams;\n"
         "                          a pipe is held in memory, up to the limit\n"
-        "  --shot-crf              per-shot CRF offsets from the shot table (implies --cut-split; Y264_SHOT_QCOMP 0.6, _CLAMP 4, _MIN 24)\n"
+        "  --shot-crf              per-shot CRF offsets from the shot table (implies --cut-split)\n"
         "  --shot-table            print the shot table (per-shot costs) as JSON on stderr (implies --cut-split)\n"
         "  --scan-out FILE         with --cut-split/--shot-crf: also save the pre-scan's result to FILE\n"
         "  --scan-in FILE          with --cut-split/--shot-crf: use a saved pre-scan instead of running one;\n"
@@ -1122,8 +1121,7 @@ typedef struct {
  * selects the flat pull queue in GOP order. */
     const int *gop_order;
     const int *gop_k;
-    /* Y264_GOP_EARLY (pipe only, above one thread; on by default, =0 restores
- * the wait): the workers start at frame 0 instead of
+    /* Early dispatch (pipe only, above one thread): the workers start at frame 0 instead of
  * after EOF or the (threads+1)'th GOP, and the GOP handed out i-th opens
  * with max(early_kmin (3), ceil(early_t / (i + 1))) frame threads, capped at the
  * budget and at the wavefront's knee. A function of the hand-out index alone, so it does not
@@ -1133,8 +1131,7 @@ typedef struct {
  * or rate carry): GOP g starts at g * keyint, so a worker may start it as
  * soon as that frame has been read instead of waiting for the GOP's last
  * frame to publish the boundary; the frame loop's end-of-input handling
- * trims a GOP that turns out short. Y264_GOP_STREAM_START=0 restores the
- * wait. */
+ * trims a GOP that turns out short. */
     int stream_start;
     /* Y264_CUT_STREAM: the GOP table comes from the streamed cut scan, one
  * frame behind the reader. n_dec frames have their IDR decision; a worker
@@ -1146,7 +1143,6 @@ typedef struct {
     int cs_share;                   /* Y264_CUT_SHARE: frames carry the scan's lowres analysis */
     size_t cs_lrsz, cs_disz;
     int n_dec;
-    int edge_full;                  /* see the early share in gop_worker */
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
  * bal_S slots, bal_busy of them held by running GOPs; a worker picks its
  * GOP's frame-thread count when it starts it (bal_pick). The count depends
@@ -1232,29 +1228,13 @@ typedef struct { gop_job_t *j; int wid; } gop_arg_t;
  * run", not "how much does a worker hold". 16 covers a page-cache read (0.3 ms
  * at 720p) against a frame's encode (tens of ms) with two orders to spare, and
  * the starvation valve means an underestimate costs latency, never progress. */
-static int early_on(void)
-{
-    const char *v = getenv("Y264_GOP_EARLY");
-    int on = v ? atoi(v) : 1;
-    return on > 0;
-}
+#define STREAM_READAHEAD 16L
 
-static int early_kmin(void)
-{
-    /* 3, not 2: it lifts the late GOPs' share from 2 to 3, and on the three
- * 1080p segments that bought 0.98-1.03x the reference encoder's wall against 1.04-1.10x at
- * 2, with BD-rate (VMAF-NEG) equal within 0.04% (2026-09-27). */
-    const char *v = getenv("Y264_GOP_EARLY_KMIN");
-    int k = v ? atoi(v) : 3;
-    return k > 0 ? k : 1;
-}
-
-static long stream_readahead(void)
-{
-    const char *v = getenv("Y264_STREAM_READAHEAD");
-    long ra = v ? atol(v) : 0;
-    return ra > 0 ? ra : 16;
-}
+/* The early share's floor. 3, not 2: it lifts the late GOPs' share from 2 to
+ * 3, and on the three 1080p segments that bought 0.98-1.03x the reference
+ * encoder's wall against 1.04-1.10x at 2, with BD-rate (VMAF-NEG) equal
+ * within 0.04% (2026-09-27). */
+#define EARLY_KMIN 3
 
 /* Frame i's slot, allocating its segment on first touch. Caller holds the lock
  * whenever this can allocate (the reader); a worker only ever reads a slot the
@@ -1369,15 +1349,6 @@ static int rc_carry_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_RC_CARRY"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-
-/* Y264_RC_SHARE=0: concurrent ABR GOPs keep their own rate factors (chained
- * through the carry only), the pre-2026-10-03 behaviour. */
-static int rc_share_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RC_SHARE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -1571,8 +1542,8 @@ static void *gop_worker(void *arg)
  * 16 threads. The first three GOPs of a stream and, once the count is
  * final, the last two take the whole budget instead; the middle of a
  * long input keeps the shared form, where full width everywhere cost
- * 8-14% more CPU-s (Y264_GOP_EDGE_FULL=0 restores it). */
-            if (j->edge_full && (k < 3 || (gops_final && g >= n_gops - 2)))
+ * 8-14% more CPU-s. */
+            if (k < 3 || (gops_final && g >= n_gops - 2))
                 ek = j->early_t;
             if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
             p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
@@ -2808,8 +2779,8 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
  * shorter than min-shot merged into their predecessor. A GOP takes
  * its shot's CRF; a shot over several GOPs shares one. */
         double crf0 = param->rc.rf;
-        double qcomp = shot_tunable("Y264_SHOT_QCOMP", 0.6), clamp = shot_tunable("Y264_SHOT_CLAMP", 4.0);
-        int minshot = (int)shot_tunable("Y264_SHOT_MIN", 24);
+        double qcomp = 0.6, clamp = 4.0;
+        int minshot = 24;
         double ctitle = 0; long nf = 0;
         for (int k = 0; k < ns; k++) { int L = shots[k].last - shots[k].first + 1; ctitle += shots[k].pcost_mean * L; nf += L; }
         ctitle = nf ? ctitle / nf : 1.0;
@@ -3062,13 +3033,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     /* A file with a known length and a GOP table that is whole before the
  * first read takes the seek reader (seek_rd in gop_job_t), whose store is
  * (GOPs in flight + 1) x readahead and needs neither the window nor the
- * ceiling below. Y264_STREAM_SEEK=0 keeps the in-order reader. */
-    int seek_ok = 0;
-    {
-        const char *sv = getenv("Y264_STREAM_SEEK");
-        seek_ok = (!sv || atoi(sv)) && !whole && !cut_stream && nknown > 0 &&
+ * ceiling below. */
+    int seek_ok = !whole && !cut_stream && nknown > 0 &&
                   hdr_len >= 0 && y264_seekable(in);
-    }
 
     int store_cap = INT_MAX;
     if (!cut_split && per_frame) {
@@ -3077,15 +3044,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * stream order, or to the one GOP still being read, which fits under the
  * floor below. A small ceiling costs occupancy (workers wait for their
  * first frame), never progress. */
-        const char *sv = getenv("Y264_STREAM_STORE_MB");
-        double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
-        /* The default ceiling is for frames above 1080p only. At 1080p the
- * store's natural peak at --threads 0 is ~2000 frames (6 GiB, under the
- * 8 GiB ceiling of a 64 GiB box) and the whole encode stays near 17 GiB,
- * so a ceiling there can only cost occupancy; at 2160p the uncapped store
- * reaches ~15 GiB on top of the encoders' own state and the box pages.
- * An explicit Y264_STREAM_STORE_MB applies at every size. */
-        if (!sv && (uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
+        double mb = (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
+        /* The ceiling is for frames above 1080p only. At 1080p the store's
+ * natural peak at --threads 0 is ~2000 frames (6 GiB, under the 8 GiB
+ * ceiling of a 64 GiB box) and the whole encode stays near 17 GiB, so a
+ * ceiling there can only cost occupancy; at 2160p the uncapped store
+ * reaches ~15 GiB on top of the encoders' own state and the box pages. */
+        if ((uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
             mb = 0;
         if (mb > 0) {
             double fr = mb * 1048576.0 / (double)per_frame;
@@ -3108,14 +3073,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * the full window refused a piped 2160p encode at --threads 0 on a 64 GiB
  * box that then needs ~8 GiB of input store. */
     int waits_for_split = ntab <= 0 &&
-        !(early_on() && nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
+        !(nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
           !getenv("Y264_GOP_FORCE_K"));
     if (budget && per_frame) {
         long hold = whole ? y264_projected_frames(in, payload + 6) : need;
         if (!whole && !waits_for_split && !win_forced && store_cap < hold)
             hold = store_cap;
         if (seek_ok) {
-            long sh = (long)(nthreads + 2) * stream_readahead();
+            long sh = (long)(nthreads + 2) * STREAM_READAHEAD;
             if (sh < hold) hold = sh;
         }
         if (whole && max_frames > 0 && (hold < 0 || hold > max_frames))
@@ -3198,7 +3163,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * the split is decided. */
     if (job.window != INT_MAX && !win_forced && n_gops > 0) {
         int gmax = n_gops < nthreads ? n_gops : nthreads;
-        long w = (long)(gmax + 1) * stream_readahead();
+        long w = (long)(gmax + 1) * STREAM_READAHEAD;
         if (w < job.window) job.window = (int)w;
     }
     if (seek_ok && n_gops > 0 && job.gops_final) {
@@ -3213,7 +3178,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
         for (int i = 0; i < n_gops; i++) job.gop_rd[i] = job.gop_cons[i] = job.gop_start[i];
         job.seek_rd = 1;
-        job.readahead = (int)stream_readahead();
+        job.readahead = (int)STREAM_READAHEAD;
     }
 
     reader_arg_t ra = {
@@ -3309,8 +3274,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * whole window before any GOP starts. 2880 frames of 1080p (9 GB) took
  * 5.5 s to arrive on a loaded box (2026-09-26), against a 12.7 s encode
  * of the same clip at night, and it is what holds the peak RSS at the
- * full window. Early dispatch (the default; Y264_GOP_EARLY=0 restores
- * the wait) skips it and takes the streamed plan whatever the clip turns
+ * full window. Early dispatch skips it and takes the streamed plan whatever the clip turns
  * out to be, never the EOF-first one, so the plan cannot depend on how
  * fast the pipe delivered. Night A/B 2026-09-26, default threads: 1080p
  * segments 1.29-2.22x -> 0.98-1.24x the reference encoder's wall (KMIN 3), 2160p
@@ -3318,7 +3282,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * +/-0.12% on the three 1080p segments. One thread keeps the wait, since one worker gains nothing
  * from starting early and --threads 1 must write what it always wrote;
  * the forced splits keep it too, since their point is a fixed share. */
-        if (early_on() && nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
+        if (nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
             !getenv("Y264_GOP_FORCE_K")) {
             early = 1;
         } else {
@@ -3461,7 +3425,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     uint64_t mem_budget = y264_mem_budget();
     if (mem_budget && per_frame && g > 1 && !force_k && !getenv("Y264_GOP_FORCE_G")) {
         int la = param->rc.lookahead;
-        long ra = stream_readahead();
+        long ra = STREAM_READAHEAD;
         long conc_cap = early && store_cap < INT_MAX ? store_cap / keyint + 1 : LONG_MAX;
         int g0 = g;
         uint64_t est = 0;
@@ -3529,7 +3493,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * documented staircase result) -- shrinking it to nthreads measured 0.89x on
  * an 8-GOP clip. NOT byte-identical: a GOP's bits depend on its share (see
  * Y264_GOP_FORCE_K above), so this split and the uniform one write different
- * streams, each deterministic. Y264_GOP_EVEN=1 selects the uniform split.
+ * streams, each deterministic.
  *
  * The greedy skips a worker already at the wavefront cap, so the budget
  * flows to workers that can still spend it instead of piling onto the
@@ -3546,8 +3510,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int ragged = 0;
     for (int i = 1; gstart_known && i < n_gops; i++)
         if (gstart[i + 1] - gstart[i] != gstart[1] - gstart[0]) { ragged = 1; break; }
-    int uneven = !bal && !force_k && gstart_known && g > 1 && g == n_gops && ragged &&
-                 !(getenv("Y264_GOP_EVEN") && atoi(getenv("Y264_GOP_EVEN")));
+    int uneven = !bal && !force_k && gstart_known && g > 1 && g == n_gops && ragged;
     if (uneven) {
         int *len = malloc((size_t)g * sizeof(int));
         int *kw  = malloc((size_t)g * sizeof(int));
@@ -3612,7 +3575,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * measured on this box (an identical-arms null reads 1.013x on medians with a
  * 38% spread between the fastest and slowest of 14 runs). So sintel cannot pay
  * for the constant either, and uneven actively refuses it: no floor.
- * Y264_GOP_EVEN=1 selects the flat queue. The per-GOP share moves that GOP's
+ * The per-GOP share moves that GOP's
  * bits (see Y264_GOP_FORCE_K above), but it is a function of the GOP table
  * alone, and the output is written in GOP order however the queue ran, so
  * the stream stays deterministic. */
@@ -3621,8 +3584,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * nothing there: that branch is reached only with n_gops > nthreads, where
  * ceil(len*nthreads/n) is 1 for every GOP and the sort is the identity, so
  * the flat queue below IS this schedule. */
-    int queued = !force_k && gstart_known && g > 1 && g < n_gops &&
-                 !(getenv("Y264_GOP_EVEN") && atoi(getenv("Y264_GOP_EVEN")));
+    int queued = !force_k && gstart_known && g > 1 && g < n_gops;
     if (bal) {
         queued = 0;
         if (gstart_known && n_gops > 1) {           /* longest first; the share is picked at start */
@@ -3702,7 +3664,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.gop_order = qorder; job.gop_k = qk;
     job.gop_stats = gop_stats; job.gop_target = gop_target;
     {
-        const char *sv = getenv("Y264_GOP_STREAM_START");
         /* The streamed cut split opens a GOP before its end is known; capped
  * ABR sizes its buffer handoff by the GOP's length at open, so it waits
  * for the end there instead. */
@@ -3712,7 +3673,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         pthread_mutex_unlock(&job.lock);
         job.stream_start = !gstart_known && !cut_split && !job.cut_stream && !qorder && !owner &&
                            !gop_stats && !job.gop_rf && param->rc.bitrate <= 0 &&
-                           job.keyint > 0 && (!sv || atoi(sv));
+                           job.keyint > 0;
         /* The early start indexes the per-GOP arrays before the reader has
  * pushed a boundary, so they have to exist from the outset. */
         if (job.stream_start) {
@@ -3731,11 +3692,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * than a bound -- a worker that starves overrides it, so a forced g needs
  * no widening of its own.
  *
- * Y264_STREAM_READAHEAD sets the per-GOP figure; Y264_STREAM_WINDOW
- * overrides the whole thing, and both are clamped by the worst case above so
- * this can only ever lower it. */
+ * Y264_STREAM_WINDOW overrides the whole thing, clamped by the worst case
+ * above so this can only ever lower it. */
     if (job.window != INT_MAX && !win_forced) {
-        long w = (long)(g + 1) * stream_readahead();
+        long w = (long)(g + 1) * STREAM_READAHEAD;
         if (w < job.window) {
             pthread_mutex_lock(&job.lock);
             job.window = (int)w;
@@ -3745,7 +3705,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
 
     job.nworkers = g;
-    /* Concurrent ABR GOPs share one rate factor (Y264_RC_SHARE, default on):
+    /* Concurrent ABR GOPs share one rate factor:
  * chained through the carry, the first W GOPs each solve their own rate
  * problem from a cold start and every later one inherits a ledger W GOPs
  * stale, so an easy GOP spends what a hard one does. Measured on sollevante
@@ -3753,8 +3713,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * the same encode with one GOP worker read 89.8. Not where a GOP must
  * re-encode identically alone (--gop-threads, the engine contract), nor
  * under two-pass, whose budget is already per GOP. */
-    if (g > 1 && param->rc.bitrate > 0 && param->rc.method != YAH264_RC_2PASS && !g_gop_threads &&
-        rc_share_on())
+    if (g > 1 && param->rc.bitrate > 0 && param->rc.method != YAH264_RC_2PASS && !g_gop_threads)
         job.rc_shared = g_api->rc_shared_new();
     if (bal) {
         const char *v;
@@ -3776,17 +3735,15 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         early = 0;                  /* the dispatch stays early; the share is bal_pick's */
     }
     if (early) {
-        { const char *ev = getenv("Y264_GOP_EDGE_FULL"); job.edge_full = !ev || atoi(ev); }
         job.early_t = nthreads;
-        job.early_kmin = early_kmin();
+        job.early_kmin = EARLY_KMIN;
         job.early_cap = wfcap;
         /* A store ceiling below g GOPs of input bounds how many GOPs can be
  * coding at once: a GOP starts only when the reader reaches it, and the
  * reader cannot pass the ceiling while the GOPs before it still hold their
  * frames. Share the threads over that many rather than over g, or the
  * later GOPs start on the floor share and the machine idles. */
-        const char *cv = getenv("Y264_STORE_CONC");
-        if (job.store_cap < INT_MAX && keyint > 0 && (!cv || atoi(cv))) {
+        if (job.store_cap < INT_MAX && keyint > 0) {
             int conc = job.store_cap / keyint;
             if (conc < 1) conc = 1;
             if (conc < g) job.early_conc = conc;
