@@ -30,21 +30,13 @@
 #error "symbols10.h is the high-depth library's namespace; Y264_BIT_DEPTH is 8"
 #endif
 
-#define abr_cguard_on                   abr_cguard_on_10
-#define abr_cguard_thresh               abr_cguard_thresh_10
 #define abr_pbrate_scale                abr_pbrate_scale_10
 #define abr_qcomp_env                   abr_qcomp_env_10
-#define abr_rf_env                      abr_rf_env_10
-#define abr_rfqp_trace                  abr_rfqp_trace_10
 #define abr_vbvov_frac                  abr_vbvov_frac_10
 #define anchor_leg_cost                 anchor_leg_cost_10
 #define blk_ac_energy                   blk_ac_energy_10
-#define crf_aqabs_env                   crf_aqabs_env_10
-#define crf_aqabs_forced                crf_aqabs_forced_10
 #define crf_cplx_env                    crf_cplx_env_10
 #define crf_max_clip                    crf_max_clip_10
-#define crf_pb0_env                     crf_pb0_env_10
-#define crf_pbscale_env                 crf_pbscale_env_10
 #define frame_complexity_ilr            frame_complexity_ilr_10
 #define frame_complexity_me             frame_complexity_me_10
 #define frame_qp                        frame_qp_10
@@ -75,37 +67,23 @@
 #define rc_head_crf                     rc_head_crf_10
 #define rc_head_serial                  rc_head_serial_10
 #define rc_knobs_resolve                rc_knobs_resolve_10
-#define rc_share_ovn_env                rc_share_ovn_env_10
 #define rcp_dbg_on                      rcp_dbg_on_10
 #define rcp_decide                      rcp_decide_10
 #define rcp_drop                        rcp_drop_10
 #define rcp_fill                        rcp_fill_10
 #define rcp_flush_all                   rcp_flush_all_10
-#define rcp_gain                        rcp_gain_10
 #define rcp_head                        rcp_head_10
-#define rcp_qpd_env                     rcp_qpd_env_10
 #define rcp_reqp                        rcp_reqp_10
 #define rcp_vbv_gate                    rcp_vbv_gate_10
 #define rcp_vbv_vfill                   rcp_vbv_vfill_10
 #define rcp_warm                        rcp_warm_10
-#define rcp_warm_n                      rcp_warm_n_10
 #define rcstep_qscale                   rcstep_qscale_10
 #define tp_bits_at                      tp_bits_at_10
 #define tp_build_plan                   tp_build_plan_10
 #define tp_plan_qscale                  tp_plan_qscale_10
 #define tp_qscale2qp                    tp_qscale2qp_10
-#define vbv_abound_env                  vbv_abound_env_10
-#define vbv_bound_all                   vbv_bound_all_10
-#define vbv_bound_env                   vbv_bound_env_10
 #define vbv_bounded_now                 vbv_bounded_now_10
-#define vbv_cjump_env                   vbv_cjump_env_10
-#define vbv_cw_env                      vbv_cw_env_10
-#define vbv_fitlaw_env                  vbv_fitlaw_env_10
-#define vbv_force_env                   vbv_force_env_10
 #define vbv_limit_at                    vbv_limit_at_10
-#define vbv_qpd_env                     vbv_qpd_env_10
-#define vbv_rhi_env                     vbv_rhi_env_10
-#define vbv_segh_env                    vbv_segh_env_10
 #define vbv_stat_on                     vbv_stat_on_10
 #define y264_add4x4_idct                y264_add4x4_idct_10
 #define y264_add4x4_idct_c              y264_add4x4_idct_c_10
@@ -329,7 +307,6 @@
 #define y264_me_search                  y264_me_search_10
 #define y264_me_search_satd             y264_me_search_satd_10
 #define y264_me_set_cheap               y264_me_set_cheap_10
-#define y264_me_set_et_off              y264_me_set_et_off_10
 #define y264_me_set_hpel                y264_me_set_hpel_10
 #define y264_me_set_isb                 y264_me_set_isb_10
 #define y264_me_set_list                y264_me_set_list_10

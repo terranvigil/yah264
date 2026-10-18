@@ -130,29 +130,6 @@ double frame_complexity_ilr(const yah264_encoder_t *e)
  * 0.2 x cvi (the Y264_ABR_CFLOOR / _CFLOORF overrides are gone). */
 
 
-/* The degenerate-frame guard of the per-frame rf model. Off: nothing arms
- * it, so a degenerate frame is never flagged. */
-int abr_cguard_on(void)
-{
-    return 0;
-}
-
-double abr_cguard_thresh(void)
-{
-    return 4.0;
-}
-
-/* Overrides param.rc.abr_model when >= 0; -1 follows the param. */
-int abr_rf_env(void)
-{
-    return -1;
-}
-
-/* The per-frame trace of both rate models; off. */
-int abr_rfqp_trace(void)
-{
-    return 0;
-}
 /* The RF2 model: one-pass ABR as the CRF path plus a slowly adapted rate
  * factor. Under mb-tree the per-MB offsets carry the per-frame complexity,
  * so the anchor's base QP is one number for the whole stream, moved by two
@@ -181,13 +158,6 @@ int abr_rfqp_trace(void)
  * tracking cells; the values and how they were read sit with the knobs in
  * rc_knobs_resolve. */
 
-
-/* Whether an instance on a shared ledger widens the overflow window by the
- * live instance count (see rcp_decide): 2 = under CBR only. */
-int rc_share_ovn_env(void)
-{
-    return 2;
-}
 
 static int rc_shared_nlive(const yah264_encoder_t *e)
 {
@@ -422,6 +392,30 @@ static double abr_scale_for(yah264_encoder_t *e, int type)
 #define CRF_MBT_LEVEL      2.3  /* QP added to --crf under mb-tree (fitted, rc_set_qp_crf) */
 #define CRF_MBT_FPS_SLOPE  2.9  /* QP per doubling of the frame rate from 30 fps (fitted) */
 
+/* The ABR error-correction gain. */
+#define RCP_GAIN 0.1
+
+/* Proportional overshoot charge for in-flight VBV entries: the virtual
+ * buffer charges r_hi * vpred per pending frame, and the burst gate falls
+ * back to serial when even that bound approaches the constraint. Corpus
+ * measurement (12 runs, ~3k frames): the bits/vpred distribution has p50
+ * ~0.8-0.9 and p90 ~1.8-2.3, but an UNBOUNDED tail (near-zero predictions,
+ * regime shifts) -- so r_hi covers the proportional body only, and the tail
+ * is carried by the extrapolation guards + the shock multiplier + the
+ * content-jump gate (see below), which the compliance battery validates. */
+#define VBV_RHI 2.0
+
+/* Extrapolation guards. QPD: how far below the model's
+ * calibrated QP regime a PIPELINED B decide may go (the serial schedule has
+ * no floor -- its per-frame actuals catch a dive within one frame; a flying
+ * burst decides bframes+1 QPs blind, and the bits model under-predicts ~2x
+ * per 6 QP of downward extrapolation on static content). CJUMP: complexity
+ * ratio past the calibrated content regime at which the burst gate goes
+ * tight (the missed-cut / fade-end shape: the scale is calibrated on the old
+ * regime and no multiplier covers the jump). */
+#define VBV_QPD   6
+#define VBV_CJUMP 4.0
+
 static double rc_tunable(const char *n, double def)
 {
     const char *s = getenv(n);
@@ -460,7 +454,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     cost nothing, and the ledger then reads several QP low for the rest
  *     of a short encode: sintel at CBR 352 kbit/s coded its B frames at
  *     QP 51 behind cheap anchors. The value is the per-frame model's own
- *     degenerate-frame line (abr_cguard_thresh); with it sintel reads
+ *     degenerate-frame line, 4; with it sintel reads
  *     -26 / -13 / -18% BD at ABR / VBR / CBR and no other band clip moves.
  *   ovc_win 2, ovc_t0 2 s: window 1 tracks tighter but costs akiyo; 3 drifts.
  *     t0 0.5, 1, 2, 3: 2 was best on akiyo and samsung.
@@ -550,15 +544,11 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->abr_vbvov_grow = 6.0;
     k->abr_vbvov_pow  = 1.0;
     k->abr_vbvov_vbr  = 0.75;
-    k->abr_dc         = 1;
     k->rf2_seed_a     = 8.692;
     k->rf2_seed_b     = 2.924;
     k->rf2_seed_c     = -1.315;
     k->vbv_plan_h     = 32.0;
     k->vbv_plan_t     = 0.5;
-    k->vbv_plan_pred  = 2;
-    k->vbv_entry_opt  = 0.0;
-    k->vbv_entry_rsv  = 0.1;
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25);
     k->vbv_cbr_dive   = 2.0;
@@ -1224,7 +1214,7 @@ void rcp_flush_all(yah264_encoder_t *e)
  * removed FROM rather than one that already charges the frame against itself. */
 double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
 {
-    double rhi = vbv_rhi_env();
+    double rhi = VBV_RHI;
     double fill = e->vbv.fill;
     int n = e->rcp_n - drop_tail;
     for (int i = 0; i < n; i++) {
@@ -1353,7 +1343,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * only holds back an anchor the retry already covers (samsung CRF+VBV at
  * one thread read +3.6% BD-VMAF-NEG with the floor, -3.2% without). */
     if (type != 2 && !e->rcp_vbv_tight && e->pool && e->bm_rvbv.have[type]) {
-        int lo = rcbm_qp_floor(&e->bm_rvbv, type, vbv_qpd_env());
+        int lo = rcbm_qp_floor(&e->bm_rvbv, type, VBV_QPD);
         if (e->qp < lo) e->qp = lo > 51 ? 51 : lo;
     }
     int coded = frame_qp(e, type, is_ref);
@@ -1427,10 +1417,10 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * to ride predictions (pre-IDR B's flush as P frames, each deciding
  * on full actuals) and its intra spike is the classic underflow shape
  * -- stay serial there and reconcile exactly. */
-        double rhi = vbv_rhi_env();
+        double rhi = VBV_RHI;
         if (e->rcp_vbv_shock > rhi)
             rhi = e->rcp_vbv_shock;     /* recent overshoot widens the margin */
-        double cj = vbv_cjump_env();
+        double cj = VBV_CJUMP;
         double fill = e->vbv.fill;
         tight = 0;
         /* Content-jump guard: the scale is calibrated on the regime it has
@@ -1468,7 +1458,7 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         double rfq = e->crf_on && !e->abr_on ? e->crf_pre_qp
                    : e->vbv_cbr && e->abr_rf2 && e->abr_qp > 0 ? e->abr_qp + e->crf_dc : 0.0;
         if (rfq > 0 && rfq < gq && e->bm_rvbv.have[1]) {
-            double reg = e->bm_rvbv.qp[1], lo = reg - vbv_qpd_env();
+            double reg = e->bm_rvbv.qp[1], lo = reg - VBV_QPD;
             gq = rfq > lo ? rfq : lo;
             if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
         }
@@ -1483,7 +1473,7 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         double vs2 = rcp_vbv_scale_eff(e, 2);
         double bqp = e->qp + 1;
         if (e->bm_rvbv.have[2]) {
-            int lo = rcbm_qp_floor(&e->bm_rvbv, 2, vbv_qpd_env());
+            int lo = rcbm_qp_floor(&e->bm_rvbv, 2, VBV_QPD);
             if (bqp < lo) bqp = lo;
         }
         double qb = pow(2.0, (bqp - 12) / 6.0);
@@ -1797,7 +1787,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         if (rcp_dbg_on())
             fprintf(stderr, "RCPE seq=%u err=%.0f\n",
                     atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1, err);
-        double target = e->abr_target_bpf - err * rcp_gain();
+        double target = e->abr_target_bpf - err * RCP_GAIN;
         if (target < 200) target = 200;
         double scale = abr_scale_for(e, type);
         double rceq = pow(C, 1.0 - abr_qcomp_env());
@@ -2046,7 +2036,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * Floor the flying decide at calqp - QPD; the next anchor re-syncs
  * on actuals and the serial equations take it from there. Tight
  * bursts have per-frame actuals (the serial schedule) -- no floor. */
-        int lo = rcbm_qp_floor(&e->bm_rvbv, 2, vbv_qpd_env());
+        int lo = rcbm_qp_floor(&e->bm_rvbv, 2, VBV_QPD);
         if (e->qp < lo) {
             e->qp = lo > 51 ? 51 : lo;
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
@@ -2566,55 +2556,6 @@ int crf_cplx_env(void)
     return v;
 }
 
-/* The absolute AQ anchor and the B cascade drop under mb-tree: both follow
- * the master gate. */
-int crf_aqabs_env(void)
-{
-    return crf_cplx_env();
-}
-
-/* Whether the absolute anchor is armed outside CRF: never. */
-int crf_aqabs_forced(void)
-{
-    return 0;
-}
-
-int crf_pb0_env(void)
-{
-    return crf_cplx_env();
-}
-
-/* B-frame QP cascade scale under the gate. With mb-tree on, non-reference
- * B's already miss the mb-tree offsets, which carries most of the B economy;
- * our extra 1..d+1 cascade on top can double-count, and since B's are ~3/4 of
- * the frames it is most of the residual under-spend at equal CRF. 0 drops the
- * cascade -- but that is not a free win: dropping the cascade is worth -8.92% BD on ducks and
- * +7.00% on sintel, a bidirectional trade with no net, so the default keeps
- * yah264's cascade at full scale. */
-double crf_pbscale_env(void)
-{
-    return 1.0;
-}
-
-/* Half-width of the QP window an ABR decide may hold around the regime its
- * model was calibrated at; 0 = no window. */
-int rcp_qpd_env(void)
-{
-    return 0;
-}
-
-/* rcp warm length (serial-tight decides per encoder before the lag begins)
- * and the ABR error-correction gain. */
-int rcp_warm_n(void)
-{
-    return 12;
-}
-
-double rcp_gain(void)
-{
-    return 0.1;
-}
-
 /* ABR qcompress for the pipelined decide. Warmed static: async-chain decides
  * run on the stair driver thread. */
 double abr_qcomp_env(void)
@@ -2631,71 +2572,6 @@ int rcp_dbg_on(void)
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_RCP_DBG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
-}
-
-/* Proportional overshoot charge for in-flight VBV entries: the virtual
- * buffer charges r_hi * vpred per pending frame, and the burst gate falls
- * back to serial when even that bound approaches the constraint. Corpus
- * measurement (12 runs, ~3k frames): the bits/vpred distribution has p50
- * ~0.8-0.9 and p90 ~1.8-2.3, but an UNBOUNDED tail (near-zero predictions,
- * regime shifts) -- so r_hi covers the proportional body only, and the tail
- * is carried by the extrapolation guards + the shock multiplier + the
- * content-jump gate (see below), which the compliance battery validates.
- * Warmed static (driver-thread decides). */
-double vbv_rhi_env(void)
-{
-    return 2.0;
-}
-
-/* Whether the burst gate's serial fallback is skipped: never. */
-int vbv_force_env(void)
-{
-    return 0;
-}
-
-/* Whether EVERY frame is bounded against its measured coded size, not just
- * the instance's first: no, for the reason vbv_bound_all sets out. */
-int vbv_bound_env(void)
-{
-    return 0;
-}
-
-/* Extrapolation guards (both warmed statics). QPD: how far below the model's
- * calibrated QP regime a PIPELINED B decide may go (the serial schedule has
- * no floor -- its per-frame actuals catch a dive within one frame; a flying
- * burst decides bframes+1 QPs blind, and the bits model under-predicts ~2x
- * per 6 QP of downward extrapolation on static content). CJUMP: complexity
- * ratio past the calibrated content regime at which the burst gate goes
- * tight (the missed-cut / fade-end shape: the scale is calibrated on the old
- * regime and no multiplier covers the jump). */
-int vbv_qpd_env(void)
-{
-    return 6;
-}
-
-double vbv_cjump_env(void)
-{
-    return 4.0;
-}
-
-/* The VBV scale is complexity-weighted (see rcp_account). */
-int vbv_cw_env(void)
-{
-    return 1;
-}
-
-/* The fit test reads the occupancy the frame is removed from. */
-int vbv_fitlaw_env(void)
-{
-    return 1;
-}
-
-/* The handoff occupancy a joined segment assumes and the exit corridor
- * steers to, as a fraction of the buffer; below 0 = the CRF+VBV fill goal,
- * rck.vbv_fill_frac. */
-double vbv_segh_env(void)
-{
-    return -1.0;
 }
 
 /* Y264_VBV_STAT=1: report burst/fallback/clamp counts at encoder close. */
@@ -2782,39 +2658,6 @@ static int vbv_first_bounded(const yah264_encoder_t *e)
     return e->vbv_on && e->vbv_first_bound && !e->abr_on && !e->tp_pass;
 }
 
-/* The same bound on EVERY frame rather than only the first (off, see
- * vbv_bound_env).
- *
- * WHY THIS COSTS THE STAIR, and why that is a property of the defect and not a
- * shortcut. A retry needs a window in which the coded size is known and nothing
- * downstream has consumed the frame yet. emit_frame has one: build_slice, then
- * append_nal. The stair's burst anchor does not, and the reason is the stair's
- * whole point -- its B leaves are ROW-GATED on the anchor's publish watermark
- * (stair_chain, the pub_wait composition argument), so they are analyzed
- * against the anchor's recon while the anchor is still being coded. By the time
- * B->size is final in stair_drain, leaves have already been coded against the
- * recon a retry would change. There is no window; re-coding the anchor would
- * mean rewinding a whole burst's DPB stores, refring pushes, colmv application
- * and ledger entries.
- *
- * So a bound with full reach and a pipelined anchor are mutually exclusive
- * given this schedule, and the honest move is to take the one that is sound.
- * With the stair disengaged every frame reaches emit_frame's serial body, one
- * route, one window, and the bound applies to a frame regardless of which
- * thread count coded it -- no frame is bounded on one path and unbounded on
- * another. Measured cost, capped VBR only, 18 threads, median of 5:
- * samsung 1.15x, park_joy 1.25x, ducks 1.28x.
- *
- * fpipe goes with it. A leaf B is non-reference, so its recon feeds nothing and
- * a retry there IS structurally local -- but with the stair off it measured no
- * faster than the serial path (park_joy 1.69s vs 1.75s, inside the noise), and
- * keeping it would need an indexed rcp_reqp because both sibling leaves push
- * ledger entries before either NAL is appended. Not worth the surface. */
-int vbv_bound_all(const yah264_encoder_t *e)
-{
-    return e->vbv_on && e->vbv_bound_on && !e->abr_on && !e->tp_pass;
-}
-
 /* Capped ABR: the measured-size bound on every frame of a TIGHT burst.
  *
  * The burst gate already sends a burst down the serial schedule when its
@@ -2829,12 +2672,6 @@ int vbv_bound_all(const yah264_encoder_t *e)
  *
  * The gate is a pure function of decided state, so the same frames are bounded
  * at every thread count. */
-int vbv_abound_env(void)
-{
-    return 1;
-}
-
-
 static int vbv_abr_bounded(const yah264_encoder_t *e)
 {
     /* A VBV always rides the pipeline now, so the !rcp_on term (the old
@@ -2856,7 +2693,7 @@ static int vbv_abr_bounded(const yah264_encoder_t *e)
  * w2_drain, by which point the NAL is appended and the RC has consumed it. */
 int vbv_bounded_now(const yah264_encoder_t *e)
 {
-    return vbv_first_bounded(e) || vbv_bound_all(e) || vbv_abr_bounded(e);
+    return vbv_first_bounded(e) || vbv_abr_bounded(e);
 }
 
 

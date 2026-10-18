@@ -182,10 +182,9 @@ struct rc_buffer {
     double fill;
 };
 
-/* The rate-control tunables that used to be read with getenv on every decide
- * (calibration knobs swept without a rebuild). rc_knobs_resolve fills them
- * once at open, so no decide path calls getenv. The *_set flags mark a knob
- * whose default is another encoder field (qp_step, crf_qcomp). */
+/* The rate-control calibration constants, and the few tunables still read
+ * from the environment. rc_knobs_resolve fills them once at open, so no
+ * decide path calls getenv. */
 struct rc_knobs {
     double abr_pbf;
     double rfm_slew;            /* the ledger QP's slew per anchor, x qp_step */
@@ -202,22 +201,14 @@ struct rc_knobs {
     double vbv_posti_raise, vbv_posti_n;  /* CRF+VBV: an intra raised this far sends the next n anchors serial */
     double vbv_cbr_dive;        /* CBR: rate factor this far under the bits model's QP regime -> serial burst */
     double vbv_fill_frac, vbv_fill_h, vbv_fill_hup, vbv_fill_min;  /* CRF+VBV fill target, horizon below / above it, floor */
-    double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;
-    int    vbv_plan_pred;      /* Y264_VBV_PLAN_PRED: 2 = the burst plan prices at per-type scales with no shock, 1 = keeps the shock, 0 = the fit test's margins */
-    int    abr_dc;             /* Y264_ABR_DC: 1 = ABR and capped VBR take the absolute AQ anchor and frame DC, 2 = CBR too */
     double abr_vbvov_vbr;      /* Y264_ABR_VBVOV_VBR: capped VBR's window, as a fraction of the buffer (0 = none) */
-    double rf2_iacc;
-    double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
-    int    rf2_floorfb;         /* Y264_ABR_RF2_FLOORFB: under-floor fit -> resolution seed */
+    double rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
-    double vbv_entry_opt;      /* Y264_VBV_ENTRY_OPT: the occupancy a joined instance plans from, as a fraction of the buffer (0 = the handoff level) */
-    double vbv_entry_rsv;      /* Y264_VBV_ENTRY_RSV: what an intra frame leaves of the guaranteed occupancy while the planned one is above it */
     int    vbv_posti;          /* Y264_VBV_POSTI (default 1): under capped VBR the anchor after an intra frame, or after one the buffer raised, takes the serial schedule */
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
-    int    vbv_exit_hard;      /* Y264_VBV_EXIT_HARD: a burst that could cross the exit corridor priced all-intra takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
-    double crf_level, crf_fps_slope, crf_mbt_cplx;
+    double crf_level, crf_fps_slope;
     int    rc_trace;            /* Y264_RC_TRACE */
     int    dbg_cplx;            /* Y264_DBG_CPLX */
 };
@@ -965,8 +956,6 @@ struct yah264_encoder {
  * yah264_2pass_stat_weight also reads */
     double   crf_cblur;         /* blurred anchor (P) complexity, absolute */
     int      crf_cblur_init;
-    double   crf_lc_sum, crf_cplx_ref;  /* running geometric-mean P complexity (Y264_CRF_MBT_CPLX) */
-    int      crf_lc_n;
     /* CRF under mb-tree is open loop and mb-tree's offsets are mean negative,
  * so the base QP carries a fitted level and frame-rate term
  * (rc_set_qp_crf); the level is uniform, so the cross-frame differential
@@ -985,16 +974,6 @@ struct yah264_encoder {
  * which is vbv_fill_budget's fixed point, so a segment that starts here
  * exits here under the budget's own dynamics. */
     double   vbv_seg_h;
-    /* Y264_VBV_ENTRY_OPT: how far above the committed occupancy the instance
- * believes the real one is, in bits. The committed one starts at the
- * handoff level, which is all the instance before promises; the real one is
- * nearly always higher. Every test that keeps the buffer from underflowing
- * stays on the committed occupancy. The burst plan's trajectory and the
- * intra reserve, which are choices and not guards, read the believed one.
- * It only shrinks: once the committed occupancy has clamped at full the
- * two are the same number. */
-    double   vbv_opt;
-    int      vbv_opt_join;      /* the instance is a joined segment: vbv_opt is set once the knobs are resolved */
     /* yah264_encoder_vbv_handoff: the instance codes vbv_exit_n frames and the
  * segment after it assumes vbv_seg_h, so the limit steers the exit to it.
  * vbv_ndec counts VBV decides (the current one included); vbv_exit_k is the
@@ -1004,11 +983,6 @@ struct yah264_encoder {
     double   vbv_exit_k;
     int      vbv_first_bound;   /* the first coded frame is still unbounded:
  * re-encode it against its measured size */
-    /* Y264_VBV_BOUND: extend that measured-size bound from the first frame to
- * EVERY frame. Doing so requires every frame to reach the serial emit,
- * because that is the only route with a retry window -- see vbv_bound_all.
- * Resolved once here so no worker reads an env. */
-    int      vbv_bound_on;
     int      vbv_cbr;           /* ABR target == maxrate: the buffer fills only as
  * fast as the target spends, so near-overflow must be spent down. Capped
  * VBR (maxrate > target) overflows harmlessly and must NOT spend up. */

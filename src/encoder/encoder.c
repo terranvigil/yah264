@@ -5101,7 +5101,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * itself; a caller that splits a capped ABR encode asks for the exit corridor
  * through yah264_encoder_vbv_handoff instead. */
         rc_knobs_resolve(e);                    /* the fill goal; resolved again below */
-        e->vbv_seg_h = (vbv_segh_env() >= 0 ? vbv_segh_env() : e->rck.vbv_fill_frac) * e->vbv.size;
+        e->vbv_seg_h = e->rck.vbv_fill_frac * e->vbv.size;
         /* Under a bitrate target too. The integrator owns the AVERAGE, but
  * nothing about it keeps a GOP from ending with the buffer low, and a
  * per-GOP instance that assumed a full buffer at its start then spent
@@ -5112,15 +5112,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * real pass-1 bits and keeps what it had. */
         if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS)
             e->vbv.fill = e->vbv_seg_h;             /* assume only the handoff */
-        e->vbv_opt_join = param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS;
         /* The first coded frame of ANY instance escapes the VBV clip -- the bits
  * model needs one coded frame before a prediction exists. Under a
  * bitrate target the seeded ABR scale covers it; under CRF/CQP nothing
  * does, so the frame gets bounded against its own measured size
  * instead. Not for 2-pass: pass 2 has real bits for frame 0. */
         e->vbv_first_bound = !e->abr_on && param->rc.method != YAH264_RC_2PASS;
-        /* Same mode envelope as the first-frame bound, plus the opt-in. */
-        e->vbv_bound_on = e->vbv_first_bound && vbv_bound_env();
         /* CBR only: with maxrate == target the buffer fills exactly as fast
  * as the target spends, and a near-overflow buffer must be spent down or
  * the stream pads. Capped VBR (maxrate > target) fills at MAXRATE, so
@@ -5299,12 +5296,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * driver under the pipeline. */
     e->tp_rctrace = getenv("Y264_RC_TRACE") != NULL;
     rc_knobs_resolve(e);
-    if (e->vbv_opt_join && e->vbv_on && e->abr_on && !e->vbv_cbr && !e->tp_pass
-        && e->rck.vbv_entry_opt * e->vbv.size > e->vbv.fill)
-        e->vbv_opt = e->rck.vbv_entry_opt * e->vbv.size - e->vbv.fill;
-    /* Opt-in ABR model: the public parameter, with the env var as an override
-     * for A/B runs. */
-    e->abr_rf = abr_rf_env() >= 0 ? abr_rf_env() : (param->rc.abr_model ? 1 : 0);
+    /* Opt-in ABR model: the public parameter. */
+    e->abr_rf = param->rc.abr_model ? 1 : 0;
     e->rcp_on = e->abr_on || e->tp_pass || e->vbv_on;
     e->rcp_vbv_tight = 1;               /* serial until the first burst gate */
     if (e->rcp_on && e->abr_on) {
@@ -5647,15 +5640,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (param->rc.method == YAH264_RC_CQP) e->aq_strength = 0.f;   /* constant QP means no AQ */
     /* Resolved here, not in the AQ kernels: they run on the lookahead/mb-tree
  * pool and an unwarmed lazy static there is a race. */
-    /* SCOPED TO CRF. The absolute anchor reaches the per-MB AQ field in EVERY
- * rate mode, unlike the two base-QP terms beside it, which carry their own
- * `e->crf_cl` gate -- so arming Y264_CRF_CPLX unscoped moves ABR's output too.
- * ABR is not measured for it, and its band's per-clip noise floor spans 0.2 to
- * 11 points, so measuring it is a round of its own. The -5.17% median is a CRF
- * number. Y264_CRF_AQABS=1 arms it everywhere for that measurement. */
-    e->aq_abs    = crf_aqabs_env()
-                && (e->crf_on || crf_aqabs_forced()
-                    || (e->abr_rf2 && e->rck.abr_dc > 0 && (!e->vbv_cbr || e->rck.abr_dc > 1)));
+    /* Scoped to CRF and to the rate-factor ABR controller outside CBR. The
+ * absolute anchor reaches the per-MB AQ field in every rate mode it is armed
+ * in, unlike the two base-QP terms beside it, which carry their own
+ * `e->crf_cl` gate. The -5.17% median is a CRF number; CBR was not measured. */
+    e->aq_abs    = crf_cplx_env() && (e->crf_on || (e->abr_rf2 && !e->vbv_cbr));
     /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
  * path, with its own strength scale and B-frame floor; y264_aq_gain). */
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
@@ -10180,25 +10169,12 @@ static void warm_lr_statics(void)
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; }
     (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)mbt_bref_probe();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)hw_env(); (void)rcp_qpd_env();
-    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_vbvov_frac();
+    (void)rcp_lag_env(); (void)hw_env();
+    (void)abr_vbvov_frac();
     (void)czw_stat_on();
     (void)direct_permb_env(); (void)y264_direct_auto_env();
-    (void)vbv_rhi_env(); (void)vbv_force_env();
-    (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
-    /* vbv_bound_env is read by encoder_open, and cli/yah264_cli.c opens one
-     * encoder PER GOP from concurrent workers, so open is not a
-     * single-threaded context. Primed here on the main thread before any
-     * worker. */
-    (void)vbv_bound_env();
-    (void)vbv_abound_env();
-    (void)vbv_cw_env();
-    (void)rc_share_ovn_env();
-    (void)vbv_fitlaw_env();
-    (void)vbv_segh_env();
-    
-    (void)crf_cplx_env(); (void)crf_pbscale_env();
-    (void)crf_aqabs_env(); (void)crf_pb0_env();
+    (void)vbv_stat_on();
+    (void)crf_cplx_env();
     (void)unsafe_no_nal();
     /* Resolved inline inside worker-called functions until 09-26, so no warm
  * could reach them: hoisted into accessors and warmed here. */
@@ -10216,7 +10192,6 @@ static void warm_lr_statics(void)
     (void)tprof_on();
     (void)hpel_probe_on();
     (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_qpel_avg_on();
-    (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
     y264_mb_warm_statics();     /* + the analyze-wavefront env statics */
@@ -11852,20 +11827,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * scale yet -- and 0.9 of the buffer let an IDR three frames after a cut
  * take 45% of it into a stretch that does not fit at QP 51 (Big Buck
  * Bunny 720p at 503 kbit/s, one thread: the cell's one underflow). */
-        if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass && e->rck.vbv_plan_pred > 0) {
+        if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass) {
             double l2 = fill - 0.5 * e->rck.vbv_plan_t * e->vbv.size;
-            /* Y264_VBV_ENTRY_OPT: while the instance believes the buffer is
- * fuller than what it was promised, the plan's reserve is taken off the
- * believed occupancy, and the frame still leaves Y264_VBV_ENTRY_RSV of the
- * buffer of the promised one. */
-            if (e->vbv_opt > 0.0) {
-                double bf = fill + e->vbv_opt;
-                if (bf > e->vbv.size) bf = e->vbv.size;
-                double lo = bf - 0.5 * e->rck.vbv_plan_t * e->vbv.size;
-                double lc = fill - e->rck.vbv_entry_rsv * e->vbv.size;
-                if (lo > lc) lo = lc;
-                if (lo > l2) l2 = lo;
-            }
             if (l2 < 0.5 * fill) l2 = 0.5 * fill;
             if (l2 < limit) limit = l2;
         }
@@ -12483,8 +12446,6 @@ static int fpipe_ready(yah264_encoder_t *e)
  * it changes no bits. */
     if (e->fields)
         return 0;
-    if (vbv_bound_all(e))
-        return 0;                       /* the bound needs the serial emit */
     if ((e->abr_on || e->vbv_on || e->tp_pass) &&
         (!e->rcp_on || rcp_warm(e) || (e->vbv_on && e->rcp_vbv_tight)))
         return 0;
@@ -13511,10 +13472,6 @@ static int stair_ready(yah264_encoder_t *e)
 {
     if (!stair_clamp_on(e))
         return 0;
-    if (vbv_bound_all(e))
-        return 0;                       /* no retry window at a burst anchor:
- * its leaves are row-gated on the recon
- * a retry would change (vbv_bound_all) */
     if (e->rcp_on && (rcp_warm(e) || (e->vbv_on && e->rcp_vbv_tight)))
         return 0;                   /* serial-tight RC feedback while warm
  * or in a tight VBV burst */
