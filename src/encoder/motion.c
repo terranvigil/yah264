@@ -147,7 +147,6 @@ static _Thread_local struct me_tls {
     int orc_valid;                   /* lowres oracle (single-shot) */
     long orc_cost;
     int orc_mvx, orc_mvy;
-    int me_cheap;                    /* frame-level cheap-search flag */
     int hpel_thresh[2];              /* half-pel qpel-skip threshold, PER LIST */
     int me_list;                     /* which list the current search is on */
     int me_isb;                      /* oracle attribution: B-frame search */
@@ -161,7 +160,7 @@ static _Thread_local struct me_tls {
     int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
     int me_xmax, me_xmaxf;           /* --intra-refresh horizontal qpel caps:
  * whole-pel vectors, fractional vectors */
-} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0,
+} s_met = { NULL, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, INT_MAX, INT_MAX };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
@@ -319,17 +318,6 @@ void y264_me_set_oracle(int valid, long cost, int mvx, int mvy)
 {
     s_met.orc_valid = valid;
     s_met.orc_cost = cost; s_met.orc_mvx = mvx; s_met.orc_mvy = mvy;
-}
-
-/* Content-adaptive ME: per-frame cheap mode set by the encoder
- * from the lookahead lowres motion field (frame-level gate). Cheap = drop the
- * UMH wide scan and cap subpel at the capped 4-point diamond (the exact config
- * that WINS BD on static clips but blows up on motion). Thread-local like
- * s_met.hpel: the analysis entry points stamp it per MB from f->me_cheap, so the
- * wavefront and GOP-parallel paths each see their own frame's flag. */
-void y264_me_set_cheap(int on)
-{
-    s_met.me_cheap = on;
 }
 
 /* The half-pel threshold (a subpel-refinement rule): after half-pel refinement,
@@ -1414,11 +1402,11 @@ static int me_search_core(const pixel *src, int ss,
  * for 16x16 (no tight seed) but redundant for 8x8-and-smaller shapes, whose
  * predictor is the already-refined parent MV. Skipping UMH for small blocks
  * (env Y264_ME_SMALL_NOUMH) removes the bulk of the per-MB ME fan-out. */
-    int umh = umh_allowed() && !s_met.me_cheap && !et_hit && !esa;
+    int umh = umh_allowed() && !et_hit && !esa;
     if (umh && w < 16 && h < 16) umh = 0;
     /* Oracle diagnostic: same eligibility the real UMH would have had. */
     int orc_mode = hex_oracle();
-    int umh_orc = no_umh() && orc_mode && !s_met.me_cheap && !et_hit && !esa
+    int umh_orc = no_umh() && orc_mode && !et_hit && !esa
                   && !(w < 16 && h < 16)
                   && !(orc_mode == 2 && s_met.me_isb) && !(orc_mode == 3 && !s_met.me_isb);
     if (umh || umh_orc) {
@@ -1623,13 +1611,12 @@ static int me_search_core(const pixel *src, int ss,
  * 1 = 4-point diamond iterated to convergence (half the probes/iter, still
  * follows a moving minimum -- the diagonal is reached over two axis
  * steps unless the surface has a strict diagonal valley);
- * 2 = 4-point diamond capped at 2 iterations/level (the cheap-frame tier).
+ * 2 = 4-point diamond capped at 2 iterations/level.
  * The 8-neighbour corners rarely beat the axis neighbours, so the diamond is
  * a near-neutral efficiency win; the cap is the speed trade. */
 qpel_only:
     IP_BEG(IP_SUBPEL);
     int sp = subpel_mode();
-    if (s_met.me_cheap && sp < 2) sp = 2;   /* cheap frame: capped diamond */
     if (sp == 0 && !hpel_sad()) {
         /* Default max-quality path (verbatim original): 8-neighbour square,
  * iterated to convergence, SATD at both levels. Byte-identical. */

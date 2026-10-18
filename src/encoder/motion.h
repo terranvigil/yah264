@@ -66,11 +66,6 @@ void y264_me_set_subpel(int subpel);
  * (byte-identical). Thread-local. */
 void y264_me_set_oracle(int valid, long cost, int mvx, int mvy);
 
-/* Content-adaptive ME frame flag: 1 = this frame's searches run
- * cheap (no UMH, capped-diamond subpel). Thread-local; the MB analysis entry
- * points stamp it from f->me_cheap. */
-void y264_me_set_cheap(int on);
-
 /* Reset the half-pel qpel-skip threshold. Call once at the start of
  * each MB's inter analysis (the threshold accumulates the best candidate cost
  * across that MB's partition x ref searches). TLS; deterministic under the

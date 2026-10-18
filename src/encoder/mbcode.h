@@ -208,7 +208,6 @@ typedef struct {
  * which partition shapes this picture's mode decision
  * may try. Read per macroblock, never re-derived. */
     int slice_is_ref;           /* this picture is a reference (nal_ref_idc>0) */
-    int mbt_frac;               /* mbtree_off is in HALF-QP units (Y264_MBT_FRAC) */
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
  * commit (our default),
  * 2 = in every RD trial. */
@@ -293,8 +292,6 @@ typedef struct {
     /* Measurement only (Y264_BLATE_STAT): the pair legs' lowres costs (l0 / l1
  * d_inter, own d_intra), unscaled lowres SATD units. NULL when absent. */
     int32_t *lr_bseed_c0, *lr_bseed_c1, *lr_bseed_ci;
-    int me_cheap;               /* content-adaptive ME: 1 = low-motion frame, run
- * cheap searches (no UMH, capped subpel) */
     uint8_t *mbqp;              /* per-MB coded luma QP, for the deblock pass */
     uint8_t *mb_tr8;            /* per-MB: 1 if the 8x8 luma transform was used */
     float aq_strength;          /* variance-AQ strength (0 = off) */
@@ -302,9 +299,9 @@ typedef struct {
     float aq_pull;              /* how far aq_analyze's centre moves from the frame mean to aq_anchor */
     float aq_anchor;            /* the absolute AQ anchor, in log2(variance + 1) */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
-    int   psy4k;                /* Y264_PSY4K arm bits, nonzero only on the 2160p size tier */
+    int   psy4k;                /* the 2160p tier's cheaper psy-RD form (pre-ME skip bound) */
     int   size_class;           /* y264_size_class of the picture */
-    int   uhdlite;              /* Y264_UHD_LITE on the 2160p size tier: tighter P and B intra admission */
+    int   uhdlite;              /* the 2160p size tier's tighter P and B intra admission */
     int stq;                    /* single-thread quality mode: at wf_width==1 the
  * speed trades (ME_ET family, PART early-term)
  * disengage -- single-thread has the speed margin

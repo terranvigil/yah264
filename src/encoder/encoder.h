@@ -343,14 +343,11 @@ struct yah264_encoder {
     uint8_t *mbqp;                          /* per-MB coded QP, for deblock */
     uint8_t *mb_tr8;                        /* per-MB: 8x8 transform used (for deblock) */
     float    aq_strength;                   /* variance-AQ strength */
-    /* AQ energy/anchor shape, resolved once at open (never read from the
+    /* AQ anchor shape, resolved once at open (never read from the
  * environment on a worker thread). aq_abs 1 = offset against the absolute
- * anchor instead of the frame mean; aq_chroma 1 = an all-plane
- * ac_energy (0 at open: luma only). See crf_cplx_env in encoder.c. */
+ * anchor instead of the frame mean. See crf_cplx_env in rate.c. */
     int      aq_abs;
-    int      aq_chroma;
     double   aq_anchor;
-    double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (0.25), <=0 = plain mean */
     double   aq_dcstr;                      /* the AQ frame-level (DC) strength on the CRF base QP (Y264_AQ_DC) */
     int      aq_rabr;                       /* AQ takes its bitrate-target constants (ABR; two-pass per Y264_AQ2_TP_ABR) */
     double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric */
@@ -960,7 +957,6 @@ struct yah264_encoder {
  * so the base QP carries a fitted level and frame-rate term
  * (rc_set_qp_crf); the level is uniform, so the cross-frame differential
  * (static gets more, motion less) survives. */
-    int      crf_cl;            /* mb-tree operating-point devices active */
     double   mbtree_mean_off;   /* mean mb-tree QP offset of the frame being coded (<=0) */
 
     /* VBV (leaky-bucket buffer model). Layered on top of the base QP: raises it
@@ -1012,7 +1008,6 @@ struct yah264_encoder {
     int      tp_resolve;        /* correct by re-solving the remaining curve */
     int      tp_dbg;            /* Y264_TP_DBG: per-frame plan trace */
     int      tp_rctrace;        /* Y264_RC_TRACE on the rcp commit path */
-    double   tp_bexp;           /* cost-to-bits exponent (1.0 = the baseline model) */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
     double   tp_ipf, tp_pbf;    /* qscale ip / pb factors */
     double  *tp_cost;           /* per record: QP-invariant cost, bits at qscale 1 */
@@ -1020,7 +1015,6 @@ struct yah264_encoder {
     double  *tp_q;              /* per record: planned qscale */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
     double   tp_fps;            /* frames per second, for the drift band */
-    int      tp_cwarm;          /* accounted frames before the model-bias term engages */
     int      tp_nacc;           /* frames accounted so far */
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_framing;        /* pass 2: framing bits of the frames accounted */
@@ -1042,7 +1036,6 @@ struct yah264_encoder {
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */
         int     fqp;            /* coded QP at decide (accounting model input) */
-        double  qoff;           /* RF2: the frame's mean mb-tree QP offset at decide */
         int     base_qp;        /* e->qp at decide (predecided-fallback restore) */
         double  dcq;            /* the frame-DC term inside base_qp (abr_dc_on), 0 otherwise */
         double  acc_qp;         /* RF2 accounting base: the P-domain QP the decide

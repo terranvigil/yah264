@@ -603,24 +603,23 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  * capped CRF and a bitrate target keep 1.04 (encoder open). acstr is the
  * field's own strength, aq-strength times the mode-2 gain. Non-reference B
  * frames get their frame-level term from aq_analyze's centre pull instead. */
-/* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the
- * pre-2026-09-28 output): the frame DC as a RATE-EQUIVALENT
- * shift instead of the plain log-energy mean. Applied per macroblock, the
+/* The frame DC as a RATE-EQUIVALENT shift instead of the plain log-energy
+ * mean, at weight w = AQ_DC_RQW. Applied per macroblock, the
  * absolute offset of a near-flat MB costs almost nothing, while the plain mean
  * moves every MB of the frame by it; a frame that is mostly flat (dark scenes, credits on black, 4K
  * animation) takes a base QP several points lower than the offset field's rate
- * justifies. With w set, each MB is weighted by a rate proxy 2^(w*l) + 1 and
+ * justifies. Each MB is weighted by a rate proxy 2^(w*l) + 1 and
  * the DC is the base shift that spends what the per-MB strength-1.0 field
  * would. Measured 2026-09-27 at w 0.25: multi-shot -0.92 / -3.16 / -0.38%, CRF
  * band median -0.20% (9 of 12, worst foreman +0.65%), chimera and meridian
  * 2160p and BBB 2160p windows neutral at matched size. w 0.5 overshoots
  * (multi-shot +1.15 / -1.85 / +1.73%). */
+#define AQ_DC_RQW 0.25
 static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
 {
     if (!e->aq_abs || !src || !src[0]) return 0.0;
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, n = wmb * hmb;
-    int stride = e->pstride[0], cstride = e->pstride[1];
-    int cw = e->aq_chroma && src[1] && src[2] ? 16 / e->sub_w : 0, ch = cw ? 16 / e->sub_h : 0;
+    int stride = e->pstride[0];
     double *lv = malloc((size_t)n * sizeof(double));
     if (!lv) return 0.0;
     /* The frame gain comes from the coded field's metric, log2(var + afloor)
@@ -641,31 +640,22 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
             y264_dsp.var16x16(s, stride, v2);
             double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
             if (var < 0) var = 0;
-            double l;
-            if (cw) {
-                double en = var * 256.0
-                    + blk_ac_energy(src[1] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch)
-                    + blk_ac_energy(src[2] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch);
-                l = log2(en < 1.0 ? 1.0 : en) - 8.0;
-            } else {
-                l = log2(var + dfl);
-            }
+            double l = log2(var + dfl);
             lv[mby * wmb + mbx] = l;
-            double lg = cw ? l : log2(var + y264_aq_afloor());
+            double lg = log2(var + y264_aq_afloor());
             sum += lg; sum2 += lg * lg;
         }
     double fmean = sum / n, fsd2 = sum2 / n - fmean * fmean;
     double astr = (double)e->aq_strength * y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0, e->aq_rabr);
-    double rqw = e->aq_dc_rqw, num = 0, den = 0, lsum = 0;
+    double rqw = AQ_DC_RQW, num = 0, den = 0, lsum = 0;
     for (int i = 0; i < n; i++) lsum += lv[i];
-    if (rqw > 0.0)
-        for (int i = 0; i < n; i++) {
-            double c = pow(2.0, rqw * lv[i]) + 1.0, d = lv[i] - e->aq_anchor;
-            num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
-            den += c * pow(2.0, -astr * d / 6.0);
-        }
+    for (int i = 0; i < n; i++) {
+        double c = pow(2.0, rqw * lv[i]) + 1.0, d = lv[i] - e->aq_anchor;
+        num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
+        den += c * pow(2.0, -astr * d / 6.0);
+    }
     free(lv);
-    if (rqw > 0.0 && den > 0.0)
+    if (den > 0.0)
         return -6.0 * log2(num / den);
     return (e->aq_dcstr - astr) * (lsum / n - e->aq_anchor);
 }
@@ -681,7 +671,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     double qp;
     if (!e->crf_cblur_init) {
         qp = e->crf;                            /* leading I: no P track yet */
-    } else if (e->crf_cl && e->mbtree_on) {
+    } else if (e->crf_on && e->mbtree_on) {
         /* Under mb-tree the per-MB field carries each frame's importance, and
  * the frame-level content term is the AQ DC (crf_dc), so the base is flat.
  * A term on the blurred lowres cost against the clip's own running
@@ -716,7 +706,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * that encoder's output at equal --crf codes higher-rate material at a
  * higher QP. The form is a constant rather than a function of qcomp because
  * the CRF path runs at a fixed qcomp. Y264_CRF_LEVEL overrides the level. */
-    if (e->crf_cl && e->mbtree_on) {
+    if (e->crf_on && e->mbtree_on) {
         double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
                    ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 30.0;
         if (fps < 1.0) fps = 1.0;
@@ -1745,7 +1735,6 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     en.is_ref = (int8_t)is_ref;
     en.cplx = C;
     en.bits = -1.0;
-    en.qoff = e->mbtree_mean_off;
     double abr_scale_used = 0.0, tp_scaleterm = 0.0;
     int tp_have = 0;
     if (e->abr_on) {
@@ -2154,25 +2143,20 @@ double yah264_2pass_stat_weight(double bits, int qp)
  *
  * Kept from the current code: the complexity domain. `cost` here is
  * (bits+1) * qscale_of_pass1, the QP-invariant coding cost. Pass 1 records
- * one bits total per frame, so texture, motion and header bits are lumped
- * (tp_bexp is the one exponent we can fit). Because bits ~ cost/qscale and
- * qscale ~ cost^(1-qcomp), the implied bits still go as cost^qcomp, so the
+ * one bits total per frame, so texture, motion and header bits are lumped.
+ * Because bits ~ cost/qscale and qscale ~ cost^(1-qcomp), the implied bits still go as cost^qcomp, so the
  * per-GOP budget split in the CLI keeps using yah264_2pass_stat_weight and
  * stays in step with this. */
 
 static double tp_qp2qscale(double qp)  { return pow(2.0, (qp - 12.0) / 6.0); }
 double tp_qscale2qp(double q)   { return 12.0 + 6.0 * log2(q); }
 
-/* Modelled bits for record i at qscale q. tp_bexp 1.0 reproduces the model the
- * greedy loop used (bits strictly inverse to qscale). An exponent above 1
- * models skip blocks making texture bits fall off faster than 1/qscale. With
- * one lumped total the exponent is the only handle we have. */
+/* Modelled bits for record i at qscale q: the model the greedy loop used,
+ * bits strictly inverse to qscale. */
 double tp_bits_at(const yah264_encoder_t *e, int i, double q)
 {
     if (q < 0.1) q = 0.1;
-    if (e->tp_bexp == 1.0)
-        return e->tp_cost[i] / q;
-    return e->tp_cost[i] * pow(e->tp_qrec[i] / q, e->tp_bexp) / e->tp_qrec[i];
+    return e->tp_cost[i] / q;
 }
 
 /* The plan's shape constants. Each was picked by a sweep on the two-pass band
@@ -2186,9 +2170,11 @@ double tp_bits_at(const yah264_encoder_t *e, int i, double q)
  * 2 and 4 swung foreman +0.63% the wrong way.
  * TP_BLUR_SIGMA 0.5: gaussian sigma in frames per unit of --cplxblur, so the
  * default 20 is sigma 10. Swept 0.25/0.5/0.75/1.0; 0.75 and 1.0 helped
- * sintel by 1.1-1.6% and cost akiyo 0.1-0.8%, 0.25 lost on most clips. */
+ * sintel by 1.1-1.6% and cost akiyo 0.1-0.8%, 0.25 lost on most clips.
+ * TP_CWARM 4: accounted frames before the measured model bias engages. */
 #define TP_IWIN       8
 #define TP_BLUR_SIGMA 0.5
+#define TP_CWARM      4
 
 /* Frame-type shaping. The complexity curve decides the P frames; the I and B
  * frames are placed relative to them, because a frame's own coding cost does
@@ -2417,7 +2403,7 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
 
     /* The measured model bias: actual bits over MODELLED bits at the QPs those
  * frames were really coded at. 1.0 until enough frames have landed. */
-    double k = (e->tp_nacc >= e->tp_cwarm && e->tp_kmod >= 1 && e->tp_kact > 0)
+    double k = (e->tp_nacc >= TP_CWARM && e->tp_kmod >= 1 && e->tp_kact > 0)
              ? e->tp_kact / e->tp_kmod : 1.0;
 
     if (e->tp_resolve) {

@@ -1309,7 +1309,7 @@ static int adme_log(void);
 #define PSY_FLAT_SHARE 75
 #define PSY_FLAT_S     307
 #define PSY_FLAT_VAR   25
-static int psy4k_bits(const yah264_param_t *p);
+static int psy4k_on(const yah264_param_t *p);
 static int uhd_lite_on(const yah264_param_t *p);
 static int psy_flat_log(void);
 
@@ -2833,7 +2833,6 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             f.mbtree_off = e->fld_mbt;
         }
     }
-    f.mbt_frac = 0;              /* mbtree_off is in whole-QP units */
     /* P-frame lowres ME seed (ref0). Gated to the medium tier so the subme-10
  * default stays byte-identical; only for P (the anchor leg is P-vs-anchor). */
     /* type FIRST: only the anchor's serial prep may touch e->lr_seed_valid --
@@ -2893,8 +2892,6 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         f.lr_bseed_c1 = fw->bseedc_src[e->cur_bseed][1];
         f.lr_bseed_ci = fw->bseedc_src[e->cur_bseed][2];
     }
-    /* Content-adaptive ME (frame_motion_score): off. */
-    f.me_cheap = 0;
     /* Y264_DIRECT_SCORE: flush the PREVIOUS frame's direct-prediction error here,
  * because prep for the next frame runs after the last one's macroblock loop.
  * t1 only, like every counter of this shape. */
@@ -2907,8 +2904,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         y264_dscore_skip[0] = y264_dscore_skip[1] = 0;
     }
     if (adme_log() && type != 0)
-        fprintf(stderr, "adme: poc=%d type=%d score=%d cheap=%d\n",
-                e->poc, type, e->cur_lr_motion, f.me_cheap);
+        fprintf(stderr, "adme: poc=%d type=%d score=%d cheap=0\n",
+                e->poc, type, e->cur_lr_motion);
     f.mbqp = e->mbqp;
     f.mb_tr8 = e->mb_tr8;
     f.aq_strength = e->aq_strength;
@@ -2916,7 +2913,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.aq_pull = (float)e->aq_pull;
     f.aq_anchor = (float)e->aq_bref;
     f.psy_rd = e->param.psy_rd;
-    f.psy4k = psy4k_bits(&e->param);
+    f.psy4k = psy4k_on(&e->param);
     f.size_class = y264_size_class(e->param.width, e->param.height);
     f.uhdlite = uhd_lite_on(&e->param);
     /* Keyed on the USER'S total thread request, not this worker's pool width:
@@ -4166,17 +4163,6 @@ static void warm_lr_statics(void);
  * so an explicit choice that differs from it is kept; an explicit choice
  * EQUAL to it (--ref 3 at medium, say) is not distinguishable and is
  * traded too. */
-/* Cheaper psy-RD forms on the 2160p size tier, as bits (mbcode.h psy4k):
- * frames of at least 3840x1600 at the medium tier with psy-RD on carry the
- * bits, everything else carries 0. 4: the pre-ME skip bound keeps half of
- * the psy term. With the whole term in it, about a third more B
- * macroblocks escape the bound and run the full search only to end as skips
- * (meridian 2160p: psy-RD costs +12.9% instructions, nearly all of it there).
- * Half the term: -3.7..-4.2% instructions on meridian 2160p, -0.6% on chimera
- * and bbb 2160p, BD-VMAF-NEG +0.23 chimera (720 frames) / -0.10 meridian (899
- * frames). The bound on the SSD alone (2) costs chimera +0.56, the survivor
- * screen without the psy widening (1) about +0.3 more. 0 is the full term. */
-#define PSY4K_BITS 4
 /* An effort cut on the 2160p size tier only: the P intra admission at 1.0x
  * the inter SATD instead of 1.5x and the B intra admission at 0.5x instead of
  * 0.75x. -2.8% instructions on meridian 2160p, -1.8% on bbb 2160p,
@@ -4188,12 +4174,21 @@ static int uhd_lite_on(const yah264_param_t *p)
     return p->subme == 7 && p->rc.method != YAH264_RC_CQP &&
            y264_size_class(p->width, p->height) >= 3;
 }
-static int psy4k_bits(const yah264_param_t *p)
+/* A cheaper psy-RD form on the 2160p size tier (mbcode.h psy4k): on frames
+ * of at least 3840x1600 at the medium tier with psy-RD on, the pre-ME skip
+ * bound keeps half of the psy term. With the whole term in it, about a third more B
+ * macroblocks escape the bound and run the full search only to end as skips
+ * (meridian 2160p: psy-RD costs +12.9% instructions, nearly all of it there).
+ * Half the term: -3.7..-4.2% instructions on meridian 2160p, -0.6% on chimera
+ * and bbb 2160p, BD-VMAF-NEG +0.23 chimera (720 frames) / -0.10 meridian (899
+ * frames). The bound on the SSD alone costs chimera +0.56, the survivor
+ * screen without the psy widening about +0.3 more. */
+static int psy4k_on(const yah264_param_t *p)
 {
     if (p->subme != 7 || p->rc.method == YAH264_RC_CQP ||
         p->psy_rd <= 0.0f || y264_size_class(p->width, p->height) < 3)
         return 0;
-    return PSY4K_BITS;
+    return 1;
 }
 static void size_trades(yah264_param_t *p)
 {
@@ -5065,7 +5060,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (e->crf_on) {
         e->crf = param->rc.rf;
         e->crf_qcomp = 0.6;                         /* the --qcomp default */
-        e->crf_cl = 1;                              /* mb-tree operating-point devices */
     }
     e->vbv_on = (param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0);
     if (e->vbv_on) {
@@ -5269,17 +5263,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
              * still drops to 0 when a plan cannot be built. */
             e->tp_plan_on  = 1;
             e->tp_corr     = 1;
-            e->tp_bexp     = 1.0;
             /* complexity blur, the --cplxblur default of 20; the planner maps
              * it to a gaussian sigma (tp_blur_cost in rate.c). */
             e->tp_cplxblur = (ev = getenv("Y264_TP_CPLXBLUR")) ? atof(ev)
                            : (e->tp_plan_on ? 20.0 : 0.0);
-            e->tp_cwarm    = 4;
             e->tp_resolve  = 1;
             e->tp_dbg      = getenv("Y264_TP_DBG") != NULL;
             e->tp_ipf      = (ev = getenv("Y264_TP_IPF"))      ? atof(ev) / 100.0 : 1.4;
             e->tp_pbf      = (ev = getenv("Y264_TP_PBF"))      ? atof(ev) / 100.0 : 1.3;
-            if (e->tp_bexp < 0.5) e->tp_bexp = 1.0;
             if (e->tp_ipf < 1.0) e->tp_ipf = 1.4;
             if (e->tp_pbf < 1.0) e->tp_pbf = 1.3;
             if (e->tp_plan_on)
@@ -5643,12 +5634,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Scoped to CRF and to the rate-factor ABR controller outside CBR. The
  * absolute anchor reaches the per-MB AQ field in every rate mode it is armed
  * in, unlike the two base-QP terms beside it, which carry their own
- * `e->crf_cl` gate. The -5.17% median is a CRF number; CBR was not measured. */
+ * `e->crf_on` gate. The -5.17% median is a CRF number; CBR was not measured. */
     e->aq_abs    = crf_cplx_env() && (e->crf_on || (e->abr_rf2 && !e->vbv_cbr));
     /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
  * path, with its own strength scale and B-frame floor; y264_aq_gain). */
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
-    e->aq_chroma = 0;               /* luma-only AQ energy */
     e->aq_anchor = aq_anchor_default();
     /* The frame-level (DC) AQ strength: see crf_frame_dc. Fitted by sweep at
  * matched rate (Y264_AQ_DC). The 1.3 sweep was uncapped CRF only. A bitrate
@@ -5679,7 +5669,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * get the pull directly; see the two-pass note at y264_aq_gain. */
     if (e->tp_pass) e->aq_pull = 1.3;
     e->aq_bref = 6.0;
-    e->aq_dc_rqw = 0.25;
     e->crf_dc = 0.0;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
     if (e->aq_strength > 0.f) {
@@ -6532,10 +6521,10 @@ static void lowres_analyse(yah264_encoder_t *e)
 /* Content-adaptive ME (speed step #2): frame-level motion score from the
  * lowres MV field lowres_analyse just filled (this display frame vs the
  * previous one; integer lowres pel = 2 full pel). Score = mean (|mvx|+|mvy|)
- * per lowres block, x64 fixed point. Frames below the threshold run cheap ME
- * (no UMH, capped subpel) -- the config that wins BD on static content and
- * only blows up on motion. No threshold is BD-gated, so no frame takes it
- * (me_cheap stays 0); Y264_ADME_LOG=1 dumps per-frame scores for calibration. */
+ * per lowres block, x64 fixed point. It was meant to send static frames to
+ * cheap ME (no UMH, capped subpel), the config that wins BD on static content
+ * and only blows up on motion. No threshold is BD-gated, so every frame runs
+ * the full search; Y264_ADME_LOG=1 dumps per-frame scores for calibration. */
 
 static int psy_flat_log(void)
 {
@@ -6599,24 +6588,6 @@ static void splat_prop(double *grid, int wmb, int hmb, int tx, int ty, double am
  * magnitude is unchanged (the ratio in the finish step is scale-invariant).
  * When aq_off is non-NULL the raw qp_offset_aq (unclamped, float) is returned
  * there for folding into the combined offset. */
-/* Sum-of-squared-deviations of a w x h block, the per-plane
- * AC-energy variance for a plane
- * whose block is not 16x16 (chroma at 4:2:0 / 4:2:2). Returns npix*var, the
- * same units as the luma term. */
-double blk_ac_energy(const pixel *p, int stride, int w, int h)
-{
-    uint64_t s1 = 0, s2 = 0;
-    for (int y = 0; y < h; y++) {
-        const pixel *r = p + (size_t)y * stride;
-        for (int x = 0; x < w; x++) {
-            uint32_t v = r[x];
-            s1 += v; s2 += (uint64_t)v * v;
-        }
-    }
-    double e = (double)s2 - (double)s1 * (double)s1 / (double)(w * h);
-    return e > 0 ? e : 0;
-}
-
 static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
                              int stride, int wmb, int hmb,
                              float strength, double *invq, float *aq_off)

@@ -34,7 +34,6 @@
 #define abr_qcomp_env                   abr_qcomp_env_10
 #define abr_vbvov_frac                  abr_vbvov_frac_10
 #define anchor_leg_cost                 anchor_leg_cost_10
-#define blk_ac_energy                   blk_ac_energy_10
 #define crf_cplx_env                    crf_cplx_env_10
 #define crf_max_clip                    crf_max_clip_10
 #define frame_complexity_ilr            frame_complexity_ilr_10
@@ -306,7 +305,6 @@
 #define y264_me_reset_hpel_thresh       y264_me_reset_hpel_thresh_10
 #define y264_me_search                  y264_me_search_10
 #define y264_me_search_satd             y264_me_search_satd_10
-#define y264_me_set_cheap               y264_me_set_cheap_10
 #define y264_me_set_hpel                y264_me_set_hpel_10
 #define y264_me_set_isb                 y264_me_set_isb_10
 #define y264_me_set_list                y264_me_set_list_10

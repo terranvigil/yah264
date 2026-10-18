@@ -479,8 +479,7 @@ static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
  * (qp_offset_aq folded in), so the standalone AQ offset must not be added
  * again. Standalone AQ applies only where mb-tree is off (e.g. bframes 0). */
     int q = f->mbtree_off
-          ? (f->mbt_frac ? (int)lround(f->qp + f->mbtree_off[i] / 2.0)
-                         : f->qp + f->mbtree_off[i])
+          ? f->qp + f->mbtree_off[i]
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
     if (q < 0) q = 0;
     if (q > 51) q = 51;
@@ -503,8 +502,7 @@ static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
 {
     int i = mby * f->wmb + mbx;
     int q = f->mbtree_off
-          ? (f->mbt_frac ? (int)lround(f->qp + f->mbtree_off[i] / 2.0)
-                         : f->qp + f->mbtree_off[i])
+          ? f->qp + f->mbtree_off[i]
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
     return q < 0 ? 0 : (q > 51 ? 51 : q);
 }
@@ -5575,7 +5573,7 @@ static void band_build_gate_bits(y264_frame_t *f, uint8_t *bits)
 {
     const int wmb = f->wmb, hmb = f->hmb;
     const int pct = part_hetero_pct();
-    const int imp = -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1);
+    const int imp = -PART_IMPORTANT_OFF;
     long long *cs = NULL, *cq = NULL;
     if (f->lr_seed_cost) {
         cs = malloc((size_t)wmb * sizeof *cs);
@@ -5750,7 +5748,7 @@ static int p_part_gate_ok(y264_frame_t *f, int mbx, int mby, long cost16, long m
     if (part_hetero(f, mbx, mby))
         return 0;
     if (f->mbtree_off &&
-        f->mbtree_off[mby * f->wmb + mbx] <= -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1))
+        f->mbtree_off[mby * f->wmb + mbx] <= -PART_IMPORTANT_OFF)
         return 0;
     return 1;
 }
@@ -5780,7 +5778,7 @@ static int part_search_rect(y264_frame_t *f, int mbx, int mby,
         if (part_earlyterm() == 4) {
             int ii = mby * f->wmb + mbx;
             if (f->mbtree_off &&
-                f->mbtree_off[ii] <= -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1))
+                f->mbtree_off[ii] <= -PART_IMPORTANT_OFF)
                 return 1;
         }
         return 0;
@@ -5789,7 +5787,7 @@ static int part_search_rect(y264_frame_t *f, int mbx, int mby,
     if (part_earlyterm() != 2) return 0;                        /* mode 1: flat gate, skip */
     int i = mby * f->wmb + mbx;
     if (f->mbtree_off &&
-        f->mbtree_off[i] <= -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1)) return 1;  /* important */
+        f->mbtree_off[i] <= -PART_IMPORTANT_OFF) return 1;  /* important */
     if (part_hetero_g(f, mbx, mby)) return 1;                   /* boundary: protect */
     return 0;
 }
@@ -8436,7 +8434,6 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     mb_qp_pre(f, mbx, mby);
     int lq = mb_lambda_qp(f, mbx, mby);
     if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
-    y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(1);                 /* oracle attribution: B frame */
@@ -8691,12 +8688,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         long preme_bound = f->b_preme_skip >= 3
                          ? (long)f->b_preme_bits
                          : Y264_LAMJ(lam, f->b_preme_bits);
-        /* Y264_PSY4K bit 2 (2160p tier): the pre-ME bound reads the skip's SSD
-         * without the psy term, which otherwise sends the macroblocks the bound
-         * would commit through the whole search only to end as a skip anyway;
-         * bit 4 keeps half of the psy term in it */
+        /* on the 2160p tier the pre-ME bound keeps only half of the skip's
+         * psy term, which otherwise sends the macroblocks the bound would
+         * commit through the whole search only to end as a skip anyway */
         if (f->b_preme_skip && f->subme <= 8 && direct_ok &&
-            ((f->psy4k & 2) ? bssd : (f->psy4k & 4) ? (bssd + bdist_x) / 2 : bdist_x) <= preme_bound &&
+            (f->psy4k ? (bssd + bdist_x) / 2 : bdist_x) <= preme_bound &&
             (!f->slice_is_ref ||
              ((f->b_preme_skip == 2 || f->b_preme_skip == 4) && f->mbtree_off &&
               f->mbtree_off[mby * f->wmb + mbx] >= 0))) {
@@ -8967,7 +8963,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             bexit_ok = 1;
         if (direct_ok && dsatd < isi_pure) isi_pure = dsatd;  /* direct carries no mv rate */
         for (int bm = 0; bm < 3; bm++) if (satd16[bm] < isi) isi = satd16[bm];
-        int thresh16 = isi * (17 + (f->psy_rd > 0.0f && !(f->psy4k & 1) ? 1 : 0)) / 16 + 1;
+        int thresh16 = isi * (17 + (f->psy_rd > 0.0f ? 1 : 0)) / 16 + 1;
 
         BPCUT(4);
         /* HD parity stage 2, candidate 3: the survivor set by RANK as well as
@@ -9109,7 +9105,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * asymmetry (it was calibrated against this same screen). Env-gated for
  * the A/B; NOT byte-identical, so it needs a BD round before it ships. */
         b_isatd = isi;
-        int thresh = isi * (17 + (f->psy_rd > 0.0f && !(f->psy4k & 1) ? 1 : 0)) / 16 + 1;
+        int thresh = isi * (17 + (f->psy_rd > 0.0f ? 1 : 0)) / 16 + 1;
         b8_thresh = thresh;         /* the B_8x8 candidate rides the same screen */
 
         /* --- RD phase: only the survivors, reusing the prediction built above.
@@ -12048,7 +12044,6 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     mb_qp_pre(f, mbx, mby);
     int lq = mb_lambda_qp(f, mbx, mby);
     if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
-    y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(0);                 /* oracle attribution: P frame */

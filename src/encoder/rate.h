@@ -34,7 +34,6 @@ struct yah264_rc_shared {
 /* encoder.c -> rate.c and back: every function the other file calls. */
 double abr_qcomp_env(void);
 double abr_vbvov_frac(void);
-double blk_ac_energy(const pixel *p, int stride, int w, int h);
 int frame_qp(const yah264_encoder_t *e, int type, int is_ref);
 int qp_bound(const yah264_encoder_t *e, int q);
 int rcp_dbg_on(void);
