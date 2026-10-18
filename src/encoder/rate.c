@@ -648,7 +648,8 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  * ladder, the same on matched-quality windows; its 2160p cut -0.24 / -0.67 /
  * -1.93 at 1.04 / 1.2 / 1.3; the multi-shot set gains 3.2-3.5% at 1.2. 1.3
  * has the lowest worst clip on the CRF band and recovers the long titles;
- * 1.4 starts to cost the static deep-band clip. So 1.3. acstr is the
+ * 1.4 starts to cost the static deep-band clip. So 1.3 under CRF; a bitrate
+ * target keeps 1.04 (encoder open). acstr is the
  * field's own strength, aq-strength times the mode-2 gain. Non-reference B
  * frames get their frame-level term from aq_analyze's centre pull instead. */
 /* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the
