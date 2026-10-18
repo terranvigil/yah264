@@ -303,7 +303,7 @@ FULL = {
     # PSNR-Y against the 8-bit source on a 240-frame probe. Both encoders and
     # the VMAF reference read the same frames.
     "stem2-full":    dict(file=os.path.join(MASTERS, "stem2_uhd_hevc_q90.mp4"),
-                          label="ASC StEM2 UHD 24p", cls="live",
+                          label="ASC StEM2 UHD 24p", cls="live", local_copy=True,
                           native=(3840, 2160), fps=(24, 1), t0=0.0, frames=25114,
                           notice="StEM2 -- Copyright 2022 -- American Society "
                                  "of Cinematographers -- All rights reserved."),
@@ -338,10 +338,31 @@ FULL = {
 # published ProRes master (the HEVC copy above was made by this Mac's hardware
 # encoder and cannot be remade there), so a box's StEM2 frames are not this
 # Mac's, and its table says so.
+#
+# A plain path is the same master at another location, and every other field
+# (t0, native, fps, frames) stands. A title marked local_copy is NOT the published
+# master on this Mac, so a plain path for it is refused: its start offset,
+# geometry and frame count would be this Mac's copy's, and an offset error would
+# pass the per-chunk proof, since both sides of that proof use the same t0. Give
+# such a title a dict carrying those fields for the other master, measured there.
 if os.environ.get("LF_FULL_FILES"):
     with open(os.environ["LF_FULL_FILES"]) as _fh:
         for _t, _p in json.load(_fh).items():
-            FULL[_t]["file"] = _p
+            if _t not in FULL:
+                sys.exit(f"longform: LF_FULL_FILES names {_t!r}, which is not a "
+                         f"known title ({', '.join(sorted(FULL))})")
+            if isinstance(_p, dict):
+                FULL[_t].update(_p)
+                FULL[_t]["master_from"] = "LF_FULL_FILES (own fields)"
+            elif FULL[_t].get("local_copy"):
+                sys.exit(f"longform: LF_FULL_FILES gives {_t!r} a path only, but "
+                         "this title's fields describe this Mac's own copy, not the "
+                         "published master. Give it {\"file\": ..., \"t0\": ..., "
+                         "\"native\": [w, h], \"fps\": [n, d], \"frames\": ...} "
+                         "measured on that master.")
+            else:
+                FULL[_t]["file"] = _p
+                FULL[_t]["master_from"] = "LF_FULL_FILES"
 SIZES = ("720p", "1080p", "2160p")
 SEG_GEOM = {"720p": (1280, 720), "1080p": (1920, 1080), "2160p": (3840, 2160)}
 SIZE_W = {"720p": 1280, "1080p": 1920}
@@ -944,6 +965,9 @@ def env_prefix(arm, cell, purec=False):
 DARWIN = sys.platform == "darwin"
 TIME_ARGV = (["/usr/bin/time", "-l"] if DARWIN else
              ["/usr/bin/time", "-f", "LFTIME %e real %U user %S sys %M maxrss_kib"])
+if not DARWIN and not os.path.exists("/usr/bin/time"):
+    sys.exit("longform: /usr/bin/time is missing. The timed legs read wall, CPU and "
+             "peak memory from GNU time; install it (Debian/Ubuntu: apt install time).")
 TIME_RE = {
     "real":   re.compile(r"([\d.]+)\s+real\b"),
     "user":   re.compile(r"([\d.]+)\s+user\b"),
@@ -2002,25 +2026,45 @@ def expected_fps(cell, cfg):
     return (seen, "measured") if seen > model else (model, "model")
 
 
-def feed_guard(cell, cfgs, start=0, count=None, workers=1):
+def pinned_feed(feed):
+    """The feeder as a pinned one-thread leg runs it (LF_PIN_FEED), else as is."""
+    return ["taskset", "-c", PIN_FEED] + feed if PIN_T1 and PIN_FEED else feed
+
+
+def feed_guard(cell, cfgs, start=0, count=None, workers=1, pinned=()):
+    """The feeder must outrun the faster encoder by FEED_MARGIN. `pinned` names
+    the one-thread configurations whose legs run with the feeder pinned to
+    LF_PIN_FEED: those are checked against the feeder pinned the same way."""
     info = cell_info(cell)
     count = count or info["frames"] - start
     n = min(count, max(1, int(round(FEEDCHECK_SECS * fps_of(info)))))
     wall, _, _ = timed_run(feeder(cell, start, n, workers))
     ffps = n / max(wall, 1e-3)
     (exp, src), cfg = max((expected_fps(cell, c), c) for c in cfgs)
-    ok = ffps >= FEED_MARGIN * exp
+    ok = free_ok = ffps >= FEED_MARGIN * exp
+    pin = None
+    if pinned and PIN_T1 and PIN_FEED:
+        pwall, _, _ = timed_run(pinned_feed(feeder(cell, start, n, workers)))
+        pfps = n / max(pwall, 1e-3)
+        (pexp, psrc), pcfg = max((expected_fps(cell, c), c) for c in pinned)
+        pin = {"feed_fps": pfps, "expected_fps": pexp, "expected_from": psrc,
+               "cfg": pcfg, "cpus": PIN_FEED, "ok": pfps >= FEED_MARGIN * pexp}
+        print(f"  {cell}: feeder pinned to CPUs {PIN_FEED} {pfps:7.1f} fps; the "
+              f"pinned one-thread leg is expected at {pexp:.1f} fps ({psrc}, {pcfg}); "
+              f"needs {FEED_MARGIN*pexp:.1f}: {'OK' if pin['ok'] else 'FEEDER-BOUND'}",
+              flush=True)
+        ok = ok and pin["ok"]
     over = os.environ.get("LF_FEEDER_OK") == "1"
     rec_ = {"feed_fps": ffps, "frames": n, "expected_fps": exp,
             "expected_from": src, "cfg": cfg, "margin": FEED_MARGIN, "ok": ok,
-            "override": over and not ok,
+            "pinned": pin, "override": over and not ok,
             "source": "staged" if staged_now(cell) else
                       (DECODE_LABEL if is_full(cell) else "y4m"),
             "date": time.strftime("%Y-%m-%d %H:%M")}
     print(f"  {cell}: feeder alone {ffps:7.1f} fps over {n} frames; the faster "
           f"encoder is expected at {exp:.1f} fps ({src}, {cfg}); needs "
           f"{FEED_MARGIN:g}x = {FEED_MARGIN*exp:.1f}: "
-          f"{'OK' if ok else 'FEEDER-BOUND'}", flush=True)
+          f"{'OK' if free_ok else 'FEEDER-BOUND'}", flush=True)
     if not ok:
         if over:
             print("  LF_FEEDER_OK=1: timing anyway, and the record says so",
@@ -2033,8 +2077,9 @@ def feed_guard(cell, cfgs, start=0, count=None, workers=1):
     return rec_
 
 
-def read_baseline(cell, start=0, count=None, workers=1):
-    wall, cpu, rss = timed_run(feeder(cell, start, count, workers))
+def read_baseline(cell, start=0, count=None, workers=1, pinned=False):
+    feed = feeder(cell, start, count, workers)
+    wall, cpu, rss = timed_run(pinned_feed(feed) if pinned else feed)
     return [wall, cpu, rss]
 
 
@@ -2126,7 +2171,8 @@ def do_timed(cell):
     info = cell_info(cell)
     frames = info["frames"]
     w = timed_workers(cell)
-    fc = feed_guard(cell, ["simd"], workers=w)
+    fc = feed_guard(cell, ["simd"], workers=w,
+                    pinned=["simd1"] if T1_ROUNDS and not is_full(cell) else [])
     out = {"cell": cell, "frames": frames, "fps": fps_of(info), "w": info["w"],
            "h": info["h"], **point_fields(xr, nr), "rounds": ROUNDS,
            "feed_workers": w, "feed_check": fc, "feed": fc["source"],
@@ -2203,7 +2249,8 @@ def do_purec(cell):
     info = cell_info(cell)
     w = timed_workers(cell)
     wins = windows(cell)
-    fc = feed_guard(cell, ["g2", "simd1"], wins[0][0], wins[0][1], w)
+    fc = feed_guard(cell, ["g2", "simd1"], wins[0][0], wins[0][1], w,
+                    pinned=["g1"] + (["simd1"] if os.environ.get("LF_S1") == "1" else []))
     crfs = {"ours": nr["crf"], "x264": xr["crf"]}
     gcrf = {g: ({"ours": wp[g]["ours_crf"], "x264": wp[g]["x264_crf"]}
                 if wp.get(g) else crfs) for g in ("G1", "G2")}
@@ -2249,6 +2296,8 @@ def do_purec(cell):
                 for arm in ms:
                     out[g][arm].append(ms[arm])
             out["read"].append(read_baseline(cell, s, n, w))
+            if PIN_T1 and PIN_FEED:
+                out.setdefault("read_pinned", []).append(read_baseline(cell, s, n, w, pinned=True))
     finally:
         shutil.rmtree(wd, ignore_errors=True)
     put(f"purec:{cell}:{PRESET}{TSUFFIX}{feed_tag(cell)}{ident(X264_C, X264)}", out)
@@ -2418,7 +2467,7 @@ def do_validate():
     xr, nr = matched(cell)
     info = cell_info(cell)
     w = timed_workers(cell)
-    fc = feed_guard(cell, ["g1"], workers=w)
+    fc = feed_guard(cell, ["g1"], workers=w, pinned=["g1"])
     crfs = {"ours": nr["crf"], "x264": xr["crf"]}
     out = {"cell": cell, "frames": info["frames"], "crfs": crfs,
            "feed_workers": w, "fields": LEG_FIELDS, "feed_check": fc,
@@ -4232,15 +4281,16 @@ def do_report_spec():
         for t in ("tears", "meridian", "stem2", "sintel", "bbb", "cosmos")
         for s in SIZES) if d)
     lf_dates.sort()
-    try:
+    if DARWIN:
         brand = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
                                capture_output=True, text=True).stdout.strip()
         ncpu = subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True,
                               text=True).stdout.strip()
-        macos = subprocess.run(["sw_vers", "-productVersion"], capture_output=True,
-                               text=True).stdout.strip()
-    except OSError:
-        brand, ncpu, macos = machine(), str(os.cpu_count()), "? (not macOS)"
+        osname = "macOS " + subprocess.run(["sw_vers", "-productVersion"],
+                                           capture_output=True, text=True).stdout.strip()
+    else:
+        # machine() already names the CPU, the CPU count and the Linux kernel
+        brand, ncpu, osname = machine(), "", ""
     L = []
     L.append(f"# yah264 parity report, {REPORT_DATE}\n")
     # LF_REPORT_ENCODER names the builds that were measured (the timing
@@ -4253,7 +4303,8 @@ def do_report_spec():
     if board_used:
         bd_ = sorted(b["date"] for b in boards.values())
         nb += f"; tier S board {bd_[0]} to {bd_[-1][11:]} (daytime)"
-    L.append(f"Machine: {brand}, {ncpu} cores, macOS {macos}.  Measured: {nb}.")
+    L.append(f"Machine: {brand}" + (f", {ncpu} cores, {osname}" if osname else "")
+             + f".  Measured: {nb}.")
     ver = versions()
     xv, xcv = ver.get("x264", "?"), ver.get("x264_c", "?")
     L.append(f"Reference binaries: SIMD `{X264}` = {xv}; pure C `{X264_C}` = {xcv}, "
