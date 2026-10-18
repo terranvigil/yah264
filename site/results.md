@@ -5,7 +5,7 @@ description: The goal tables, the quality maps, the corpus, and how each number 
 
 # Results
 
-yah264 reached full parity with x264 on 12 October 2026. Both encoders code the
+yah264 reached full parity with x264. Both encoders code the
 same source at the same file size. Every speed figure here is yah264's wall
 time over x264's, so anything under 1.00 means yah264 finished first. x264 is
 version 0.165.3222 (commit b35605a) at `--preset medium`. Goals 1 and 2 run plain
@@ -15,10 +15,9 @@ way it vectorizes ours. Goal 3 runs what each encoder ships: our NEON against
 x264's hand-written assembly. Quality is scored with the VMAF NEG model, which predicts
 how good video looks to people.
 
-Every figure in this section comes from the parity report of that date, timed on
+Every figure in this section comes from the current parity measurement, timed on
 one Apple M5 Max with 18 cores. A group passes when its median ratio is at or
-under 1.00 and its worst cell at or under 1.15, with its quality holding. All 27 of the
-groups that count toward parity pass.
+under 1.00 and its worst cell at or under 1.15, with its quality holding. All 27 of the groups that count toward parity pass.
 
 ## The test set
 
@@ -33,24 +32,25 @@ Both encoders read the same 8-bit 4:2:0 frames on stdin.
 
 ## Speed
 
-Median and worst ratio in each group.
+Median and worst ratio in each group. A ≤ marks a reading where the source
+couldn't be fed as fast as yah264 encoded, so it's an upper bound on our ratio.
 
 | class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
 |---|---|--:|--:|--:|
-| CIF | S | 0.75 / 0.77 | 0.71 / 0.73 | 0.83 / 0.88 |
-| 720p | S | 0.68 / 0.73 | 0.61 / 0.65 | 0.72 / 0.85 |
-| 720p | L | 0.70 / 0.72 | 0.63 / 0.79 | 0.59 / 0.65 |
-| 720p | C | 0.62 / 0.62 | 0.65 / 0.65 | 0.64 / 0.64 |
-| 1080p | S | 0.61 / 0.66 | 0.66 / 0.71 | 0.77 / 0.94 |
-| 1080p | M | 0.52 / 0.62 | 0.60 / 0.75 | 0.72 / 0.72 |
-| 1080p | L | 0.55 / 0.60 | 0.63 / 0.74 | 0.60 / 0.63 |
-| 1080p | C | 0.63 / 0.63 | 0.66 / 0.66 | 0.66 / 0.66 |
-| 2160p | S | 0.51 / 0.54 | 0.55 / 0.60 | 0.68 / 0.74 |
-| 2160p | M | 0.49 / 0.62 | 0.51 / 0.66 | 0.56 / 0.59 |
-| 2160p | L | 0.54 / 0.57 | 0.60 / 0.64 | 0.59 / 0.73 |
+| CIF | S | 0.72 / 0.75 | 0.71 / 0.73 | 0.82 / 0.88 |
+| 720p | S | 0.66 / 0.70 | 0.60 / 0.64 | 0.70 / 0.84 |
+| 720p | L | 0.68 / 0.69 | 0.62 / 0.76 | 0.56 / 0.62 |
+| 720p | C | 0.60 / 0.60 | 0.64 / 0.64 | 0.63 / 0.63 |
+| 1080p | S | 0.60 / 0.62 | 0.64 / 0.69 | 0.75 / 0.88 |
+| 1080p | M | 0.51 / 0.56 | 0.59 / 0.70 | 0.69 / 0.71 |
+| 1080p | L | 0.54 / 0.58 | 0.61 / 0.72 | 0.59 / 0.61 |
+| 1080p | C | 0.62 / 0.62 | 0.66 / 0.66 | 0.65 / 0.65 |
+| 2160p | S | 0.50 / 0.52 | 0.55 / 0.60 | 0.67 / 0.73 |
+| 2160p | M | 0.47 / 0.58 | 0.49 / 0.60 | 0.53 / 0.57 |
+| 2160p | L | 0.52 / 0.55 | ≤0.58 / 0.62 | ≤0.57 / 0.59 |
 | 2160p | C | not measured | not measured | void |
 
-The slowest cell anywhere is 0.94, a short 1080p clip with SIMD on. The 4K
+The slowest cell anywhere is 0.88, a short CIF clip with SIMD on. The 4K
 content-type clips are the one gap. Goals 1 and 2 haven't been timed there, and
 the goal 3 run failed a validity rule. Those cells sit outside the parity count.
 
@@ -61,39 +61,43 @@ and the worst PSNR-Y difference in dB. Positive means yah264 looks better.
 
 | class | group | VMAF-NEG | PSNR-Y worst | worst cell |
 |---|---|--:|--:|---|
-| CIF | S | -0.03 / -0.28 | -0.36 | stefan_cif |
-| 720p | S | +0.17 / -0.09 | +0.07 | park_joy_720p |
-| 720p | L | +0.69 / +0.20 | -0.26 | bbb_720p |
-| 720p | C | +1.97 / +1.97 | +0.29 | lash1924_720p |
-| 1080p | S | +0.41 / +0.13 | +0.04 | riverbed_1080p |
-| 1080p | M | +0.61 / +0.48 | +0.19 | sollevante_1080p |
-| 1080p | L | +0.81 / -0.27 | -0.88 | cosmos_1080p |
-| 1080p | C | +1.14 / -0.00 | -0.13 | worldcup_far_1080p |
-| 2160p | S | +1.56 / +0.62 | -0.58 | bbb_2160p |
-| 2160p | M | +1.19 / +0.47 | -0.01 | sollevante_2160p |
-| 2160p | L | +1.71 / +0.06 | -0.79 | bbb_2160p |
-| 2160p | C | +2.13 / +2.13 | +0.38 | boxing_2160p |
+| CIF | S | -0.05 / -0.28 | -0.29 | stefan_cif |
+| 720p | S | +0.19 / +0.06 | +0.02 | park_joy_720p |
+| 720p | L | +0.85 / +0.32 | -0.21 | bbb_720p |
+| 720p | C | +2.06 / +2.06 | +0.31 | lash1924_720p |
+| 1080p | S | +0.48 / +0.12 | +0.06 | riverbed_1080p |
+| 1080p | M | +0.72 / +0.71 | +0.24 | sollevante_1080p |
+| 1080p | L | +0.98 / -0.06 | -0.85 | cosmos_1080p |
+| 1080p | C | +1.13 / +0.04 | -0.10 | worldcup_far_1080p |
+| 2160p | S | +1.59 / +0.60 | -0.74 | bbb_2160p |
+| 2160p | M | +1.20 / +0.53 | +0.07 | sollevante_2160p |
+| 2160p | L | +1.79 / +0.27 | -0.72 | bbb_2160p |
+| 2160p | C | +2.18 / +2.18 | +0.39 | boxing_2160p |
 
 ## Across the rate range
 
 Each real title was also coded at five rates, at CRF and at capped VBR. Both
 encoders ran on six threads with a 40-frame lookahead. The bar is a
 [BD-rate](encoding.html#bd-rate) on VMAF-NEG no worse than +1.0%. All 52 ladders
-pass. At the median yah264 needs 12% fewer bits than x264 for the same score. On
-Meridian at 4K it needs 45% fewer. Two ladders came out behind: Big Buck Bunny
-at 720p VBR by 0.39% and Cosmos Laundromat at 1080p CRF by 0.32%.
+pass. At the median yah264 needs 13% fewer bits than x264 for the same score. On
+Meridian at 4K it needs 55% fewer. One ladder came out behind: Big Buck Bunny at
+720p VBR by 0.27%.
 
-Seven of those ladders have some rates measured on rented Linux arm64
-instances. An instance only counted after it reproduced this machine's output.
-Their source frames were decoded in software. On three ladders the instance
-coded its own decode of the title instead of this machine's frames.
+Of those ladders, 49 have some rates measured on rented Linux arm64 instances.
+An instance only counted after it reproduced this machine's output. Their source
+frames were decoded in software. On 27 ladders the instance coded its own decode
+of the title instead of this machine's frames.
 
-We also swept our lookahead at 30, 40 and 50 frames against x264's default of 40.
-Most ladders moved less than the 0.4-point run-to-run spread. Big Buck Bunny and
-Meridian at 1080p did best at 50. Every other figure on this page uses 40.
+We also swept our lookahead at 30, 40 and 50 frames against x264's default of
+40. Most ladders moved less than the 0.4-point run-to-run spread. Big Buck Bunny
+at 1080p and 4K, Chimera at 4K, Meridian at 1080p and 4K and Sol Levante at 4K
+did best at 50 in at least one mode. Sintel at 4K and Sol Levante at 1080p did
+best at 40 in at least one mode. Every other figure on this page uses 40.
 
-In capped VBR, with the target set to x264's CRF 23 rate, every encode came within
-5% of its target. Goal 3 read between 0.48 and 0.71 on every VBR cell.
+In capped VBR, with the target set to x264's CRF 23 rate, every encode came
+within 4% of its target. Goal 3 read between 0.49 and 0.67 on every VBR cell. On
+two of them the source couldn't be fed as fast as yah264 encoded, so those
+readings are upper bounds on our ratio.
 
 ## By processor
 
@@ -104,7 +108,7 @@ fewer clips. They're reported apart from it. The
 
 | processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
 |---|---|--:|--:|--:|---|
-| arm64: Apple M5 Max, 18 cores | NEON + dot product | 0.49-0.75 | 0.51-0.71 | 0.56-0.83 | full parity, the tables above |
+| arm64: Apple M5 Max, 18 cores | NEON + dot product | 0.47-0.72 | 0.49-0.71 | 0.53-0.82 | full parity, the tables above |
 | arm64: AWS Graviton4, 96 vCPU, Linux | NEON | 0.57 | 0.44 | 0.70 | seven-clip check, median of 5 to 7 valid cells |
 | arm64: AWS Graviton3, 32 vCPU, Linux | SVE (256-bit) + NEON | | | 0.65-0.74 CPU time, one thread | two-clip profile; not goal 3, which is read at the default thread count |
 | x86-64: AMD EPYC, 32 vCPU, rented | AVX2 | | | 0.86-0.96 CPU time, one thread | two-clip profile after the second x86 tuning round; not goal 3; slower than x264 at the default thread count on one clip, see below |
@@ -201,8 +205,7 @@ multi-shot sequences have no parity-report reading yet.
 
 ### Reading the tables
 
-Every figure here comes from one Apple M5 Max with 18 cores. We will add other
-CPUs and instruction sets as we support them. Each cell is the median of three
+Every figure here comes from one Apple M5 Max with 18 cores. Each cell is the median of three
 interleaved samples. A board repeated on the same machine still moves its
 ratios, so small differences in these tables are not readings. A goal
 is four metrics. A fifth reads underneath them as a floor.
@@ -231,12 +234,12 @@ The floor passes and the debt list is empty.
 ## CRF versus ABR
 
 Ask an encoder for a quality level. It gives you whatever bitrate that takes.
-That is CRF. The table at the top of this page reads it. Ask for a bitrate
+That is CRF. Ask for a bitrate
 instead. You get whatever quality that buys. That is ABR. No goal is set
 against the ABR table.
 
-**ABR, matched achieved bitrate.** Superseded, because samsung still holds the
-720p slot. A quiet re-read will replace it.
+**ABR, matched achieved bitrate**, on the earlier ten-clip board, before
+parity. The parity tables at the top of this page cover capped VBR instead.
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
@@ -260,8 +263,8 @@ clips. The ABR columns come from the superseded table above.
 | 2 | 0.78x | 0.86x | 1.00x | 0.90x | 0.87x | 1.04x |
 | 3 | 0.92x | 0.99x | 1.10x | 1.07x | 1.02x | 1.18x |
 
-Bitrate orders these rows. Resolution doesn't. The slow cells are the
-low-bitrate HD ones, and the fastest on the board are the high-bitrate 1080p
+Bitrate orders these rows. Resolution doesn't. On that board the slow cells were
+the low-bitrate HD ones, and the fastest were the high-bitrate 1080p
 ones. The 1080p column reads high because two of its three clips are
 low-bitrate.
 
@@ -376,13 +379,13 @@ column. Ducks and riverbed are the exceptions.
 
 | encoder | quality (VMAF) | pure-C 1-thread | pure-C MT | SIMD MT | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| yah264 | +0.22 | 0.92x | **0.84x** | 0.96x | +0.0% | this repo, ten-clip board |
+| yah264 | +0.22 | 0.92x | **0.84x** | 0.96x | +0.0% | this repo, earlier ten-clip board, before parity |
 | x264 | ref | 1.00x | 1.00x | 1.00x | ref | the reference point |
 | openh264 | -14.2 | 0.15x | 0.98x | withdrawn | +4.1% | a different design point |
 
 openh264 beats x264 single-threaded because it does far less work per frame.
 It pays about 14 VMAF points for that at the same bitrate. Read the speed
-and the quality columns as one row. The yah264 row is the goal table above. The
+and the quality columns as one row. The yah264 row is the earlier ten-clip board. The
 openh264 row runs Cisco's encoder over the same ten clips and bitrates at its
 own defaults, with frame skipping off so both encoders code every frame. Speed
 is wall time against x264 in the same three builds. Quality and size are
@@ -416,7 +419,7 @@ against the 0.98x beside it. An earlier five-clip BD-rate with B-frames off on
 x264 read +63.7%. That figure is in our local records and was not re-measured
 here. Its
 gap against x264 comes from a different measurement again, so the two do not
-subtract to the +0.22 in the board table at the top of this page.
+subtract to the +0.22 in the yah264 row above.
 
 ## Across shots
 
@@ -439,8 +442,8 @@ yah264 spends more bits at equal quality.
 Taken one at a time, the same clips are ahead of x264 on two of the three
 sizes. So the whole swing came from allocation across shots. Coding efficiency
 wasn't the cause. The fix puts the frame-mean part of adaptive quantization on
-the frame's base QP at full strength, on every input path including streaming. The
-single-shot tables above did not move. `--shot-crf` goes further on file input
+the frame's base QP, on every input path including streaming. Its strength is
+1.3 under CRF and 1.04 under a bitrate target. The single-shot board did not move. `--shot-crf` goes further on file input
 by sizing each shot against the whole title. Four CRF points fitted with a
 cubic is thinner than the five-point sweeps our own rule asks for. Read the
 table for the direction and rough size of the effect. Reproduce it with:
@@ -457,7 +460,7 @@ median and +0.9% at worst.
 
 ## The corpus
 
-The ten clips in the goal tables are natural video. All of them come from
+The ten clips of the earlier board are natural video. All of them come from
 Xiph's public test collection, 8-bit 4:2:0 at native resolution. The rate is
 the ABR target each clip is coded at on the board.
 
@@ -493,6 +496,6 @@ has the measurements and the preset-ladder rows. That spread is also why a
 preset-for-preset speed comparison stops meaning much once content leaves the
 set the presets were tuned on.
 
-The numbers: on 3D CGI we run 25% ahead of x264 at 1.34x the time. Held at
-equal quality there, our `veryfast` reaches x264 medium at 1.07x for a fifth
-fewer bits. On hand-drawn 2D we run 8% behind.
+The numbers, read before parity: on 3D CGI we ran 25% ahead of x264 at 1.34x the time. Held at
+equal quality there, our `veryfast` reached x264 medium at 1.07x for a fifth
+fewer bits. On hand-drawn 2D we ran 8% behind.

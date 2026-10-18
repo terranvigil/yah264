@@ -3,13 +3,15 @@
 Every claim below is measured. Each names the harness that produced it and says
 so when that harness is local rather than in this repository.
 
-1. **Quality, and only in a stated rate range.** At low bitrate we're ahead of
-   x264 `--preset medium` in BD-rate (VMAF-NEG) on 9 of the 10 board clips, with
-   a median around -12%. The lead narrows as bitrate rises and is gone at the
-   top of the range. A compression claim from this project therefore has to
-   name the band it came from. Source: the ten-clip board, 2026-09-02, with the
-   published figures in `site/results.md`. This line used to quote an undated
-   "-2.76% over 7 clips". It averaged across bands and isn't quotable.
+1. **Speed and compression at parity and past it.** On the Apple M5 Max, yah264
+   finishes faster than x264 `--preset medium` at the same file size in all 27
+   gating groups (CIF to 4K; short clips, 2-minute segments and 10-minute
+   excerpts) at all three goals, with the same or better quality. Over 52 rate
+   ladders on real titles, at CRF and capped VBR, it needs a median 13% fewer
+   bits for the same VMAF-NEG, and only one ladder is behind. Source: the parity
+   board and ladders, with every cell in `site/results.md`. The lead still
+   depends on the content and the rate, so a compression claim names its ladder
+   or band.
 2. **CABAC throughput.** The byte-queue arithmetic engine runs 2.51x per bin
    over the engine it replaced, byte-identical. That figure is ours against our own previous engine. We list this as a real
 speedup and don't claim it as a lead over anyone.
@@ -25,7 +27,7 @@ speedup and don't claim it as a lead over anyone.
    a TSan floor of zero and per-feature byte-identity escapes. The check count
    is built at run time, so quote what `scripts/conformance.sh` prints instead
    of a number written down here. Output determinism is claimed only at one
-   thread. Since 2026-09-25 (owner), repeatable byte-exact output isn't required
+   thread. Repeatable byte-exact output isn't required
    for threaded encodes, and their determinism checks report differences
    without failing on them.
 

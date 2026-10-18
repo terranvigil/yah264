@@ -30,19 +30,19 @@ We make use of coding to assist with design-space exploration. We treat each cod
 
 ## Status
 
-yah264 has met and surprised speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
+yah264 has met and surpassed speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
 
 | goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
-| 1 | plain C, one thread | 1.33x to 2.04x | 1.30x |
-| 2 | plain C, all cores | 1.41x to 1.96x | 1.27x |
-| 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.06x |
+| 1 | plain C, one thread | 1.39x to 2.13x | 1.33x |
+| 2 | plain C, all cores | 1.41x to 2.04x | 1.32x |
+| 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.22x to 1.89x | 1.14x |
 
 NOTE: An Apple M5 is my primary development platform so most of the work was done for arm64. Once we reached parity, I also further optimized for additional platforms and instruction sets.
 
 ## Details
 
-On 52 rate ladders over real titles, yah264 uses a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
+On 52 rate ladders over real titles, yah264 uses a median 13% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
 On rented cloud machines:
 
@@ -84,7 +84,7 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice; the open item is speed with every core busy. There we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
 
-A few x264 options are still to build, such as custom quant matrices and exhaustive motion search ([x264-parity-plan.md](docs/x264-parity-plan.md)). After that come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+Every x264 option is now built or deliberately left out, with the reasons in [x264-parity-plan.md](docs/x264-parity-plan.md). Next come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 

@@ -1,125 +1,127 @@
 <svg xmlns='http://www.w3.org/2000/svg' width='900' height='794' viewBox='0 0 900 794'><rect width='100%' height='100%' fill='#fcfcfb'/>
-<text x='24' y='40' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='22' fill='#0b0b0b' text-anchor='start' font-weight='600'>A median 12% fewer bits for the same quality</text>
+<text x='24' y='40' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='22' fill='#0b0b0b' text-anchor='start' font-weight='600'>A median 13% fewer bits for the same quality</text>
 <text x='24' y='64' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='14' fill='#52514e' text-anchor='start' font-weight='normal'>BD-rate against x264 on VMAF-NEG, 52 rate ladders over real titles. Left of zero means fewer bits.</text>
 <circle cx='30' cy='88' r='6' fill='#2a78d6'/>
 <text x='42' y='93' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='start' font-weight='normal'>CRF</text>
 <circle cx='140' cy='88' r='6' fill='#eb6834'/>
 <text x='152' y='93' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='start' font-weight='normal'>capped VBR</text>
 <line x1='230.0' y1='102' x2='230.0' y2='734' stroke='#e6e5e1' stroke-width='1'/>
-<text x='230.0' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-50%</text>
-<line x1='344.54545454545456' y1='102' x2='344.54545454545456' y2='734' stroke='#e6e5e1' stroke-width='1'/>
-<text x='344.54545454545456' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-40%</text>
-<line x1='459.0909090909091' y1='102' x2='459.0909090909091' y2='734' stroke='#e6e5e1' stroke-width='1'/>
-<text x='459.0909090909091' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-30%</text>
-<line x1='573.6363636363636' y1='102' x2='573.6363636363636' y2='734' stroke='#e6e5e1' stroke-width='1'/>
-<text x='573.6363636363636' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-20%</text>
-<line x1='688.1818181818182' y1='102' x2='688.1818181818182' y2='734' stroke='#e6e5e1' stroke-width='1'/>
-<text x='688.1818181818182' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-10%</text>
-<line x1='802.7272727272727' y1='102' x2='802.7272727272727' y2='734' stroke='#8a8984' stroke-width='1.5'/>
-<text x='802.7272727272727' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>0 (x264)</text>
+<text x='230.0' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-60%</text>
+<line x1='326.9230769230769' y1='102' x2='326.9230769230769' y2='734' stroke='#e6e5e1' stroke-width='1'/>
+<text x='326.9230769230769' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-50%</text>
+<line x1='423.84615384615387' y1='102' x2='423.84615384615387' y2='734' stroke='#e6e5e1' stroke-width='1'/>
+<text x='423.84615384615387' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-40%</text>
+<line x1='520.7692307692307' y1='102' x2='520.7692307692307' y2='734' stroke='#e6e5e1' stroke-width='1'/>
+<text x='520.7692307692307' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-30%</text>
+<line x1='617.6923076923077' y1='102' x2='617.6923076923077' y2='734' stroke='#e6e5e1' stroke-width='1'/>
+<text x='617.6923076923077' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-20%</text>
+<line x1='714.6153846153846' y1='102' x2='714.6153846153846' y2='734' stroke='#e6e5e1' stroke-width='1'/>
+<text x='714.6153846153846' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-10%</text>
+<line x1='811.5384615384615' y1='102' x2='811.5384615384615' y2='734' stroke='#8a8984' stroke-width='1.5'/>
+<text x='811.5384615384615' y='754' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>0 (x264)</text>
 <text x='545.0' y='782' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='middle' font-weight='normal'>bitrate change for the same VMAF-NEG</text>
-<text x='218' y='126.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 2160p (10 min)</text>
-<line x1='286.47090909090906' y1='122.0' x2='296.78' y2='122.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='296.8' cy='122.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='286.5' cy='122.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='150.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 2160p (2 min)</text>
-<line x1='310.5254545454545' y1='146.0' x2='320.6054545454545' y2='146.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='320.6' cy='146.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='310.5' cy='146.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='174.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 1080p (10 min)</text>
-<line x1='417.2818181818182' y1='170.0' x2='437.32727272727277' y2='170.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='437.3' cy='170.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='417.3' cy='170.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='198.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 1080p (2 min)</text>
-<line x1='423.3527272727273' y1='194.0' x2='445.2309090909091' y2='194.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='445.2' cy='194.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='423.4' cy='194.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='126.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 2160p (2 min)</text>
+<line x1='277.97692307692313' y1='122.0' x2='302.1107692307692' y2='122.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='278.0' cy='122.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='302.1' cy='122.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='150.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 2160p (10 min)</text>
+<line x1='360.3615384615385' y1='146.0' x2='377.2261538461538' y2='146.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='377.2' cy='146.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='360.4' cy='146.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='174.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 1080p (2 min)</text>
+<line x1='418.70923076923077' y1='170.0' x2='431.01846153846157' y2='170.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='418.7' cy='170.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='431.0' cy='170.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='198.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 1080p (10 min)</text>
+<line x1='468.5276923076923' y1='194.0' x2='502.54769230769233' y2='194.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='502.5' cy='194.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='468.5' cy='194.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='222.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Nocturne 2160p (10 min)</text>
-<line x1='476.5018181818182' y1='218.0' x2='492.3090909090909' y2='218.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='492.3' cy='218.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='476.5' cy='218.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='246.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 720p (10 min)</text>
-<line x1='502.96181818181816' y1='242.0' x2='528.2763636363636' y2='242.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='528.3' cy='242.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='503.0' cy='242.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='270.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>StEM2 2160p (10 min)</text>
-<line x1='521.06' y1='266.0' x2='552.1018181818182' y2='266.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='552.1' cy='266.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='521.1' cy='266.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='509.9138461538461' y1='218.0' x2='524.1615384615385' y2='218.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='524.2' cy='218.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='509.9' cy='218.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='246.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>StEM2 2160p (10 min)</text>
+<line x1='570.2' y1='242.0' x2='575.8215384615385' y2='242.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='575.8' cy='246.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='570.2' cy='238.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='270.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Meridian 720p (10 min)</text>
+<line x1='558.1815384615385' y1='266.0' x2='606.5461538461539' y2='266.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='606.5' cy='266.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='558.2' cy='266.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='294.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Nocturne 1080p (10 min)</text>
-<line x1='541.1054545454546' y1='290.0' x2='553.0181818181818' y2='290.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='541.1' cy='290.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='553.0' cy='290.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='583.1876923076923' y1='290.0' x2='590.1661538461537' y2='290.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='590.2' cy='294.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='583.2' cy='286.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='318.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Tears of Steel 2160p (10 min)</text>
-<line x1='559.4327272727273' y1='314.0' x2='570.0854545454546' y2='314.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='570.1' cy='314.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='559.4' cy='314.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='582.3153846153846' y1='314.0' x2='599.9553846153847' y2='314.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='600.0' cy='314.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='582.3' cy='314.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='342.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>StEM2 1080p (10 min)</text>
-<line x1='578.2181818181818' y1='338.0' x2='593.9109090909091' y2='338.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='578.2' cy='338.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='593.9' cy='338.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='621.5692307692307' y1='338.0' x2='627.2876923076923' y2='338.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='627.3' cy='342.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='621.6' cy='334.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='366.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Nocturne 720p (10 min)</text>
-<line x1='592.0781818181819' y1='362.0' x2='600.8981818181818' y2='362.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='592.1' cy='366.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='600.9' cy='358.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='632.7153846153846' y1='362.0' x2='641.5353846153846' y2='362.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='641.5' cy='362.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='632.7' cy='362.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='390.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Chimera 2160p (2 min)</text>
-<line x1='606.3963636363636' y1='386.0' x2='640.8745454545453' y2='386.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='606.4' cy='386.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='640.9' cy='386.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='647.3507692307693' y1='386.0' x2='653.8446153846154' y2='386.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='647.4' cy='390.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='653.8' cy='382.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='414.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>StEM2 720p (10 min)</text>
-<line x1='635.72' y1='410.0' x2='654.5054545454545' y2='410.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='635.7' cy='410.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='654.5' cy='410.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='438.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Chimera 1080p (2 min)</text>
-<line x1='679.0181818181818' y1='434.0' x2='683.2563636363636' y2='434.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='683.3' cy='438.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='679.0' cy='430.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='462.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sintel 2160p (10 min)</text>
-<line x1='690.2436363636364' y1='458.0' x2='690.2436363636364' y2='458.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='690.2' cy='462.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='690.2' cy='454.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='486.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sintel 1080p (10 min)</text>
-<line x1='690.3581818181817' y1='482.0' x2='698.1472727272727' y2='482.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='698.1' cy='486.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='690.4' cy='478.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='510.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sintel 720p (10 min)</text>
-<line x1='703.5309090909091' y1='506.0' x2='709.2581818181818' y2='506.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='703.5' cy='510.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='709.3' cy='502.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='534.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Tears of Steel 1080p (10 min)</text>
-<line x1='699.4072727272728' y1='530.0' x2='716.7036363636364' y2='530.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='716.7' cy='530.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='699.4' cy='530.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='674.9738461538461' y1='410.0' x2='683.4061538461539' y2='410.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='683.4' cy='410.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='675.0' cy='410.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='438.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sintel 2160p (10 min)</text>
+<line x1='691.8384615384616' y1='434.0' x2='705.4076923076923' y2='434.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='705.4' cy='434.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='691.8' cy='434.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='462.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Chimera 1080p (2 min)</text>
+<line x1='705.3107692307692' y1='458.0' x2='710.5446153846153' y2='458.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='710.5' cy='462.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='705.3' cy='454.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='486.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Tears of Steel 1080p (10 min)</text>
+<line x1='711.5138461538462' y1='482.0' x2='735.3569230769231' y2='482.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='735.4' cy='482.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='711.5' cy='482.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='510.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sintel 1080p (10 min)</text>
+<line x1='715.8753846153846' y1='506.0' x2='734.1938461538462' y2='506.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='734.2' cy='506.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='715.9' cy='506.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='534.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sintel 720p (10 min)</text>
+<line x1='736.9076923076923' y1='530.0' x2='749.5076923076923' y2='530.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='749.5' cy='530.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='736.9' cy='530.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='558.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sol Levante 1080p (2 min)</text>
-<line x1='715.6727272727272' y1='554.0' x2='757.5963636363637' y2='554.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='715.7' cy='554.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='757.6' cy='554.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='732.8369230769231' y1='554.0' x2='769.9584615384615' y2='554.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='732.8' cy='554.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='770.0' cy='554.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='582.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Cosmos Laundromat 720p (10 min)</text>
-<line x1='740.6436363636365' y1='578.0' x2='756.3363636363637' y2='578.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='740.6' cy='578.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='756.3' cy='578.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='606.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Tears of Steel 720p (10 min)</text>
-<line x1='748.3181818181819' y1='602.0' x2='764.0109090909091' y2='602.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='764.0' cy='602.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='748.3' cy='602.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='630.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sol Levante 2160p (2 min)</text>
-<line x1='724.0345454545454' y1='626.0' x2='794.709090909091' y2='626.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='724.0' cy='626.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='794.7' cy='626.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='654.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Big Buck Bunny 1080p (10 min)</text>
-<line x1='751.7545454545455' y1='650.0' x2='787.4927272727273' y2='650.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='787.5' cy='650.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='751.8' cy='650.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='746.0184615384616' y1='578.0' x2='762.3015384615385' y2='578.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='762.3' cy='578.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='746.0' cy='578.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='606.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Sol Levante 2160p (2 min)</text>
+<line x1='744.3707692307693' y1='602.0' x2='792.8323076923077' y2='602.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='744.4' cy='602.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='792.8' cy='602.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='630.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Big Buck Bunny 1080p (10 min)</text>
+<line x1='751.64' y1='626.0' x2='793.4138461538462' y2='626.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='793.4' cy='626.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='751.6' cy='626.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='654.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Tears of Steel 720p (10 min)</text>
+<line x1='762.0107692307693' y1='650.0' x2='785.1753846153846' y2='650.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='785.2' cy='650.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='762.0' cy='650.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 <text x='218' y='678.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Big Buck Bunny 2160p (10 min)</text>
-<line x1='753.7018181818182' y1='674.0' x2='790.8145454545455' y2='674.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='790.8' cy='674.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='753.7' cy='674.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='702.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Big Buck Bunny 720p (10 min)</text>
-<line x1='779.4745454545455' y1='698.0' x2='807.1945454545455' y2='698.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='807.2' cy='698.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='779.5' cy='698.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
-<text x='218' y='726.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Cosmos Laundromat 1080p (10 min)</text>
-<line x1='792.9909090909091' y1='722.0' x2='806.3927272727273' y2='722.0' stroke='#e6e5e1' stroke-width='2'/>
-<circle cx='793.0' cy='722.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
-<circle cx='806.4' cy='722.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<line x1='750.2830769230769' y1='674.0' x2='800.0046153846154' y2='674.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='800.0' cy='674.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='750.3' cy='674.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='702.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Cosmos Laundromat 1080p (10 min)</text>
+<line x1='792.7353846153846' y1='698.0' x2='801.9430769230769' y2='698.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='801.9' cy='698.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='792.7' cy='698.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<text x='218' y='726.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12.5' fill='#0b0b0b' text-anchor='end' font-weight='normal'>Big Buck Bunny 720p (10 min)</text>
+<line x1='781.5892307692308' y1='722.0' x2='814.1553846153846' y2='722.0' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='814.2' cy='722.0' r='5.5' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='781.6' cy='722.0' r='5.5' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
 </svg>

@@ -1,11 +1,11 @@
 # Hardware mode: VideoToolbox H.264 behind the yah264 option surface
 
-Status: STEP 1 AND THE CORE OF STEP 2 BUILT 2026-09-04 (see "Where it
-stands" below the step-0 answers). STARTED 2026-09-04. The owner asked for a
+Status: STEP 1 AND THE CORE OF STEP 2 BUILT (see "Where it
+stands" below the step-0 answers). The owner asked for a
 mode that uses the Mac's encode hardware when it is present. It maps the yah264
 options as far as they go and warns about the rest.
 
-**Step 0 answers (owner, 2026-09-04: "recommendations"):**
+**Step 0 answers (the owner took the recommendations):**
 
 1. CRF mapping: (a). `--crf` maps onto the quality key with a fixed monotone
    table and a one-line warning that the scale is not ours. (b), emulation, is
@@ -19,7 +19,7 @@ options as far as they go and warns about the rest.
 5. ffmpeg exposure: CLI and API only.
 6. `auto` fall-back: warn once and fall back to our encoder.
 
-## Where it stands (2026-09-04, first PR)
+## Where it stands
 
 Built:
 
@@ -182,7 +182,7 @@ still move QP inside a frame.
   went in.
 - Flush at end of stream, and propagate the callback's error status.
 - Per-frame options: ForceKeyFrame from our scene-cut when step 0 item 4 says
-  yes. Base QP hint only after the probe says the H.264 path honours it.
+  yes. Base QP hint only after the probe says the H.264 path honors it.
 
 ## Step 3: the option map
 
@@ -211,7 +211,7 @@ hardware has, warned once; "no" = ignored with a warning if set explicitly;
 | --tune zerolatency | RealTime + AllowFrameReordering off + MaxFrameDelayCount 0 | approx | other tunes: no |
 | --sar | PixelAspectRatio | maps | |
 | fps from y4m | ExpectedFrameRate | maps | |
-| colour primaries / transfer / matrix | Color* keys | maps | when we carry them |
+| color primaries / transfer / matrix | Color* keys | maps | when we carry them |
 | --threads | ignored | silent or warn | step 0 |
 | --aq-strength, --psy-rd, --psy-trellis, --trellis, --deadzone-*, --cqm | none | no | |
 | --me, --merange, --subme, --subpel | none | no | |

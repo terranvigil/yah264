@@ -1,11 +1,11 @@
 # Animation: where the preset ladder stops meaning what it says
 
-yah264 encodes Big Buck Bunny about 1.34x slower than x264 at the same preset,
-against 0.82x to 1.16x on the six table clips. That looked like a defect. It is
+Before parity, yah264 encoded Big Buck Bunny about 1.34x slower than x264 at the
+same preset, against 0.82x to 1.16x on the six table clips. That looked like a defect. It is
 not. The reason is worth writing down because the same reasoning applies to any
 content class the corpus does not contain.
 
-Since then yah264 has reached parity with x264 (2026-10-12), so the 1.34x and
+Since then yah264 has reached parity with x264, so the 1.34x and
 0.82-1.16x readings below describe the encoder before that round. The current
 speed figures are in the README and `site/results.md`.
 

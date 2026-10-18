@@ -89,7 +89,8 @@ DEFAULT_OVERRIDES = {
     "Y264_TRELLIS_LAMBDA": "256,150,28,38",
     "Y264_DCTDEC_T4": "table", "Y264_DCTDEC_T8": "table", "Y264_DCTDEC_TAB4": "table",
     "Y264_AQ_ANCHOR": "= aq_anchor_default()",
-    "Y264_AQ_BPULL": "1.0",              # 0 wherever the absolute anchor is off
+    "Y264_AQ_DC": "= rate mode: 1.3 CRF, 1.04 bitrate target",
+    "Y264_AQ_BPULL": "1.3",              # 0 wherever the absolute anchor is off
     "Y264_CRF_PBSCALE": "1.0",
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
@@ -333,9 +334,9 @@ def generate(knobs, instr_doc):
         f.write("# The Y264_* knob census (generated -- edit "
                 "scripts/knob_census.py OVERRIDES, not this file)\n\n"
                 "Regenerate: `python3 scripts/knob_census.py`. CI check: "
-                "`--check`.\n\nTier meanings: **default** = shipped behaviour, "
+                "`--check`.\n\nTier meanings: **default** = shipped behavior, "
                 "the env is its escape; **instrument** = measurement machinery "
-                "(catalogued in docs/instruments.md when it has produced a "
+                "(cataloged in docs/instruments.md when it has produced a "
                 "result); **arm** = default-off gate still being priced. "
                 "A refuted arm is removed, with its verdict and the removing "
                 "commit recorded in the local refused index.\n")
