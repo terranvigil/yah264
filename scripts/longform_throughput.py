@@ -182,8 +182,9 @@ DECODE_LABEL = os.environ.get("LF_DECODER") or ("vt" if sys.platform == "darwin"
 PIN_T1 = os.environ.get("LF_PIN_T1", "")
 PIN_FEED = os.environ.get("LF_PIN_FEED", "")
 # DRIFT: with LF_DRIFT=0.03, a timed group whose rounds of one arm differ by
-# more than 3% (slowest over fastest) gets another interleaved round, up to
-# LF_DRIFT_MAX_ROUNDS in all, and the record keeps every round.
+# more than 3% (its two closest rounds, slower over faster) gets another
+# interleaved round, up to LF_DRIFT_MAX_ROUNDS in all, and the record keeps
+# every round.
 DRIFT = float(os.environ.get("LF_DRIFT", "0"))
 DRIFT_MAX_ROUNDS = int(os.environ.get("LF_DRIFT_MAX_ROUNDS", "5"))
 # SCORE EVERY FRAME. At `--bframes 3` the mini-GOP period is 4, so
@@ -2068,9 +2069,14 @@ def machine():
 
 
 def drift(ms):
-    """Slowest over fastest wall, minus one, of one arm's rounds."""
-    ws = [m[0] for m in ms]
-    return max(ws) / min(ws) - 1 if len(ws) > 1 and min(ws) > 0 else 0.0
+    """The tightest pair of one arm's rounds: slower over faster wall, minus one.
+    A spread over every round can only grow as rounds are added, so a group that
+    once drifted would always run to LF_DRIFT_MAX_ROUNDS; the repeat stops instead
+    once two rounds agree, and the median still reads every round."""
+    ws = sorted(m[0] for m in ms)
+    if len(ws) < 2 or ws[0] <= 0:
+        return 0.0
+    return min(b / a - 1 for a, b in zip(ws, ws[1:]))
 
 
 def versions():
@@ -2261,6 +2267,7 @@ def do_purec(cell):
 # agrees. The pure-C leg prints its own window bytes, so a mismatch cannot hide.
 WIN_TOL = float(os.environ.get("WIN_TOL", "0.5"))        # percent; the bar is 1
 WIN_VOID = float(os.environ.get("WIN_VOID", "5.0"))      # percent; over this the goal is void
+WIN_STEP = float(os.environ.get("WIN_STEP", "0.02"))     # rate-factor bracket below which the search stops
 
 
 def win_bytes(arm, cell, crf, threads, wins, wd, purec=False):
@@ -2299,8 +2306,11 @@ def win_move_ref(cell, g, key, v, tx, wins, wd):
         xcrf = xcrf + math.log(tb / xb2) / slope
     xbest = min(xpts, key=lambda q: abs(q[2]))
     if abs(xbest[2]) < abs(v["dsize_pct"]):
-        put(key, {**v, "x264_crf": xbest[0], "x264_bytes": xbest[1],
+        # the pure-C/SIMD identity check (LF_WIN_VERIFY) was made at the old point
+        put(key, {**{k: x for k, x in v.items() if k != "purec_identical"},
+                  "x264_crf": xbest[0], "x264_bytes": xbest[1],
                   "x264_md5": xbest[3], "dsize_pct": xbest[2], "ref_moved": True,
+                  "ref_move_encodes": len(xpts),
                   "ours_only_dsize_pct": v["dsize_pct"],
                   "date": time.strftime("%Y-%m-%d %H:%M")})
         print(f"  {cell:<20}{g}  reference moved to crf {xbest[0]:.3f} on the windows: "
@@ -2346,7 +2356,7 @@ def do_winpoint(cell):
             # its bitstream is not the SIMD build's (0.01% apart on a probe), unlike ours
             xb, xmd = win_bytes("x264", cell, X264_CRF, tx, wins, wd, purec=True)
             pts, crf, slope = [], start, -0.13
-            for _ in range(8):
+            for _ in range(10):
                 ob, omd = win_bytes("ours", cell, crf, to, wins, wd)
                 d = 100 * (ob / xb - 1)
                 pts.append((crf, ob, d, omd))
@@ -2354,11 +2364,23 @@ def do_winpoint(cell):
                       f"({d:+.2f}% of {xb})", flush=True)
                 if abs(d) <= WIN_TOL:
                     break
-                # two sizes either side of the target and nothing between them:
-                # the staircase steps over it, and more of our encodes cannot land
-                if (len(pts) >= 3 and len({q[1] for q in pts[-3:]}) <= 2
-                        and min(q[2] for q in pts) < 0 < max(q[2] for q in pts)):
-                    break
+                # once the target is bracketed, bisect between the closest point on
+                # each side; a bracket narrower than WIN_STEP that still holds no
+                # match is the staircase stepping over the target, and no rate
+                # factor of ours lands there (the reference moves instead, below).
+                # Bisection reads only which side each point fell on, so a few
+                # bytes of threaded noise cannot steer it the way a slope can.
+                above = [q for q in pts if q[2] > 0]
+                below = [q for q in pts if q[2] < 0]
+                if above and below:
+                    # size falls as the rate factor rises: the tightest bracket is the
+                    # highest rate factor still over the target and the lowest under it
+                    hi = max(above, key=lambda q: q[0])
+                    lo = min(below, key=lambda q: q[0])
+                    if abs(hi[0] - lo[0]) <= WIN_STEP:
+                        break
+                    crf = round((hi[0] + lo[0]) / 2, 3)
+                    continue
                 if len(pts) >= 2 and pts[-1][1] != pts[-2][1] and pts[-1][0] != pts[-2][0]:
                     slope = min(-0.05, max(-0.30, math.log(pts[-1][1] / pts[-2][1])
                                            / (pts[-1][0] - pts[-2][0])))
