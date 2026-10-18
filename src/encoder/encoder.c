@@ -9662,9 +9662,8 @@ static void mbt_pre_main(void *arg)
 /* --- mb-tree oracle probe (Y264_MBT_REC / Y264_MBT_PLAY, default OFF) ---
  *
  * PROBE, not a feature: bounds the prize of computing mb-tree off the
- * driver's critical path with unbounded lead (our MBT_PRE launches one call early and the
- * driver waits out nearly the whole latency -- measured, samsung t18: the
- * TP_MBTREE bucket is 118 ms with MBT_PRE latched as without it). REC=path
+ * driver's critical path with unbounded lead (a walk can start at most one
+ * call early, and the driver waits out nearly the whole latency). REC=path
  * records every anchor's resolved offsets; PLAY=path replays them with the
  * chain rendezvous and the walk skipped. The gate is byte-identity of the
  * .264 against the recording run, EVERY time the oracle is used.
@@ -14832,7 +14831,7 @@ static int stair_encode_b(yah264_encoder_t *e, struct stair_burst *B,
 /* The sibling non-ref leaf pair, inside the burst (Lever 2 folded into the
  * staircase): both leaves encode concurrently as jobs on the shared pool --
  * the serial stair path would otherwise LOSE the pair overlap the default
- * (FPIPE) path has. Preps run serially in coding order; leaf 1's
+ * leaf-pipeline path has. Preps run serially in coding order; leaf 1's
  * analyze+emit+deblock task rides the (idle, just-drained) bemit thread while
  * leaf 0 runs inline. The leaves never read the in-flight anchor (their
  * list-1 is the mini-GOP's reference B, committed before this), so no row
