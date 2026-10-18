@@ -238,7 +238,7 @@ us with the type oracle, reads +2.6%, so matching it isn't the target.
  cif +0.24, 720p -2.54, 1080p -0.38. Cosmos (six windows) -0.08, flat.
  Instructions at meridian 1080p t12: +3.6% (INTRA10 alone +5.2%: six more
  SATDs per block; HPEL is free and PSUB +1.2%).
- Trimmed (2026-10-03, on main 1b527c5): buffered B's keep their intra
+ Trimmed (2026-10-03): buffered B's keep their intra
  estimate (Y264_BDINTRA, default on, byte-identical, -0.8% on the default).
  Y264_LR_INTRA10=3 runs the six directional modes only where the zero-motion
  residual reaches a quarter of the four-mode intra. HPEL + PSUB + INTRA10=3

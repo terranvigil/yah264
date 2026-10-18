@@ -1,6 +1,6 @@
 # Denoising for grainy and noisy sources: `--nr` and `--mcstf` (2026-09-27)
 
-Branch `item-denoise`, off main at `7cd4c0d`. Both tools are **off by
+Both tools are **off by
 default**. Both are reached through the environment, which the CLI flags
 write, so `yah264_param_t` and `include/yah264.h` keep their layout.
 

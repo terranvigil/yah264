@@ -265,7 +265,7 @@ rules and the spinner check like everything else.
 
 bbb_720p **-9.99%**, sintel_720p **+0.15%**, against the old tune's -3.69% and
 +4.47%. The clip it was hurting is neutral and the clip it helped nearly tripled.
-Default path byte-identical, `make test` 9/9. Commit 21d7709.
+Default path byte-identical, `make test` 9/9.
 
 ## Item 2, flat-gated skip-accept via existing knobs: CLOSED EMPTY
 

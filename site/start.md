@@ -102,8 +102,8 @@ Medium is the default because every comparison on this site is against x264
 medium.
 
 `--tune` adjusts for content: `grain`, `film`, `animation`, `psnr`, `ssim`,
-`zerolatency`, `stillimage` and `fastdecode`. `zerolatency` turns off the sync
-lookahead. It's the only option here that trades quality for latency.
+`zerolatency`, `stillimage` and `fastdecode`. `zerolatency` turns off B frames, the
+rate-control lookahead and the sync lookahead. It's the only tune that trades quality for latency.
 
 Four tunes come with a caveat:
 

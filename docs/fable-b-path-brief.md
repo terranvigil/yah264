@@ -109,8 +109,8 @@ Say which board produced any number.
 **The tooling exists and here is where it lives.** ffmpeg with libyah264 at
 `/tmp/ffmpeg-yah264/ffmpeg`, our library installed at `/tmp/y264inst`, x264 at
 `/tmp/x264asm` and `/tmp/x264noasm`. Control worktrees are built at
-`/private/tmp/y264base` (`1553454`, pre-session) and `/private/tmp/y264pre`
-(`c7b70e1`, pre-rename, so its binary is `next264`). `/tmp` is not durable, and
+`/private/tmp/y264base` (pre-session) and `/private/tmp/y264pre`
+(pre-rename, so its binary is `next264`). `/tmp` is not durable, and
 `docs/ffmpeg-integration-plan.md` has the rebuild recipe.
 
 **A goal cannot be adjudicated on one day's draw.** Today ffboard read G1 1.05 /

@@ -4,7 +4,7 @@
 > controller and its `Y264_RC_PIPE` / `Y264_RC_PIPE_VBV` escapes were removed;
 > the A/B results below that use them are history.
 >
-> `Y264_RCP_LAG` has defaulted to 1 above one thread since commit 94bc84c, so
+> `Y264_RCP_LAG` has defaulted to 1 above one thread, so
 > ABR output at more than one thread varies with the thread count by design.
 > The sections below that call the lag refused or default 0 predate that.
 
@@ -417,8 +417,8 @@ exactly the byte-queue ordering that the whole RCP determinism argument rests on
 
 ## `Y264_RCP_LAG`: the lagged schedule, measured and refused
 
-This refusal was later reversed. Lag 1 became the default above one thread in
-commit 94bc84c, once each in-flight frame was predicted from its own
+This refusal was later reversed. Lag 1 became the default above one thread
+once each in-flight frame was predicted from its own
 complexity (`Y264_ABR_RF2_INFLIGHT`). At one thread it's byte-identical to lag
 0 (`rcp_lag_env` and `rcp_lag_for` in `src/encoder/encoder.c`). The section
 below is the record from before that.
@@ -1063,4 +1063,4 @@ error across the corpus and a band read with `bench/lowrate/abr_noise.py`
 alongside (`abr-band-noise-floor`: an ABR row smaller than that clip's floor is
 not evidence). It belongs to the same predicate family as `Y264_RC_PIPE_VBV`,
 which took the same decision and defaulted on before it was removed. The lag
-took it too and has been the default above one thread since commit 94bc84c.
+took it too and is now the default above one thread.
