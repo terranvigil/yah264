@@ -1,7 +1,6 @@
 <svg xmlns='http://www.w3.org/2000/svg' width='900' height='560' viewBox='0 0 900 560'><rect width='100%' height='100%' fill='#fcfcfb'/>
 <text x='24' y='40' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='22' fill='#0b0b0b' text-anchor='start' font-weight='600'>Same file size, same or better quality</text>
 <text x='24' y='64' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='14' fill='#52514e' text-anchor='start' font-weight='normal'>VMAF-NEG points ahead of x264 at the same bytes, median per group</text>
-<text x='876' y='40' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#c0392b' text-anchor='end' font-weight='normal'>«PENDING:final5-pair»</text>
 <line x1='210.0' y1='82' x2='210.0' y2='500' stroke='#e6e5e1' stroke-width='1'/>
 <text x='210.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-0.5</text>
 <line x1='315.0' y1='82' x2='315.0' y2='500' stroke='#8a8984' stroke-width='1.5'/>
@@ -48,6 +47,6 @@
 <rect x='315.0' y='433.8' width='252.0' height='20.5' rx='3' fill='#2a78d6'/>
 <text x='573.0' y='448.0909090909091' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.20</text>
 <text x='198' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 10-min films</text>
-<rect x='315.0' y='471.1' width='373.8' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='694.8000000000001' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.78</text>
+<rect x='315.0' y='471.1' width='375.9' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='696.9' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.79</text>
 </svg>

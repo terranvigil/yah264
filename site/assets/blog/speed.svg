@@ -69,5 +69,8 @@
 <circle cx='786.1' cy='498.6' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
 <circle cx='714.6' cy='498.6' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
 <text x='198' y='543.5454545454545' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 10-min films</text>
-<text x='860' y='543.5454545454545' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='11' fill='#c0392b' text-anchor='end' font-weight='normal'>PENDING: goal 1, 2, 3</text>
+<line x1='639.064039408867' y1='539.5454545454545' x2='731.4285714285713' y2='539.5454545454545' stroke='#e6e5e1' stroke-width='2'/>
+<circle cx='731.4' cy='539.5' r='6' fill='#2a78d6' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='639.1' cy='539.5' r='6' fill='#eb6834' stroke='#fcfcfb' stroke-width='2'/>
+<circle cx='653.1' cy='539.5' r='6' fill='#1baf7a' stroke='#fcfcfb' stroke-width='2'/>
 </svg>

@@ -17,7 +17,7 @@ how good video looks to people.
 
 Every figure in this section comes from the current parity measurement, timed on
 one Apple M5 Max with 18 cores. A group passes when its median ratio is at or
-under 1.00 and its worst cell at or under 1.15, with its quality holding. «PENDING:groups-passing» of the 27 groups that count toward parity pass.
+under 1.00 and its worst cell at or under 1.15, with its quality holding. All 27 of the groups that count toward parity pass.
 
 ## The test set
 
@@ -32,7 +32,8 @@ Both encoders read the same 8-bit 4:2:0 frames on stdin.
 
 ## Speed
 
-Median and worst ratio in each group.
+Median and worst ratio in each group. A ≤ marks a reading where the source
+couldn't be fed as fast as yah264 encoded, so it's an upper bound on our ratio.
 
 | class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
 |---|---|--:|--:|--:|
@@ -46,10 +47,10 @@ Median and worst ratio in each group.
 | 1080p | C | 0.62 / 0.62 | 0.66 / 0.66 | 0.65 / 0.65 |
 | 2160p | S | 0.50 / 0.52 | 0.55 / 0.60 | 0.67 / 0.73 |
 | 2160p | M | 0.47 / 0.58 | 0.49 / 0.60 | 0.53 / 0.57 |
-| 2160p | L | «PENDING:2160p-L/G1» | «PENDING:2160p-L/G2» | «PENDING:2160p-L/G3» |
+| 2160p | L | 0.52 / 0.55 | ≤0.58 / 0.62 | ≤0.57 / 0.59 |
 | 2160p | C | not measured | not measured | void |
 
-The slowest cell anywhere is «PENDING:slowest-cell». The 4K
+The slowest cell anywhere is 0.88, a short CIF clip with SIMD on. The 4K
 content-type clips are the one gap. Goals 1 and 2 haven't been timed there, and
 the goal 3 run failed a validity rule. Those cells sit outside the parity count.
 
@@ -60,18 +61,18 @@ and the worst PSNR-Y difference in dB. Positive means yah264 looks better.
 
 | class | group | VMAF-NEG | PSNR-Y worst | worst cell |
 |---|---|--:|--:|---|
-| CIF | S | -0.05 / -0.28 | -0.29 | stefan_cif «PENDING:final5-pair» |
-| 720p | S | +0.19 / +0.06 | +0.02 | park_joy_720p «PENDING:final5-pair» |
-| 720p | L | +0.85 / +0.32 | -0.21 | bbb_720p «PENDING:final5-pair» |
-| 720p | C | +2.06 / +2.06 | +0.31 | lash1924_720p «PENDING:final5-pair» |
-| 1080p | S | +0.48 / +0.12 | +0.06 | riverbed_1080p «PENDING:final5-pair» |
-| 1080p | M | +0.72 / +0.71 | +0.24 | sollevante_1080p «PENDING:final5-pair» |
-| 1080p | L | +0.98 / -0.06 | -0.85 | cosmos_1080p «PENDING:final5-pair» |
-| 1080p | C | +1.13 / +0.04 | -0.10 | worldcup_far_1080p «PENDING:final5-pair» |
-| 2160p | S | +1.59 / +0.60 | -0.74 | bbb_2160p «PENDING:final5-pair» |
-| 2160p | M | +1.20 / +0.53 | +0.07 | sollevante_2160p «PENDING:final5-pair» |
-| 2160p | L | +1.78 / +0.27 | -0.72 | bbb_2160p «PENDING:final5-pair» |
-| 2160p | C | +2.18 / +2.18 | +0.39 | boxing_2160p «PENDING:final5-pair» |
+| CIF | S | -0.05 / -0.28 | -0.29 | stefan_cif |
+| 720p | S | +0.19 / +0.06 | +0.02 | park_joy_720p |
+| 720p | L | +0.85 / +0.32 | -0.21 | bbb_720p |
+| 720p | C | +2.06 / +2.06 | +0.31 | lash1924_720p |
+| 1080p | S | +0.48 / +0.12 | +0.06 | riverbed_1080p |
+| 1080p | M | +0.72 / +0.71 | +0.24 | sollevante_1080p |
+| 1080p | L | +0.98 / -0.06 | -0.85 | cosmos_1080p |
+| 1080p | C | +1.13 / +0.04 | -0.10 | worldcup_far_1080p |
+| 2160p | S | +1.59 / +0.60 | -0.74 | bbb_2160p |
+| 2160p | M | +1.20 / +0.53 | +0.07 | sollevante_2160p |
+| 2160p | L | +1.79 / +0.27 | -0.72 | bbb_2160p |
+| 2160p | C | +2.18 / +2.18 | +0.39 | boxing_2160p |
 
 ## Across the rate range
 
@@ -107,7 +108,7 @@ fewer clips. They're reported apart from it. The
 
 | processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
 |---|---|--:|--:|--:|---|
-| arm64: Apple M5 Max, 18 cores | NEON + dot product | «PENDING:G1-range» | «PENDING:G2-range» | «PENDING:G3-range» | full parity, the tables above |
+| arm64: Apple M5 Max, 18 cores | NEON + dot product | 0.47-0.72 | 0.49-0.71 | 0.53-0.82 | full parity, the tables above |
 | arm64: AWS Graviton4, 96 vCPU, Linux | NEON | 0.57 | 0.44 | 0.70 | seven-clip check, median of 5 to 7 valid cells |
 | arm64: AWS Graviton3, 32 vCPU, Linux | SVE (256-bit) + NEON | | | 0.65-0.74 CPU time, one thread | two-clip profile; not goal 3, which is read at the default thread count |
 | x86-64: AMD EPYC, 32 vCPU, rented | AVX2 | | | 0.86-0.96 CPU time, one thread | two-clip profile after the second x86 tuning round; not goal 3; slower than x264 at the default thread count on one clip, see below |
