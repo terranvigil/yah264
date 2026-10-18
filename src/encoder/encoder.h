@@ -355,7 +355,7 @@ struct yah264_encoder {
     /* AQ energy/anchor shape, resolved once at open (never read from the
  * environment on a worker thread). aq_abs 1 = offset against the absolute
  * anchor instead of the frame mean; aq_chroma 1 = an all-plane
- * ac_energy. See crf_cplx_env / aq_chroma_env in encoder.c. */
+ * ac_energy (0 at open: luma only). See crf_cplx_env in encoder.c. */
     int      aq_abs;
     int      aq_chroma;
     double   aq_anchor;
@@ -1403,7 +1403,7 @@ struct yah264_encoder {
         double rc_cplx;
     } pipe;
 
-    /* Frame pipeline (env Y264_FPIPE): the two non-reference sibling B leaves
+    /* Frame pipeline: the two non-reference sibling B leaves
  * of a bframes>=3 mini-GOP encode concurrently as jobs on the SHARED
  * multi-frame pool, each with fully private frame state (rec/grids/
  * colmv/cabac/bitstream). Created
@@ -1415,7 +1415,7 @@ struct yah264_encoder {
     ntp_bg_t          *fp_bg;       /* drives the second leaf; first runs inline */
     struct fpipe_leaf *fp_leaf[2];
 
-    /* Staircase (env Y264_STAIR, default on): the reference-frame staircase.
+    /* Staircase: the reference-frame staircase.
  * A mini-GOP's P anchor and its buffered B's encode as concurrent jobs on
  * the ONE shared multi-frame pool, each B row's CLAIM gated on the anchor's
  * published CONSUMABLE rows (analyzed + deblocked + border-extended +
@@ -1443,14 +1443,7 @@ struct yah264_encoder {
     struct la_thread  *la_th;
     struct la_entry   *la_prev_pushed;
 
-    /* mb-tree prefetch (env Y264_MBT_PRE, default off): the anchor's
- * compute_mbtree runs on a dedicated thread, launched at the pop of the
- * last buffered B of its mini-GOP -- one encode call before the anchor
- * needs it -- instead of on the GOP driver at the anchor's own pop.
- * Everything it reads (the B copies in bplane, the ring window, the
- * anchor's own entry) is already final at that point and is not mutated
- * before the latch, so it is the same values in the same order: WHO
- * computes changes, nothing else. State/ctx in encoder.c. */
+    /* mb-tree Phase-A warm thread (see mbt_warm_window); state in encoder.c. */
     struct mbt_pre    *mbtp;
 };
 
