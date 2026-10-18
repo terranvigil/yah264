@@ -557,7 +557,7 @@ struct yah264_encoder {
     int      lr_w, lr_h;
     pixel   *lowres_cur;        /* current frame, downscaled */
     pixel   *lowres_prev;       /* previous frame, downscaled */
-    /* Y264_LR_HPEL_ALLREF: source half-pel planes for the lowres copies
+    /* Source half-pel planes for the lowres copies
      * mb-tree reads as references (the two buffers lowres_cur/_prev swap
      * between, the coded anchor's copy, the buffered B's), so every phase
      * build mb-tree makes takes the same kind of plane the lookahead does */
@@ -695,9 +695,6 @@ struct yah264_encoder {
  * lowres pair (B entries, bleg_have); NEXT = the
  * B's list-1 lowres pair vs its future anchor. */
         int      bleg_have;     /* B entry: ANCHOR/NEXT pair legs filled */
-        y264_lr_blk *pyr[2];    /* Y264_BADAPT_PYRSHARE: the leaf's legs against its
-                                 * pyramid bracket (past, future), from the run placement */
-        int      pyr_have, pyr_poc0, pyr_poc1;
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
         int      wp_vote;       /* percent of lowres SATD a frame-DC weight saves against the previous anchor, -1 unmeasured */
         int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
@@ -741,21 +738,7 @@ struct yah264_encoder {
     long     sc_prev_ic;        /* Y264_SC_FLOOR: the last finalized frame's intra sum, -1 = none */
     int      sc_rn;
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */
-    pixel   *la_anchor_hp[3];   /* its source half-pel planes (whole-run B placement) */
-    /* Y264_BADAPT_RUN: whole-run B placement scratch -- cached lowres legs
-     * keyed on (frame, reference) push index and cached quarter-pel phase
-     * sets keyed on the reference. */
-    int      brun_on;
-    struct { long cur, ref, age, x; int kind; y264_lr_blk *leg; } brun_leg[48];
-    int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
-    long     brun_akey;               /* push index of the anchor brun_decide ran from */
-    struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
-    y264_lr_blk *la_pf_leg;           /* Y264_LA_PREVFIELD scratch */
-    pixel   *la_pf_sub[16];           /* its phase set (=2) */
-    y264_lr_blk *brun_padv;           /* Y264_BADAPT_PADERIVE scratch */
-    long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
-    struct { long key, age; pixel *pl[16]; } brun_ph[8];
-    long     brun_clock;
+    pixel   *la_anchor_hp[3];   /* its source half-pel planes */
     int      la_anchor_have;
     /* Previous anchor pair's ANCHOR-leg MV field (lowres quarter-pel): the
  * colocated temporal seed for the next pair's lowres ME (motion
@@ -819,9 +802,7 @@ struct yah264_encoder {
                                  * mb-tree reads it instead of re-estimating */
     int      bdintra_valid[8];
     int      lr_intra_pen;      /* the lowres intra penalty (lr_intra_penalty) */
-    int      lr_i10;            /* the lowres intra mode set (Y264_LR_INTRA10; 0 on the 2160p tier under Y264_UHD_LITE) */
-    y264_lr_blk *bpyr[8][2];    /* Y264_BADAPT_PYRSHARE: a buffered leaf's pyramid legs */
-    int      bpyr_have[8], bpyr_poc0[8], bpyr_poc1[8];
+    int      lr_i10;            /* the lowres intra mode set (LR_I10_MODE; 0 on the 2160p tier under Y264_UHD_LITE) */
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
@@ -1417,7 +1398,7 @@ struct yah264_encoder {
     int                st_state;
     struct stair_ctx  *st;
 
-    /* Decoupled lookahead thread (env Y264_LA_THREAD, default off): the
+    /* Decoupled lookahead thread: the
  * per-frame lookahead chain (push-time lowres analysis, the deferred
  * finalize, the anchor/B-pair lowres ME) runs on ONE dedicated thread in
  * push order; the API thread pads + enqueues and every consumer read of a
@@ -1427,9 +1408,9 @@ struct yah264_encoder {
  * before this one" (the finalize target), owned by whoever runs chain
  * steps (the la thread when engaged, the API thread otherwise/at flush). */
     int                la_th_on;
-    /* Y264_LA_INLINE resolved: run the chain's tiny per-push parallel_fors on
- * the calling thread instead of fanning them into the pool. Auto follows
- * la_th_on. Per-open constant, and byte-identical either way. */
+    /* Run the chain's tiny per-push parallel_fors on the calling thread
+ * instead of fanning them into the pool: an off-driver chain on a small
+ * frame. Per-open constant, and byte-identical either way. */
     int                la_inline;
     struct la_thread  *la_th;
     struct la_entry   *la_prev_pushed;
