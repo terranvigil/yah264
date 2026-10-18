@@ -482,7 +482,6 @@ static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
           ? (f->mbt_frac ? (int)lround(f->qp + f->mbtree_off[i] / 2.0)
                          : f->qp + f->mbtree_off[i])
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
-    if (f->brk) q += f->brk->q[mby];
     if (q < 0) q = 0;
     if (q > 51) q = 51;
     f->cur_qp = q;
@@ -507,7 +506,6 @@ static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
           ? (f->mbt_frac ? (int)lround(f->qp + f->mbtree_off[i] / 2.0)
                          : f->qp + f->mbtree_off[i])
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
-    if (f->brk) q += f->brk->q[mby];
     return q < 0 ? 0 : (q > 51 ? 51 : q);
 }
 
@@ -5288,92 +5286,12 @@ static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r
 static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *r);
 
 /* Y264_VBV_ROWBRAKE_TRACE=1: one RBT line per picture, the pass-1 entropy
- * estimate and the real coded bits of every MB row (the 3h row brake's
- * input, measured before anything acts on it). */
+ * estimate and the real coded bits of every MB row. */
 int y264_rb_trace_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_VBV_ROWBRAKE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
-}
-
-/* The row-level VBV brake's settings: K rows of lag, the dmax offset cap,
- * the margin and the arm ratio (2.0: on the step-3 cells 1.5 fired on 4-17x
- * more frames and lost VMAF-NEG on two of them; 2.0 gained on all four).
- * Returns the mode: 0, the brake is off. Mode 9 is the forced test ramp
- * (every picture's lower half steps up one QP per row to dmax) and mode 1 the
- * rule; CABAC only, as the pass-1 estimate the rule reads exists only there. */
-int y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm)
-{
-    if (K) *K = 4;
-    if (dmax) *dmax = 6;
-    if (margin) *margin = 0.10;
-    if (arm) *arm = 2.0;
-    return 0;
-}
-
-/* The brake offset of row r, decided once, at the row's first macroblock
- * (before any of its QPs is read), from coding-order facts only. */
-static void rowbrake_row(y264_frame_t *f, int r)
-{
-    struct y264_rowbrake *b = f->brk;
-    if (!b) return;
-    int q = 0;
-    if (b->mode == 9) {
-        int h2 = b->hmb / 2;
-        q = r < h2 ? 0 : r - h2 + 1;
-    } else if (b->mode == 1 && r > 0) {
-        /* The rule. Rows 0..n-1 (n = r - K + 1) have finished pass 1, so
- * their estimate S is final and the same at every thread count. The
- * frame is projected at the rate those rows ran (S over d = n / hmb, with
- * a prior, below);
- * the brake arms only when that rate is past the decide's own prediction
- * by `arm` (the bits model missed: a cut, a fade end) AND the projection
- * passes the budget by `margin`. Then QP steps toward the offset that
- * would bring the projection back to the budget, one step per row, up
- * only, capped at dmax. A frame the model priced right never arms. */
-        q = b->q[r - 1];
-        int n = r - b->K + 1;
-        if (n > 0 && b->bud > 0.0 && b->pred > 0.0 && b->est) {
-            double S = 0.0;
-            for (int i = 0; i < n; i++) S += (double)b->est[i];
-            S /= 256.0;
-            double d = (double)n / b->hmb;
-            /* the running rate, shrunk toward the prediction by a prior worth
- * a quarter of the picture: one row of a top-heavy frame cannot arm
- * it, a sustained 2x miss does by about a quarter of the way down */
-            double rate = (S + 0.25 * b->pred) / (d + 0.25);
-            double proj = S + (1.0 - d) * rate;
-            if (rate > b->arm * b->pred && proj > b->bud * (1.0 + b->margin)) {
-                int target = (int)ceil(6.0 * log2(proj / b->bud));
-                int up = q + 1;
-                q = up < target ? up : (target > q ? target : q);
-            }
-        }
-    }
-    if (q > b->dmax) q = b->dmax;
-    b->q[r] = (int8_t)q;
-}
-
-/* Row r has finished pass 1 (wavefront): advance the watermark the K-row gate
- * reads. Rows of one picture finish in order. */
-static void rowbrake_row_done(y264_frame_t *f, int r)
-{
-    struct y264_rowbrake *b = f->brk;
-    if (!b) return;
-    atomic_store_explicit(&b->done, r + 1, memory_order_release);
-    if (b->pool) ntp_pool_kick((ntp_pool_t *)b->pool);
-}
-
-/* The K-row claim gate: row r may start once rows 0..r-K have finished, so
- * its decision reads the same rows at every thread count. Chains the
- * staircase's gate when there is one. */
-static int rowbrake_ready(void *ctx, int r)
-{
-    struct y264_rowbrake *b = ctx;
-    if (r >= b->K && atomic_load_explicit(&b->done, memory_order_acquire) < r - b->K + 1)
-        return 0;
-    return b->inner_ready ? b->inner_ready(b->inner_ctx, r) : 1;
 }
 
 /* Y264_UNSAFE_NO_EMIT=1: skip pass 2 entirely -- the frame is analyzed and
@@ -8523,7 +8441,6 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     pred_cache_new_mb();
     y264_me_set_isb(1);                 /* oracle attribution: B frame */
     y264_me_set_stq(f->stq);
-    y264_me_set_et_class(f->slice_is_ref ? 2 : 4);
     const pixel *src = f->src[0] + (mby * 16) * ss + mbx * 16;
 
     y264_bs_t sb;
@@ -9571,7 +9488,6 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
-                    if (mbx == 0) rowbrake_row(f, mby);
                     f->prev_qp = predict_prev_qp(f, mbx, mby);
                     est_mb_begin(bc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, r);
@@ -12137,7 +12053,6 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     pred_cache_new_mb();
     y264_me_set_isb(0);                 /* oracle attribution: P frame */
     y264_me_set_stq(f->stq);
-    y264_me_set_et_class(1);
     int smvx, smvy;
     mv_skip(f, mbx, mby, &smvx, &smvy);
     pixel *rec = f->rec[0] + (mby * 16) * rs + mbx * 16;
@@ -12764,7 +12679,6 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     }
     if (f->row_gate && c == 0)      /* staircase v3: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0) rowbrake_row(f, r);
     if (c == 0)                             /* WPP: seed est_ctx from row above MB-1,
                                              * or from slice-init at a slice start */
         memcpy(cb->est_ctx,
@@ -12791,7 +12705,6 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
                            &w->rowqc[r], REC_AT(f, w->recs, r * w->wmb));
         f->row_done(f->row_done_ctx, r);
     }
-    if (c == w->wmb - 1) rowbrake_row_done(f, r);
 }
 static int pcb_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
@@ -12811,14 +12724,8 @@ static int pcb_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam,
              w.rowqc;
     if (ok) {
         ntp_prof_tag("analyze_Pcb");
-        {
-            int (*rb_gate)(void *, int) = f->row_ready; void *rb_ctx = f->row_gate_ctx;
-            if (f->brk) { f->brk->inner_ready = f->row_ready; f->brk->inner_ctx = f->row_gate_ctx;
-                          f->brk->pool = pool; atomic_store(&f->brk->done, 0);
-                          rb_gate = rowbrake_ready; rb_ctx = f->brk; }
-            ntp_wavefront_gated(pool, f->hmb, f->wmb, pcb_wf_init, pcb_wf_attach,
-                            pcb_wf_cell, &w, rb_gate, rb_ctx);
-        }
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, pcb_wf_init, pcb_wf_attach,
+                            pcb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
 }
@@ -12863,7 +12770,6 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
     struct b_rec *rec = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0) rowbrake_row(f, r);
     if (c == 0)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
@@ -12889,7 +12795,6 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
     long eb = est_commit_b(f, c, r, rec);
     if (f->rb) f->rb[r] += eb;
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
-    if (c == w->wmb - 1) rowbrake_row_done(f, r);
 }
 static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
@@ -12904,14 +12809,8 @@ static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
     int ok = wpp && w.fc && w.cb && w.nzbuf  && w.snap_best;
     if (ok) {
         ntp_prof_tag("analyze_Bcb");
-        {
-            int (*rb_gate)(void *, int) = f->row_ready; void *rb_ctx = f->row_gate_ctx;
-            if (f->brk) { f->brk->inner_ready = f->row_ready; f->brk->inner_ctx = f->row_gate_ctx;
-                          f->brk->pool = pool; atomic_store(&f->brk->done, 0);
-                          rb_gate = rowbrake_ready; rb_ctx = f->brk; }
-            ntp_wavefront_gated(pool, f->hmb, f->wmb, bcb_wf_init, bcb_wf_attach,
-                            bcb_wf_cell, &w, rb_gate, rb_ctx);
-        }
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, bcb_wf_init, bcb_wf_attach,
+                            bcb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
 }
@@ -12957,7 +12856,6 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     struct intra_mb *o = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)              /* staircase: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0) rowbrake_row(f, r);
     if (c == 0)                             /* WPP: seed est_ctx from row above MB-1,
                                              * or from slice-init at a slice start */
         memcpy(cb->est_ctx,
@@ -12970,7 +12868,6 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     long eb = est_commit_i(f, c, r, o);     /* advance this row's est_ctx */
     if (f->rb) f->rb[r] += eb;
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
-    if (c == w->wmb - 1) rowbrake_row_done(f, r);
 }
 static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
                       const uint8_t *slice_ctx)
@@ -12983,14 +12880,8 @@ static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
     int ok = wpp && w.fc && w.cb;
     if (ok) {
         ntp_prof_tag("analyze_Icb");
-        {
-            int (*rb_gate)(void *, int) = f->row_ready; void *rb_ctx = f->row_gate_ctx;
-            if (f->brk) { f->brk->inner_ready = f->row_ready; f->brk->inner_ctx = f->row_gate_ctx;
-                          f->brk->pool = pool; atomic_store(&f->brk->done, 0);
-                          rb_gate = rowbrake_ready; rb_ctx = f->brk; }
-            ntp_wavefront_gated(pool, f->hmb, f->wmb, icb_wf_init, icb_wf_attach,
-                            icb_wf_cell, &w, rb_gate, rb_ctx);
-        }
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, icb_wf_init, icb_wf_attach,
+                            icb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
 }
@@ -13116,7 +13007,6 @@ struct y264_emit_job {
     struct qp_chain qc0;
     uint8_t slice_ctx[Y264_CABAC_CTX];
     int64_t *rb;            /* the picture's row-brake trace, or NULL */
-    struct y264_rowbrake *brk;  /* the picture's row brake, or NULL */
     int  rb_poc, rb_hmb;
 };
 
@@ -13217,7 +13107,6 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
     j->slice_type = f->slice_type;
     j->cabac = f->cabac ? 1 : 0;
     j->rb = f->rb; j->rb_poc = f->poc; j->rb_hmb = f->hmb;
-    j->brk = f->brk;
     aq_analyze(f);
     if (f->mb_tr8)
         memset(f->mb_tr8, 0, (size_t)f->wmb * f->hmb);
@@ -13247,7 +13136,6 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     struct intra_mb *o = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
-                    if (mbx == 0) rowbrake_row(f, mby);
                     mb_qp_pre(f, mbx, mby);
                     f->prev_qp = predict_prev_qp(f, mbx, mby);
                     est_mb_begin(c, mbx, mby, f->cf_idc);   /* RDOQ in analyze reads est_ctx via c->ctx */
@@ -13351,7 +13239,6 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
-                    if (mbx == 0) rowbrake_row(f, mby);
                     f->prev_qp = predict_prev_qp(f, mbx, mby);
                     est_mb_begin(pc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
@@ -13447,20 +13334,7 @@ void y264_frame_emit_free(y264_emit_job_t *job)
                     (long long)job->rb[h + r]);
         fputc('\n', stderr);
     }
-    free(job->rb);              /* the trace's, or the rule's estimate */
-    if (job->brk) {
-        /* with the trace on, one RBK line per picture the brake touched */
-        struct y264_rowbrake *b = job->brk;
-        if (y264_rb_trace_on()) {
-            int maxq = 0, first = -1;
-            for (int r = 0; r < b->hmb; r++)
-                if (b->q[r] > 0) { if (first < 0) first = r; if (b->q[r] > maxq) maxq = b->q[r]; }
-            if (first >= 0)
-                fprintf(stderr, "RBK poc=%d type=%c bud=%.0f pred=%.0f maxq=%d first_row=%d of %d\n",
-                        job->rb_poc, "IPB"[job->slice_type], b->bud, b->pred, maxq, first, b->hmb);
-        }
-        free(b->q); free(b);
-    }
+    free(job->rb);
     recs_release(job->recs);
     free(job);
 }

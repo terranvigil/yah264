@@ -59,7 +59,6 @@ double anchor_leg_cost(const yah264_encoder_t *e);
 double crf_max_clip(const yah264_encoder_t *e, double base, double raised, int off);
 double frame_complexity_ilr(const yah264_encoder_t *e);
 double frame_complexity_me(const yah264_encoder_t *e);
-double rb_walk_env(void);
 void rc_head_crf(yah264_encoder_t *e, int type, pixel *const src[3], int want_c);
 void rc_head_serial(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3]);
 void rc_knobs_resolve(yah264_encoder_t *e);

@@ -156,14 +156,12 @@ static _Thread_local struct me_tls {
     int stq;                         /* single-thread quality mode: the
  * integer early-out disengages,
  * keyed on width */
-    int et_class;                    /* frame-class of the current MB:
- * 1=P, 2=ref B, 4=nonref B, 0=unstamped */
     int ref16_valid, ref16x, ref16y; /* this MB's 16x16 winner (Y264_SUB_FAR) */
     int noqpel;                      /* stop after half-pel (the B reference loop) */
     int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
     int me_xmax, me_xmaxf;           /* --intra-refresh horizontal qpel caps:
  * whole-pel vectors, fractional vectors */
-} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0,
+} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, INT_MAX, INT_MAX };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
@@ -173,7 +171,6 @@ void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
     s_met.hpel_stride = stride;
 }
 
-void y264_me_set_et_class(int c) { s_met.et_class = c; }
 void y264_me_set_stq(int q) { s_met.stq = q; }
 
 /* Half-pel plane operands per quarter-pel position: one table now, in interp.h,

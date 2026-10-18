@@ -576,7 +576,6 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
  * deblock jobs' busy time 593 -> 391 ms and their row stalls 5390 -> 1048 ms,
  * md5-identical; the wall has not been read. */
 #define DB_CHUNK 4
-void y264_deblock_warm(void) { }
 static void deblock_cell(void *ctx, int tid, int r, int c)
 {
     y264_frame_t *f = ctx;

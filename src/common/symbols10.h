@@ -72,7 +72,6 @@
 #define ntp_wavefront_batch             ntp_wavefront_batch_10
 #define ntp_wavefront_gated             ntp_wavefront_gated_10
 #define qp_bound                        qp_bound_10
-#define rb_walk_env                     rb_walk_env_10
 #define rc_head_crf                     rc_head_crf_10
 #define rc_head_serial                  rc_head_serial_10
 #define rc_knobs_resolve                rc_knobs_resolve_10
@@ -187,7 +186,6 @@
 #define y264_deblock_chroma2_v_neon     y264_deblock_chroma2_v_neon_10
 #define y264_deblock_chroma8_h_neon     y264_deblock_chroma8_h_neon_10
 #define y264_deblock_frame              y264_deblock_frame_10
-#define y264_deblock_warm               y264_deblock_warm_10
 #define y264_deblock_luma_h16_neon      y264_deblock_luma_h16_neon_10
 #define y264_deblock_luma_h4_neon       y264_deblock_luma_h4_neon_10
 #define y264_deblock_luma_v16_neon      y264_deblock_luma_v16_neon_10
@@ -331,7 +329,6 @@
 #define y264_me_search                  y264_me_search_10
 #define y264_me_search_satd             y264_me_search_satd_10
 #define y264_me_set_cheap               y264_me_set_cheap_10
-#define y264_me_set_et_class            y264_me_set_et_class_10
 #define y264_me_set_et_off              y264_me_set_et_off_10
 #define y264_me_set_hpel                y264_me_set_hpel_10
 #define y264_me_set_isb                 y264_me_set_isb_10
@@ -396,7 +393,6 @@
 #define y264_rb_trace_on                y264_rb_trace_on_10
 #define y264_real_coefs                 y264_real_coefs_10
 #define y264_recs_cache_ref             y264_recs_cache_ref_10
-#define y264_rowbrake_cfg               y264_rowbrake_cfg_10
 #define y264_sa8d_16x16_neon            y264_sa8d_16x16_neon_10
 #define y264_sa8d_8x8_neon              y264_sa8d_8x8_neon_10
 #define y264_sad_16x16_neon             y264_sad_16x16_neon_10

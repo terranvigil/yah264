@@ -1666,29 +1666,6 @@ static double rfm_open_qp(yah264_encoder_t *e, double C)
     return oq > 0 ? oq : rfm_open_intra_qp(e, C) - (flat ? e->rck.open_imargin : 0.0);
 }
 
-/* The row brake's in-flight charge override; 0 keeps the clip's own budget. */
-double rb_walk_env(void)
-{
-    return 0.0;
-}
-
-/* The row brake's inputs, noted after the VBV clip: the budget the clip
- * tested the frame against (the same call on the same virtual fill, the
- * entry not pushed yet) and the frame's predicted size at its coded QP,
- * shock included. Read only: nothing here moves the decide. */
-static void rb_note_budget(yah264_encoder_t *e, struct rcp_pend *en)
-{
-    double bud = 0.0;
-    if (rcp_vbv_scale_eff(e, en->type) > 0.0) {
-        bud = vbv_limit_at(e, rcp_vbv_vfill(e, 0));
-    }
-    double shock = e->rcp_vbv_shock > 1.0 ? e->rcp_vbv_shock : 1.0;
-    en->rb_bud = bud;
-    en->rb_pred = en->vpred * shock;
-    e->rb_bud = en->rb_bud;
-    e->rb_pred = en->rb_pred;
-}
-
 /* The rate-factor controller runs on the CRF path's field. Until now the absolute AQ anchor
  * and the anchor's frame-DC term (crf_frame_dc: the across-shot allocation,
  * worth 4-8% on multi-shot content under CRF) were CRF-only, so one-pass ABR
@@ -2092,7 +2069,6 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         en.vcplx = Cv;
         en.vpred = vs > 0.0 ? vs * Cv / pow(2.0, (en.fqp - 12) / 6.0) : 0.0;
         en.tight = (int8_t)(e->rcp_vbv_tight ? 1 : 0);
-        rb_note_budget(e, &en);
     }
     if (rcp_dbg_on())
         fprintf(stderr, "RCPD seq=%u type=%d ref=%d C=%.0f qp=%d np=%d pp=%.0f ca=%.0f s0=%.0f s1=%.0f s2=%.0f\n",
@@ -2143,7 +2119,6 @@ void rcp_head(yah264_encoder_t *e, int type, int is_ref,
         e->rcp_predecided--;
         e->qp = e->rcp[idx].base_qp;
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
-        e->rb_bud = e->rcp[idx].rb_bud; e->rb_pred = e->rcp[idx].rb_pred;
         return;
     }
     rcp_decide(e, type, is_ref, src);
@@ -2735,11 +2710,6 @@ int vbv_stat_on(void)
  * nal_ref_idc / dec_ref_pic_marking). src[] are the source planes to encode. */
 /* Per-frame QP from the base (P) QP. I frames drop a few QP (they are referenced
  * most; ip_ratio ~1.4 -> ~3 QP), B frames rise (pb_ratio; referenced B less). */
-/* Temporal-layer QP cascade for a B frame: deeper B's (nearer the leaves,
- * referenced by fewer or no frames) take a larger penalty. Depth 0 is the
- * flat-B case (bframes 1, no pyramid); the pyramid sets depth >= 1. Split out
- * of frame_qp so build_slice_prep can hand the same number to the frame
- * struct (lambda_casc) for the Y264_MB_LAMBDA=7 probe. */
 /* A6 (Y264_ABR_VBVOV, default 0.25; 0 disables): with a VBV the rate-factor
  * integrator's tolerance window is capped at this fraction of the buffer.
  * The plain-ABR window is 2 x tolerance x bitrate x sqrt(seconds elapsed),

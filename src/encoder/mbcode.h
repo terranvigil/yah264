@@ -75,23 +75,6 @@ typedef struct {
     int32_t n;            /* macroblocks summarised (0 = nothing populated it) */
 } y264_band_t;
 
-/* The row brake's per-picture state (see y264_frame_t.brk). */
-struct y264_rowbrake {
-    int8_t  *q;                 /* per MB row: QP offset, written when the row starts */
-    int      mode;              /* 1 = the rule, 9 = forced ramp (test pattern) */
-    int      K;                 /* rows of lag between a row and the rows it reads */
-    int      dmax;              /* largest offset */
-    int      hmb;
-    double   bud, pred;         /* the decide's VBV budget and predicted size, bits */
-    double   margin, arm;       /* fire past bud x (1 + margin), once the running
- * rate exceeds pred x arm */
-    const int64_t *est;         /* per row pass-1 estimate x256 (y264_frame_t.rb) */
-    _Atomic int done;           /* wavefront: rows fully analysed (rows finish in order) */
-    void    *pool;              /* kicked when `done` advances */
-    int    (*inner_ready)(void *ctx, int row);   /* the gate this one chains (staircase) */
-    void    *inner_ctx;
-};
-
 typedef struct {
     const pixel   *src[3];      /* MB-aligned source planes (Y, Cb, Cr) */
     int            src_stride[3];
@@ -298,9 +281,6 @@ typedef struct {
     const uint32_t *mbvar;
     const pixel *const *mbvar_src;
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
-    /* B temporal-cascade share of this frame's QP (frame_qp's casc term, after
- * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply. */
-    int lambda_casc;
     /* Per-MB lookahead (lowres, vs this frame's ref0/anchor) MV, quarter-pel, as
  * an integer-search seed. NULL when no lookahead ran. Indexed mby*wmb+mbx.
  * P-frame ref0 only: the current-frame motion seeded from the lowres MVs. */
@@ -418,15 +398,11 @@ typedef struct {
  * cell; row_gate stays as the blocking form for the serial fallback. Must
  * be monotonic per row (an atomic watermark read). */
     int  (*row_ready)(void *ctx, int mby);
-    /* Row-brake trace (Y264_VBV_ROWBRAKE_TRACE, item 3h step 1): per MB row,
+    /* Row trace (Y264_VBV_ROWBRAKE_TRACE): per MB row,
  * [0, hmb) the pass-1 entropy estimate (x256) and [hmb, 2 hmb) the bits the
  * emit actually wrote. Allocated per picture by the frame prep, printed and
  * freed with the emit job. NULL = off. */
     int64_t *rb;
-    /* Row-level VBV brake (item 3h): a per-row QP offset
- * added to the QP map, decided at the start of each row from coding-order
- * facts only. NULL = off. */
-    struct y264_rowbrake *brk;
     int    stair_clamp;
     /* Clamp this slice's LIST-0 searches against the references whose
  * POC is in this SET (the possibly-in-flight recent anchors). A set rather
@@ -527,6 +503,5 @@ double           y264_aq_gain(double mean, double sd, int bpath, int abr);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
 int              y264_rb_trace_on(void);
-int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm);
 
 #endif /* YAH264_MACROBLOCK_H */

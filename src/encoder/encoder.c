@@ -1154,12 +1154,13 @@ static void extend_borders(yah264_encoder_t *e, pixel *const planes[3])
                      Y264_CHROMA_BORDER);
 }
 
+/* Temporal-layer QP cascade for a B frame: deeper B's (nearer the leaves,
+ * referenced by fewer or no frames) take a larger penalty. Depth 0 is the
+ * flat-B case (bframes 1, no pyramid); the pyramid sets depth >= 1. */
 static int frame_b_casc(const yah264_encoder_t *e, int is_ref)
 {
     int d = e->cur_b_depth;
     int casc = d <= 0 ? (is_ref ? 1 : 3) : (is_ref ? d : d + 1);
-    if (crf_pb0_env() && (e->crf_on || e->abr_rf2) && e->mbtree_on)
-        casc = (int)lround(crf_pbscale_env() * casc);   /* B offset 0 under mb-tree; RF2 too (measurement) */
     casc = (int)lround(abr_pbrate_scale(e) * casc);
     return casc;
 }
@@ -2785,9 +2786,6 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.chroma_qp = fcqp;
     f.cur_qp = fqp;
     f.cur_chroma_qp = fcqp;
-    /* The cascade share of fqp, for the MB_LAMBDA=7 probe; 0 unless this is a
- * B whose frame_qp actually applied the cascade (2-pass sets QP directly). */
-    f.lambda_casc = (type == 2 && e->tp_pass < 2) ? frame_b_casc(e, is_ref) : 0;
     f.prev_qp = fqp;                /* mb_qp_delta chain starts at SliceQPY */
     f.last_qp_delta = 0;
     f.te_mbx = -1; f.te_mby = -1;   /* A6 src-texture memo: empty at frame start */
@@ -2982,23 +2980,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.row_done = NULL; f.row_done_ctx = NULL;
     f.row_gate = NULL; f.row_gate_ctx = NULL;
     f.row_ready = NULL;
-    f.brk = NULL;
-    {
-        int K, dmax;
-        double margin, arm;
-        int m = y264_rowbrake_cfg(&K, &dmax, &margin, &arm);
-        /* the rule reads the per-row estimate, so it keeps the trace array */
-        f.rb = (y264_rb_trace_on() || m == 1)
-             ? calloc((size_t)2 * f.hmb, sizeof(int64_t)) : NULL;
-        struct y264_rowbrake *b = m ? calloc(1, sizeof *b) : NULL;
-        if (b && (b->q = calloc((size_t)f.hmb, 1)) != NULL) {
-            b->mode = m; b->K = K; b->dmax = dmax; b->hmb = f.hmb;
-            b->margin = margin; b->arm = arm; b->est = f.rb;
-            b->bud = e->vbv_on && e->rcp_on ? e->rb_bud : 0.0;
-            b->pred = e->rb_pred;
-            f.brk = b;
-        } else free(b);
-    }
+    f.rb = y264_rb_trace_on() ? calloc((size_t)2 * f.hmb, sizeof(int64_t)) : NULL;
     /* The list-1 vertical clamp applies to every B that references the current
  * mini-GOP ANCHOR (poc_l1 == prev_anchor_poc), on EVERY code path (stair
  * driver, serial code_b_hier, fpipe pair) and at every thread count, purely
@@ -4254,7 +4236,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * (CLI primes on the main thread before workers) */
     (void)tprof_on();           /* profiling gate: warm before any bg thread reads it */
     y264_cabac_warm();          /* build the RDOQ bit table before any worker runs */
-    y264_deblock_warm();
     y264_cavlc_warm();          /* likewise the VLC tables */
     if (!param)
         return NULL;
@@ -10197,7 +10178,7 @@ static void warm_lr_statics(void)
     (void)stair_unsafe_no_prevpwait();
     (void)stq_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; }
-    (void)abr_qcomp_env(); (void)rcp_dbg_on(); (void)rb_walk_env();
+    (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)mbt_bref_probe();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)hw_env(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_vbvov_frac();
