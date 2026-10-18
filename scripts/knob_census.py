@@ -334,9 +334,9 @@ def generate(knobs, instr_doc):
         f.write("# The Y264_* knob census (generated -- edit "
                 "scripts/knob_census.py OVERRIDES, not this file)\n\n"
                 "Regenerate: `python3 scripts/knob_census.py`. CI check: "
-                "`--check`.\n\nTier meanings: **default** = shipped behaviour, "
+                "`--check`.\n\nTier meanings: **default** = shipped behavior, "
                 "the env is its escape; **instrument** = measurement machinery "
-                "(catalogued in docs/instruments.md when it has produced a "
+                "(cataloged in docs/instruments.md when it has produced a "
                 "result); **arm** = default-off gate still being priced. "
                 "A refuted arm is removed, with its verdict and the removing "
                 "commit recorded in the local refused index.\n")

@@ -46,7 +46,7 @@ time, measured from outside.
 | per-MB operation | yah264 medium | share of self-time |
 |---|---|---|
 | P integer ME | hex-to-convergence (32 iters cap) plus **UMH grid on 16x16 AND 16x8 x2 AND 8x16 x2**; every shape searched fresh from its own median | ME probe ~23% |
-| P subpel | 8-neighbour square **iterated to convergence**, hpel+qpel, every search | probe_sub ~10% |
+| P subpel | 8-neighbor square **iterated to convergence**, hpel+qpel, every search | probe_sub ~10% |
 | P RD encodes | 1-2 (16x16 insurance always admitted, `rd_admit_16` default-open) but **each runs Viterbi RDOQ and full chroma** | RDOQ ~12% |
 | trellis | inside **every** RD trial and intra trial | -- |
 | intra in P/B | `analyze_intra_g` **fully encodes i16** (fdct, RDOQ, recon, chroma, rate) on every MB; i4/i8 get only a 2x-margin early-out | intra ~625 samples |

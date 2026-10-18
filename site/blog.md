@@ -27,7 +27,7 @@ On the Mac, each range runs from the slowest group's median to the fastest's. Sp
 
 - A median 13% fewer bits for the same quality over 52 rate ladders on real titles.
 - 8-bit and 10-bit in one binary.
-- CRF, ABR, capped CRF and CBR, with VBV and HRD signalling.
+- CRF, ABR, capped CRF and CBR, with VBV and HRD signaling.
 - Presets from `ultrafast` to `placebo`.
 
 Every number is on the [results page](results.md). The page explains the method too. `make review` reruns a smaller HD board from the repository, so you can [check the results yourself](check-it-yourself.md).

@@ -247,7 +247,7 @@ anchor fold and B-frame AQ finally use the same metric. It is also a large CPU
 win, because the full-res 16x16 variance pass currently reruns per B per anchor
 per chain step.
 
-Frame sums, filled when a leg is analysed:
+Frame sums, filled when a leg is analyzed:
 
 ```
 sum_icost      = sum_i lr_icost(d_intra[i], lambda_lr)

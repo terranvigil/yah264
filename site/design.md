@@ -39,7 +39,7 @@ macroblock-tree data, which records how much later frames will depend on each
 Behind it, whole frames encode in parallel where the GOP structure allows. A GOP
 is the run of frames from one keyframe to the next. Inside a frame the rows move
 as a wavefront: a row starts once the row above it is far enough ahead to supply
-the neighbouring blocks it needs. One lock-free pool feeds both kinds of work.
+the neighboring blocks it needs. One lock-free pool feeds both kinds of work.
 
 At `--threads 1`, two runs of the same encode produce the same bytes. We test
 that. With more threads they may not, across runs or across thread counts.
@@ -57,7 +57,7 @@ is 352 by 288 pixels, so its wavefront runs out of independent rows quickly. A
 So the thread count is picked in two steps. Auto takes the smaller of the core
 count and 16. Then the picture caps it: 12 threads for CIF, 21 for 720p, 32 for
 1080p. Under auto only the CIF cap ever bites. The others apply when a caller
-asks for a count, which we honour and then clamp.
+asks for a count, which we honor and then clamp.
 
 Nobody measured a knee at 16. It's a default that's safe on an unknown machine,
 because wavefront scaling hits the picture's critical path, the longest chain of
@@ -127,7 +127,7 @@ cheapest wins. Encoders differ in three places:
 - where the search may stop early.
 
 Motion estimation looks for where a block came from in an earlier picture. The
-search starts from a guess built from the neighbouring blocks' vectors and walks
+search starts from a guess built from the neighboring blocks' vectors and walks
 a diamond, hexagon or uneven multi-hexagon pattern, depending on the preset.
 Subpixel refinement then tests positions between whole pixels, as far as the
 preset allows. Full trellis RDOQ runs over both transform sizes and picks each

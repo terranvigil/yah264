@@ -145,7 +145,7 @@ merged together where NEON takes one.
 
 **Multiply and add.** ARM's dot-product instruction multiplies sixteen byte
 pairs and sums them into four lanes in one step. x86 has a byte multiply-add
-that pairs neighbours instead, which suits filters. Neither is a superset of
+that pairs neighbors instead, which suits filters. Neither is a superset of
 the other.
 
 **Alignment.** Both families load from any address now, though older x86 tiers

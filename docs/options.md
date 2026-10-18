@@ -104,7 +104,7 @@ as something else.
 | `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
 | `--input-csp` | `i420`\|`i422`\|`i444`, each with an optional `p10` | `i420` | Raw input chroma format **and sample depth**. A raw file has no Y4M `C` tag. That tag carries the depth beside the format, so the depth travels with the format here too: `--input-csp i420p10`. That is why there is no `--input-depth`. |
 | `--fps` | `N`, `N/D` or a decimal | 25 | Raw input frame rate. `--fps 23.976` is read as 23976/1000. |
-| `--input-range` | `full`\|`limited` | not signalled | VUI color range for raw input. It is the same field `--range` sets. |
+| `--input-range` | `full`\|`limited` | not signaled | VUI color range for raw input. It is the same field `--range` sets. |
 | `--frames` | N | 0 = all | Stop after N input frames. |
 | `--seek` | N | 0 | Drop the first N input frames. Seeks where the input allows it and reads-and-discards where it does not, so a pipe still works. |
 | `--crop-rect` | `L,T,R,B` | off | Crop the input before encoding, in luma samples. The offsets must land on a chroma sample and the result must be even in both axes. Anything else is refused, not rounded. |
@@ -114,9 +114,9 @@ as something else.
 | `--no-progress` | | | No progress line. It only appears when stderr is a terminal, so a gate or a redirect never sees one either way. |
 | `--output-depth` | 8 or 10 | the input's | Which of the two encoder libraries codes the stream. 10 on 8-bit input upshifts each sample by 2 and writes High 10. 8 on 10-bit input is refused, not rounded. |
 | `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below). An explicit `--threads` above 1 is warned about rather than dropped. |
-| `--range` | `full` or `limited` | not signalled | VUI color range. The Y4M `XCOLORRANGE` tag sets it on its own. |
-| `--colorprim`, `--transfer`, `--colormatrix` | H.273 code or a name (`bt709`, `bt2020`, `bt601`, `smpte170m`, `bt470bg`, `srgb`, `smpte2084`, `arib-std-b67`) | not signalled | VUI color description. Signaling only: nothing in the encoder changes with them. |
-| `--chromaloc` | 0..5 | not signalled | VUI chroma sample location. |
+| `--range` | `full` or `limited` | not signaled | VUI color range. The Y4M `XCOLORRANGE` tag sets it on its own. |
+| `--colorprim`, `--transfer`, `--colormatrix` | H.273 code or a name (`bt709`, `bt2020`, `bt601`, `smpte170m`, `bt470bg`, `srgb`, `smpte2084`, `arib-std-b67`) | not signaled | VUI color description. Signaling only: nothing in the encoder changes with them. |
+| `--chromaloc` | 0..5 | not signaled | VUI chroma sample location. |
 | `--version` | | | Print version, exit. |
 | `-h`, `--help` | | | Print usage, exit. `--longhelp` and `--fullhelp` print the same list, since it already names every flag. |
 
@@ -139,12 +139,12 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
-| `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level centre on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
+| `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
 | `--abr-model` | `default`, `rf` | `default` | ABR bit allocation. `rf` (spelled `x264` in older scripts, still accepted) spends a given bitrate markedly better and hits it less reliably. See below. |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
 | `--ipratio`, `--pbratio` | float | 1.4, 1.3 | **Two-pass only.** The I-to-P and P-to-B qscale factors of the offline allocator. They keep x264's names, numbers and defaults. The single-pass modes anchor I and B their own way and never read these. |
-| `--cplxblur` | | 20 | **Two-pass only.** Width of the planner's complexity blur: a gaussian over neighbouring frames' costs with sigma `--cplxblur`/2 frames. 0 turns it off. `--qblur` is accepted for compatibility and ignored, with a warning: the planner has no quantiser blur. |
+| `--cplxblur` | | 20 | **Two-pass only.** Width of the planner's complexity blur: a gaussian over neighboring frames' costs with sigma `--cplxblur`/2 frames. 0 turns it off. `--qblur` is accepted for compatibility and ignored, with a warning: the planner has no quantiser blur. |
 
 ### `--crf-max` buys quality with the buffer model
 
@@ -831,7 +831,7 @@ parallelism, not encoder speed.
 | `--pic-struct` | | off | VUI `pic_struct_present_flag` plus a `pic_timing` SEI per picture. A frame picture writes 0. Under `--tff`/`--bff` each field writes its own parity, 1 for a top field and 2 for a bottom one. |
 | `--nal-hrd` | `none`\|`vbr`\|`cbr` | `none` | Write the buffer model into the stream: `hrd_parameters` in the VUI, a `buffering_period` SEI at every IDR, a `pic_timing` SEI carrying `cpb_removal_delay` and `dpb_output_delay` on every picture. **Needs `--vbv-maxrate` and `--vbv-bufsize`**, and a frame rate. Refused without them. `vbr` declares a schedule the channel may pause on and moves no sample and no slice bit. `cbr` declares a channel that never pauses, so every access unit is padded up to the rate with filler. See [rate-control.md](rate-control.md#what-vbv-actually-guarantees). |
 | `--filler` / `--no-filler` | | follows `--nal-hrd` | Pad access units to the constant rate with filler NAL units (type 12). On under `--nal-hrd cbr` and refused anywhere else, because padding to a constant rate only means something where a constant rate is declared. `--no-filler` under `cbr` gives the CBR headers over an unpadded stream, whose buffer a conforming decoder may overflow. It is the negative control, not a shipping mode. |
-| `--frame-packing` | 0..7 | off | `frame_packing_arrangement` SEI: 0 checkerboard, 1 column, 2 row, 3 side-by-side, 4 top-bottom, 5 frame alternation, 6 2D, 7 tile. Written once, "until cancelled". |
+| `--frame-packing` | 0..7 | off | `frame_packing_arrangement` SEI: 0 checkerboard, 1 column, 2 row, 3 side-by-side, 4 top-bottom, 5 frame alternation, 6 2D, 7 tile. Written once, "until canceled". |
 | `--cll` | `MAX,AVG` | off | Content light level SEI (MaxCLL, MaxFALL) in cd/m^2. |
 | `--mastering-display` | `G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)` | off | Mastering display color volume SEI. Chromaticity in 0.00002 units, luminance in 0.0001 cd/m^2. **G, B, R is the spec's order**, not the R, G, B a person writes. |
 | `--alternative-transfer` | H.273 code or a `--transfer` name | off | `alternative_transfer_characteristics` SEI: the transfer a display should prefer over the VUI's. |

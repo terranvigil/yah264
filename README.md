@@ -28,7 +28,7 @@ We are making use of agentic tools to assist with design-space exploration. We t
 
 ## Status
 
-yah264 has met and surprised speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
+yah264 has met and surpassed speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
 
 | goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
@@ -82,7 +82,7 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice; the open item is speed with every core busy. There we still trail x264 on some clips ([x86-plan.md](docs/x86-plan.md)).
 
-A few x264 options are still to build, such as custom quant matrices and exhaustive motion search ([x264-parity-plan.md](docs/x264-parity-plan.md)). After that come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+Every x264 option is now built or deliberately left out, with the reasons in [x264-parity-plan.md](docs/x264-parity-plan.md). Next come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 

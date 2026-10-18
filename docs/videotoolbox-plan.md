@@ -182,7 +182,7 @@ still move QP inside a frame.
   went in.
 - Flush at end of stream, and propagate the callback's error status.
 - Per-frame options: ForceKeyFrame from our scene-cut when step 0 item 4 says
-  yes. Base QP hint only after the probe says the H.264 path honours it.
+  yes. Base QP hint only after the probe says the H.264 path honors it.
 
 ## Step 3: the option map
 
@@ -211,7 +211,7 @@ hardware has, warned once; "no" = ignored with a warning if set explicitly;
 | --tune zerolatency | RealTime + AllowFrameReordering off + MaxFrameDelayCount 0 | approx | other tunes: no |
 | --sar | PixelAspectRatio | maps | |
 | fps from y4m | ExpectedFrameRate | maps | |
-| colour primaries / transfer / matrix | Color* keys | maps | when we carry them |
+| color primaries / transfer / matrix | Color* keys | maps | when we carry them |
 | --threads | ignored | silent or warn | step 0 |
 | --aq-strength, --psy-rd, --psy-trellis, --trellis, --deadzone-*, --cqm | none | no | |
 | --me, --merange, --subme, --subpel | none | no | |
