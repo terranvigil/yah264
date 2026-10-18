@@ -89,7 +89,7 @@ DEFAULT_OVERRIDES = {
     "Y264_TRELLIS_LAMBDA": "256,150,28,38",
     "Y264_DCTDEC_T4": "table", "Y264_DCTDEC_T8": "table", "Y264_DCTDEC_TAB4": "table",
     "Y264_AQ_ANCHOR": "= aq_anchor_default()",
-    "Y264_AQ_DC": "= rate mode: 1.3 CRF, 1.04 bitrate target",
+    "Y264_AQ_DC": "= rate mode: 1.3 uncapped CRF, 1.04 capped CRF or bitrate target",
     "Y264_AQ_BPULL": "1.3",              # 0 wherever the absolute anchor is off
     "Y264_CRF_PBSCALE": "1.0",
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool

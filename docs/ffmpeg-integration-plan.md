@@ -98,7 +98,7 @@ take the commercial license instead.
 
 The wrapper itself sits inside `libavcodec` and would be LGPL. It therefore
 cannot live in this repository. It is a patch against ffmpeg, and both
-`CONTRIBUTING.md` rule 6 and `scripts/hygiene_check.sh` refuse checked-in
+`scripts/hygiene_check.sh` refuses checked-in
 patches. It gets its own repository, the way the shared GPU library does.
 
 There are two destinations. They are not exclusive:

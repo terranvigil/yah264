@@ -43,6 +43,11 @@ test_api = executable('test_api',
   dependencies : yah264_dep)
 test('api', test_api)
 
+test_aqdc = executable('test_aqdc',
+  'test_aqdc.c',
+  dependencies : yah264_dep)
+test('aqdc', test_aqdc)
+
 test_denoise = executable('test_denoise',
   'test_denoise.c',
   dependencies : yah264_dep)
