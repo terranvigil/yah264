@@ -113,8 +113,8 @@ Four tunes come with a caveat:
 - `stillimage` borrows x264's constants for that tune. We haven't measured them,
   because there's no still-image clip to measure them on.
 - `fastdecode` turns off deblocking, CABAC and weighted biprediction. That's a
-  real quality loss, on purpose. Explicit P weighted prediction belongs in that
-  set too but can't be turned off yet.
+  real quality loss, on purpose. It also sets `--weightp 0`, so explicit P
+  weighted prediction is off too.
 
 ## Other flags
 
@@ -292,7 +292,7 @@ is the full list, with the reason for each line.
 ## The full option list
 
 `yah264 --help` prints every flag with its default. Beyond that there are about
-350 `Y264_*` environment knobs. They're research instruments and change between
+440 `Y264_*` environment knobs. They're research instruments and change between
 commits without notice.
 [knob_census.py](https://github.com/terranvigil/yah264/blob/main/scripts/knob_census.py)
 generates the catalog in

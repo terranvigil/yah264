@@ -30,7 +30,7 @@ below. The census below finds that, so the program is complete.
 | `--lookahead-threads`, `--mvrange-thread` | absorbed | One thread budget covers both. |
 | `--input-depth` | automatic | The library is picked from the input's own format tag. |
 | `--cqm8ic`, `--cqm8pc` | no seat | The 4:4:4 chroma 8x8 lists. 4:4:4 never picks the 8x8 transform here, so they would be read by nothing. |
-| `--bluray-compat` | refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, strict B-pyramid, access-unit delimiters, picture structure) are each available on their own. |
+| `--bluray-compat` | refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, access-unit delimiters, picture structure) are each available on their own, except the strict B-pyramid, which is refused. |
 | `--slice-max-size`, `--slice-max-mbs`, `--slice-min-mbs`, `--slices-max` | refused | Packet-sized slices only matter for RTP-style delivery, which isn't a target. `--slices N` covers the count form. |
 | `--asm` | refused | `--no-asm` and `Y264_SIMD_FORCE` cover testing. Every kernel already matches its C reference. |
 | `--avcintra-flavor` | refused | It picks the vendor variant of `--avcintra-class`, which is refused. |

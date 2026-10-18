@@ -44,7 +44,8 @@ place, without coding anything. `--cut-split` puts a keyframe on every cut, so
 each shot is coded as its own unit and every cut is a clean seek point.
 `--shot-table` prints each shot's frame range and costs as JSON.
 
-Both need the whole input, so they work on a file and do nothing on a pipe.
+Both need the whole input. A file is read twice, once to scan and once to encode.
+A pipe can't be, so it is held in memory up to the limit, past which the encode is refused.
 Cut-aware long-form encoding from a stream would need two passes: an analysis
 pass, then an encode that reads its plan.
 

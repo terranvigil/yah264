@@ -32,7 +32,7 @@ Pipeline stages, each a thread-pool consumer connected by queues:
 
 Frame-level parallelism across this pipeline serves throughput. A segment-based mode serves low latency, and slice threading with intra-refresh serves the zerolatency tune.
 
-Kernel layer: every hot function (SAD, SATD, subpel filters, transforms, quant, deblock, CABAC bit ops where possible) has a C reference and asm variants selected by dispatch table. Tiers: SSE2 baseline, SSSE3/SSE4.1, AVX2 primary, AVX-512 first-class (Zen 4/5 changed the throttling story), NEON+dotprod from the start. VNNI for SAD/SATD is a profiling-driven experiment and not a commitment. The core has no GPU offload, because the x264 OpenCL record argues against it. (A hardware encode mode, `--hw videotoolbox`, exists as a separate backend. It replaces the core instead of offloading part of it: docs/videotoolbox-plan.md.)
+Kernel layer: every hot function (SAD, SATD, subpel filters, transforms, quant, deblock, CABAC bit ops where possible) has a C reference and SIMD variants selected by dispatch table. (Superseded: the shipped kernels are intrinsics, the x86-64 floor is SSE4.2, and AVX-512 covers the pixel-comparison kernels; see the phase 5 status.) Planned tiers: SSE2 baseline, SSSE3/SSE4.1, AVX2 primary, AVX-512 first-class (Zen 4/5 changed the throttling story), NEON+dotprod from the start. VNNI for SAD/SATD is a profiling-driven experiment and not a commitment. The core has no GPU offload, because the x264 OpenCL record argues against it. (A hardware encode mode, `--hw videotoolbox`, exists as a separate backend. It replaces the core instead of offloading part of it: docs/videotoolbox-plan.md.)
 
 ## Phases
 

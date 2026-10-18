@@ -14,7 +14,9 @@ is half the program.
 medium at one pinned matched operating point, each with four legs: median
 wall <= 1.00x, worst clip < 1.15x, quality within 0.5 dVMAF, size within
 1.0%. Goal 1 pure C single thread, goal 2 pure C multi-thread, goal 3 as
-shipped (NEON) multi-thread. Read 2026-09-05: G1 0.92x / 1.15x, G2 0.84x /
+shipped (NEON) multi-thread. Full parity has since been reached on every
+resolution and length; site/results.md has the current tables. The first
+board read G1 0.92x / 1.15x, G2 0.84x /
 1.08x, G3 0.96x / 1.15x, dVMAF +0.22, dsize +0.1%. Quality against x264 on
 the CRF band: CIF -5.7%, 720p -14%, 1080p +0.4%; deep band (VMAF-NEG 55-83)
 9/10 clips, median about -12%.

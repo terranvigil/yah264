@@ -205,8 +205,7 @@ multi-shot sequences have no parity-report reading yet.
 
 ### Reading the tables
 
-Every figure here comes from one Apple M5 Max with 18 cores. We will add other
-CPUs and instruction sets as we support them. Each cell is the median of three
+Every figure here comes from one Apple M5 Max with 18 cores. Each cell is the median of three
 interleaved samples. A board repeated on the same machine still moves its
 ratios, so small differences in these tables are not readings. A goal
 is four metrics. A fifth reads underneath them as a floor.
@@ -235,12 +234,12 @@ The floor passes and the debt list is empty.
 ## CRF versus ABR
 
 Ask an encoder for a quality level. It gives you whatever bitrate that takes.
-That is CRF. The table at the top of this page reads it. Ask for a bitrate
+That is CRF. Ask for a bitrate
 instead. You get whatever quality that buys. That is ABR. No goal is set
 against the ABR table.
 
-**ABR, matched achieved bitrate.** Superseded, because samsung still holds the
-720p slot. A quiet re-read will replace it.
+**ABR, matched achieved bitrate**, on the earlier ten-clip board, before
+parity. The parity tables at the top of this page cover capped VBR instead.
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
@@ -264,8 +263,8 @@ clips. The ABR columns come from the superseded table above.
 | 2 | 0.78x | 0.86x | 1.00x | 0.90x | 0.87x | 1.04x |
 | 3 | 0.92x | 0.99x | 1.10x | 1.07x | 1.02x | 1.18x |
 
-Bitrate orders these rows. Resolution doesn't. The slow cells are the
-low-bitrate HD ones, and the fastest on the board are the high-bitrate 1080p
+Bitrate orders these rows. Resolution doesn't. On that board the slow cells were
+the low-bitrate HD ones, and the fastest were the high-bitrate 1080p
 ones. The 1080p column reads high because two of its three clips are
 low-bitrate.
 
@@ -380,13 +379,13 @@ column. Ducks and riverbed are the exceptions.
 
 | encoder | quality (VMAF) | pure-C 1-thread | pure-C MT | SIMD MT | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| yah264 | +0.22 | 0.92x | **0.84x** | 0.96x | +0.0% | this repo, ten-clip board |
+| yah264 | +0.22 | 0.92x | **0.84x** | 0.96x | +0.0% | this repo, earlier ten-clip board, before parity |
 | x264 | ref | 1.00x | 1.00x | 1.00x | ref | the reference point |
 | openh264 | -14.2 | 0.15x | 0.98x | withdrawn | +4.1% | a different design point |
 
 openh264 beats x264 single-threaded because it does far less work per frame.
 It pays about 14 VMAF points for that at the same bitrate. Read the speed
-and the quality columns as one row. The yah264 row is the goal table above. The
+and the quality columns as one row. The yah264 row is the earlier ten-clip board. The
 openh264 row runs Cisco's encoder over the same ten clips and bitrates at its
 own defaults, with frame skipping off so both encoders code every frame. Speed
 is wall time against x264 in the same three builds. Quality and size are
@@ -420,7 +419,7 @@ against the 0.98x beside it. An earlier five-clip BD-rate with B-frames off on
 x264 read +63.7%. That figure is in our local records and was not re-measured
 here. Its
 gap against x264 comes from a different measurement again, so the two do not
-subtract to the +0.22 in the board table at the top of this page.
+subtract to the +0.22 in the yah264 row above.
 
 ## Across shots
 
@@ -443,8 +442,8 @@ yah264 spends more bits at equal quality.
 Taken one at a time, the same clips are ahead of x264 on two of the three
 sizes. So the whole swing came from allocation across shots. Coding efficiency
 wasn't the cause. The fix puts the frame-mean part of adaptive quantization on
-the frame's base QP at full strength, on every input path including streaming. The
-single-shot tables above did not move. `--shot-crf` goes further on file input
+the frame's base QP, on every input path including streaming. Its strength is
+1.3 under CRF and 1.04 under a bitrate target. The single-shot board did not move. `--shot-crf` goes further on file input
 by sizing each shot against the whole title. Four CRF points fitted with a
 cubic is thinner than the five-point sweeps our own rule asks for. Read the
 table for the direction and rough size of the effect. Reproduce it with:
@@ -461,7 +460,7 @@ median and +0.9% at worst.
 
 ## The corpus
 
-The ten clips in the goal tables are natural video. All of them come from
+The ten clips of the earlier board are natural video. All of them come from
 Xiph's public test collection, 8-bit 4:2:0 at native resolution. The rate is
 the ABR target each clip is coded at on the board.
 
@@ -497,6 +496,6 @@ has the measurements and the preset-ladder rows. That spread is also why a
 preset-for-preset speed comparison stops meaning much once content leaves the
 set the presets were tuned on.
 
-The numbers: on 3D CGI we run 25% ahead of x264 at 1.34x the time. Held at
-equal quality there, our `veryfast` reaches x264 medium at 1.07x for a fifth
-fewer bits. On hand-drawn 2D we run 8% behind.
+The numbers, read before parity: on 3D CGI we ran 25% ahead of x264 at 1.34x the time. Held at
+equal quality there, our `veryfast` reached x264 medium at 1.07x for a fifth
+fewer bits. On hand-drawn 2D we ran 8% behind.

@@ -64,7 +64,8 @@ because wavefront scaling hits the picture's critical path, the longest chain of
 work that has to run in order, well before it runs out of cores. On a chip with
 two kinds of core, the last workers land on the slow ones and lengthen that
 chain. The one measurement behind the default is at CIF, where 18 threads read
-6 to 11% worse than 8. We haven't measured a machine with more than 18 cores.
+6 to 11% worse than 8. Runs on rented 32- and 96-vCPU machines are on the
+[results page](results.md#by-processor).
 
 The [interactive threading page](threading.html) walks through the model with
 live diagrams.
@@ -105,7 +106,8 @@ counts aren't one ratio.
 Across shots, the base quantizer under CRF is flat per frame type and moves with
 the frame mean of the per-macroblock offsets. That mean holds the
 macroblock-tree boost and the adaptive quantization's energy term. We apply the
-energy term's frame mean at full strength on the anchor frame's base QP. B
+energy term's frame mean on the anchor frame's base QP, scaled by 1.3 under CRF
+and 1.04 under a bitrate target. B
 frames predict from an earlier and a later picture, so they inherit the shift
 through the offsets under the anchor. A busy shot then codes a little cheaper and a quiet one a little better. The
 term's within-frame part keeps the gentler strength that won on single-shot
@@ -146,7 +148,7 @@ how far each pixel ends up from the source. `--tune psnr` turns the term off.
 SIMD instructions do the same arithmetic on many pixels at once. We write them
 as intrinsics, C functions that map one for one onto the instructions, rather
 than hand assembly. The cost is that the compiler schedules instructions and
-allocates registers. That's where x264's assembly still wins. Every kernel
+allocates registers, which is where hand assembly can still win a kernel. Every kernel
 is checked against the plain C version of the same routine and benchmarked
 through checkasm.
 

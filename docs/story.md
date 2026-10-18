@@ -30,14 +30,14 @@ Match x264, then beat it. In that order, and in layers:
    third-generation techniques that a single-clip encoder can't reach.
 
 The north star is to **be the fastest open-source H.264 encoder, at equal or
-better quality.** It's measurable. It's also a goal, not a claim about today.
+better quality.** It's measurable, and on the Apple M5 Max it's now a measured result.
 
-On a ten-clip board measured 2026-09-02, multi-threaded pure C runs at 0.84x of
-x264's time. The shipped NEON build runs at 0.95x and single-threaded pure C at
-0.97x, with quality 0.2 to 0.3 VMAF ahead at the same size. Compression depends
-on the rate. At low bitrates we lead on 9 of 10 clips by around 12% BD-rate, and
-the lead fades to nothing at the top of the range. The open item is low-bitrate
-HD, where the worst clip runs 1.16 to 1.18x. The rest of this document says which
+On the first ten-clip board, multi-threaded pure C ran at 0.84x of
+x264's time. The shipped NEON build ran at 0.95x and single-threaded pure C at
+0.97x, with quality 0.2 to 0.3 VMAF ahead at the same size. Compression depended
+on the rate. At low bitrates we led on 9 of 10 clips by around 12% BD-rate, and
+the lead faded to nothing at the top of the range. The open item then was
+low-bitrate HD, where the worst clip ran 1.16 to 1.18x. The rest of this document says which
 line each piece sits on.
 
 Since then yah264 has reached parity with x264: faster at the same
