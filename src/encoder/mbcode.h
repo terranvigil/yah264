@@ -32,7 +32,7 @@ static inline int y264_size_class(int w, int h)
  * Plus one for the IMMEDIATE predecessor's REFERENCE B, which a deep list 0
  * reaches ahead of both anchors (it is coded after its anchor, so it outranks
  * them on FrameNum). Only the immediate predecessor's, not every live burst's --
- * see the row-gate reasoning in encoder.c's stair_refbgate_on.
+ * see the row-gate reasoning at encoder.c's stair_refbgate_elig.
  *
  * The set is therefore not "newest-first" in any meaningful sense -- a
  * reference B is NEWER than its own anchor -- and it is PACKED, which is the
@@ -74,23 +74,6 @@ typedef struct {
     int32_t prop_frac;    /* x256 share of the band whose mb-tree offset is negative */
     int32_t n;            /* macroblocks summarised (0 = nothing populated it) */
 } y264_band_t;
-
-/* The row brake's per-picture state (see y264_frame_t.brk). */
-struct y264_rowbrake {
-    int8_t  *q;                 /* per MB row: QP offset, written when the row starts */
-    int      mode;              /* Y264_VBV_ROWBRAKE: 9 = forced ramp (test pattern) */
-    int      K;                 /* rows of lag between a row and the rows it reads */
-    int      dmax;              /* largest offset */
-    int      hmb;
-    double   bud, pred;         /* the decide's VBV budget and predicted size, bits */
-    double   margin, arm;       /* fire past bud x (1 + margin), once the running
- * rate exceeds pred x arm */
-    const int64_t *est;         /* per row pass-1 estimate x256 (y264_frame_t.rb) */
-    _Atomic int done;           /* wavefront: rows fully analysed (rows finish in order) */
-    void    *pool;              /* kicked when `done` advances */
-    int    (*inner_ready)(void *ctx, int row);   /* the gate this one chains (staircase) */
-    void    *inner_ctx;
-};
 
 typedef struct {
     const pixel   *src[3];      /* MB-aligned source planes (Y, Cb, Cr) */
@@ -225,7 +208,6 @@ typedef struct {
  * which partition shapes this picture's mode decision
  * may try. Read per macroblock, never re-derived. */
     int slice_is_ref;           /* this picture is a reference (nal_ref_idc>0) */
-    int mbt_frac;               /* mbtree_off is in HALF-QP units (Y264_MBT_FRAC) */
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
  * commit (our default),
  * 2 = in every RD trial. */
@@ -298,11 +280,6 @@ typedef struct {
     const uint32_t *mbvar;
     const pixel *const *mbvar_src;
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
-    /* B temporal-cascade share of this frame's QP (frame_qp's casc term, after
- * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply.
- * Read only by Y264_MB_LAMBDA=7: decide non-ref-B modes/motion at the
- * anchor-grade lambda (cur_qp - lambda_casc) while quantising at cur_qp. */
-    int lambda_casc;
     /* Per-MB lookahead (lowres, vs this frame's ref0/anchor) MV, quarter-pel, as
  * an integer-search seed. NULL when no lookahead ran. Indexed mby*wmb+mbx.
  * P-frame ref0 only: the current-frame motion seeded from the lowres MVs. */
@@ -315,8 +292,6 @@ typedef struct {
     /* Measurement only (Y264_BLATE_STAT): the pair legs' lowres costs (l0 / l1
  * d_inter, own d_intra), unscaled lowres SATD units. NULL when absent. */
     int32_t *lr_bseed_c0, *lr_bseed_c1, *lr_bseed_ci;
-    int me_cheap;               /* content-adaptive ME: 1 = low-motion frame, run
- * cheap searches (no UMH, capped subpel) */
     uint8_t *mbqp;              /* per-MB coded luma QP, for the deblock pass */
     uint8_t *mb_tr8;            /* per-MB: 1 if the 8x8 luma transform was used */
     float aq_strength;          /* variance-AQ strength (0 = off) */
@@ -324,11 +299,11 @@ typedef struct {
     float aq_pull;              /* how far aq_analyze's centre moves from the frame mean to aq_anchor */
     float aq_anchor;            /* the absolute AQ anchor, in log2(variance + 1) */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
-    int   psy4k;                /* Y264_PSY4K arm bits, nonzero only on the 2160p size tier */
+    int   psy4k;                /* the 2160p tier's cheaper psy-RD form (pre-ME skip bound) */
     int   size_class;           /* y264_size_class of the picture */
-    int   uhdlite;              /* Y264_UHD_LITE on the 2160p size tier: tighter P and B intra admission */
+    int   uhdlite;              /* the 2160p size tier's tighter P and B intra admission */
     int stq;                    /* single-thread quality mode: at wf_width==1 the
- * speed trades (ME_ET family, PART early-term)
+ * speed trades (ME early-out family, PART early-term)
  * disengage -- single-thread has the speed margin
  * and needs the quality. Thread-variant output by
  * policy; t2+ byte-identical. */
@@ -420,15 +395,11 @@ typedef struct {
  * cell; row_gate stays as the blocking form for the serial fallback. Must
  * be monotonic per row (an atomic watermark read). */
     int  (*row_ready)(void *ctx, int mby);
-    /* Row-brake trace (Y264_VBV_ROWBRAKE_TRACE, item 3h step 1): per MB row,
+    /* Row trace (Y264_VBV_ROWBRAKE_TRACE): per MB row,
  * [0, hmb) the pass-1 entropy estimate (x256) and [hmb, 2 hmb) the bits the
  * emit actually wrote. Allocated per picture by the frame prep, printed and
  * freed with the emit job. NULL = off. */
     int64_t *rb;
-    /* Row-level VBV brake (Y264_VBV_ROWBRAKE, item 3h): a per-row QP offset
- * added to the QP map, decided at the start of each row from coding-order
- * facts only. NULL = off. */
-    struct y264_rowbrake *brk;
     int    stair_clamp;
     /* Clamp this slice's LIST-0 searches against the references whose
  * POC is in this SET (the possibly-in-flight recent anchors). A set rather
@@ -529,6 +500,5 @@ double           y264_aq_gain(double mean, double sd, int bpath, int abr);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
 int              y264_rb_trace_on(void);
-int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm);
 
 #endif /* YAH264_MACROBLOCK_H */

@@ -400,8 +400,7 @@ typedef struct {
  * independent of subme): -1 = auto (8-neighbour square
  * iterated to convergence, the max-quality default),
  * 1 = 4-point diamond, 2 = capped diamond (the capped
- * subme-7 tier, cheapest). Presets set this; Y264_SUBPEL env
- * overrides. */
+ * subme-7 tier, cheapest). Presets set this. */
     int me_method;          /* ME search method (the --me option), decoupled from
  * --preset: YAH264_ME_AUTO follows subme (hex at
  * medium/fast, UMH at slow+), else _DIA/_HEX/_UMH.
@@ -495,8 +494,8 @@ typedef struct {
         int bitrate;        /* target bitrate in kbit/s (_ABR) */
         /* ABR allocation model (_ABR only), default 0 = the shipped one:
  * since 2026-09-02 the CRF path plus a rate factor (the single-pass
- * design the reference encoder documents for mb-tree; Y264_ABR_RF2=0 selects the older per-frame
- * complexity model). 1 selects the earlier rate-factor experiment
+ * design the reference encoder documents for mb-tree; without mb-tree it
+ * falls back to the older per-frame complexity model). 1 selects the earlier rate-factor experiment
  * described below, kept for measurement.
  *
  * 1 selects a self-normalising rate factor for P, with I and B
@@ -784,8 +783,7 @@ typedef struct {
  * fires, codes the chosen reference TWICE -- once plain, once carrying the
  * weight -- so the mode decision picks weighted or plain per macroblock
  * instead of per frame. The duplicate needs a list-0 slot to sit in, so it
- * is refused at `ref` 1, and it is refused with field coding. Y264_WEIGHTP
- * still overrides it. */
+ * is refused at `ref` 1, and it is refused with field coding. */
     int weightp;
 
     /* Periodic intra refresh (--intra-refresh). 1 = no keyframe after the
@@ -1094,7 +1092,7 @@ YAH264_EXPORT int yah264_encoder_frame_stats(yah264_encoder_t *enc, yah264_frame
 
 YAH264_EXPORT int yah264_frame_thread_cap(int width, int height);
 
-/* What param.threads = 0 resolves to on this machine: every online core, cached.
+/* What param.threads = 0 resolves to on this machine: the online cores, at most 16.
  * Exported so a caller splitting work across several encoder instances sizes its
  * budget from the same number the library would have used, instead of asking the
  * OS separately and drifting. Clamp per instance with yah264_frame_thread_cap:

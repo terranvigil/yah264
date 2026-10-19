@@ -51,7 +51,7 @@ typedef struct y264_lr_blk {
  *
  * That 559/433 measurement moved THREE gates at once, so it prices them
  * jointly and attributes nothing to any one. The lookahead lead is separated
- * out (la_pool_min): a pool of 2 running its own lookahead thread measures
+ * out (LA_POOL_MIN in encoder.c): a pool of 2 running its own lookahead thread measures
  * -3.8% to -5.4%, so "a dedicated thread is pure overhead" is false for the
  * lead. It may still be true for the other two; nobody has separated those.
  *
@@ -182,10 +182,9 @@ struct rc_buffer {
     double fill;
 };
 
-/* The rate-control tunables that used to be read with getenv on every decide
- * (calibration knobs swept without a rebuild). rc_knobs_resolve fills them
- * once at open, so no decide path calls getenv. The *_set flags mark a knob
- * whose default is another encoder field (qp_step, crf_qcomp). */
+/* The rate-control calibration constants, and the few tunables still read
+ * from the environment. rc_knobs_resolve fills them once at open, so no
+ * decide path calls getenv. */
 struct rc_knobs {
     double abr_pbf;
     double rfm_slew;            /* the ledger QP's slew per anchor, x qp_step */
@@ -202,22 +201,14 @@ struct rc_knobs {
     double vbv_posti_raise, vbv_posti_n;  /* CRF+VBV: an intra raised this far sends the next n anchors serial */
     double vbv_cbr_dive;        /* CBR: rate factor this far under the bits model's QP regime -> serial burst */
     double vbv_fill_frac, vbv_fill_h, vbv_fill_hup, vbv_fill_min;  /* CRF+VBV fill target, horizon below / above it, floor */
-    double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;
-    int    vbv_plan_pred;      /* Y264_VBV_PLAN_PRED: 2 = the burst plan prices at per-type scales with no shock, 1 = keeps the shock, 0 = the fit test's margins */
-    int    abr_dc;             /* Y264_ABR_DC: 1 = ABR and capped VBR take the absolute AQ anchor and frame DC, 2 = CBR too */
-    double abr_vbvov_vbr;      /* Y264_ABR_VBVOV_VBR: capped VBR's window, as a fraction of the buffer (0 = none) */
-    double rf2_iacc;
-    double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
-    int    rf2_floorfb;         /* Y264_ABR_RF2_FLOORFB: under-floor fit -> resolution seed */
+    double abr_vbvov_vbr;      /* capped VBR's overflow window, as a fraction of the buffer */
+    double rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
-    double vbv_entry_opt;      /* Y264_VBV_ENTRY_OPT: the occupancy a joined instance plans from, as a fraction of the buffer (0 = the handoff level) */
-    double vbv_entry_rsv;      /* Y264_VBV_ENTRY_RSV: what an intra frame leaves of the guaranteed occupancy while the planned one is above it */
     int    vbv_posti;          /* Y264_VBV_POSTI (default 1): under capped VBR the anchor after an intra frame, or after one the buffer raised, takes the serial schedule */
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
-    int    vbv_exit_hard;      /* Y264_VBV_EXIT_HARD: a burst that could cross the exit corridor priced all-intra takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
-    double crf_level, crf_fps_slope, crf_mbt_cplx;
+    double crf_level, crf_fps_slope;
     int    rc_trace;            /* Y264_RC_TRACE */
     int    dbg_cplx;            /* Y264_DBG_CPLX */
 };
@@ -227,8 +218,8 @@ struct rc_knobs {
  * as bits * qscale / complexity (the rcbm_* helpers in encoder.c). The
  * complexity domain differs by user -- full-resolution SATD for the serial
  * ABR and VBV, the lowres arrival sums for the pipelined ones -- but the model
- * and its update are the same: an EMA of per-frame ratios, or (Y264_VBV_CW)
- * the ratio of decayed sums num/den, which weighs each frame by its
+ * and its update are the same: an EMA of per-frame ratios, or (the pipelined
+ * VBV model) the ratio of decayed sums num/den, which weighs each frame by its
  * complexity. qp and cplx hold the regime it was measured in (EMAs, read by
  * the extrapolation guards); have[] says k holds a value (measured or
  * seeded), meas[] that it has been measured. */
@@ -352,26 +343,23 @@ struct yah264_encoder {
     uint8_t *mbqp;                          /* per-MB coded QP, for deblock */
     uint8_t *mb_tr8;                        /* per-MB: 8x8 transform used (for deblock) */
     float    aq_strength;                   /* variance-AQ strength */
-    /* AQ energy/anchor shape, resolved once at open (never read from the
+    /* AQ anchor shape, resolved once at open (never read from the
  * environment on a worker thread). aq_abs 1 = offset against the absolute
- * anchor instead of the frame mean; aq_chroma 1 = an all-plane
- * ac_energy. See crf_cplx_env / aq_chroma_env in encoder.c. */
+ * anchor instead of the frame mean. See crf_cplx_env in rate.c. */
     int      aq_abs;
-    int      aq_chroma;
     double   aq_anchor;
-    double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (Y264_AQ_DC_RQW, default 0.25), <=0 = plain mean */
     double   aq_dcstr;                      /* the AQ frame-level (DC) strength on the CRF base QP (Y264_AQ_DC) */
-    int      aq_rabr;                       /* AQ takes its bitrate-target constants (ABR; two-pass per Y264_AQ2_TP_ABR) */
-    double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric (Y264_AQ_DCFLOOR) */
-    double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref (Y264_AQ_BPULL) */
-    double   aq_bref;                       /* the level aq_analyze's centre is pulled to (Y264_AQ_BREF) */
+    int      aq_rabr;                       /* AQ takes its bitrate-target constants (1 = ABR, 3 = two-pass) */
+    double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric */
+    double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref */
+    double   aq_bref;                       /* the level aq_analyze's centre is pulled to */
     double   crf_dc;                        /* this anchor's DC delta on the CRF base QP (crf_frame_dc) */
     /* Co-located motion of the list-1 anchor, saved for B direct modes. */
     int16_t *colmvx, *colmvy;
     int8_t  *colref;
     int16_t *colpoc;            /* per-4x4 referenced-picture POC (temporal) */
     int      colframepoc;       /* POC of the frame colmv came from (temporal seed) */
-    int      col_l0poc0;        /* that frame's own list-0[0] POC (Y264_TDIR_LEGAL) */
+    int      col_l0poc0;        /* that frame's own list-0[0] POC (temporal legality) */
     int      mv_stride;
     /* The most recently coded frame's reference-list POCs (captured in
  * build_slice), used to resolve colpoc when it enters the DPB / col grid. */
@@ -414,7 +402,7 @@ struct yah264_encoder {
  * from list 1 only (its POC is the list-1 one). */
         int      col_l0poc0;/* this picture's own list-0[0] POC when it was
  * coded (-1 for an I picture): the slice-level
- * temporal-direct legality test (Y264_TDIR_LEGAL) */
+ * temporal-direct legality test */
         int      poc;
         int      frame_num;
         int      used;
@@ -474,7 +462,7 @@ struct yah264_encoder {
  * streaming picture an anchor reads, not the furthest.
  *
  * Only [0] is read (the immediate predecessor's, which is the only burst
- * whose reference B an anchor row-gates against -- see stair_refbgate_on).
+ * whose reference B an anchor row-gates against -- see stair_refbgate_elig).
  * A P anchor preps BEFORE its own launch pushes, so [0] names its
  * predecessor there. The array is K deep because that is what the push
  * costs anyway and a future round that reaches further wants the history to
@@ -557,7 +545,7 @@ struct yah264_encoder {
     int      lr_w, lr_h;
     pixel   *lowres_cur;        /* current frame, downscaled */
     pixel   *lowres_prev;       /* previous frame, downscaled */
-    /* Y264_LR_HPEL_ALLREF: source half-pel planes for the lowres copies
+    /* Source half-pel planes for the lowres copies
      * mb-tree reads as references (the two buffers lowres_cur/_prev swap
      * between, the coded anchor's copy, the buffered B's), so every phase
      * build mb-tree makes takes the same kind of plane the lookahead does */
@@ -695,9 +683,6 @@ struct yah264_encoder {
  * lowres pair (B entries, bleg_have); NEXT = the
  * B's list-1 lowres pair vs its future anchor. */
         int      bleg_have;     /* B entry: ANCHOR/NEXT pair legs filled */
-        y264_lr_blk *pyr[2];    /* Y264_BADAPT_PYRSHARE: the leaf's legs against its
-                                 * pyramid bracket (past, future), from the run placement */
-        int      pyr_have, pyr_poc0, pyr_poc1;
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
         int      wp_vote;       /* percent of lowres SATD a frame-DC weight saves against the previous anchor, -1 unmeasured */
         int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
@@ -737,25 +722,11 @@ struct yah264_encoder {
     int      la_have_prev_fin;  /* a frame has been finalized (finalize-side prev) */
     const void    *lrh_lr;      /* yah264_encoder_lowres_hint for the next encode call */
     const int32_t *lrh_di;
-    double   sc_rhist[3];       /* Y264_SC_JUMP: the last finalized frames' prev/intra ratios, newest first */
-    long     sc_prev_ic;        /* Y264_SC_FLOOR: the last finalized frame's intra sum, -1 = none */
+    double   sc_rhist[3];       /* the jump test's: the last finalized frames' prev/intra ratios, newest first */
+    long     sc_prev_ic;        /* the floor test's: the last finalized frame's intra sum, -1 = none */
     int      sc_rn;
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */
-    pixel   *la_anchor_hp[3];   /* its source half-pel planes (whole-run B placement) */
-    /* Y264_BADAPT_RUN: whole-run B placement scratch -- cached lowres legs
-     * keyed on (frame, reference) push index and cached quarter-pel phase
-     * sets keyed on the reference. */
-    int      brun_on;
-    struct { long cur, ref, age, x; int kind; y264_lr_blk *leg; } brun_leg[48];
-    int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
-    long     brun_akey;               /* push index of the anchor brun_decide ran from */
-    struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
-    y264_lr_blk *la_pf_leg;           /* Y264_LA_PREVFIELD scratch */
-    pixel   *la_pf_sub[16];           /* its phase set (=2) */
-    y264_lr_blk *brun_padv;           /* Y264_BADAPT_PADERIVE scratch */
-    long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
-    struct { long key, age; pixel *pl[16]; } brun_ph[8];
-    long     brun_clock;
+    pixel   *la_anchor_hp[3];   /* its source half-pel planes */
     int      la_anchor_have;
     /* Previous anchor pair's ANCHOR-leg MV field (lowres quarter-pel): the
  * colocated temporal seed for the next pair's lowres ME (motion
@@ -819,9 +790,6 @@ struct yah264_encoder {
                                  * mb-tree reads it instead of re-estimating */
     int      bdintra_valid[8];
     int      lr_intra_pen;      /* the lowres intra penalty (lr_intra_penalty) */
-    int      lr_i10;            /* the lowres intra mode set (Y264_LR_INTRA10; 0 on the 2160p tier under Y264_UHD_LITE) */
-    y264_lr_blk *bpyr[8][2];    /* Y264_BADAPT_PYRSHARE: a buffered leaf's pyramid legs */
-    int      bpyr_have[8], bpyr_poc0[8], bpyr_poc1[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
@@ -831,7 +799,6 @@ struct yah264_encoder {
     int      bmotion[8];        /* buffered B lowres motion score (adaptive ME) */
     int      btdiff[8];         /* buffered B lowres |tdiff| EWMA x256 (psy calm gate) */
     int      cur_lr_motion;     /* motion score of the frame being encoded */
-    int      mbt_pe_have, mbt_pe_poc, mbt_pe_n;  /* Y264_MBT_PEVERY: last anchor resolved, P-only run length */
     int      cur_lr_tdiff;      /* |tdiff| EWMA x256 of the frame being encoded */
     int      lr_tdiff_ewma;     /* chained at ARRIVAL order (deterministic) */
     int      nbuf;              /* number currently buffered */
@@ -864,7 +831,7 @@ struct yah264_encoder {
  * 0 = none. Fixed at open and handed to the quantiser through each frame, so
  * encoders in one process never share it. */
     int      lev_max;
-    /* --weightp / Y264_WEIGHTP, resolved once at open: 0 off, 1 the frame-level
+    /* --weightp, resolved once at open: 0 off, 1 the frame-level
  * estimate, 2 the refined estimate plus a duplicate list-0 slot. */
     int      weightp;
     /* Mode 2's search oracle. The duplicate slot predicts from a reference the
@@ -955,8 +922,8 @@ struct yah264_encoder {
                                  * would drag a bad seed across ~2x more frames),
                                  * qp = the accounted-QP regime, read only by the
                                  * Y264_RCP_LAG guard */
-    int      abr_rf;            /* the rate-factor ABR allocation model (param.rc.abr_model
- * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
+    int      abr_rf;            /* the rate-factor ABR allocation model (param.rc.abr_model);
+ * resolved once at open */     /* per-type scale has been calibrated at least once */
     int      abr_rf2;           /* the rate-factor model on the CRF path (mb-tree on) */
     /* The rate-factor ledger (rate.c, "The RF2 model"): the qscale at
  * which the frames coded so far would have spent their target is
@@ -986,13 +953,10 @@ struct yah264_encoder {
  * yah264_2pass_stat_weight also reads */
     double   crf_cblur;         /* blurred anchor (P) complexity, absolute */
     int      crf_cblur_init;
-    double   crf_lc_sum, crf_cplx_ref;  /* running geometric-mean P complexity (Y264_CRF_MBT_CPLX) */
-    int      crf_lc_n;
     /* CRF under mb-tree is open loop and mb-tree's offsets are mean negative,
  * so the base QP carries a fitted level and frame-rate term
  * (rc_set_qp_crf); the level is uniform, so the cross-frame differential
- * (static gets more, motion less) survives. Gated Y264_CRF_CL. */
-    int      crf_cl;            /* mb-tree operating-point devices active */
+ * (static gets more, motion less) survives. */
     double   mbtree_mean_off;   /* mean mb-tree QP offset of the frame being coded (<=0) */
 
     /* VBV (leaky-bucket buffer model). Layered on top of the base QP: raises it
@@ -1006,16 +970,6 @@ struct yah264_encoder {
  * which is vbv_fill_budget's fixed point, so a segment that starts here
  * exits here under the budget's own dynamics. */
     double   vbv_seg_h;
-    /* Y264_VBV_ENTRY_OPT: how far above the committed occupancy the instance
- * believes the real one is, in bits. The committed one starts at the
- * handoff level, which is all the instance before promises; the real one is
- * nearly always higher. Every test that keeps the buffer from underflowing
- * stays on the committed occupancy. The burst plan's trajectory and the
- * intra reserve, which are choices and not guards, read the believed one.
- * It only shrinks: once the committed occupancy has clamped at full the
- * two are the same number. */
-    double   vbv_opt;
-    int      vbv_opt_join;      /* the instance is a joined segment: vbv_opt is set once the knobs are resolved */
     /* yah264_encoder_vbv_handoff: the instance codes vbv_exit_n frames and the
  * segment after it assumes vbv_seg_h, so the limit steers the exit to it.
  * vbv_ndec counts VBV decides (the current one included); vbv_exit_k is the
@@ -1025,11 +979,6 @@ struct yah264_encoder {
     double   vbv_exit_k;
     int      vbv_first_bound;   /* the first coded frame is still unbounded:
  * re-encode it against its measured size */
-    /* Y264_VBV_BOUND: extend that measured-size bound from the first frame to
- * EVERY frame. Doing so requires every frame to reach the serial emit,
- * because that is the only route with a retry window -- see vbv_bound_all.
- * Resolved once here so no worker reads an env. */
-    int      vbv_bound_on;
     int      vbv_cbr;           /* ABR target == maxrate: the buffer fills only as
  * fast as the target spends, so near-overflow must be spent down. Capped
  * VBR (maxrate > target) overflows harmlessly and must NOT spend up. */
@@ -1059,9 +1008,6 @@ struct yah264_encoder {
     int      tp_resolve;        /* correct by re-solving the remaining curve */
     int      tp_dbg;            /* Y264_TP_DBG: per-frame plan trace */
     int      tp_rctrace;        /* Y264_RC_TRACE on the rcp commit path */
-    double   rb_bud, rb_pred;   /* row brake: the last decide's VBV budget and
- * predicted size, handed to the frame prep like e->qp */
-    double   tp_bexp;           /* cost-to-bits exponent (1.0 = the baseline model) */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
     double   tp_ipf, tp_pbf;    /* qscale ip / pb factors */
     double  *tp_cost;           /* per record: QP-invariant cost, bits at qscale 1 */
@@ -1069,7 +1015,6 @@ struct yah264_encoder {
     double  *tp_q;              /* per record: planned qscale */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
     double   tp_fps;            /* frames per second, for the drift band */
-    int      tp_cwarm;          /* accounted frames before the model-bias term engages */
     int      tp_nacc;           /* frames accounted so far */
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_framing;        /* pass 2: framing bits of the frames accounted */
@@ -1091,12 +1036,11 @@ struct yah264_encoder {
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */
         int     fqp;            /* coded QP at decide (accounting model input) */
-        double  qoff;           /* RF2: the frame's mean mb-tree QP offset at decide */
         int     base_qp;        /* e->qp at decide (predecided-fallback restore) */
         double  dcq;            /* the frame-DC term inside base_qp (abr_dc_on), 0 otherwise */
         double  acc_qp;         /* RF2 accounting base: the P-domain QP the decide
  * was current at (an anchored I: the last P base,
- * not its own track-derived QP); see abr_rf2_basedom_on */
+ * not its own track-derived QP); see the base-domain note in encoder.c */
         double  rceq;           /* ABR: rate-compressed complexity at decide */
         double  cplx;           /* pass-1 stat complexity */
         double  cq;             /* pass 2: complexity^qcomp share */
@@ -1105,8 +1049,6 @@ struct yah264_encoder {
         double  vpred;          /* VBV-model predicted bits at decide (virtual
  * buffer advance; error == VBV model error) */
         double  vcplx;          /* VBV-model complexity (lowres intra sum) */
-        double  rb_bud, rb_pred;  /* row brake: the clip's budget and predicted
- * size at the coded QP (see rb_note_budget) */
         double  bits;           /* actual coded bits (valid when filled) */
         double  framing;        /* stream bits around them: slice start codes
  * and NAL headers, and the parameter-set / SEI /
@@ -1171,15 +1113,14 @@ struct yah264_encoder {
  * rc_waits forced, entries pop at fill), i.e. exact serial VBV behavior. */
     int      rcp_vbv_tight;     /* current burst decides on actuals, serially */
     /* Pipelined VBV bits models, in the lowres decide-complexity domain.
- * bm_rvbv: per type; first calibration snaps, later EMA (have = meas). Under
- *   Y264_VBV_CW its k is num/den, decayed sums of bits*qscale and of
- *   complexity. Its qp[] is the EMA of the ACCOUNTED coded QP, the regime
+ * bm_rvbv: per type; first calibration snaps, later EMA (have = meas). Its
+ *   k is num/den, decayed sums of bits*qscale and of complexity. Its qp[] is the EMA of the ACCOUNTED coded QP, the regime
  *   the scale is calibrated at: the model cannot extrapolate far below it (a
  *   static-content scale calibrated at skip-all QPs under-predicts a low-QP
- *   frame 40x), so pipelined B decides floor their QP at qp - Y264_VBV_QPD --
+ *   frame 40x), so pipelined B decides floor their QP at qp - VBV_QPD (rate.c) --
  *   serial feedback recovers per frame; a flying burst must not dive blind.
  *   Its cplx[] is the content regime: the burst gate goes tight when a coming
- *   frame jumps Y264_VBV_CJUMP past it (the missed-cut / fade-end shape).
+ *   frame jumps VBV_CJUMP past it (the missed-cut / fade-end shape).
  * bm_rvbvs: the SHARED cross-type scale (serial's shape) in slot 0: a regime
  *   shock (a 1 Mbit IDR at a missed cut) snaps it up, so the very next B's
  *   clip prediction inflates too. Predictions use max(per-type, shared) --
@@ -1272,7 +1213,7 @@ struct yah264_encoder {
     int64_t frame_count;
     int     headers_done;
 
-    /* In-frame row-wavefront pool (NULL unless Y264_WF_THREADS>1). Separate
+    /* In-frame row-wavefront pool (NULL unless the wavefront width is >1). Separate
  * from CLI GOP-parallelism (--threads) to avoid N*N oversubscription. The
  * first frame runs serial (wf_warmed=0) to initialise every lazy static
  * cache (CPU detect, config, tables) on one thread before any parallel frame
@@ -1347,15 +1288,6 @@ struct yah264_encoder {
  * a fixed thread count holds. See stair_wide_capable in encoder.c. */
     int              rcp_lag;
 
-    /* The launch-split PROBE (env Y264_ABR_EARLY; mode 1 is the probe, the
- * shipped default is 2, the drain split, and 0 restores the prologue drain). Unsafe by
- * construction: it drops the zero-lag prologue drain so the anchor's jobs
- * register before its predecessor is retired, which means the decide runs
- * on a FIFO missing that predecessor's actuals. Measurement only -- it
- * bounds what drain placement is worth and is never a shipping path. See
- * abr_early_env in encoder.c. */
-    int              abr_early;
-
     /* W2 emit-overlap (env Y264_W2, on whenever there is a pool). Frame N's entropy emit runs on
  * a background thread (bg) concurrent with frame N+1's analyze. Recon never
  * reads entropy output, so emit can trail; only the deferred NAL-append + RC
@@ -1403,7 +1335,7 @@ struct yah264_encoder {
         double rc_cplx;
     } pipe;
 
-    /* Frame pipeline (env Y264_FPIPE): the two non-reference sibling B leaves
+    /* Frame pipeline: the two non-reference sibling B leaves
  * of a bframes>=3 mini-GOP encode concurrently as jobs on the SHARED
  * multi-frame pool, each with fully private frame state (rec/grids/
  * colmv/cabac/bitstream). Created
@@ -1415,7 +1347,7 @@ struct yah264_encoder {
     ntp_bg_t          *fp_bg;       /* drives the second leaf; first runs inline */
     struct fpipe_leaf *fp_leaf[2];
 
-    /* Staircase (env Y264_STAIR, default on): the reference-frame staircase.
+    /* Staircase: the reference-frame staircase.
  * A mini-GOP's P anchor and its buffered B's encode as concurrent jobs on
  * the ONE shared multi-frame pool, each B row's CLAIM gated on the anchor's
  * published CONSUMABLE rows (analyzed + deblocked + border-extended +
@@ -1426,7 +1358,7 @@ struct yah264_encoder {
     int                st_state;
     struct stair_ctx  *st;
 
-    /* Decoupled lookahead thread (env Y264_LA_THREAD, default off): the
+    /* Decoupled lookahead thread: the
  * per-frame lookahead chain (push-time lowres analysis, the deferred
  * finalize, the anchor/B-pair lowres ME) runs on ONE dedicated thread in
  * push order; the API thread pads + enqueues and every consumer read of a
@@ -1436,21 +1368,14 @@ struct yah264_encoder {
  * before this one" (the finalize target), owned by whoever runs chain
  * steps (the la thread when engaged, the API thread otherwise/at flush). */
     int                la_th_on;
-    /* Y264_LA_INLINE resolved: run the chain's tiny per-push parallel_fors on
- * the calling thread instead of fanning them into the pool. Auto follows
- * la_th_on. Per-open constant, and byte-identical either way. */
+    /* Run the chain's tiny per-push parallel_fors on the calling thread
+ * instead of fanning them into the pool: an off-driver chain on a small
+ * frame. Per-open constant, and byte-identical either way. */
     int                la_inline;
     struct la_thread  *la_th;
     struct la_entry   *la_prev_pushed;
 
-    /* mb-tree prefetch (env Y264_MBT_PRE, default off): the anchor's
- * compute_mbtree runs on a dedicated thread, launched at the pop of the
- * last buffered B of its mini-GOP -- one encode call before the anchor
- * needs it -- instead of on the GOP driver at the anchor's own pop.
- * Everything it reads (the B copies in bplane, the ring window, the
- * anchor's own entry) is already final at that point and is not mutated
- * before the latch, so it is the same values in the same order: WHO
- * computes changes, nothing else. State/ctx in encoder.c. */
+    /* mb-tree Phase-A warm thread (see mbt_warm_window); state in encoder.c. */
     struct mbt_pre    *mbtp;
 };
 

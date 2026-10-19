@@ -570,23 +570,17 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
  * pays the per-cell sync on every one of them; a chunk still satisfies the
  * dependency, since "chunk left done, row above done through chunk+1" dominates
  * every constituent macroblock's requirement. */
-/* Y264_DB_CHUNK (default 4): macroblocks per cell. Any width keeps the
- * output byte-identical (the dependency argument above holds per chunk); a
- * wider chunk pays fewer syncs and has fewer rows live at once. At 2160p and
- * --threads 0, 16 took the deblock jobs' busy time 593 -> 391 ms and their
- * row stalls 5390 -> 1048 ms, md5-identical; the wall has not been read. */
-static int db_chunk_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_DB_CHUNK"); v = s ? atoi(s) : 4; if (v < 1) v = 1; }
-    return v;
-}
-void y264_deblock_warm(void) { (void)db_chunk_env(); }
+/* macroblocks per cell. Any width keeps the output byte-identical (the
+ * dependency argument above holds per chunk); a wider chunk pays fewer syncs
+ * and has fewer rows live at once. At 2160p and --threads 0, 16 took the
+ * deblock jobs' busy time 593 -> 391 ms and their row stalls 5390 -> 1048 ms,
+ * md5-identical; the wall has not been read. */
+#define DB_CHUNK 4
 static void deblock_cell(void *ctx, int tid, int r, int c)
 {
     y264_frame_t *f = ctx;
     (void)tid;
-    int ch = db_chunk_env();
+    int ch = DB_CHUNK;
     int x0 = c * ch, x1 = x0 + ch;
     if (x1 > f->wmb) x1 = f->wmb;
     for (int mbx = x0; mbx < x1; mbx++)
@@ -609,7 +603,7 @@ void y264_deblock_frame(y264_frame_t *f)
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
     if (pool && ntp_pool_nthreads(pool) > 1) {
         ntp_prof_tag("deblock"); ntp_prio_hint();
-        int ch = db_chunk_env();
+        int ch = DB_CHUNK;
         ntp_wavefront(pool, f->hmb, (f->wmb + ch - 1) / ch,
                       NULL, deblock_cell, f);
         STG_END();

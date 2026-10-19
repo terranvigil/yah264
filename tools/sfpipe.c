@@ -426,7 +426,6 @@ static void encode_frame(int i)
     f->lr_seed_mvx = NULL; f->lr_seed_mvy = NULL; f->lr_seed_cost = NULL;
     f->lr_bseed_mvx0 = f->lr_bseed_mvy0 = NULL;
     f->lr_bseed_mvx1 = f->lr_bseed_mvy1 = NULL;
-    f->me_cheap = 0;
     f->mbqp = NULL;
     f->mb_tr8 = s->mb_tr8;
     f->aq_strength = 0.f;

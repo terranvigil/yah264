@@ -127,58 +127,9 @@ double frame_complexity_ilr(const yah264_encoder_t *e)
  *
  * Self-BD against the unfloored build on the band ladders: samsung -4.94%,
  * sintel -0.36%, and the other eight clips byte-identical. Always on, at
- * 0.2 x cvi (the Y264_ABR_CFLOOR / _CFLOORF overrides are gone). */
+ * 0.2 x cvi. */
 
 
-/* The full reference-encoder ABR model: rate factor for P, P-track anchors for I and B.
- * All three go in together: the P-track anchors alone fail when layered on a
- * model with no rate factor under them. DEFAULT OFF until the corpus gates
- * it. */
-int abr_cguard_on(void)
-{
-    /* Default ON whenever the rf model is armed: the guard is part of that
- * model's rate-accuracy fix (sintel-900
- * +48.2% -> +12.3%), not an independent experiment. Explicit env wins. */
-    static int v = -1;
-    if (v < 0) {
-        const char *s = getenv("Y264_ABR_CGUARD");
-        if (s) v = atoi(s) ? 1 : 0;
-        else { const char *rf = getenv("Y264_ABR_RF"); v = rf && atoi(rf) ? 1 : 0; }
-    }
-    return v;
-}
-
-double abr_cguard_thresh(void)
-{
-    static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_ABR_CGUARD_T"); v = s ? atof(s) : 4.0; }
-    return v;
-}
-
-/* Env override of the public param.rc.abr_model. -1 = unset (use the param). */
-int abr_rf_env(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *s = getenv("Y264_ABR_RF"); v = s ? (atoi(s) ? 1 : 0) : -1; }
-    return v;
-}
-/* Y264_ABR_RFQP=1: plan step A1 (work item A), the per-frame ledger of BOTH
- * rate models from one encode. On every
- * rcp_decide the default model's equation (err, target, scale, rceq, the
- * pre-clamp and post-clamp QP) prints beside the rate-factor model's
- * (blurred rceq, rfm_work, rfm_owed, rf, feedback, the raw,
- * lstep-clipped and anchored QP), and on every rcp_account the coded bits
- * and QP with the accumulators after the update. Whichever model is live
- * decides; the other is a SHADOW: its state (rfm_work, rfm_owed, the
- * complexity blur, the slew references, the P track) is fields only the
- * rf branch reads, so shadowing them on the default path leaves the output
- * byte-identical. Default inert. */
-int abr_rfqp_trace(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_ABR_RFQP"); v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
 /* The RF2 model: one-pass ABR as the CRF path plus a slowly adapted rate
  * factor. Under mb-tree the per-MB offsets carry the per-frame complexity,
  * so the anchor's base QP is one number for the whole stream, moved by two
@@ -207,17 +158,6 @@ int abr_rfqp_trace(void)
  * tracking cells; the values and how they were read sit with the knobs in
  * rc_knobs_resolve. */
 
-
-/* Y264_RC_SHARE_OVN: whether an instance on a shared ledger widens the
- * overflow window by the live instance count (see rcp_decide). Unset = under
- * CBR only; 0 = never; 1 = always, the output before 2026-10-10. Warmed
- * static. */
-int rc_share_ovn_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RC_SHARE_OVN"); v = s ? (atoi(s) ? 1 : 0) : 2; }
-    return v;
-}
 
 static int rc_shared_nlive(const yah264_encoder_t *e)
 {
@@ -288,15 +228,15 @@ static double rfm_feedback_qp(const yah264_encoder_t *e, double err, double win)
     return d;
 }
 
-/* The ledger QP's slew limit: at most rck.rfm_slew x qp_step (or the
- * Y264_ABR_QPSTEP override) from the previous decide's limited value. It
+/* The ledger QP's slew limit: at most rck.rfm_slew x qp_step from the
+ * previous decide's limited value. It
  * bounds the slow term only; the feedback is bounded on its own. What it
  * catches is a ledger that jumps because one frame dominates a young sum
  * (the opening I frame's bits landing on a ledger of one frame) or that
  * collapses on content that is nearly free (a black opening). */
 static double rfm_slew_qp(const yah264_encoder_t *e, double qp, double ref, double mult)
 {
-    double s = mult * (e->rck.abr_qpstep_set ? e->rck.abr_qpstep : e->qp_step);
+    double s = mult * e->qp_step;
     if (qp < ref - s) qp = ref - s;
     if (qp > ref + s) qp = ref + s;
     return qp;
@@ -444,7 +384,7 @@ static double abr_scale_for(yah264_encoder_t *e, int type)
  * (mobile lost ~5 VMAF), so the swept 1.8 stands. The blur track follows P
  * anchors only: B frames inherit the anchor base (frame_qp adds the type
  * cascade) and I frames read the track without polluting it with intra-domain
- * magnitudes. Base/slope/cap stay env-overridable for re-calibration.
+ * magnitudes.
  * ABR/VBV/2-pass still use the self-calibrating zero-motion frame_complexity. */
 #define CRF_BASE_CPLX  140.0    /* per-MB ME-compensated cost that sits at qp=crf */
 #define CRF_QP_SLOPE   1.8      /* QP per log2 of complexity (a 0.6 qcomp would be 2.4) */
@@ -452,18 +392,39 @@ static double abr_scale_for(yah264_encoder_t *e, int type)
 #define CRF_MBT_LEVEL      2.3  /* QP added to --crf under mb-tree (fitted, rc_set_qp_crf) */
 #define CRF_MBT_FPS_SLOPE  2.9  /* QP per doubling of the frame rate from 30 fps (fitted) */
 
-static double rc_tunable(const char *n, double def, int *set)
+/* The ABR error-correction gain. */
+#define RCP_GAIN 0.1
+
+/* Proportional overshoot charge for in-flight VBV entries: the virtual
+ * buffer charges r_hi * vpred per pending frame, and the burst gate falls
+ * back to serial when even that bound approaches the constraint. Corpus
+ * measurement (12 runs, ~3k frames): the bits/vpred distribution has p50
+ * ~0.8-0.9 and p90 ~1.8-2.3, but an UNBOUNDED tail (near-zero predictions,
+ * regime shifts) -- so r_hi covers the proportional body only, and the tail
+ * is carried by the extrapolation guards + the shock multiplier + the
+ * content-jump gate (see below), which the compliance battery validates. */
+#define VBV_RHI 2.0
+
+/* Extrapolation guards. QPD: how far below the model's
+ * calibrated QP regime a PIPELINED B decide may go (the serial schedule has
+ * no floor -- its per-frame actuals catch a dive within one frame; a flying
+ * burst decides bframes+1 QPs blind, and the bits model under-predicts ~2x
+ * per 6 QP of downward extrapolation on static content). CJUMP: complexity
+ * ratio past the calibrated content regime at which the burst gate goes
+ * tight (the missed-cut / fade-end shape: the scale is calibrated on the old
+ * regime and no multiplier covers the jump). */
+#define VBV_QPD   6
+#define VBV_CJUMP 4.0
+
+static double rc_tunable(const char *n, double def)
 {
     const char *s = getenv(n);
-    if (set) *set = s != NULL;
     return s ? atof(s) : def;
 }
 
-/* Every rate-control calibration knob the decides read (env-overridable so
- * the CRF base/cap/slope, the ABR steps and the opening fit can be swept
- * without a rebuild; the defaults are the baked-in calibration). Resolved
- * once at open: decides run on the stair driver thread and nothing on a
- * decide path calls getenv. */
+/* Every rate-control calibration constant the decides read. Resolved once
+ * at open: decides run on the stair driver thread and nothing on a decide
+ * path calls getenv. */
 void rc_knobs_resolve(yah264_encoder_t *e)
 {
     struct rc_knobs *k = &e->rck;
@@ -493,7 +454,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     cost nothing, and the ledger then reads several QP low for the rest
  *     of a short encode: sintel at CBR 352 kbit/s coded its B frames at
  *     QP 51 behind cheap anchors. The value is the per-frame model's own
- *     degenerate-frame line (abr_cguard_thresh); with it sintel reads
+ *     degenerate-frame line, 4; with it sintel reads
  *     -26 / -13 / -18% BD at ABR / VBR / CBR and no other band clip moves.
  *   ovc_win 2, ovc_t0 2 s: window 1 tracks tighter but costs akiyo; 3 drifts.
  *     t0 0.5, 1, 2, 3: 2 was best on akiyo and samsung.
@@ -549,65 +510,55 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     four threads; 2, 3 and 6 clear all 36 and gain BD, 3 and 6 at +1.4%
  *     and more instructions, 2 at +0.1%;
  *   vbv_fill_min 0.5: 0.25 and 0.75 inert from horizon 2 up. */
-    k->rfm_slew       = rc_tunable("Y264_RFM_SLEW", 0.25, NULL);
-    k->rfm_slew_fb    = rc_tunable("Y264_RFM_SLEW_FB", 1.0, NULL);
-    k->rfm_fb_t       = rc_tunable("Y264_RFM_FB_T", 2.0, NULL);
-    k->rfm_slew_fb_up = rc_tunable("Y264_RFM_SLEW_FB_UP", 0.35, NULL);
-    k->rfm_degen      = rc_tunable("Y264_RFM_DEGEN", 4.0, NULL);
-    k->pf_slew        = rc_tunable("Y264_PF_SLEW", 1.0, NULL);
-    k->ovc_gain       = rc_tunable("Y264_OVC_GAIN", 16.0, NULL);
-    k->ovc_gain_up    = rc_tunable("Y264_OVC_GAIN_UP", 12.0, NULL);
-    k->ovc_gain_cbr   = rc_tunable("Y264_OVC_GAIN_CBR", 10.0, NULL);
-    k->ovc_gain_cbr_up = rc_tunable("Y264_OVC_GAIN_CBR_UP", 4.0, NULL);
-    k->ovc_lo         = rc_tunable("Y264_OVC_LO", 6.0, NULL);
-    k->ovc_hi         = rc_tunable("Y264_OVC_HI", 6.0, NULL);
-    k->ovc_win        = rc_tunable("Y264_OVC_WIN", 2.0, NULL);
-    k->ovc_t0         = rc_tunable("Y264_OVC_T0", 2.0, NULL);
-    k->itrk_decay     = rc_tunable("Y264_ITRK_DECAY", 0.9, NULL);
-    k->blur_decay     = rc_tunable("Y264_BLUR_DECAY", 0.5, NULL);
-    k->open_ia        = rc_tunable("Y264_OPEN_IA", 31.7, NULL);
-    k->open_ib        = rc_tunable("Y264_OPEN_IB", 1.41, NULL);
-    k->open_ic        = rc_tunable("Y264_OPEN_IC", -4.14, NULL);
-    k->open_ioff      = rc_tunable("Y264_OPEN_IOFF", 4.0, NULL);
-    k->open_imargin   = rc_tunable("Y264_OPEN_IMARGIN", 8.0, NULL);
-    k->open_tex_t     = rc_tunable("Y264_OPEN_TEX_T", 6500.0, NULL);
-    k->open_tex_g     = rc_tunable("Y264_OPEN_TEX_G", 10.0, NULL);
-    k->open_tex_m     = rc_tunable("Y264_OPEN_TEX_M", 6.0, NULL);
-    k->open_ip0       = rc_tunable("Y264_OPEN_IP0", 28.0, NULL);
-    k->open_rfs       = rc_tunable("Y264_OPEN_RFS", 30.0, NULL);
-    k->vbv_fill_frac  = rc_tunable("Y264_VBV_FILL_FRAC", 0.5, NULL);
-    k->vbv_fill_h     = rc_tunable("Y264_VBV_FILL_H", 2.0, NULL);
-    k->vbv_fill_hup   = rc_tunable("Y264_VBV_FILL_HUP", 1.0, NULL);
-    k->vbv_fill_min   = rc_tunable("Y264_VBV_FILL_MIN", 0.5, NULL);
-    k->abr_pbf        = rc_tunable("Y264_ABR_PBF", 1.3, NULL);
-    k->abr_qpstep     = rc_tunable("Y264_ABR_QPSTEP", 0.0, &k->abr_qpstep_set);
-    k->abr_vbvov_grow = rc_tunable("Y264_ABR_VBVOV_GROW", 6.0, NULL);
-    k->abr_vbvov_pow  = rc_tunable("Y264_ABR_VBVOV_POW", 1.0, NULL);
-    k->abr_vbvov_vbr  = rc_tunable("Y264_ABR_VBVOV_VBR", 0.75, NULL);
-    k->abr_dc         = (int)rc_tunable("Y264_ABR_DC", 1.0, NULL);
-    k->rf2_iacc       = rc_tunable("Y264_ABR_RF2_IACC", 1.0, NULL);
-    k->rf2_seed       = rc_tunable("Y264_ABR_RF2_SEED", 2.0, NULL);
-    k->rf2_floorfb    = rc_tunable("Y264_ABR_RF2_FLOORFB", 1.0, NULL) != 0.0;
-    k->rf2_seed_a     = rc_tunable("Y264_ABR_RF2_SEED_A", 8.692, NULL);
-    k->rf2_seed_b     = rc_tunable("Y264_ABR_RF2_SEED_B", 2.924, NULL);
-    k->rf2_seed_c     = rc_tunable("Y264_ABR_RF2_SEED_C", -1.315, NULL);
-    k->vbv_plan_h     = rc_tunable("Y264_VBV_PLAN_H", 32.0, NULL);
-    k->vbv_plan_t     = rc_tunable("Y264_VBV_PLAN_T", 0.5, NULL);
-    k->vbv_plan_pred  = (int)rc_tunable("Y264_VBV_PLAN_PRED", 2.0, NULL);
-    k->vbv_entry_opt  = rc_tunable("Y264_VBV_ENTRY_OPT", 0.0, NULL);
-    k->vbv_entry_rsv  = rc_tunable("Y264_VBV_ENTRY_RSV", 0.1, NULL);
-    k->vbv_exit_hard  = (int)rc_tunable("Y264_VBV_EXIT_HARD", 0.0, NULL);
-    k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0, NULL);
-    k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25, NULL);
-    k->vbv_cbr_dive   = rc_tunable("Y264_VBV_CBR_DIVE", 2.0, NULL);
-    k->vbv_posti_raise = rc_tunable("Y264_VBV_POSTI_RAISE", 3.0, NULL);
-    k->vbv_posti_n    = rc_tunable("Y264_VBV_POSTI_N", 2.0, NULL);
-    k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
-    k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
-    k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
-    k->crf_level      = rc_tunable("Y264_CRF_LEVEL", CRF_MBT_LEVEL, NULL);
-    k->crf_fps_slope  = rc_tunable("Y264_CRF_FPS_SLOPE", CRF_MBT_FPS_SLOPE, NULL);
-    k->crf_mbt_cplx   = rc_tunable("Y264_CRF_MBT_CPLX", 0.0, NULL);
+    k->rfm_slew       = 0.25;
+    k->rfm_slew_fb    = 1.0;
+    k->rfm_fb_t       = 2.0;
+    k->rfm_slew_fb_up = 0.35;
+    k->rfm_degen      = 4.0;
+    k->pf_slew        = 1.0;
+    k->ovc_gain       = 16.0;
+    k->ovc_gain_up    = 12.0;
+    k->ovc_gain_cbr   = 10.0;
+    k->ovc_gain_cbr_up = 4.0;
+    k->ovc_lo         = 6.0;
+    k->ovc_hi         = 6.0;
+    k->ovc_win        = 2.0;
+    k->ovc_t0         = 2.0;
+    k->itrk_decay     = 0.9;
+    k->blur_decay     = 0.5;
+    k->open_ia        = 31.7;
+    k->open_ib        = 1.41;
+    k->open_ic        = -4.14;
+    k->open_ioff      = 4.0;
+    k->open_imargin   = 8.0;
+    k->open_tex_t     = 6500.0;
+    k->open_tex_g     = 10.0;
+    k->open_tex_m     = 6.0;
+    k->open_ip0       = 28.0;
+    k->open_rfs       = 30.0;
+    k->vbv_fill_frac  = 0.5;
+    k->vbv_fill_h     = 2.0;
+    k->vbv_fill_hup   = 1.0;
+    k->vbv_fill_min   = 0.5;
+    k->abr_pbf        = 1.3;
+    k->abr_vbvov_grow = 6.0;
+    k->abr_vbvov_pow  = 1.0;
+    k->abr_vbvov_vbr  = 0.75;
+    k->rf2_seed_a     = 8.692;
+    k->rf2_seed_b     = 2.924;
+    k->rf2_seed_c     = -1.315;
+    k->vbv_plan_h     = 32.0;
+    k->vbv_plan_t     = 0.5;
+    k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0);
+    k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25);
+    k->vbv_cbr_dive   = 2.0;
+    k->vbv_posti_raise = 3.0;
+    k->vbv_posti_n    = 2.0;
+    k->crf_base       = CRF_BASE_CPLX;
+    k->crf_slope      = CRF_QP_SLOPE;
+    k->crf_cap        = CRF_QP_CAP;
+    k->crf_level      = rc_tunable("Y264_CRF_LEVEL", CRF_MBT_LEVEL);
+    k->crf_fps_slope  = CRF_MBT_FPS_SLOPE;
     k->rc_trace       = getenv("Y264_RC_TRACE") != NULL;
     k->dbg_cplx       = getenv("Y264_DBG_CPLX") != NULL;
 }
@@ -652,24 +603,23 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  * capped CRF and a bitrate target keep 1.04 (encoder open). acstr is the
  * field's own strength, aq-strength times the mode-2 gain. Non-reference B
  * frames get their frame-level term from aq_analyze's centre pull instead. */
-/* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the
- * pre-2026-09-28 output): the frame DC as a RATE-EQUIVALENT
- * shift instead of the plain log-energy mean. Applied per macroblock, the
+/* The frame DC as a RATE-EQUIVALENT shift instead of the plain log-energy
+ * mean, at weight w = AQ_DC_RQW. Applied per macroblock, the
  * absolute offset of a near-flat MB costs almost nothing, while the plain mean
  * moves every MB of the frame by it; a frame that is mostly flat (dark scenes, credits on black, 4K
  * animation) takes a base QP several points lower than the offset field's rate
- * justifies. With w set, each MB is weighted by a rate proxy 2^(w*l) + 1 and
+ * justifies. Each MB is weighted by a rate proxy 2^(w*l) + 1 and
  * the DC is the base shift that spends what the per-MB strength-1.0 field
  * would. Measured 2026-09-27 at w 0.25: multi-shot -0.92 / -3.16 / -0.38%, CRF
  * band median -0.20% (9 of 12, worst foreman +0.65%), chimera and meridian
  * 2160p and BBB 2160p windows neutral at matched size. w 0.5 overshoots
  * (multi-shot +1.15 / -1.85 / +1.73%). */
+#define AQ_DC_RQW 0.25
 static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
 {
     if (!e->aq_abs || !src || !src[0]) return 0.0;
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, n = wmb * hmb;
-    int stride = e->pstride[0], cstride = e->pstride[1];
-    int cw = e->aq_chroma && src[1] && src[2] ? 16 / e->sub_w : 0, ch = cw ? 16 / e->sub_h : 0;
+    int stride = e->pstride[0];
     double *lv = malloc((size_t)n * sizeof(double));
     if (!lv) return 0.0;
     /* The frame gain comes from the coded field's metric, log2(var + afloor)
@@ -690,31 +640,22 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
             y264_dsp.var16x16(s, stride, v2);
             double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
             if (var < 0) var = 0;
-            double l;
-            if (cw) {
-                double en = var * 256.0
-                    + blk_ac_energy(src[1] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch)
-                    + blk_ac_energy(src[2] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch);
-                l = log2(en < 1.0 ? 1.0 : en) - 8.0;
-            } else {
-                l = log2(var + dfl);
-            }
+            double l = log2(var + dfl);
             lv[mby * wmb + mbx] = l;
-            double lg = cw ? l : log2(var + y264_aq_afloor());
+            double lg = log2(var + y264_aq_afloor());
             sum += lg; sum2 += lg * lg;
         }
     double fmean = sum / n, fsd2 = sum2 / n - fmean * fmean;
     double astr = (double)e->aq_strength * y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0, e->aq_rabr);
-    double rqw = e->aq_dc_rqw, num = 0, den = 0, lsum = 0;
+    double rqw = AQ_DC_RQW, num = 0, den = 0, lsum = 0;
     for (int i = 0; i < n; i++) lsum += lv[i];
-    if (rqw > 0.0)
-        for (int i = 0; i < n; i++) {
-            double c = pow(2.0, rqw * lv[i]) + 1.0, d = lv[i] - e->aq_anchor;
-            num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
-            den += c * pow(2.0, -astr * d / 6.0);
-        }
+    for (int i = 0; i < n; i++) {
+        double c = pow(2.0, rqw * lv[i]) + 1.0, d = lv[i] - e->aq_anchor;
+        num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
+        den += c * pow(2.0, -astr * d / 6.0);
+    }
     free(lv);
-    if (rqw > 0.0 && den > 0.0)
+    if (den > 0.0)
         return -6.0 * log2(num / den);
     return (e->aq_dcstr - astr) * (lsum / n - e->aq_anchor);
 }
@@ -726,26 +667,19 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     if (type == 1) {
         e->crf_cblur = e->crf_cblur_init ? 0.6 * e->crf_cblur + 0.4 * C : C;
         e->crf_cblur_init = 1;
-        if (C > 0.0) {                          /* the clip's running level */
-            e->crf_lc_sum += log2(C); e->crf_lc_n++;
-            e->crf_cplx_ref = exp2(e->crf_lc_sum / e->crf_lc_n);
-        }
     }
     double qp;
     if (!e->crf_cblur_init) {
         qp = e->crf;                            /* leading I: no P track yet */
-    } else if (e->crf_cl && e->mbtree_on) {
+    } else if (e->crf_on && e->mbtree_on) {
         /* Under mb-tree the per-MB field carries each frame's importance, and
  * the frame-level content term is the AQ DC (crf_dc), so the base is flat.
- * Y264_CRF_MBT_CPLX=k adds k QP per log2 of the blurred lowres cost
- * against the clip's own running geometric mean. A/B at matched rate on
- * six clips: k 0.6 / 1.2 cost sintel_720p 10% / 21% (its scene cuts read
- * as complexity), k -0.6 buys sintel 4.9% and costs akiyo 1.6%. Neither
- * sign is same-or-better on every clip, so the default is 0. */
+ * A term on the blurred lowres cost against the clip's own running
+ * geometric mean was read at matched rate on six clips: +0.6 / +1.2 QP per
+ * log2 cost sintel_720p 10% / 21% (its scene cuts read as complexity), -0.6
+ * buys sintel 4.9% and costs akiyo 1.6%. Neither sign is same-or-better on
+ * every clip. */
         qp = e->crf;
-        double k = e->rck.crf_mbt_cplx;
-        if (k != 0.0 && e->crf_cplx_ref > 0.0)
-            qp += k * log2(e->crf_cblur / e->crf_cplx_ref);
     } else {
         double base_permb = e->rck.crf_base;
         double slope = e->rck.crf_slope;
@@ -771,16 +705,15 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * |bytes ratio - 1| of 5.2% (worst cell 27.7%). The slope is there because
  * that encoder's output at equal --crf codes higher-rate material at a
  * higher QP. The form is a constant rather than a function of qcomp because
- * the CRF path runs at a fixed qcomp. Y264_CRF_LEVEL and Y264_CRF_FPS_SLOPE
- * override. */
-    if (e->crf_cl && e->mbtree_on) {
+ * the CRF path runs at a fixed qcomp. Y264_CRF_LEVEL overrides the level. */
+    if (e->crf_on && e->mbtree_on) {
         double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
                    ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 30.0;
         if (fps < 1.0) fps = 1.0;
         if (fps > 240.0) fps = 240.0;
         qp += e->rck.crf_level + e->rck.crf_fps_slope * log2(fps / 30.0);
     }
-    qp += e->crf_dc;                            /* Y264_AQ_DC_BASE, 0 otherwise */
+    qp += e->crf_dc;                            /* the frame DC (crf_frame_dc), 0 otherwise */
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
     e->qp = (int)lround(qp);
@@ -859,7 +792,7 @@ double vbv_limit_at(const yah264_encoder_t *e, double fill)
  * 0.9 * (fill + rate) until 2026-10-03, one frame of refill more than the
  * buffer holds at the removal, which let the model sit at "empty" while the
  * stream underflowed by up to a frame's worth of the cap. */
-    double limit = 0.9 * (vbv_fitlaw_env() ? fill : fill + e->vbv.rate);
+    double limit = 0.9 * fill;
     /* Never zero: every caller reads "limit <= 0" as "no limit", and an empty
  * buffer is the case that wants the HIGHEST QP, not none. */
     if (limit < 0.01 * e->vbv.rate) limit = 0.01 * e->vbv.rate;
@@ -994,38 +927,30 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
 {
     if (e->vbv_on) {
         double qscale = pow(2.0, (p->fqp - 12) / 6.0);
-        double s = p->bits * qscale / (p->vcplx > 0 ? p->vcplx : 1.0);
         /* First measurement per type SNAPS (see the abr note below). The QP
  * and complexity regime EMAs travel with the scale: they define where
- * the model is trustworthy (the extrapolation guards). */
-        /* Y264_VBV_CW (default on): the scale is a ratio of decayed SUMS,
- * bits*qscale over complexity, so each frame weighs in by its complexity.
- * An average of per-frame ratios lets a run of near-empty frames -- a
- * black stretch codes ~400 bits of headers at any complexity -- set the
- * scale, and after the cut the first real frame moves it by 0.3 of the
- * way: chimera's post-cut P predicted 252 kbit at the QP its predecessor
- * had just coded 747 kbit at. Weighted, the empty frames carry almost no
- * weight and the first real frame takes the scale. */
+ * the model is trustworthy (the extrapolation guards). The scale is a
+ * ratio of decayed SUMS, bits*qscale over complexity, so each frame weighs
+ * in by its complexity. An average of per-frame ratios lets a run of
+ * near-empty frames -- a black stretch codes ~400 bits of headers at any
+ * complexity -- set the scale, and after the cut the first real frame
+ * moves it by 0.3 of the way: chimera's post-cut P predicted 252 kbit at
+ * the QP its predecessor had just coded 747 kbit at. Weighted, the empty
+ * frames carry almost no weight and the first real frame takes the scale. */
         double qs_bits = p->bits * qscale, cx = p->vcplx > 0 ? p->vcplx : 1.0;
         {
             struct rc_bmodel *m = &e->bm_rvbv, *sh = &e->bm_rvbvs;
             int t = p->type, w = m->have[t], ws = sh->have[0];
-            if (vbv_cw_env()) {
-                m->num[t]   = rcbm_sum(w, m->num[t], qs_bits);
-                m->den[t]   = rcbm_sum(w, m->den[t], cx);
-                sh->num[0]  = rcbm_sum(ws, sh->num[0], qs_bits);
-                sh->den[0]  = rcbm_sum(ws, sh->den[0], cx);
-            }
-            m->k[t]    = rcbm_ema(w, m->k[t], s);
+            m->num[t]   = rcbm_sum(w, m->num[t], qs_bits);
+            m->den[t]   = rcbm_sum(w, m->den[t], cx);
+            sh->num[0]  = rcbm_sum(ws, sh->num[0], qs_bits);
+            sh->den[0]  = rcbm_sum(ws, sh->den[0], cx);
+            m->k[t]    = m->num[t] / m->den[t];
             m->qp[t]   = rcbm_ema(w, m->qp[t], p->fqp);
             m->cplx[t] = rcbm_ema(w, m->cplx[t], p->vcplx);
             m->have[t] = 1;
-            sh->k[0]   = rcbm_ema(ws, sh->k[0], s);
+            sh->k[0]   = sh->num[0] / sh->den[0];
             sh->have[0] = 1;
-        }
-        if (vbv_cw_env()) {
-            e->bm_rvbv.k[p->type] = e->bm_rvbv.num[p->type] / e->bm_rvbv.den[p->type];
-            e->bm_rvbvs.k[0] = e->bm_rvbvs.num[0] / e->bm_rvbvs.den[0];
         }
         /* Shock: decaying max of the accounted overshoot ratio. Capped (one
  * pathological ratio must not sterilise the encoder for long). */
@@ -1051,8 +976,6 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * (sintel, CBR). */
             e->vbv.fill = rcbuf_step(&e->vbv, e->vbv.fill, p->bits + p->framing, &empty);
             if (empty) e->rcp_vbv_nclamp++;
-            if (e->vbv_opt > e->vbv.size - e->vbv.fill)
-                e->vbv_opt = e->vbv.size - e->vbv.fill;
         }
         if (rcp_dbg_on())
             fprintf(stderr, "RCPB seq=%u type=%d bits=%.0f fill=%.0f\n",
@@ -1061,7 +984,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
     if (e->abr_on) {
         double qscale = pow(2.0, (p->fqp - 12) / 6.0);
         double s = p->bits * qscale / p->rceq;
-        if (e->abr_rf || e->abr_rf2 || abr_rfqp_trace()) {     /* the trace shadows the rf accumulators */
+        if (e->abr_rf || e->abr_rf2) {
             /* The per-frame model divides a B by pb_factor so a B's
  * cheapness cannot drag its whole rate factor down; under mb-tree the
  * P/B ratio is 1. The ledger never decays: with a VBV the feedback's
@@ -1078,8 +1001,6 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
                 e->bm_rf2kc.k[p->type] = rcbm_ema(e->bm_rf2kc.have[p->type], e->bm_rf2kc.k[p->type], k);
                 e->bm_rf2kc.have[p->type] = 1;
             }
-            double n_before = e->rfm_owed / e->abr_target_bpf;
-            double mean_before = n_before > 0 ? e->rfm_work / n_before : 0.0;
             int skip = 0;
             if (e->abr_rf2 && e->rck.rfm_degen > 0) {
                 double nmb = (double)(e->width_in_mbs * e->height_in_mbs);
@@ -1092,12 +1013,6 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             if (e->rc_shared && e->abr_rf2)
                 rc_shared_add(e, skip ? 0.0 : contrib, skip ? 0.0 : e->abr_target_bpf, p->bits, e->abr_target_bpf);
             rfm_note_coded(e, p->fqp - p->dcq, p->type);
-            if (abr_rfqp_trace())
-                fprintf(stderr, "RFQA seq=%u type=%d bits=%.0f fqp=%d qoff=%.2f rceq=%.3f | work=%.0f owed=%.0f "
-                        "rfqp=%.2f itrk=%.2f contrib=%.0f mean_before=%.0f\n", p->seq, p->type, p->bits, p->fqp,
-                        p->qoff, p->rceq, e->rfm_work, e->rfm_owed,
-                        12.0 + 6.0 * log2(e->rfm_work / e->rfm_owed),
-                        rfm_itrk_qp(e), contrib, mean_before);
         }
         /* First measurement per type SNAPS over the open-time seed (a guess);
  * later ones EMA. The burst lag decides a whole mini-GOP on the seed,
@@ -1289,7 +1204,7 @@ void rcp_flush_all(yah264_encoder_t *e)
  * removed FROM rather than one that already charges the frame against itself. */
 double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
 {
-    double rhi = vbv_rhi_env();
+    double rhi = VBV_RHI;
     double fill = e->vbv.fill;
     int n = e->rcp_n - drop_tail;
     for (int i = 0; i < n; i++) {
@@ -1313,7 +1228,7 @@ double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
  * through the buffer law. The base is the lowest QP at or above the rate
  * factor's whose walk keeps every frame inside 0.9 of what it is removed from
  * and ends the burst on a trajectory toward the target level -- half the
- * buffer -- closing the gap over Y264_VBV_PLAN_H frames rather than at once.
+ * buffer -- closing the gap over rck.vbv_plan_h frames rather than at once.
  * Above the target the burst may spend down to it, so a full buffer is spent
  * on hard content exactly as before; below it the raise arrives one burst at a
  * time instead of as a wall.
@@ -1331,18 +1246,14 @@ static int vbv_plan_on(const yah264_encoder_t *e)
 static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, int is_ref,
                                 double fill)
 {
-    double va = rcp_vbv_scale_eff(e, type);
-    double vb = rcp_vbv_scale_eff(e, 2);
-    double shock = e->rcp_vbv_shock > 1.0 ? e->rcp_vbv_shock : 1.0;
-    if (e->rck.vbv_plan_pred) {
-        /* The plan is a trajectory, not the underflow guard, so it prices
+    /* The plan is a trajectory, not the underflow guard, so it prices
  * the burst at each type's own measured scale: no shared-scale maximum
  * and no shock multiplier. Those two are the fit test's margin, and they
  * stay there (rcp_vbv_clip). In the plan they priced the P after every
  * intra frame at three to four times what it coded, and the plan answered
  * with a base 10 to 20 QP above the rate factor's for the next few
  * anchors: on a 10-minute 720p title, one spike per cut. */
-        /* ...and only at scales this instance has measured. A GOP instance
+    /* ...and only at scales this instance has measured. A GOP instance
  * opens with none, and the cross-type fallback priced the P after its
  * first I at the I frame's scale: a one-anchor spike of 10 to 20 QP at
  * every GOP start. That P is priced from the I it follows instead, scaled
@@ -1351,22 +1262,21 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
  * the right price and the raise is wanted, and well under 1 for the
  * ordinary P of a held shot. Its B frames take the same price until one is
  * measured. Any other unmeasured case is left to the fit test. */
-        int have_a = e->bm_rvbv.have[type], have_b = e->bm_rvbv.have[2];
-        if (!have_a) {
-            if (type != 1 || !e->bm_rvbv.have[0] || e->rcp_cur_cvi <= 0.0)
-                return 0.0;
-            double r = e->rcp_cur_cme / e->rcp_cur_cvi;
-            va = e->bm_rvbv.k[0] * (r < 1.0 ? r : 1.0);
-        } else
-            va = rcp_vbv_scale_for(e, type);
-        if (have_b)
-            vb = rcp_vbv_scale_for(e, 2);
-        else if (!have_a)
-            vb = va;
-        else if (e->nbuf > 0)
+    double va, vb = rcp_vbv_scale_eff(e, 2);
+    int have_a = e->bm_rvbv.have[type], have_b = e->bm_rvbv.have[2];
+    if (!have_a) {
+        if (type != 1 || !e->bm_rvbv.have[0] || e->rcp_cur_cvi <= 0.0)
             return 0.0;
-        if (e->rck.vbv_plan_pred > 1) shock = 1.0;
-    }
+        double r = e->rcp_cur_cme / e->rcp_cur_cvi;
+        va = e->bm_rvbv.k[0] * (r < 1.0 ? r : 1.0);
+    } else
+        va = rcp_vbv_scale_for(e, type);
+    if (have_b)
+        vb = rcp_vbv_scale_for(e, 2);
+    else if (!have_a)
+        vb = va;
+    else if (e->nbuf > 0)
+        return 0.0;
     if (va <= 0.0)
         return 0.0;
     if (vb <= 0.0) vb = va;
@@ -1374,31 +1284,13 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
     double T = e->rck.vbv_plan_t * e->vbv.size;
     int nb = e->nbuf;
     int n = nb + 1;
-    /* Y264_VBV_ENTRY_OPT: the trajectory is read on the believed occupancy.
- * `fill` already carries the in-flight frames; the belief rides on top and
- * is capped at the buffer. The 0.9 fit below stays on the committed one. */
-    double opt = e->vbv_opt > 0.0 ? e->vbv_opt : 0.0;
-    if (opt > e->vbv.size - fill) opt = e->vbv.size - fill;
-    if (opt < 0.0) opt = 0.0;
-    double bfill = fill + opt;
-    double end_need = bfill >= T ? T : bfill + (T - bfill) * (n / (H > 1 ? H : 1));
+    double end_need = fill >= T ? T : fill + (T - fill) * (n / (H > 1 ? H : 1));
     /* An intra frame is one frame's spend, not a rate: asking its burst to
  * end above where it started squeezes exactly the frame the whole shot
  * predicts from. It may take the buffer down to half the target level;
  * below that the ordinary rule applies again. */
-    if (e->rck.vbv_plan_pred && type == 0 && bfill > 0.5 * T && end_need > 0.5 * T)
+    if (type == 0 && fill > 0.5 * T && end_need > 0.5 * T)
         end_need = 0.5 * T;
-    /* ...and while the belief is above the committed occupancy, the burst
- * does not take the committed one under Y264_VBV_ENTRY_RSV of the buffer
- * (an intra frame: half that), or any lower than it already is. The belief
- * spares the climb to the target level; it does not license spending what
- * was never promised, and without this floor a hard opening ran the
- * committed occupancy along zero on the fit test alone. */
-    double keep = 0.0;
-    if (opt > 0.0) {
-        keep = (type == 0 ? 0.5 : 1.0) * e->rck.vbv_entry_rsv * e->vbv.size;
-        if (keep > fill) keep = fill;
-    }
     int aoff = frame_qp(e, type, is_ref) - e->qp;   /* I takes its offset */
     for (int base = e->qp; base <= 51; base++) {
         double f = fill;
@@ -1407,13 +1299,11 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
             int cq = j == 0 ? base + aoff : base + 1;   /* B: the smallest cascade step */
             if (cq > 51) cq = 51;
             double c = j == 0 ? C : e->rcp_bcvi[j - 1];
-            double bits = (j == 0 ? va : vb) * c / pow(2.0, (cq - 12) / 6.0) * shock;
+            double bits = (j == 0 ? va : vb) * c / pow(2.0, (cq - 12) / 6.0);
             if (bits > 0.9 * f) ok = 0;
             f = rcbuf_refill(&e->vbv, f - bits);
         }
-        double fe = f + opt;
-        if (fe > e->vbv.size) fe = e->vbv.size;
-        if (ok && fe >= end_need && f >= keep)
+        if (ok && f >= end_need)
             return base;
     }
     return 51.0;
@@ -1443,7 +1333,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * only holds back an anchor the retry already covers (samsung CRF+VBV at
  * one thread read +3.6% BD-VMAF-NEG with the floor, -3.2% without). */
     if (type != 2 && !e->rcp_vbv_tight && e->pool && e->bm_rvbv.have[type]) {
-        int lo = rcbm_qp_floor(&e->bm_rvbv, type, vbv_qpd_env());
+        int lo = rcbm_qp_floor(&e->bm_rvbv, type, VBV_QPD);
         if (e->qp < lo) e->qp = lo > 51 ? 51 : lo;
     }
     int coded = frame_qp(e, type, is_ref);
@@ -1517,10 +1407,10 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * to ride predictions (pre-IDR B's flush as P frames, each deciding
  * on full actuals) and its intra spike is the classic underflow shape
  * -- stay serial there and reconcile exactly. */
-        double rhi = vbv_rhi_env();
+        double rhi = VBV_RHI;
         if (e->rcp_vbv_shock > rhi)
             rhi = e->rcp_vbv_shock;     /* recent overshoot widens the margin */
-        double cj = vbv_cjump_env();
+        double cj = VBV_CJUMP;
         double fill = e->vbv.fill;
         tight = 0;
         /* Content-jump guard: the scale is calibrated on the regime it has
@@ -1558,7 +1448,7 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         double rfq = e->crf_on && !e->abr_on ? e->crf_pre_qp
                    : e->vbv_cbr && e->abr_rf2 && e->abr_qp > 0 ? e->abr_qp + e->crf_dc : 0.0;
         if (rfq > 0 && rfq < gq && e->bm_rvbv.have[1]) {
-            double reg = e->bm_rvbv.qp[1], lo = reg - vbv_qpd_env();
+            double reg = e->bm_rvbv.qp[1], lo = reg - VBV_QPD;
             gq = rfq > lo ? rfq : lo;
             if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
         }
@@ -1573,7 +1463,7 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         double vs2 = rcp_vbv_scale_eff(e, 2);
         double bqp = e->qp + 1;
         if (e->bm_rvbv.have[2]) {
-            int lo = rcbm_qp_floor(&e->bm_rvbv, 2, vbv_qpd_env());
+            int lo = rcbm_qp_floor(&e->bm_rvbv, 2, VBV_QPD);
             if (bqp < lo) bqp = lo;
         }
         double qb = pow(2.0, (bqp - 12) / 6.0);
@@ -1640,40 +1530,6 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
     if (!tight && e->rck.vbv_low > 0.0 && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && e->vbv.fill < e->rck.vbv_low * e->vbv.size)
         tight = 1;
-    /* Y264_VBV_EXIT_HARD (default 0 = off): the exit level held in coded
- * bytes. The corridor's wall tests a prediction, and a pipelined burst is
- * never checked against what it coded: a P four frames before a join, the
- * anchor after a cut the wall had just raised to QP 48, was priced from
- * its inter cost, decided at QP 33 and took 44% of the buffer (Big Buck
- * Bunny 1080p at 1087 kbit/s). No multiplier on a prediction covers that;
- * the frame's intra cost does, since a frame costs about its intra price
- * at most. So a burst whose walk, every frame priced as intra at the
- * instance's measured intra scale, would end under the corridor's line
- * takes the serial schedule, where each frame is re-coded against its
- * measured size and the wall. The gate runs ahead of the decide and the
- * base QP it reads is the last frame's, which after a raised intra frame
- * is far above what the rate factor gives the next anchor: price at the
- * lower of the two, less the one step a decide may drop. A pure function
- * of decided state. It costs the pipelined schedule on those bursts, and
- * a cut the buffer cannot hold at QP 51 still gets through. */
-    if (!tight && e->rck.vbv_exit_hard && e->vbv_exit_n > 0 && e->bm_rvbv.have[0]) {
-        int n = e->nbuf + 1;
-        int rem = e->vbv_exit_n - e->vbv_ndec - n;      /* frames after the burst */
-        if (rem < 0) rem = 0;
-        double need = e->vbv_seg_h - rem * e->vbv_exit_k * e->vbv.rate;
-        double ki = e->bm_rvbv.k[0];
-        double bq = e->qp;
-        if (e->abr_qp > 0 && e->abr_qp < bq) bq = e->abr_qp;
-        bq -= e->qp_step;
-        double f = e->vbv.fill;
-        f = rcbuf_refill(&e->vbv, f - ki * e->rcp_arr_cvi / pow(2.0, (bq - 12) / 6.0));
-        double qb = pow(2.0, (bq + 1 - 12) / 6.0);
-        for (int i = 0; i < e->nbuf; i++)
-            f = rcbuf_refill(&e->vbv, f - ki * e->rcp_bcvi[i] / qb);
-        if (f < need) tight = 1;
-    }
-    if (vbv_force_env())
-        tight = 0;                          /* measurement-only override */
     e->rcp_vbv_tight = tight;
     e->rcp_vbv_ntight += tight;
     if (rcp_dbg_on())
@@ -1687,7 +1543,7 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * may be streaming under the staircase. The prediction is the model's own
  * expectation at the decided coded QP, so prediction error == model error and
  * the err*0.1 correction absorbs it. */
-/* RF2 opening QP (Y264_ABR_RF2_SEED, default 2). The cumulative rate factor
+/* RF2 opening QP. The cumulative rate factor
  * never forgets its opening: a first second coded far from where the loop
  * settles is a deficit or surplus the proportional overflow term repays only
  * slowly (its window grows with sqrt(t)). A seed from the resolution alone opened
@@ -1695,17 +1551,12 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * ducks 720p 28 Mbit/s at QP 6 (settles 27) and riverbed at 15 (settles 34) --
  * the -14% / +18% board misses. A fixed opening QP for every ABR encode
  * (what the reference encoder's first frames show) is right for foreman and wrong by 15 QP for stefan.
- *   mode 0: no lowres fit; the opening comes from the intra fit
- *           (rfm_open_intra_qp);
- *   mode 1: was a fixed QP (Y264_ABR_RF2_SEEDQ, refused and removed); now
- *           the same as mode 0;
- *   mode 2: fitted on the lookahead window: the median lowres inter cost per
- *           macroblock of the frames that arrived before the first decide and
- *           the target bits per macroblock,
- *             qp = 8.69 + 2.92 log2(cme/mb) - 1.32 log2(bits/mb), clamped 15..45,
- *           least squares on 17 non-board cells (fit rms 3.3 QP), scoring the
- *           ten board clips out of sample at rms 2.5 / max 4.1 QP
- *           (local record abr-undershoot-2026-09-04). */
+ * So the opening is fitted on the lookahead window: the median lowres inter
+ * cost per macroblock of the frames that arrived before the first decide and
+ * the target bits per macroblock,
+ *   qp = 8.69 + 2.92 log2(cme/mb) - 1.32 log2(bits/mb), clamped 15..45,
+ * least squares on 17 non-board cells (fit rms 3.3 QP), scoring the ten
+ * board clips out of sample at rms 2.5 / max 4.1 QP. */
 /* The opening fit's input: the median lowres cost of the oldest 32 buffered
  * frames, -1 when fewer than two are usable. Its own function so that rate-
  * control replay can supply it (rcreplay.h). */
@@ -1724,8 +1575,6 @@ static double rf2_open_cme(const yah264_encoder_t *e, int *nusable)
 
 static double rf2_open_qp(yah264_encoder_t *e, int *flat)
 {
-    int mode = (int)e->rck.rf2_seed;
-    if (mode != 2) return 0.0;
     /* The lookahead ring at the first decide: every buffered frame's
  * min(intra, vs-previous) lowres sum, the same metric the rcp decide
  * reads per frame. The oldest entry is the frame being decided (its
@@ -1738,15 +1587,13 @@ static double rf2_open_qp(yah264_encoder_t *e, int *flat)
  * frame being decided was already popped -- so it is a live sample. */
     int n = 0;
     double cme = RCR_VAL(e->rcr, RCR_RF2CME, rf2_open_cme(e, &n));
-    if (abr_rfqp_trace())
-        fprintf(stderr, "RFOPEN mode=%d la_n=%d usable=%d\n", mode, e->la_n, n);
     if (cme < 0.0) return 0.0;
     double nmb = (double)(e->width_in_mbs * e->height_in_mbs);
     if (nmb <= 0 || cme < 1.0 || e->abr_target_bpf <= 0) return 0.0;
     double qp = e->rck.rf2_seed_a
               + e->rck.rf2_seed_b * log2(cme / nmb)
               + e->rck.rf2_seed_c * log2(e->abr_target_bpf / nmb);
-    /* Y264_ABR_RF2_FLOORFB (default 1): a fit below its floor is a fit outside
+    /* A fit below its floor is a fit outside
  * the range it was fitted on, not a QP. The fit's cells were all 1080p or
  * below and none animation; flat 4K animation reads a lowres cost per
  * macroblock so small that it lands far below the floor (bbb 2160p: the
@@ -1754,18 +1601,12 @@ static double rf2_open_qp(yah264_encoder_t *e, int *flat)
  * 15 coded the first I frame at QP 15 with half the encode's bits (ABR
  * +35%, VBR +14% BD-VMAF-NEG against the reference). Under the floor the
  * opening falls back to the intra fit instead. A fit inside
- * [15, 45] is untouched. 0 restores the clamp. */
-    if (qp < 15 && e->rck.rf2_floorfb) {
+ * [15, 45] is untouched. */
+    if (qp < 15) {
         *flat = 1;
-        if (abr_rfqp_trace())
-            fprintf(stderr, "RFOPEN n=%d cme/mb=%.0f bits/mb=%.1f -> fit %.2f under the floor: intra fit\n",
-                    n, cme / nmb, e->abr_target_bpf / nmb, qp);
         return 0.0;
     }
-    if (qp < 15) qp = 15;
     if (qp > 45) qp = 45;
-    if (abr_rfqp_trace())
-        fprintf(stderr, "RFOPEN n=%d cme/mb=%.0f bits/mb=%.1f -> qp %.2f\n", n, cme / nmb, e->abr_target_bpf / nmb, qp);
     return qp;
 }
 
@@ -1782,8 +1623,6 @@ static double rfm_open_intra_qp(const yah264_encoder_t *e, double C)
     if (cpm < 1.0) cpm = 1.0;
     if (bpm < 1.0) bpm = 1.0;
     double qp = e->rck.open_ia + e->rck.open_ib * log2(cpm) + e->rck.open_ic * log2(bpm);
-    if (abr_rfqp_trace())
-        fprintf(stderr, "RFOPEN intra C/mb=%.0f bits/mb=%.1f -> qp %.2f\n", cpm, bpm, qp);
     if (qp < 10) qp = 10;
     if (qp > 48) qp = 48;
     {   /* the opening I's offset under that level: see open_tex_* */
@@ -1807,58 +1646,20 @@ static double rfm_open_qp(yah264_encoder_t *e, double C)
     return oq > 0 ? oq : rfm_open_intra_qp(e, C) - (flat ? e->rck.open_imargin : 0.0);
 }
 
-/* Y264_VBV_ROWBRAKE_WALK (default 0 = the clip's own budget): see rb_note_budget. */
-double rb_walk_env(void)
-{
-    static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_VBV_ROWBRAKE_WALK"); v = s ? atof(s) : 0.0; if (v < 0) v = 0; }
-    return v;
-}
-
-/* The row brake's inputs, noted after the VBV clip: the budget the clip
- * tested the frame against (the same call on the same virtual fill, the
- * entry not pushed yet) and the frame's predicted size at its coded QP,
- * shock included. Read only: nothing here moves the decide. */
-static void rb_note_budget(yah264_encoder_t *e, struct rcp_pend *en)
-{
-    double bud = 0.0;
-    if (rcp_vbv_scale_eff(e, en->type) > 0.0) {
-        double fill;
-        if (rb_walk_env() > 0.0) {
-            /* Y264_VBV_ROWBRAKE_WALK=x: the in-flight frames charged at x times
- * their prediction instead of the clip's conservative r_hi (2.0) --
- * the budget the frame most likely has, not the worst case */
-            fill = e->vbv.fill;
-            for (int i = 0; i < e->rcp_n; i++) {
-                const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
-                fill = rcbuf_step(&e->vbv, fill, rb_walk_env() * p->vpred, NULL);
-            }
-        } else
-            fill = rcp_vbv_vfill(e, 0);
-        bud = vbv_limit_at(e, fill);
-    }
-    double shock = e->rcp_vbv_shock > 1.0 ? e->rcp_vbv_shock : 1.0;
-    en->rb_bud = bud;
-    en->rb_pred = en->vpred * shock;
-    e->rb_bud = en->rb_bud;
-    e->rb_pred = en->rb_pred;
-}
-
-/* Y264_ABR_DC (default 1; 0 = the output before 2026-10-09): the rate-factor
- * controller runs on the CRF path's field. Until now the absolute AQ anchor
+/* The rate-factor controller runs on the CRF path's field. Until now the absolute AQ anchor
  * and the anchor's frame-DC term (crf_frame_dc: the across-shot allocation,
  * worth 4-8% on multi-shot content under CRF) were CRF-only, so one-pass ABR
  * and capped VBR coded every shot at one base QP where our own CRF moves
  * several QP between a dark or flat shot and a busy one. On a 10-minute
  * 720p title at six threads plain ABR read 4.0% behind our own CRF curve
  * in BD-VMAF-NEG and reads 1.1% with it; capped VBR gains 0.9 points. Off
- * under CBR (2 arms it there), which was not measured. With it the anchor's base QP is the
+ * under CBR, which was not measured. With it the anchor's base QP is the
  * rate factor's QP plus the frame DC; the ledger credits each frame at its
  * coded QP minus that DC, so the factor converges on the constant-quality
  * level that spends the target, exactly a slowly adapted CRF. */
 static int abr_dc_on(const yah264_encoder_t *e)
 {
-    return e->abr_rf2 && e->aq_abs && e->rck.abr_dc > 0 && (!e->vbv_cbr || e->rck.abr_dc > 1);
+    return e->abr_rf2 && e->aq_abs && !e->vbv_cbr;
 }
 
 void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
@@ -1934,7 +1735,6 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     en.is_ref = (int8_t)is_ref;
     en.cplx = C;
     en.bits = -1.0;
-    en.qoff = e->mbtree_mean_off;
     double abr_scale_used = 0.0, tp_scaleterm = 0.0;
     int tp_have = 0;
     if (e->abr_on) {
@@ -1976,7 +1776,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         if (rcp_dbg_on())
             fprintf(stderr, "RCPE seq=%u err=%.0f\n",
                     atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1, err);
-        double target = e->abr_target_bpf - err * rcp_gain();
+        double target = e->abr_target_bpf - err * RCP_GAIN;
         if (target < 200) target = 200;
         double scale = abr_scale_for(e, type);
         double rceq = pow(C, 1.0 - abr_qcomp_env());
@@ -2008,14 +1808,14 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     if (e->vbv_on && e->vbv.size > 0 && abr_vbvov_frac() > 0 &&
                         (e->vbv_cbr || e->rck.abr_vbvov_vbr > 0)) {
                         /* The window is tied to the buffer under CBR (A6).
- * Capped VBR takes a wider one, Y264_ABR_VBVOV_VBR (0.75) of the
+ * Capped VBR takes a wider one, rck.abr_vbvov_vbr (0.75) of the
  * buffer, against its own bar (owner decision 2026-10-05: about +-6%
  * over a 6 s window; CBR keeps the tight one). 0.75 is the widest
  * that holds A6 inside it (stefan -4.8%, ducks +5.3% at the 1.5x
  * cap; 1.0 reads -6.6 / +6.1) and buys 0.7-2.7 BD points on tier S
  * VBR at one thread (foreman -8.0 -> -10.7%, stefan -7.9 -> -10.2%).
- * Both widen with the coded duration past Y264_ABR_VBVOV_GROW
- * seconds as (t / grow)^Y264_ABR_VBVOV_POW. */
+ * Both widen with the coded duration past rck.abr_vbvov_grow (6)
+ * seconds as (t / grow)^rck.abr_vbvov_pow (1). */
                         double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                         double t = bps > 0 ? wanted / bps : 0.0;
                         double cap = (e->vbv_cbr ? abr_vbvov_frac() : e->rck.abr_vbvov_vbr) * e->vbv.size;
@@ -2030,15 +1830,11 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * instance count made the pull at six threads six times too weak
  * (real titles landed 9 to 19% under or 8 to 12% over); unscaled,
  * every rung of eight real-title cells lands within 6.6% of its
- * target. Kept under CBR, whose window is the buffer-tied one.
- * Y264_RC_SHARE_OVN=1 scales everywhere, 0 nowhere. */
-                    int ovn = rc_share_ovn_env();
-                    if (shared && (ovn == 1 || (ovn == 2 && e->vbv_cbr)))
+ * target. Kept under CBR, whose window is the buffer-tied one. */
+                    if (shared && e->vbv_cbr)
                         win *= rc_shared_nlive(e);
                     fb = rfm_feedback_qp(e, err, win);
                 }
-                double qp_lim = qp_led;
-                int anch = 0;
                 /* Mid-stream I frames take the P track (P domain; frame_qp's
  * -3 is the I/P offset). Every other anchor takes the slew-limited
  * ledger QP plus the feedback. The opening frame is unlimited and
@@ -2047,8 +1843,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 double qp;
                 if (iq > 0) {
                     qp = iq;
-                    anch = 1;
                 } else {
+                    double qp_lim = qp_led;
                     if (!first) {
                         double sl = e->rck.rfm_slew;
                         if (e->rfm_open_fb) {
@@ -2073,14 +1869,6 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 if (qp > 51) qp = 51;
                 e->qp = qp_bound(e, (int)lround(qp));
                 e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
-                if (abr_rfqp_trace())
-                    fprintf(stderr, "RFQP seq=%u type=%d C=%.0f np=%d | rf2 work=%.0f owed=%.0f "
-                            "err=%.0f fb=%.3f qp_led=%.2f qp_lim=%.2f anch=%d qp=%.2f dc=%.2f moff=%.2f | live=rf2 qp=%d\n",
-                            atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1, type, C,
-                            np, work, wanted, err, fb, qp_led, qp_lim, anch, qp, dc, e->mbtree_mean_off, e->qp);
-            } else if (abr_rfqp_trace()) {
-                fprintf(stderr, "RFQP seq=%u type=2 C=%.0f np=%d | rf2 B on anchor base | live=rf2 qp=%d\n",
-                        atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1, C, np, e->qp);
             }
         } else {
             double open_qp = -1.0;
@@ -2114,30 +1902,18 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             double qscale = scale * rceq / target;
             double qp = 12.0 + 6.0 * log2(qscale);
             int anch = 0;
-            int tr_on = abr_rfqp_trace();
-            double tr_qp_eq = qp;                    /* default model, pre-clamp */
-            double tr_blur = rceq, tr_cplxr = 0.0, tr_wanted = 0.0, tr_rf = 0.0;
-            double tr_ovf = 1.0, tr_qp_raw = 0.0, tr_qp_rf = 0.0, tr_anch = -1.0;
-            /* CGUARD part 2: a degenerate frame must not move the rf
- * model's slew reference either. During a black opening the computed
- * QP sits on the slew's lower edge every frame, so the reference walks
- * down a full slew per frame and the post-cut frames pay it back at
- * QP~1. Same criterion as part 1 below. */
-            double cpm_g = C / (double)(e->width_in_mbs * e->height_in_mbs);
-            int degen = abr_cguard_on() && cpm_g < abr_cguard_thresh();
-            if (e->abr_rf || tr_on) {
+            if (e->abr_rf) {
                 /* The rate factor runs on the blurred complexity, a decayed
  * mean (rck.blur_decay per P/B frame), not the raw per-frame value.
  * I frames are excluded because our I complexity is full-res intra
  * SATD, a different domain from the lowres cme the P/B path uses. */
-                if (type != 0 && !degen) {   /* CGUARD: black frames must not drain the blur */
+                if (type != 0) {
                     double d = e->rck.blur_decay;
                     e->blur_csum = d * e->blur_csum + C;
                     e->blur_cwt = d * e->blur_cwt + 1.0;
                 }
                 if (type != 0 && e->blur_cwt > 0)
-                    tr_blur = pow(e->blur_csum / e->blur_cwt, 1.0 - abr_qcomp_env());
-                if (e->abr_rf) rceq = tr_blur;   /* the shadow (Y264_ABR_RFQP) leaves the default model's rceq alone */
+                    rceq = pow(e->blur_csum / e->blur_cwt, 1.0 - abr_qcomp_env());
                 /* The self-normalising rate factor. In-flight frames owe
  * their target on the owed side; their work is the current mean,
  * which is what the model would predict for them anyway. The
@@ -2148,11 +1924,9 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 double work = e->rfm_work;
                 if (np > 0 && n_done > 0) work += np * (e->rfm_work / n_done);
                 double rf = wanted / (work > 0 ? work : 1.0);
-                double q = tr_blur / (rf > 0 ? rf : 1.0);
+                double q = rceq / (rf > 0 ? rf : 1.0);
                 double qp_eq = 12.0 + 6.0 * log2(q > 0 ? q : 1e-9);
                 double fb = rfm_feedback_qp(e, err, rfm_window(e, wanted));
-                tr_cplxr = work; tr_wanted = wanted; tr_rf = rf;
-                tr_qp_raw = qp_eq + fb;
                 /* The per-type slew. WITHOUT IT the rate factor runs away on
  * content whose complexity signal legitimately collapses: sintel
  * opens on near-black frames with C ~ 1, so the work stops growing
@@ -2160,16 +1934,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * fourteen frames. Per type, because I, P and B complexities live in
  * different domains here. */
                 double qp_lim = e->slew_ref[type] >= 0 ? rfm_slew_qp(e, qp_eq, e->slew_ref[type], e->rck.pf_slew) : qp_eq;
-                if (!degen) e->slew_ref[type] = qp_lim;
-                tr_ovf = fb; tr_qp_rf = qp_lim + fb;
-                if (type == 0 && e->last_anchor_type != 0 && e->abr_cum_actual > 0)
-                    tr_anch = rfm_itrk_qp(e);
-                else if (type == 2 && e->last_ref_qp[0] >= 0)
-                    tr_anch = (e->last_ref_qp[0] +
-                               (e->last_ref_qp[1] >= 0 ? e->last_ref_qp[1] : e->last_ref_qp[0])) / 2.0;
-            }
-            if (e->abr_rf) {
-                qp = tr_qp_rf;
+                e->slew_ref[type] = qp_lim;
+                qp = qp_lim + fb;
                 /* I and B do not run the equation at all: I takes the
  * decayed P track, B the mean of the last two reference QPs.
  * frame_qp's cascade (I -3, B +1..4) is applied on top, the
@@ -2199,57 +1965,11 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * keeps the full swing. */
                 qp = rcstep_qp(qp, e->abr_qp - (e->bm_abr.meas[type] ? 4 : 2), e->abr_qp + 4);
             }
-            /* LAG WINDUP GUARD (Y264_RCP_QPD, off unless a lag budget is set).
- * The swing limit above bounds one STEP, and with zero lag that is
- * enough because an actual lands between every anchor's steps. Under
- * lag several decides run before anything lands, all reading the
- * same uncorrected error, so the ladder walks the full limit in one
- * direction repeatedly -- measured, it reaches QP 51 on akiyo and
- * comes back, with the per-decide sd going 4.5 -> 11.7. That is the
- * VBV round's extrapolation failure arriving in plain ABR, which had
- * never met it because it had never had anchor lag.
- *
- * Same device as Y264_VBV_QPD, and symmetric because this runaway
- * goes both ways: hold the decide within QPD of the regime the model
- * was actually calibrated at. Pure function of the accounted ledger,
- * so it is a coding-order fact like everything else here. */
-            int qpd = rcp_qpd_env();
-            if (qpd > 0 && e->bm_abr.meas[type] && !anch) {
-                double c = e->bm_abr.qp[type];
-                qp = rcstep_qp(qp, c - qpd, c + qpd);
-            }
             if (qp < 1) qp = 1;
             if (qp > 51) qp = 51;
-            /* DEGENERATE-COMPLEXITY GUARD (Y264_ABR_CGUARD). A frame whose
- * complexity sits at the floor -- sintel opens on ~13 near-black
- * frames, C=1258 against a clip mean two orders larger -- carries no
- * information about the rate model, but it still ratchets abr_qp
- * down to the clamp. The +/-4 swing limit then needs ~9 frames to
- * climb back, and on sintel those are exactly the frames after the
- * scene cut: we spend 76% of the clip's bits there where the reference
- * encoder's stream spends 24%. Under CRF, which has no cumulative state, we
- * concentrate 9.8% against its 17.6% -- so this is purely an RC-state defect, not
- * content. Code the frame at the computed QP, but do not let it move
- * the remembered one. */
-            /* The criterion has to be ABSOLUTE, per macroblock. A running mean
- * does not work here: the degenerate frames come FIRST, so they
- * define the mean and nothing is ever far enough below it. sintel's
- * black opening reads 1258/3600 = 0.35 per MB where the frame after
- * the cut reads 49523/3600 = 13.8, so a few units per MB separates
- * them cleanly. */
-            if (!degen) e->abr_qp = qp;
+            e->abr_qp = qp;
             e->qp = (int)lround(qp);
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
-            if (tr_on)
-                fprintf(stderr, "RFQP seq=%u type=%d C=%.0f rceq=%.1f blur=%.1f np=%d degen=%d | "
-                        "dflt err=%.0f target=%.0f scale=%.1f qp_eq=%.2f qp=%.2f | "
-                        "rf cplxr=%.0f wanted=%.0f rf=%.4f ovf=%.3f qp_raw=%.2f qp_lstep=%.2f anch=%.2f | "
-                        "live=%s qp=%d\n",
-                        atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1,
-                        type, C, rceq, tr_blur, np, degen,
-                        err, target, scale, tr_qp_eq, e->abr_rf ? 0.0 : qp,
-                        tr_cplxr, tr_wanted, tr_rf, tr_ovf, tr_qp_raw, tr_qp_rf, tr_anch,
-                        e->abr_rf ? "rf" : "dflt", e->qp);
         }
         en.rceq = rceq;
         abr_scale_used = scale;
@@ -2305,7 +2025,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * Floor the flying decide at calqp - QPD; the next anchor re-syncs
  * on actuals and the serial equations take it from there. Tight
  * bursts have per-frame actuals (the serial schedule) -- no floor. */
-        int lo = rcbm_qp_floor(&e->bm_rvbv, 2, vbv_qpd_env());
+        int lo = rcbm_qp_floor(&e->bm_rvbv, 2, VBV_QPD);
         if (e->qp < lo) {
             e->qp = lo > 51 ? 51 : lo;
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
@@ -2328,7 +2048,6 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         en.vcplx = Cv;
         en.vpred = vs > 0.0 ? vs * Cv / pow(2.0, (en.fqp - 12) / 6.0) : 0.0;
         en.tight = (int8_t)(e->rcp_vbv_tight ? 1 : 0);
-        rb_note_budget(e, &en);
     }
     if (rcp_dbg_on())
         fprintf(stderr, "RCPD seq=%u type=%d ref=%d C=%.0f qp=%d np=%d pp=%.0f ca=%.0f s0=%.0f s1=%.0f s2=%.0f\n",
@@ -2341,16 +2060,12 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     en.dcq = abr_dc_on(e) ? e->crf_dc : 0.0;
     en.acc_qp = e->qp - en.dcq;
     if (e->abr_rf2 && type == 0) {
-        /* Y264_ABR_RF2_IACC: 0 = credit an I at the P base current at its
- * decide (unbiased: bits at base = wanted at equilibrium whatever the
- * type mix); 1 = at the I's own coded QP (three below), which
- * under-credits intra bits by the I/P ratio and so biases the loop
- * toward spending on cut-heavy content. Default 1 (2026-09-04): +1..4%
- * closer to target and -0.8..-1.6% BD on foreman/bus/stefan/samsung. */
-        if (e->rck.rf2_iacc > 0)
-            en.acc_qp = en.fqp - en.dcq;
-        else if (!(e->abr_cum_actual <= 0 && e->rcp_n == 0) && e->slew_ref[1] > 0)
-            en.acc_qp = lround(e->slew_ref[1]);
+        /* An I is credited at its own coded QP (three below the P base),
+ * not at the P base current at its decide. That under-credits intra bits
+ * by the I/P ratio and so biases the loop toward spending on cut-heavy
+ * content: +1..4% closer to target and -0.8..-1.6% BD on
+ * foreman/bus/stefan/samsung. */
+        en.acc_qp = en.fqp - en.dcq;
     }
     en.seq = atomic_fetch_add_explicit(&e->rcp_seq, 1, memory_order_relaxed) + 1;
     if (type != 2) {
@@ -2383,7 +2098,6 @@ void rcp_head(yah264_encoder_t *e, int type, int is_ref,
         e->rcp_predecided--;
         e->qp = e->rcp[idx].base_qp;
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
-        e->rb_bud = e->rcp[idx].rb_bud; e->rb_pred = e->rcp[idx].rb_pred;
         return;
     }
     rcp_decide(e, type, is_ref, src);
@@ -2429,25 +2143,20 @@ double yah264_2pass_stat_weight(double bits, int qp)
  *
  * Kept from the current code: the complexity domain. `cost` here is
  * (bits+1) * qscale_of_pass1, the QP-invariant coding cost. Pass 1 records
- * one bits total per frame, so texture, motion and header bits are lumped
- * (tp_bexp is the one exponent we can fit). Because bits ~ cost/qscale and
- * qscale ~ cost^(1-qcomp), the implied bits still go as cost^qcomp, so the
+ * one bits total per frame, so texture, motion and header bits are lumped.
+ * Because bits ~ cost/qscale and qscale ~ cost^(1-qcomp), the implied bits still go as cost^qcomp, so the
  * per-GOP budget split in the CLI keeps using yah264_2pass_stat_weight and
  * stays in step with this. */
 
 static double tp_qp2qscale(double qp)  { return pow(2.0, (qp - 12.0) / 6.0); }
 double tp_qscale2qp(double q)   { return 12.0 + 6.0 * log2(q); }
 
-/* Modelled bits for record i at qscale q. tp_bexp 1.0 reproduces the model the
- * greedy loop used (bits strictly inverse to qscale). An exponent above 1
- * models skip blocks making texture bits fall off faster than 1/qscale. With
- * one lumped total the exponent is the only handle we have. */
+/* Modelled bits for record i at qscale q: the model the greedy loop used,
+ * bits strictly inverse to qscale. */
 double tp_bits_at(const yah264_encoder_t *e, int i, double q)
 {
     if (q < 0.1) q = 0.1;
-    if (e->tp_bexp == 1.0)
-        return e->tp_cost[i] / q;
-    return e->tp_cost[i] * pow(e->tp_qrec[i] / q, e->tp_bexp) / e->tp_qrec[i];
+    return e->tp_cost[i] / q;
 }
 
 /* The plan's shape constants. Each was picked by a sweep on the two-pass band
@@ -2461,9 +2170,11 @@ double tp_bits_at(const yah264_encoder_t *e, int i, double q)
  * 2 and 4 swung foreman +0.63% the wrong way.
  * TP_BLUR_SIGMA 0.5: gaussian sigma in frames per unit of --cplxblur, so the
  * default 20 is sigma 10. Swept 0.25/0.5/0.75/1.0; 0.75 and 1.0 helped
- * sintel by 1.1-1.6% and cost akiyo 0.1-0.8%, 0.25 lost on most clips. */
+ * sintel by 1.1-1.6% and cost akiyo 0.1-0.8%, 0.25 lost on most clips.
+ * TP_CWARM 4: accounted frames before the measured model bias engages. */
 #define TP_IWIN       8
 #define TP_BLUR_SIGMA 0.5
+#define TP_CWARM      4
 
 /* Frame-type shaping. The complexity curve decides the P frames; the I and B
  * frames are placed relative to them, because a frame's own coding cost does
@@ -2692,7 +2403,7 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
 
     /* The measured model bias: actual bits over MODELLED bits at the QPs those
  * frames were really coded at. 1.0 until enough frames have landed. */
-    double k = (e->tp_nacc >= e->tp_cwarm && e->tp_kmod >= 1 && e->tp_kact > 0)
+    double k = (e->tp_nacc >= TP_CWARM && e->tp_kmod >= 1 && e->tp_kact > 0)
              ? e->tp_kact / e->tp_kmod : 1.0;
 
     if (e->tp_resolve) {
@@ -2831,83 +2542,6 @@ int crf_cplx_env(void)
     return v;
 }
 
-/* Per-term overrides, so the bundle can be attributed. Unset = follow the
- * master gate; 0/1 forces the term on its own. The mb-tree strength has
- * Y264_MBTREE_STRENGTH already and the B cascade has Y264_CRF_PBSCALE, so
- * these two complete the set. */
-int crf_aqabs_env(void)
-{
-    static int v = -3;
-    if (v == -3) { const char *s = getenv("Y264_CRF_AQABS"); v = s ? (atoi(s) ? 1 : 0) : -1; }
-    return v < 0 ? crf_cplx_env() : v;
-}
-
-/* True only when the knob was set EXPLICITLY, so the ABR round can arm the
- * absolute anchor outside CRF without the default flip doing it silently. */
-int crf_aqabs_forced(void)
-{
-    const char *s = getenv("Y264_CRF_AQABS");
-    return s && atoi(s);
-}
-
-
-int crf_pb0_env(void)
-{
-    static int v = -3;
-    if (v == -3) { const char *s = getenv("Y264_CRF_PB0"); v = s ? (atoi(s) ? 1 : 0) : -1; }
-    return v < 0 ? crf_cplx_env() : v;
-}
-
-/* B-frame QP cascade scale under the gate. With mb-tree on, non-reference
- * B's already miss the mb-tree offsets, which carries most of the B economy;
- * our extra 1..d+1 cascade on top can double-count, and since B's are ~3/4 of
- * the frames it is most of the residual under-spend at equal CRF. 0 drops the
- * cascade -- but that is not a free win: dropping the cascade is worth -8.92% BD on ducks and
- * +7.00% on sintel, a bidirectional trade with no net, so the default keeps
- * yah264's cascade and this stays a probe. */
-double crf_pbscale_env(void)
-{
-    static double v = -1e9;
-    if (v < -1e8) { const char *s = getenv("Y264_CRF_PBSCALE");
-                    v = s ? atof(s) : 1.0; }
-    return v;
-}
-
-/* Half-width of the QP window an ABR decide may occupy around the regime its
- * model was calibrated at (the ABR twin of Y264_VBV_QPD). 0 = no guard, and
- * that is the DEFAULT so the shipped path is untouched.
- *
- * It applies at every lag setting, including 0, and that is deliberate rather
- * than incidental: gating it on lag>0 made "lag1 with the guard" vs "lag0
- * without it" read as a 48% BD WIN for the lag, which is not a statement about
- * lag at all -- a tight clamp is close to constant-QP and that beats this ABR
- * ladder's own allocation on a static clip. Isolating the lag needs the guard
- * on both arms. Resolved in warm_lr_statics. */
-int rcp_qpd_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RCP_QPD"); v = s ? atoi(s) : 0; }
-    return v;
-}
-
-/* rcp warm length (serial-tight decides per encoder before the lag begins)
- * and the ABR error-correction gain; tunables for re-calibration. Warmed
- * statics: decides can run on the stair driver thread. */
-int rcp_warm_n(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RCP_WARM"); v = s ? atoi(s) : 12; }
-    return v;
-}
-
-
-double rcp_gain(void)
-{
-    static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_RCP_GAIN"); v = s ? atof(s) : 0.1; }
-    return v;
-}
-
 /* ABR qcompress for the pipelined decide. Warmed static: async-chain decides
  * run on the stair driver thread. */
 double abr_qcomp_env(void)
@@ -2926,96 +2560,6 @@ int rcp_dbg_on(void)
     return v;
 }
 
-/* Proportional overshoot charge for in-flight VBV entries: the virtual
- * buffer charges r_hi * vpred per pending frame, and the burst gate falls
- * back to serial when even that bound approaches the constraint. Corpus
- * measurement (12 runs, ~3k frames): the bits/vpred distribution has p50
- * ~0.8-0.9 and p90 ~1.8-2.3, but an UNBOUNDED tail (near-zero predictions,
- * regime shifts) -- so r_hi covers the proportional body only, and the tail
- * is carried by the extrapolation guards + the shock multiplier + the
- * content-jump gate (see below), which the compliance battery validates.
- * Warmed static (driver-thread decides). */
-double vbv_rhi_env(void)
-{
-    static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_VBV_RHI"); v = s ? atof(s) : 2.0; }
-    return v;
-}
-
-/* Y264_VBV_FORCE=1: measurement-only -- skip the serial fallback so every
- * burst pipelines (prediction-error instrumentation needs in-flight entries).
- * Config-deterministic like every rcp input; never set in production. */
-int vbv_force_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_FORCE"); v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
-
-/* Y264_VBV_BOUND=1: bound EVERY frame against its measured coded size, not
- * just the instance's first. Default off -- it costs the stair, for the reason
- * vbv_bound_all sets out. Resolved in warm_lr_statics. */
-int vbv_bound_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_BOUND"); v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
-
-/* Extrapolation guards (both warmed statics). QPD: how far below the model's
- * calibrated QP regime a PIPELINED B decide may go (the serial schedule has
- * no floor -- its per-frame actuals catch a dive within one frame; a flying
- * burst decides bframes+1 QPs blind, and the bits model under-predicts ~2x
- * per 6 QP of downward extrapolation on static content). CJUMP: complexity
- * ratio past the calibrated content regime at which the burst gate goes
- * tight (the missed-cut / fade-end shape: the scale is calibrated on the old
- * regime and no multiplier covers the jump). */
-int vbv_qpd_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_QPD"); v = s ? atoi(s) : 6; }
-    return v;
-}
-
-
-double vbv_cjump_env(void)
-{
-    static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_VBV_CJUMP"); v = s ? atof(s) : 4.0; }
-    return v;
-}
-
-/* Y264_VBV_CW: complexity-weighted VBV scale (see rcp_account). Default on.
- * Warmed static. */
-int vbv_cw_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_CW"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-
-/* Y264_VBV_FITLAW (default 1): 1 = the fit test reads the occupancy the frame
- * is removed from; 0 = the pre-2026-10-03 law that also counted the frame's own
- * refill (measurement arm: it underflows). Warmed static. */
-int vbv_fitlaw_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_FITLAW"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-
-/* Y264_VBV_SEGH (default unset = the CRF+VBV fill goal, rck.vbv_fill_frac):
- * the handoff occupancy a joined segment assumes
- * and the exit corridor steers to, as a fraction of the buffer. Warmed static. */
-double vbv_segh_env(void)
-{
-    static double v = -1.0;
-    static int done = 0;
-    if (!done) { const char *s = getenv("Y264_VBV_SEGH"); v = s ? atof(s) : -1.0;
-                 if (s && v < 0) v = 0; if (v > 1) v = 1; done = 1; }
-    return v;
-}
-
 /* Y264_VBV_STAT=1: report burst/fallback/clamp counts at encoder close. */
 int vbv_stat_on(void)
 {
@@ -3028,11 +2572,6 @@ int vbv_stat_on(void)
  * nal_ref_idc / dec_ref_pic_marking). src[] are the source planes to encode. */
 /* Per-frame QP from the base (P) QP. I frames drop a few QP (they are referenced
  * most; ip_ratio ~1.4 -> ~3 QP), B frames rise (pb_ratio; referenced B less). */
-/* Temporal-layer QP cascade for a B frame: deeper B's (nearer the leaves,
- * referenced by fewer or no frames) take a larger penalty. Depth 0 is the
- * flat-B case (bframes 1, no pyramid); the pyramid sets depth >= 1. Split out
- * of frame_qp so build_slice_prep can hand the same number to the frame
- * struct (lambda_casc) for the Y264_MB_LAMBDA=7 probe. */
 /* A6 (Y264_ABR_VBVOV, default 0.25; 0 disables): with a VBV the rate-factor
  * integrator's tolerance window is capped at this fraction of the buffer.
  * The plain-ABR window is 2 x tolerance x bitrate x sqrt(seconds elapsed),
@@ -3061,7 +2600,7 @@ double abr_vbvov_frac(void)
  * DEFAULT ON (2026-09-03). ABR ladders vs the unscaled controller, t1,
  * 120f: ducks -7.50%, riverbed -1.52, crowd_run -1.17, park_joy -0.24;
  * samsung, sintel, foreman, stockholm +0.00 (scale 1 there, byte-identical).
- * Always on; the Y264_ABR_PBRATE switch and its _LO/_HI overrides are gone. */
+ * Always on. */
 double abr_pbrate_scale(const yah264_encoder_t *e)
 {
     const double lo = 0.10, hi = 0.40;   /* bits per pixel per frame */
@@ -3105,38 +2644,6 @@ static int vbv_first_bounded(const yah264_encoder_t *e)
     return e->vbv_on && e->vbv_first_bound && !e->abr_on && !e->tp_pass;
 }
 
-/* Y264_VBV_BOUND: the same bound on EVERY frame rather than only the first.
- *
- * WHY THIS COSTS THE STAIR, and why that is a property of the defect and not a
- * shortcut. A retry needs a window in which the coded size is known and nothing
- * downstream has consumed the frame yet. emit_frame has one: build_slice, then
- * append_nal. The stair's burst anchor does not, and the reason is the stair's
- * whole point -- its B leaves are ROW-GATED on the anchor's publish watermark
- * (stair_chain, the pub_wait composition argument), so they are analyzed
- * against the anchor's recon while the anchor is still being coded. By the time
- * B->size is final in stair_drain, leaves have already been coded against the
- * recon a retry would change. There is no window; re-coding the anchor would
- * mean rewinding a whole burst's DPB stores, refring pushes, colmv application
- * and ledger entries.
- *
- * So a bound with full reach and a pipelined anchor are mutually exclusive
- * given this schedule, and the honest move is to take the one that is sound.
- * With the stair disengaged every frame reaches emit_frame's serial body, one
- * route, one window, and the bound applies to a frame regardless of which
- * thread count coded it -- no frame is bounded on one path and unbounded on
- * another. Measured cost, capped VBR only, 18 threads, median of 5:
- * samsung 1.15x, park_joy 1.25x, ducks 1.28x.
- *
- * fpipe goes with it. A leaf B is non-reference, so its recon feeds nothing and
- * a retry there IS structurally local -- but with the stair off it measured no
- * faster than the serial path (park_joy 1.69s vs 1.75s, inside the noise), and
- * keeping it would need an indexed rcp_reqp because both sibling leaves push
- * ledger entries before either NAL is appended. Not worth the surface. */
-int vbv_bound_all(const yah264_encoder_t *e)
-{
-    return e->vbv_on && e->vbv_bound_on && !e->abr_on && !e->tp_pass;
-}
-
 /* Capped ABR: the measured-size bound on every frame of a TIGHT burst.
  *
  * The burst gate already sends a burst down the serial schedule when its
@@ -3150,15 +2657,7 @@ int vbv_bound_all(const yah264_encoder_t *e)
  * QP is exact where every model is a guess.
  *
  * The gate is a pure function of decided state, so the same frames are bounded
- * at every thread count. Y264_VBV_ABOUND=0 restores the unbounded emit. */
-int vbv_abound_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_ABOUND"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-
-
+ * at every thread count. */
 static int vbv_abr_bounded(const yah264_encoder_t *e)
 {
     /* A VBV always rides the pipeline now, so the !rcp_on term (the old
@@ -3173,15 +2672,14 @@ static int vbv_abr_bounded(const yah264_encoder_t *e)
  * prediction cannot see: samsung 720p, CRF with a 480 kbit cap, one
  * thread, a 307 kbit anchor into a 277 kbit buffer once weighted P stopped
  * weighting the brightness drift before the cut. */
-    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight || !e->pool)
-        && vbv_abound_env();
+    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight || !e->pool);
 }
 
 /* Either bound wants the serial emit: W2 does not know a frame's size until
  * w2_drain, by which point the NAL is appended and the RC has consumed it. */
 int vbv_bounded_now(const yah264_encoder_t *e)
 {
-    return vbv_first_bounded(e) || vbv_bound_all(e) || vbv_abr_bounded(e);
+    return vbv_first_bounded(e) || vbv_abr_bounded(e);
 }
 
 
@@ -3228,7 +2726,6 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         if (f > e->vbv.size) f = e->vbv.size;
         if (f < 0) f = 0;
         e->vbv.fill = f;
-        e->vbv_opt = 0.0;               /* the exact occupancy: nothing to believe beyond it */
     }
     return 0;
 }

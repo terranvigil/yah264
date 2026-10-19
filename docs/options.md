@@ -135,12 +135,12 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--qpmin`, `--qpmax` | 0..51 | 0, 51 | Bounds on the coded QP the rate control may pick. Applied after the frame-type offsets, so they bound what is coded rather than the base QP the offsets came from. |
 | `--crf-max` | 1..51 | off | Ceiling on the QP the VBV may raise a `--crf` frame to. Needs `--crf` and a VBV. Without either it is refused, because nothing else raises the QP for it to bound. It bounds the raise and not the mapping: a frame the rate factor already put above the ceiling keeps the QP it was given. The buffer is then allowed to under-run. That is the trade, not a defect. See below. |
 | `--ratetol` | float, or `inf` | 1.0 | How far single-pass ABR may drift from its target before the correction answers, as a fraction of the target bitrate. Smaller tracks the rate closer and swings the quality more. `inf` takes the correction out and leaves the rate to the allocator. Under a VBV the buffer's own cap on the correction still applies. The default is today's ABR, byte for byte. `Y264_ABR_TOL` still overrides it. |
-| `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type. Reaches the single-pass ABR step clip and the two-pass allocator's. `Y264_ABR_QPSTEP` still overrides the ABR half. |
+| `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type. Reaches the single-pass ABR step clip and the two-pass allocator's. |
 | `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
-| `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
-| `--abr-model` | `default`, `rf` | `default` | ABR bit allocation. `rf` (spelled `x264` in older scripts, still accepted) spends a given bitrate markedly better and hits it less reliably. See below. |
+| `--aq-mode` | 1 or 2 | 2 | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
+| `--abr-model` | `default`, `rf` | `default` | ABR bit allocation without mb-tree (`--bframes 0 --rc-lookahead 0`). With mb-tree, both use the rate-factor ledger. `rf` is also accepted under its older spelling `x264`. See below. |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
 | `--ipratio`, `--pbratio` | float | 1.4, 1.3 | **Two-pass only.** The I-to-P and P-to-B qscale factors of the offline allocator. They keep x264's names, numbers and defaults. The single-pass modes anchor I and B their own way and never read these. |
@@ -174,29 +174,21 @@ The ceiling is read on the CODED QP after the frame-type cascade, where
 At `--crf-max 34` on foreman the P frames landed on 34 and the B frames on 37, a
 bound nobody can see in the picture.
 
-### `--abr-model rf`, and why it is not the default
+### `--abr-model rf` matters only without mb-tree
 
-`default` is the shipped allocator. `rf` selects the rate-factor one, which
-gives P frames a self-normalizing rate factor and anchors I and B to the running
-non-B QP track. An ABR encoder has two jobs: spending a bitrate well and hitting
-it exactly. They come apart here. `rf` is better at the first and worse at the
-second, so it is opt-in.
+ABR with mb-tree, which runs whenever there are B frames or a lookahead (the
+default), always uses the rate-factor ledger: P frames get a self-normalizing
+rate factor, and I and B frames are anchored to the running non-B QP track.
+`--abr-model` doesn't change that path. A one-thread foreman encode at
+500 kbit/s is byte-identical under `default` and `rf`, with or without
+`--no-mbtree`, because `--no-mbtree` skips propagation but leaves the ledger in
+place.
 
-**Spending it.** At 1200 kbit/s on samsung_720p the default's I frames are 3.4x
-smaller than x264's and its B frames 2.7x larger. `--abr-model rf` puts both
-within a few percent of x264's own sizes. Across the 12-clip band that is a
-median **-5.65% BD-rate**. 9 clips get better (samsung -26.6%, akiyo -49.2%) and
-3 get worse (ducks +5.8%).
-
-**Hitting it.** When the complexity signal collapses, usually on a near-black
-opening, the rate factor drifts. Its per-type slew (one `--qpstep` per frame)
-and the feedback term bound how far: sintel_720p at 1200 kbit/s reads **+4.4%
-over target** at 900 frames. Elsewhere the error is a warm-up transient that
-decays with length (ducks_720p at 25 Mbit/s: +11.2% at 180 frames, -0.6% at
-480).
-
-Choose it when quality per bit matters more than landing the target exactly. Do
-not choose it for a hard bitrate budget on unknown content.
+The flag matters only at `--bframes 0 --rc-lookahead 0`, where there is no
+mb-tree at all. There `default` falls back to the per-frame model, and `rf`
+keeps a rate factor on the blurred complexity instead. The older measurements
+that compared the two came from before the ledger was the default, and they
+haven't been re-run on this path.
 
 **`--qp`, `--bitrate` and `--crf` each name a mode. The last one on the command
 line wins**, as in x264. A warning on stderr names what the loser still does:
@@ -388,9 +380,10 @@ worse at both offsets tried (3 and 6).
 
 #### `--b-bias` is a tuning dial
 
-The adaptive placement keeps a candidate frame as a B while its best
-bidirectional lowres cost stays under 0.77 of its intra cost, and turns it
-into an anchor otherwise. `--b-bias` moves that 0.77 in a straight line: up to
+The adaptive placement keeps a candidate frame as a B while its lowres cost
+stays under 0.77 of its intra cost. That cost is, per block, the cheapest of
+the forward leg, the backward leg and intra. Otherwise the frame becomes an
+anchor. `--b-bias` moves that 0.77 in a straight line: up to
 1.0 at +100, where a frame becomes an anchor only if nothing predicts it
 better than intra, and down to 0 at -100, where every frame is an anchor. The
 B-run limit (`--bframes`), the key-frame interval and scene cuts don't move. At
@@ -434,7 +427,7 @@ bits. It is not a quality setting, and nothing here suggests moving it from 0.
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
 | `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
-| `--weightp` | 0\|1\|2 | 1 | Explicit weighted prediction on P slices. **0** clears `weighted_pred_flag`: no `pred_weight_table` in any P slice header, and the weight leaves the prediction and the search alike. It is the one flag that can LOWER the declared profile. Annex A.2.1 forbids the tool in Baseline and nothing else here asserted it, so a CAVLC stream with no B frames and no 8x8 transform declares Baseline at `--weightp 0` and Main at 1. **1** is the default and is what every encode before this flag did. It codes one luma weight and offset per active list-0 reference. The weight is estimated from the frame's DC ratio against that reference, because that ratio is what a fade looks like from outside. Chroma weights stay identity. **2** adds a second list-0 slot carrying that weight while the reference's own slot stays plain, so the mode decision picks weighted or plain per macroblock instead of per frame. It fires only where the frame-level estimate already did, and only where the weight wins on most of the picture but not all of it. It needs a slot to put the duplicate in, so it is **refused at `--ref 1`**. It is also refused with `--tff`/`--bff`. It is OFF by default. It costs +0.29% BD-VMAF-NEG on a CIF fade clip, and on ten of the twelve HD band clips it is inert and byte-identical to `--weightp 1`. [plan.md](plan.md) has the measurement. `Y264_WEIGHTP` overrides the flag in both directions. |
+| `--weightp` | 0\|1\|2 | 1 | Explicit weighted prediction on P slices. **0** clears `weighted_pred_flag`: no `pred_weight_table` in any P slice header, and the weight leaves the prediction and the search alike. It is the one flag that can LOWER the declared profile. Annex A.2.1 forbids the tool in Baseline and nothing else here asserted it, so a CAVLC stream with no B frames and no 8x8 transform declares Baseline at `--weightp 0` and Main at 1. **1** is the default and is what every encode before this flag did. It codes one luma weight and offset per active list-0 reference. The weight is estimated from the frame's DC ratio against that reference, because that ratio is what a fade looks like from outside. Chroma weights stay identity. **2** adds a second list-0 slot carrying that weight while the reference's own slot stays plain, so the mode decision picks weighted or plain per macroblock instead of per frame. It fires only where the frame-level estimate already did, and only where the weight wins on most of the picture but not all of it. It needs a slot to put the duplicate in, so it is **refused at `--ref 1`**. It is also refused with `--tff`/`--bff`. It is OFF by default. It costs +0.29% BD-VMAF-NEG on a CIF fade clip, and on ten of the twelve HD band clips it is inert and byte-identical to `--weightp 1`. [plan.md](plan.md) has the measurement. |
 | `--slices` | N | 1 | Cut each picture into N independently decodable slices on macroblock-row boundaries. Nothing crosses a slice's first row: not the intra reference samples, not the mode or motion-vector predictors, not the CAVLC nC or the CABAC contexts, not the `mb_qp_delta` chain. Each slice is its own NAL. A decoder can resynchronize at any of them and decode several at once. **The in-loop filter is not cut**: every slice header writes `disable_deblocking_filter_idc` 0, so the picture is deblocked whole and the slice edges do not show. It costs bits (see below). Clamped to the picture's macroblock row count, and to 256. Refused with `--hw`. |
 | `--constrained-intra` | | off | Sets the PPS `constrained_intra_pred_flag`. Intra prediction in a P or B slice then treats an inter-coded neighbor as unavailable, for the reference samples and for the intra mode predictor alike. An intra macroblock then decodes from intra data alone. It buys error resilience, and the price is bits. The prediction has less to work with, and I_16x16 plane and the corner-reading 4x4/8x8 modes drop out wherever the above-left neighbor is inter. No effect on I slices, where every neighbor is intra already. |
 | `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantizer **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
@@ -460,7 +453,7 @@ bits. It is not a quality setting, and nothing here suggests moving it from 0.
 | `--qcomp` | 0..1 | 0.6 | Rate-curve compression, x264's `--qcomp`. See the divergence below. |
 | `--cut-split` | off | File input only: put an IDR on every scene cut the pre-scan finds and split the GOP workers there, instead of at arithmetic keyint boundaries. Clean seek points at the cuts, and each shot is coded as its own unit. From a file the pre-scan is a pass of its own. It reads the file once for the scan, keeping one byte per frame, then rewinds and encodes through the ordinary bounded window. It needs about the memory a plain encode does (see [Memory](#memory-the-parallel-path-streams-through-a-bounded-window)). A pipe cannot be read twice, so there the input is held in memory until it reaches the limit, where the encode is refused. |
 | `--shot-table` | off | Print the pre-scan's shot table as JSON on stderr (first/last frame, mean and peak lowres intra cost, mean inter cost, ratio). Implies `--cut-split`. |
-| `--shot-crf` | off | Per-shot CRF from the shot table: `crf + 6(1-qcomp) log2(C_shot / C_title)`, where C is the shot's mean lowres inter cost, clamped to +-4 QP. Shots under `Y264_SHOT_MIN` frames merge into their predecessor, and each GOP takes its shot's CRF. Implies `--cut-split`. On ten real titles at 1080p (three 2-minute segments, seven 10-minute excerpts) it reads a median -1.0% BD-rate on VMAF-NEG (7 of 10 better) and -5.3% on PSNR-Y (all 10 better) against plain CRF. On the short multi-shot sequences it reads -1 to -4% against the default and -6 to -11% against `--cut-split` alone. Ignored by `--pass 1`. |
+| `--shot-crf` | off | Per-shot CRF from the shot table: `crf + 6(1-qcomp) log2(C_shot / C_title)`, where C is the shot's mean lowres inter cost, clamped to +-4 QP. Shots under 24 frames merge into their predecessor, and each GOP takes its shot's CRF. Implies `--cut-split`. On ten real titles at 1080p (three 2-minute segments, seven 10-minute excerpts) it reads a median -1.0% BD-rate on VMAF-NEG (7 of 10 better) and -5.3% on PSNR-Y (all 10 better) against plain CRF. On the short multi-shot sequences it reads -1 to -4% against the default and -6 to -11% against `--cut-split` alone. Ignored by `--pass 1`. |
 | `--scan-out FILE` | off | With `--cut-split` or `--shot-crf`: also save the pre-scan's result (the IDR map and the shot table) to FILE, so a later encode of the same input can skip the pre-scan. See [the saved pre-scan](#the-saved-pre-scan---scan-out-and---scan-in). |
 | `--scan-in FILE` | off | With `--cut-split` or `--shot-crf`: use a saved pre-scan instead of running one. Refused, never applied, unless the frame count, the input's geometry, the scan's settings and a hash of three frames' luma all match this encode. Output is byte-identical to running the scan. |
 | `--plan FILE` | off | Zones, one per line: `first last [idr] [qp+N\|qp-N]`, frames from 0 in input order, inclusive. `idr` forces a keyframe and a GOP boundary at `first`. The QP offset applies to every frame in the range on top of the rate control (CRF, CQP, ABR). The engine interface's plan (docs/engine-interface.md). |
@@ -533,11 +526,8 @@ and the prediction worse, and the residual pays for it. `none` is the extreme:
 every macroblock is coded whole. That makes a useful floor to measure against
 but not a setting to ship.
 
-One diagnostic environment variable narrows further **inside** a shape family.
-It still wins where they disagree, on the `--subpel` convention. `Y264_B_RECT=1`
-restores the B 16x8 and 8x16 searches, which are off at every preset. So
-`--partitions b8x8` asks for the B split family and gets the quadrant split. The
-rectangles need the variable as well.
+The B 16x8 and 8x16 searches are off at every preset. So `--partitions b8x8`
+asks for the B split family and gets the quadrant split.
 
 ### The three low-rate decision gates
 
@@ -690,12 +680,8 @@ the damage: at the bottom of a 1080p ladder the verdict's wrong skips run
 between 11% and 17% across every decile of every band field there is. There is
 no band to arm it in.
 
-`Y264_P_PART_GATE`, `Y264_B_PREME_SKIP=<mode>[,<bound>]`, `Y264_RD_SURV_RANK`,
-`Y264_LR_SETTLE`, `Y264_LR_SUBGATE`, `Y264_MBT_DEPFLOOR`, `Y264_B_INTRA_BAND`
-and `Y264_B8_BAND` override all eight in either direction, on the `--subpel`
-convention. `Y264_BAND_ROWS` sets the band width in macroblock rows (2).
-`Y264_BAND_TAB=1` builds the table even when no band rule is armed, and 0 never
-builds it. `Y264_BAND_PRECOMP=1` moves the P sub-partition gate's two interlocks
+`Y264_MBT_DEPFLOOR` overrides its flag in either direction. `Y264_BAND_ROWS`
+sets the band width in macroblock rows (2). `Y264_BAND_PRECOMP=1` moves the P sub-partition gate's two interlocks
 into the frame-open pass. It is byte-identical but off, because the gate's
 lambda test already screens most macroblocks out before either interlock is
 consulted.
@@ -762,7 +748,7 @@ Three of them do not mean quite what the x264 flag of the same name means:
  *fastest* mode but this library's "unset", which means the slowest (10), so
  accepting it would do the opposite of what an x264 user meant.
 - **`--qcomp` reaches the ABR curve and the mb-tree strength derived from it,
- not the CRF or two-pass curves**, which carry their own (`Y264_TP_QCOMP`).
+ not the CRF or two-pass curves**, which carry their own fixed 0.6.
  The reference documents `--qcomp` as one global curve compression.
 - **The deadzone flags are not a no-op at their own defaults.** Passing either
  swaps the exact shipped expression (intra `step/3`, inter `step/6`) for the
@@ -773,8 +759,7 @@ Three of them do not mean quite what the x264 flag of the same name means:
 **`--trellis` takes all three of x264's levels** and defaults to 1, as x264
 does. 0 is RDOQ off everywhere, with the plain deadzone. 1 quantizes the trials
 with the deadzone and re-encodes only the winner with RDOQ. 2 runs RDOQ in every
-mode decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ
-back in every trial at level 1.
+mode decision.
 
 **`--weightp` takes all three of x264's levels** and defaults to 1, so explicit
 P-slice weighted prediction is on unless you turn it off. See the row above for
@@ -1025,7 +1010,7 @@ rate and DPB size per Annex A.
 
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
-| `--threads` | N or `auto` | 0 = auto (online cores) | Total thread budget, split across GOP workers and in-frame wavefront threads. |
+| `--threads` | N or `auto` | 0 = auto: online cores, at most 16 | Total thread budget, split across GOP workers and in-frame wavefront threads. |
 | `--max-memory` | MiB | half of physical RAM | Memory budget for the threaded encode. When the GOP workers would not fit, fewer run at once, each with a wider wavefront. See [Memory](#memory-the-parallel-path-streams-through-a-bounded-window). |
 | `--sync-lookahead` | frames or `auto` | auto | Input frames buffered so the lookahead runs ahead of the encode on its own thread. `0` disables. A negative count is refused. |
 
@@ -1100,7 +1085,7 @@ An unknown preset name is an error, not a warning.
 | --- | --- |
 | `grain` | psy-trellis 1.0, psy-rd 1.5. The 1.5 was a measured VMAF-NEG win on heavy grain against a 1.0 default. The default has since moved to 2.0, so the tune now lowers psy-rd and has not been re-measured against it. |
 | `film` | psy-trellis 0.5. psy-rd left at the 2.0 default. The film value has not been BD-measured for want of a film clip. |
-| `animation` | psy-trellis 0.5, aq-strength 0.6, and bframes +2 (capped at 8). |
+| `animation` | 4 more B frames, only when `--bframes` isn't given and the preset's count is under 8. psy-trellis and AQ stay at the preset's values: raising one and lowering the other measured as a coin flip across two cartoon clips. |
 | `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. |
 | `ssim` | psy-rd 0, psy-trellis 0, AQ kept. |
 | `zerolatency` | bframes 0, rc-lookahead 0, sync-lookahead off. |
@@ -1199,15 +1184,14 @@ queue will hand out. The store is `(GOPs in flight + 1) x 16` frames whatever
 the title length and however fast the disk delivers: 272 frames (611 MiB) on a
 ten-minute 1920x818 title at default threads. The frames are the same bytes in
 any order, so the stream is the one an in-order reader writes, at every thread
-count. `Y264_STREAM_SEEK=0` restores the in-order reader.
+count.
 
 **From a pipe**, the reader has to read in display order, so to start a GOP it
 must hold every frame between the oldest GOP still coding and the new one. The
 window is `(--threads + 1) x --keyint` frames, narrowed to read-ahead once the
 workers start. Early dispatch hands GOPs out in display order as the reader
 reaches them, which keeps the GOPs in flight contiguous (558 frames on the same
-title). Above 1080p a store ceiling of an eighth of physical RAM applies
-(`Y264_STREAM_STORE_MB`).
+title). Above 1080p a store ceiling of an eighth of physical RAM applies.
 
 What remains is the GOP workers themselves. Each one is a whole encoder, with
 its lookahead ring, reference and half-pel planes, mb-tree arrays and per-frame
@@ -1424,7 +1408,7 @@ Options that differ, and how:
 | `--crf` | The CRF scale moved with this release. The frame-level AQ strength under uncapped CRF went from 1.04 to 1.3 (capped CRF keeps 1.04), so at the same CRF value busy content now codes smaller than it did before: 5% on foreman, 13% on stefan and 19% on bus at CRF 23. Quality per bit is better. If you tuned a CRF value on an earlier yah264, check your sizes again, and compare encoders at matched size or quality, never at matched CRF. |
 | `--crf 0` | x264's lossless. Not implemented here, and refused rather than accepted, because `rc.rf = 0` means "CRF unarmed" in the param struct. |
 | `--direct` | x264's `none` is not implemented and is refused. `auto` (the default, as in x264) picks per slice by skippability. `spatial` and `temporal` behave the same as x264's. |
-| `--qp` | x264 forces mb-tree and AQ off at constant QP. yah264 forces AQ off *at the CLI* but leaves mb-tree running. `--qp 26` is not the same workload on both encoders. |
+| `--qp` | Both encoders turn mb-tree and AQ off at constant QP, so `--qp N` is the same workload on each. |
 | `--scenecut` | On the CLI, `--scenecut 0` means off, same as x264. In the C API, `param.scenecut = 0` means **default (40)** and off is spelled with a negative. Assign `YAH264_SCENECUT_OFF`. See [Calling it from C](#calling-it-from-c). |
 | `--sync-lookahead` | Same 0-means-off spelling on the CLI. The API spells off with a negative: assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
 | `--input-y4m` / `--input-raw` | x264 sniffs the input format. Here the two are separate flags and nothing is guessed. |
@@ -1590,7 +1574,7 @@ traps but will still surprise:
 
 ## Environment variables
 
-The encoder reads **over 300 distinct `Y264_*` environment variables** in C
+The encoder reads **about 160 distinct `Y264_*` environment variables** in C
 code. [knobs.md](knobs.md) is generated from the source and carries the count.
 Almost none of them are features. They are how this project ships an experiment
 without a rebuild. The great majority are measurement scaffolding that happens
@@ -1602,18 +1586,13 @@ thumb: if it is not in the first table, the answer is no.
 Shared semantics worth knowing before you set any of them:
 
 - **Most are read once and cached** in a lazy static, warmed on the main thread
- at encoder open. Changing one mid-process does nothing. Three re-read per
- call: `Y264_MBTREE_MVLAMBDA`, `Y264_ABR_QCOMP` on the serial path, and
- `Y264_DBG_CPLX`.
+ at encoder open. Changing one mid-process does nothing. `Y264_MBTREE_STRENGTH`
+ is read again on every mb-tree pass.
 - **Some are presence-only**, so setting them to `0` still turns them *on*:
  `YAH264_NO_ASM`, `Y264_RC_TRACE`, `Y264_TP_DBG`, `Y264_MBTREE_DBG`,
- `Y264_MBT_PRE_DBG`, `Y264_DBG_CPLX`. `Y264_WF_THREADS` is half-presence-only:
- its mere presence disables the thread-cap clamp, separately from its value.
-- **Some test one literal character.** `Y264_ME_LAMBDA` and `Y264_WF_PREDQP`
- only act on exactly `0`. `Y264_VITERBI` acts on anything that is not `0`.
- `Y264_NO_SCENECUT` only acts on exactly `1`, so `=2` does nothing.
-- **Some are scaled.** `Y264_TP_BEXP`, `Y264_TP_IPF` and `Y264_TP_PBF` are
- percentages divided by 100. The four `Y264_NTP_SPIN*` are microseconds.
+ `Y264_MBT_PRE_DBG`, `Y264_DBG_CPLX`.
+- **Some are scaled.** `Y264_TP_IPF` and `Y264_TP_PBF` are percentages divided
+ by 100.
 
 ### Tier 1: worth knowing about
 
@@ -1623,37 +1602,27 @@ Escape hatches, and knobs with no CLI equivalent.
 | --- | --- | --- |
 | `YAH264_NO_ASM` | asm on | Force every scalar C path. Presence-only, so `=0` also disables asm. Promoted to `--no-asm`, and still overrides it. |
 | `Y264_SIMD_FORCE` | unset | Cap the binary at one SIMD tier: `none`, `sse4`, `avx2`, `avx512`. It clears the CPU feature bits above the tier it names, so one binary runs the way the lower-tier build would have. Output does not move, because every kernel is bit-exact with its C reference. This is a speed axis and never a quality one. `none` is the twin of `YAH264_NO_ASM`. On aarch64 there is one tier and nothing above it to cap, so the three x86 names do nothing there. An unrecognized value changes nothing rather than dropping to C, so a typo cannot be read as a result. The build-time twin is meson's `-Dsimd=`, which leaves the tier out of the binary instead of routing past it. |
-| `Y264_SUBPEL` | preset | The subpel pattern: 0 square, 1 diamond, 2 capped diamond. Promoted to `--subpel`, and still overrides it. |
 | `Y264_UMH_RANGE` | 16 | UMH search radius in integer pels. Promoted to `--merange`, and still overrides it. |
 | `Y264_ABR_QCOMP` | 0.6 | The ABR rate curve's compression, and the mb-tree strength derived from it. Promoted to `--qcomp`, and still overrides it. |
-| `Y264_AQ_DC` | 1.3 under uncapped CRF, 1.04 otherwise (capped CRF included) | The AQ frame-level strength, added to the CRF base QP as its rate-equivalent difference from the per-MB field's strength: the across-shot allocation term. Under one-pass ABR and capped VBR it feeds the rate model instead. CBR (unless `Y264_ABR_DC` is above 1), two-pass and CQP don't use it. Fitted by sweep. |
+| `Y264_AQ_DC` | 1.3 under uncapped CRF, 1.04 otherwise (capped CRF included) | The AQ frame-level strength, added to the CRF base QP as its rate-equivalent difference from the per-MB field's strength: the across-shot allocation term. Under one-pass ABR and capped VBR it feeds the rate model instead. CBR, two-pass and CQP don't use it. Fitted by sweep. |
 | `Y264_DZ_INTRA` / `Y264_DZ_INTER` | unset | Quantizer rounding bias in 1/64 units. This is the encoder's own scale, **not** the CLI flag's, which is `32` minus this. Promoted to `--deadzone-intra`/`--deadzone-inter`, which do the inversion. Both still override. |
 | `Y264_AQ_MODE` | 2 | 1 is plain log2-variance AQ, 2 and above is yah264's adaptive form (see `--aq-mode`). Promoted to `--aq-mode`, and still overrides it. |
 | `Y264_FAST_PSKIP` | 1 (on) | The cheap P_Skip pre-test at `--subme` 8 and below. Promoted to `--no-fast-pskip`, and still overrides it. |
 | `Y264_DCTDEC` | 1 (on) | Coefficient decimation. Promoted to `--no-dct-decimate`, and still overrides it. |
-| `Y264_AQ_DARK` | 0 (off) | Dark-region AQ bias, around 0.5 to 1.0. |
 | `Y264_2PASS_MT` | on | 0 forces two-pass onto the serial path, reproducing the serial output exactly. |
 | `Y264_MBTREE_OFF` | 0 (off) | Skip mb-tree entirely. Set it when comparing `--qp` runs against x264. Changes bits. Promoted to `--no-mbtree`, and still overrides it. |
 | `Y264_CUT_SPLIT` | 0 (off) | Split GOP workers on real scene cuts instead of arithmetic boundaries. Worth up to 17% of wall on multi-shot clips. Bitstream unchanged. Its pre-scan needs every frame at once, so it turns streaming off and brings back the whole-clip ceiling, plus a second whole-clip array on top (~+18%). |
-| `Y264_SHOT_QCOMP` | 0.6 | `--shot-crf`: the compression of the per-shot curve, `6(1-qcomp)` QP per doubling of the shot's cost against the title's. |
-| `Y264_SHOT_CLAMP` | 4 | `--shot-crf`: the per-shot CRF offset's bound, in QP. |
-| `Y264_SHOT_MIN` | 24 | `--shot-crf`: shots shorter than this many frames take their predecessor's offset. |
 | `Y264_MAX_INPUT_MB` | 50% of physical RAM | How much memory the input window may take, in MiB. It refuses rather than being OOM-killed. Raise it if you know the box can take it; lower it to test the refusal. |
-| `Y264_STREAM_WINDOW` | `(--threads + 1) x --keyint` | Input frames held resident on the in-order reader (a pipe, or `Y264_STREAM_SEEK=0`), overriding the default window. Below `2 x --keyint` the reader could block before a whole GOP is dispatchable, so that is the floor. Scheduling-only: the bitstream does not move with it. |
-| `Y264_STREAM_SEEK` | 1 (on) | From a file with a known frame count, read each GOP's frames on demand, at most `Y264_STREAM_READAHEAD` (16) frames ahead of its worker, instead of in display order. 0 restores the in-order reader and its window. Bitstream unchanged. |
+| `Y264_STREAM_WINDOW` | `(--threads + 1) x --keyint` | Input frames held resident on the in-order reader (a pipe), overriding the default window. Below `2 x --keyint` the reader could block before a whole GOP is dispatchable, so that is the floor. Scheduling-only: the bitstream does not move with it. |
 | `Y264_STREAM_STAT` | 0 (off) | Report the window's high-water mark at the end of the encode: frames actually resident, and compressed bytes published but not yet written. |
-| `Y264_WF_THREADS` | from `--threads` | Sets the wavefront width directly **and bypasses the critical-path cap**. The only way to probe above the knee. |
-| `Y264_LA_BUF` | auto = `bframes+1` (4 at medium) | Overrides `--sync-lookahead`, **in both directions**: the auto default resolves a lead of `bframes+1` whenever there is a pool, so `=1` and `=0` REDUCE it and cost 1-6% of wall. Costs latency, and changes no bits **while the decoupled chain is on**, which is whenever the knob has any effect. Forced together with `Y264_LA_THREAD=0`, it changes the bitstream deterministically. |
-| `Y264_NTP_SPIN` | 25 (us) | Thread-pool spin budget before sleeping. Worth tuning on unusual core counts. |
+| `Y264_LA_BUF` | auto = `bframes+1` (4 at medium) | Overrides `--sync-lookahead`, **in both directions**: the auto default resolves a lead of `bframes+1` whenever there is a pool, so `=1` and `=0` REDUCE it and cost 1-6% of wall. Costs latency, and changes no bits **while the decoupled chain is on**, which is whenever the knob has any effect. |
 | `Y264_CRF_CPLX` | 1 (on) | Behavior-matched CRF content adaptation, on by default. Narrows the equal-CRF spread against x264 from 100 points to 41, and improves 9 of 11 corpus clips at the tuned anchor, worst +1.54%. 0 turns it off. |
-| `Y264_CRF_LEVEL`, `Y264_CRF_FPS_SLOPE` | 2.3, 2.9 | The CRF base under mb-tree, `crf + level + slope * log2(fps / 30)`, fitted against the reference CLI's bytes at equal `--crf`. |
-| `Y264_AQ_CHROMA` | 0 (off) | Sums chroma into the AQ energy. Measured neutral: it costs 9% of the mb-tree bucket and buys +0.35..-0.29% BD. Off even under `CRF_CPLX`. |
+| `Y264_CRF_LEVEL` | 2.3 | The CRF base under mb-tree is `crf + level + 2.9 * log2(fps / 30)`, fitted against the reference CLI's bytes at equal `--crf`. This sets the level. |
 
 Two you should know exist so you never set them:
 
 | Variable | Why not |
 | --- | --- |
-| `Y264_WF_PREDQP=0` | Escapes to the true raster QP chain, which makes analysis **non-deterministic across thread counts**. The default of 1 keeps wavefront analysis independent of the worker count (BD-neutral). |
 | `Y264_UNSAFE_NO_REFBWAIT`, `Y264_UNSAFE_NO_PREVPWAIT` | Deliberately racy. They drop synchronization waits to measure a ceiling. The output is not trustworthy. |
 | `Y264_UNSAFE_NO_EMIT`, `Y264_UNSAFE_NO_NAL` | Deliberately broken. They delete the entropy emit and the NAL assembly to price the emission path. The bitstream is invalid. The reconstruction is unaffected, which is the point. |
 
@@ -1664,53 +1633,18 @@ defaults were measured. Moving one moves quality in ways that have usually
 already been tested and rejected. They are listed so you know what you are
 looking at if you find one in a script, not as a tuning surface.
 
-**Motion and mode decision:** `Y264_HPEL_SAD`, `Y264_HPEL_THRESH`,
-`Y264_ME_SMALL_NOUMH`, `Y264_ME_LAMBDA`, `Y264_TEMPORAL_SEED`,
-`Y264_RICH_SEEDS`, `Y264_LR_SEED`, `Y264_B_SEEDS`, `Y264_LR_ME`, `Y264_TR_PRE`,
-`Y264_TRELLIS_COMMIT`, `Y264_VITERBI`, `Y264_PSY_TRELLIS`,
-`Y264_CABAC_RD`, `Y264_DCTDEC`, `Y264_DCTDEC_T4`,
-`Y264_DCTDEC_T8`, `Y264_QPELRD`, `Y264_QPELRD_HYST`, `Y264_QPELRD_LUMA`,
-`Y264_INTRA_SKIP`, `Y264_INTRA_SCREEN`,
-`Y264_INTRA_SCREEN_PURE`,
-`Y264_PART_EARLYTERM`, `Y264_PART_THRESH`, `Y264_PART_IMPORTANT`,
-`Y264_B_THRESH`, `Y264_B_RECT`, `Y264_BPO`,
-`Y264_PROBE_TRELLIS`, `Y264_RD_ADMIT`, `Y264_RD_ADMIT_MARGIN`, `Y264_MIDSKIP`,
-`Y264_MIDSKIP_MARGIN`, `Y264_ADME`.
+**Motion and mode decision:** `Y264_DCTDEC`, `Y264_PART_EARLYTERM`,
+`Y264_PROBE_TRELLIS`.
 
-**AQ and rate control:** `Y264_AQ2_SREF`, `Y264_AQ2_SPOW`, `Y264_AQ2_GMIN`, `Y264_AQ2_GMAX`, `Y264_AQ2_BFLOOR`, `Y264_AQ2_AFLOOR`, `Y264_AQ_BPULL`, `Y264_AQ_BREF`, `Y264_AQ_BOOST`, `Y264_AQ_OCTILE`,
-`Y264_AQ_ANCHOR`, `Y264_CRF_CL`, `Y264_CRF_AQABS`, `Y264_CRF_PB0`,
-`Y264_CRF_PBSCALE`, `Y264_CRF_BASE`, `Y264_CRF_SLOPE`,
-`Y264_CRF_CAP`, `Y264_CRF_MBT_CPLX`, `Y264_RCP_GAIN`, `Y264_RCP_WARM`,
-`Y264_RCP_QPD`, `Y264_VBV_RHI`, `Y264_VBV_QPD`, `Y264_VBV_CJUMP`,
-`Y264_TP_BEXP`,
-`Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`,
-`Y264_TP_CWARM`.
+**Rate control:** `Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`.
 
-**mb-tree and lookahead:** `Y264_MBTREE_WHOLEBUF`, `Y264_MBTREE_IPPP`,
-`Y264_MBTREE_STRENGTH`, `Y264_MBTREE_BFIX`, `Y264_MBTREE_MVLAMBDA`,
-`Y264_MBTREE_CENTER`, `Y264_MBTREE_PROP_INVQ`, `Y264_MBTREE_BOTHLIST`,
-`Y264_MBTREE_ADAPT`, `Y264_MBTREE_AINT`, `Y264_MBTREE_ASLOPE`,
-`Y264_MBTREE_ALO`, `Y264_MBTREE_AHI`, `Y264_LOWRES_COH`, `Y264_LR_INTRA_NEIGHBOUR`,
-`Y264_LR_REUSE`, `Y264_LA_THREAD`, `Y264_LA_INLINE`, `Y264_LA_POOL_MIN`.
+**mb-tree:** `Y264_MBTREE_STRENGTH`.
 
 **Threading and scheduling** (all byte-identical unless noted): `Y264_W2`,
-`Y264_FPIPE`, `Y264_STAIR`, `Y264_STAIR_DEPTH`, `Y264_STAIR_WIDE`,
-`Y264_STAIR_EVICTPOOL`, `Y264_HPEL`,
-`Y264_GOP_EVEN`, `Y264_NTP_SPIN_ROW`, `Y264_NTP_SPIN_JOIN`,
-`Y264_NTP_SPIN_IDLE`, `Y264_F1`, `Y264_F3`, `Y264_F3C`.
+`Y264_STAIR_WIDE`.
 
-`Y264_MBTREE_CENTER` deserves a warning: it has two read sites with *different*
-defaults, so its effective default depends on which mb-tree path is live.
-
-`Y264_VBV_BOUND` (default **0**) belongs to both of the lists above and to
-neither cleanly, so it is called out here. It bounds every frame against its
-measured coded size instead of only the instance's first. It reaches the
-concurrent routes by disengaging the stair and fpipe, so it is a rate-control
-change *and* a scheduling one. It only does anything under a VBV cap with no
-bitrate target and no pass-1 record (capped VBR and CQP+VBV). Every other mode
-is byte-identical with it on. Turned on, it takes `scripts/cvbr_compliance.sh`
-from 34/36 to 36/36 at both windows, with quality neutral-to-positive in the
-mode and wall clock ~1.5-1.6x.
+[knobs.md](knobs.md) lists the rest by tier, with each one's default and
+reader.
 
 ### Tier 3: measurement scaffolding, not features
 
@@ -1722,24 +1656,18 @@ diagnostics or a known-worse encode. Several change bits.
 `Y264_STAIR_STAT`, `Y264_VBV_STAT`, `Y264_RCP_DBG`, `Y264_RC_TRACE`,
 `Y264_TP_DBG`, `Y264_MBTREE_DBG`, `Y264_MBT_PRE_DBG`, `Y264_DBG_CPLX`,
 `Y264_LA_STAT`, `Y264_ME_STATS`, `Y264_MB_LOG`, `Y264_SKIP_ORACLE`,
-`Y264_EST_CHECK`, `Y264_CUT_SPLIT_STAT`, `Y264_ADME_LOG`,
+`Y264_CUT_SPLIT_STAT`, `Y264_ADME_LOG`,
 `Y264_PROBE_DEADZONE`, `Y264_HEX_ORACLE`, `Y264_STAIR_BDEPTH`,
-`Y264_STAIR_MULTIHOP`, `Y264_STAIR_WIDE_REF`, `Y264_STAIR_REFBGATE`,
-`Y264_STAIR_REFBEARLY`, `Y264_STAIR_LEAFRUN`, `Y264_STAIR_LAG_FORCE`,
-`Y264_RCP_LAG`, `Y264_RCP_LAG_NOWIDE`, `Y264_VBV_FORCE`,
+`Y264_RCP_LAG`,
 `Y264_UNSAFE_NO_REFBWAIT`, `Y264_UNSAFE_NO_PREVPWAIT`, `Y264_UNSAFE_NO_EMIT`,
-`Y264_UNSAFE_NO_NAL`, `Y264_NO_SCENECUT`,
-`Y264_MBT_PRE`, `Y264_DPB_POOL`, `Y264_GOP_FORCE_G`, `Y264_GOP_FORCE_K`.
-
-`Y264_NO_SCENECUT` is **not** a user-facing way to disable scene cuts. It is a
-diagnostic that isolates a threading barrier. Use `--no-scenecut`.
+`Y264_UNSAFE_NO_NAL`, `Y264_GOP_FORCE_G`, `Y264_GOP_FORCE_K`.
 
 `Y264_MB_LOG` and `Y264_SKIP_ORACLE` take a **path**, not a boolean.
 
 ### Not read by the encoder
 
 These appear in scripts and tests only, never in C: `Y264_CRF`,
-`Y264_CRF_CACHE`, `Y264_REFENC_CACHE`, `Y264_STRESS_ABR`, `Y264_TRELLIS_PRINT`,
+`Y264_CRF_CACHE`, `Y264_STRESS_ABR`, `Y264_TRELLIS_PRINT`,
 `YAH264_ARGS`, `YAH264_DESC`, `YAH264_ENC`, `YAH264_CONF_*`, and
 `YAH264_VMAF_MODEL` (used by `scripts/vmaf.sh` and `scripts/bdcompare.py`).
 
@@ -1750,16 +1678,14 @@ cannot be set from a shell: `Y264_STAIR_K`, `Y264_STAIR_HOPS`,
 
 ### Comments that lie about their defaults
 
-The comments beside the readers in `src/encoder/encoder.c` now agree with the
-code for all four gates this section used to list. The struct-field comments in
-`src/encoder/encoder.h` are still stale and describe an era when these were off.
-Trust the reader, or the census in [knobs.md](knobs.md), and not the header:
+The comments beside the readers in `src/encoder/encoder.c` agree with the
+code. One struct-field comment in `src/encoder/encoder.h` is still stale and
+describes an era when the gate was off. Trust the reader, or the census in
+[knobs.md](knobs.md), and not the header:
 
 | Variable | Header comment claims | Code does |
 | --- | --- | --- |
-| `Y264_STAIR` | default off | defaults to **1** |
-| `Y264_W2` | default off | **on whenever there is a thread pool** |
-| `Y264_ABR_EARLY` | default 0, a probe | defaults to **2**, the shipped drain split |
+| `Y264_W2` | off by default | **on whenever there is a thread pool** |
 
 ## Rough edges
 

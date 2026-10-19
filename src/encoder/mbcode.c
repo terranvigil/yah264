@@ -313,30 +313,16 @@ static int aq_mode_env(void)
     return v;
 }
 
-/* aq-mode 2's constants, resolved once (y264_mb_warm_statics) so the AQ kernels
- * on the lookahead and mb-tree pool only ever read them. Every value was fitted
- * by sweep with band_at_rate.py (CRF band, matched achieved rate) and
- * hd_band.py; see y264_aq_gain and aq_analyze for what each one does. */
-struct aq2_cfg { double sref, mref, spow, spow_ab, gmin, gmax, bfloor, afloor, abr_k; };
-static const struct aq2_cfg *aq2_cfg(void)
-{
-    static struct aq2_cfg c;
-    static int init;
-    if (!init) {
-        const char *v;
-        v = getenv("Y264_AQ2_SREF");   c.sref   = v ? atof(v) : 2.5;
-        v = getenv("Y264_AQ2_MREF");   c.mref   = v ? atof(v) : 5.0;
-        v = getenv("Y264_AQ2_SPOW");   c.spow   = v ? atof(v) : 1.0;
-        v = getenv("Y264_AQ2_SPOW_AB"); c.spow_ab = v ? atof(v) : 0.0;
-        v = getenv("Y264_AQ2_GMIN");   c.gmin   = v ? atof(v) : 0.5;
-        v = getenv("Y264_AQ2_GMAX");   c.gmax   = v ? atof(v) : 1.0;
-        v = getenv("Y264_AQ2_BFLOOR"); c.bfloor = v ? atof(v) : 16.0;
-        v = getenv("Y264_AQ2_ABR_K");  c.abr_k  = v ? atof(v) : 1.02;
-        v = getenv("Y264_AQ2_AFLOOR"); c.afloor = v ? atof(v) : 2.0;
-        init = 1;
-    }
-    return &c;
-}
+/* aq-mode 2's constants. Every value was fitted by sweep with band_at_rate.py
+ * (CRF band, matched achieved rate) and hd_band.py; see y264_aq_gain and
+ * aq_analyze for what each one does. */
+#define AQ2_SREF    2.5
+#define AQ2_MREF    5.0
+#define AQ2_GMIN    0.5
+#define AQ2_GMAX    1.0
+#define AQ2_BFLOOR 16.0
+#define AQ2_AFLOOR  2.0
+#define AQ2_ABR_K   1.02
 
 /* The variance floor inside l = log2(variance + floor). Mode 1 uses 1 on
  * every path. Mode 2 uses afloor for the anchored field (mb-tree frames and
@@ -346,18 +332,18 @@ static const struct aq2_cfg *aq2_cfg(void)
  * 4 / 8 / 16 / 32: the field wants 2 (perseverance_720p +1.3% at 1, akiyo
  * +1.0-1.4% at 3-4, stefan +0.5% at 16) and the non-reference B wants 16
  * (bbb_720p -0.4% against +1.0% at 1). */
-double y264_aq_bfloor(int abr) { return aq_mode_env() >= 2 && !(abr & 2) ? aq2_cfg()->bfloor : 1.0; }
-double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.0; }
+double y264_aq_bfloor(int abr) { return aq_mode_env() >= 2 && !(abr & 2) ? AQ2_BFLOOR : 1.0; }
+double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? AQ2_AFLOOR : 1.0; }
 
 /* The per-frame gain aq-mode 2 puts on --aq-strength, from the frame's
- * per-MB l: (x)^spow clamped to [gmin, gmax], x = sd / sref, the spread of l
+ * per-MB l: x clamped to [gmin, gmax], x = sd / sref, the spread of l
  * against a reference spread. A frame whose blocks all sit near one energy (a
  * dark scene, a fade, a flat animation background) has little masking
  * contrast to exploit, and moving its few outliers by the full slope only
  * shifts bits between blocks that look alike, so its gradient eases. On the
  * anchored field (bpath 0) a textured frame keeps the full gradient whatever
- * its spread: x is at least mean / mref there. Swept at matched rate: spow
- * 0 / 0.25 / 0.5 / 1 (0.5 and below lose 1.3-4.0% on sintel_720p); gmax 1.0 /
+ * its spread: x is at least mean / mref there. Swept at matched rate: a power
+ * on x of 0 / 0.25 / 0.5 / 1 (0.5 and below lose 1.3-4.0% on sintel_720p); gmax 1.0 /
  * 1.1 / 1.2 / 2.0 (above 1.0 costs perseverance_720p and akiyo 0.3-1.3%);
  * sref 1.75 / 2.0 / 2.25 / 2.5 (below 2.5 costs sintel 0.7-1.6%); mref off /
  * 7 / 6 / 5 on the field (touchdown_420 in the deep band +1.35 / +0.77 /
@@ -365,10 +351,10 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.
  * (sintel and stefan +0.4%, so not there). A gain that grows with the mean
  * above 1 (2^(b * (mean - m0)), or mean / 7.5 up to 1.2) lost on stefan
  * (+2.5%) and on the HD clips and is not used. Under a bitrate target the
- * non-anchored path takes spow_ab = 0 (gain 1): the spread gain there cost
+ * non-anchored path takes gain 1: the spread gain there cost
  * mobile_cif's ABR band 1.2-2.4% at three ladder shifts, where it was fitted
  * on CRF. Also under a bitrate target, every path's gain is scaled by
- * abr_k, swept 1.00-1.10 in steps of 0.02 on the ABR band at three ladder
+ * AQ2_ABR_K, swept 1.00-1.10 in steps of 0.02 on the ABR band at three ladder
  * shifts. Means over the shifts, stefan / akiyo / mobile, and the band
  * median at x1.0:
  *   1.00  +0.81 / +0.60 / -0.79   -0.83
@@ -379,23 +365,22 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.
  *   1.10  -0.51 / +1.63 / -0.08   -0.70
  * akiyo reads +0.3 to +0.8 from 1.00 to 1.08 with no trend, so 1.02 (best
  * three-clip mean and best band median) is the optimum.
- * Two-pass (abr bit 2) takes the bitrate-target path without abr_k, with a
- * B-frame floor of 1 and a B-frame pull of 1.3 (Y264_AQ_TP_PULL), fitted on
+ * Two-pass (abr bit 2) takes the bitrate-target path without AQ2_ABR_K, with a
+ * B-frame floor of 1 and a B-frame pull of 1.3, fitted on
  * tp_band.py at rate scales 0.9 / 1.0 / 1.1: the one-pass settings put bus,
- * akiyo, mobile and park_joy 0.35-1.9% over main; without abr_k, bus stayed
+ * akiyo, mobile and park_joy 0.35-1.9% over main; without AQ2_ABR_K, bus stayed
  * +0.5% and park_joy +0.1%; the floor and a pull of 1.0 / 1.3 brought every
  * clip to or under the band's own null (pull 0.5 left akiyo at +0.14, 1.3 has
  * the lowest rate error). Mode 1 is gain 1. */
 double y264_aq_gain(double mean, double sd, int bpath, int abr)
 {
     if (aq_mode_env() < 2) return 1.0;
-    const struct aq2_cfg *c = aq2_cfg();
-    double x = (sd > 0.0 ? sd : 0.0) / c->sref;
-    if (!bpath && mean / c->mref > x) x = mean / c->mref;
-    double g = pow(x, abr && bpath ? c->spow_ab : c->spow);
-    if (g < c->gmin) g = c->gmin;
-    if (g > c->gmax) g = c->gmax;
-    return (abr & 1) && !(abr & 2) ? g * c->abr_k : g;
+    double x = (sd > 0.0 ? sd : 0.0) / AQ2_SREF;
+    if (!bpath && mean / AQ2_MREF > x) x = mean / AQ2_MREF;
+    double g = abr && bpath ? 1.0 : x;
+    if (g < AQ2_GMIN) g = AQ2_GMIN;
+    if (g > AQ2_GMAX) g = AQ2_GMAX;
+    return (abr & 1) && !(abr & 2) ? g * AQ2_ABR_K : g;
 }
 
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
@@ -494,10 +479,8 @@ static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
  * (qp_offset_aq folded in), so the standalone AQ offset must not be added
  * again. Standalone AQ applies only where mb-tree is off (e.g. bframes 0). */
     int q = f->mbtree_off
-          ? (f->mbt_frac ? (int)lround(f->qp + f->mbtree_off[i] / 2.0)
-                         : f->qp + f->mbtree_off[i])
+          ? f->qp + f->mbtree_off[i]
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
-    if (f->brk) q += f->brk->q[mby];
     if (q < 0) q = 0;
     if (q > 51) q = 51;
     f->cur_qp = q;
@@ -519,10 +502,8 @@ static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
 {
     int i = mby * f->wmb + mbx;
     int q = f->mbtree_off
-          ? (f->mbt_frac ? (int)lround(f->qp + f->mbtree_off[i] / 2.0)
-                         : f->qp + f->mbtree_off[i])
+          ? f->qp + f->mbtree_off[i]
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
-    if (f->brk) q += f->brk->q[mby];
     return q < 0 ? 0 : (q > 51 ? 51 : q);
 }
 
@@ -531,29 +512,14 @@ static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
  * of the true chain and thus wavefront-parallelisable. The entropy pass still
  * codes the real raster chain. Identical to the true chain under CQP (all deltas
  * 0) and whenever the predecessor codes residual (the common case); differs only
- * for a post-skip/no-residual predecessor -> BD-gated. */
+ * for a post-skip/no-residual predecessor, and BD-neutral there (+0.00% VMAF-NEG,
+ * 6-clip CIF). Pricing against the true chain would make analysis depend on
+ * which predecessors coded a delta, so serial and wavefront splits would diverge. */
 static int predict_prev_qp(const y264_frame_t *f, int mbx, int mby)
 {
     if (mbx == 0 && mby == f->mb_ytop) return f->qp;    /* slice-init (SliceQPY) */
     return mbx > 0 ? mb_cur_qp(f, mbx - 1, mby)
                    : mb_cur_qp(f, f->wmb - 1, mby - 1);
-}
-
-/* Position-independent mb_qp_delta pricing: the RD trials price se(cur_qp - prev_qp)
- * against the QP-MAP raster predecessor (predict_prev_qp), NOT the true entropy
- * chain. This is what makes analysis thread-count-INDEPENDENT: the true chain's
- * prev_qp depends on which predecessors coded a delta (order/skip-sensitive under
- * non-uniform QP from mb-tree/AQ/CRF), so a serial-vs-wavefront or 2-vs-8-thread
- * split diverges. DEFAULT ON -- it restores byte-identical output
- * across all thread counts (proven on the conformance syn_320x240 determinism
- * check) and is BD-neutral (+0.00% VMAF-NEG, 6-clip CIF, vs the true chain).
- * Y264_WF_PREDQP=0 escapes to the true raster chain, which is NON-deterministic
- * across threads: a byte-identity canary only. */
-static int wf_predqp_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_WF_PREDQP"); v = (e && e[0] == '0') ? 0 : 1; }
-    return v;
 }
 
 /* P_Skip MV (8.4.1.1): zero when a required neighbour is unavailable or is a
@@ -860,22 +826,15 @@ static void apply_wp_luma(y264_frame_t *f, pixel *pred, int stride, int bw, int 
         }
 }
 
-/* Y264_WP_ME (default 1; 0 = off): the motion search against a weighted reference
- * reads the macroblock's source mapped through the inverse of that weight,
+/* The motion search against a weighted reference reads the macroblock's source mapped through the inverse of that weight,
  * (s - o) * 2^D / w, so the search ranks positions by the residual the
  * weighted prediction will leave rather than by one that still carries the
  * brightness change. Returns the plain source otherwise. */
-static int wp_me_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_WP_ME"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
 static const pixel *wp_me_src(y264_frame_t *f, int r, int mbx, int mby, pixel buf[256], int *stride)
 {
     int ss = f->src_stride[0];
     const pixel *s = f->src[0] + (mby * 16) * (size_t)ss + mbx * 16;
-    if (!f->wp_luma[r] || !wp_me_on() || f->wp_w[r] <= 0) { *stride = ss; return s; }
+    if (!f->wp_luma[r] || f->wp_w[r] <= 0) { *stride = ss; return s; }
     int w = f->wp_w[r], o = f->wp_o[r] * (1 << (Y264_BIT_DEPTH - 8)), D = f->wp_denom;
     for (int y = 0; y < 16; y++)
         for (int x = 0; x < 16; x++) {
@@ -1088,13 +1047,9 @@ static long scan_bits_4x4(const y264_cabac_t *cb, int cat, const dctcoef scan[16
  * keeps the full greedy so the max-quality default stays byte-identical. Only CABAC (cb != NULL) and non-psy
  * blocks use it -- CAVLC and psy-trellis keep the greedy search. */
 /* Transform-size pre-decision (SA8D-vs-SATD, encode one size) at the medium tier
- * (subme<=8); subme>=9 encodes both and RD-picks (byte-identical). Y264_TR_PRE
- * forces on(1)/off(0). */
+ * (subme<=8); subme>=9 encodes both and RD-picks (byte-identical). */
 static int tr_pre_on(int subme)
 {
-    static int env = -2;
-    if (env == -2) { const char *e = getenv("Y264_TR_PRE"); env = e ? atoi(e) : -1; }
-    if (env >= 0) return env;
     return (subme > 0 ? subme : 10) <= 8;
 }
 
@@ -1110,10 +1065,10 @@ static int tr_pre_on(int subme)
  * the aligned skip probe; shipped-config corpus mean -2.8%, park_joy -6.7%,
  * no clip regressing). DEFAULT 32 (behaviour-matched round-to-nearest; a value
  * sweep confirmed 32 over 24/40). The legacy deadzone seed (-1) is reached
- * only by the deadzone probe now; the env override is gone. */
+ * only by the deadzone probe. */
 static int rdoq_seed64(void)
 {
-    return 32;                 /* frozen; its Y264_RDOQ_SEED64 override is gone */
+    return 32;
 }
 
 static int viterbi_rdoq(int subme)
@@ -1126,8 +1081,8 @@ static int viterbi_rdoq(int subme)
  * is re-encoded with the full RDOQ before commit. That is what --trellis 1
  * means; running the Viterbi in EVERY trial is 31% of the pure-C
  * profile. DEFAULT ON at the medium tier for the measured trade: 1.18x CIF /
- * 1.29x 720p pure-C for +1.42% VMAF-NEG BD. Y264_TRELLIS_COMMIT=0 restores
- * trellis-in-trials; subme>=9 is untouched (byte-identical max quality).
+ * 1.29x 720p pure-C for +1.42% VMAF-NEG BD. subme>=9 is untouched
+ * (byte-identical max quality).
  * Thread-local: set/cleared inside one MB's analysis, which runs whole on one
  * worker; the emit and I-frame paths never set it, so they keep the full RDOQ. */
 static _Thread_local int s_rd_trial = 0;
@@ -1552,42 +1507,21 @@ static int lambda_mode(int qp)
 /* Coefficient bits need not be priced at the mode lambda. A squared-lambda
  * curve -- 0.85^2 (inter) / 0.65^2 (intra) against a 0.9 base -- prices them
  * at ~0.80x (inter) and ~0.47x (intra) of mode RD, while all nine RDOQ sites here reuse
- * lambda_mode. Y264_TRELLIS_LAMBDA=<inter_x256>,<intra_x256> scales the lambda
- * handed to those sites and to the skip probe (which must price like the inter
- * coder it predicts). Default 256,256 is byte-identical. */
-static const int *trellis_lambda_env(void)
-{
-    /* {inter_x256, intra_x256, qp0, qp1}. qp0<0 = constant scale; otherwise
- * the scale is 256 at qp<=qp0 and ramps linearly to the configured value
- * at qp>=qp1 -- the matched-rate band killed the unconditional form
- * (median +0.71%) while the crf 32-41 band won 11/12, so the discount is
- * priced only where the deep-quant mechanism lives. */
-    static int s[4] = { -1, -1, -1, -1 };
-    if (s[0] < 0) {
-        /* shipped default: intra at the 0.65^2/0.85^2 ratio, ramped in over
- * qp 28..38. Gates: crf 32-41 band 11/12 negative (median -0.77%),
- * matched-rate band median +0.01% worst bus +0.74% (a rate lean,
- * +0.6-0.9% bits for +0.2 NEG at its bottom rung), t12 wall inside
- * the control's spread, determ 16/16 under load. Escape
- * Y264_TRELLIS_LAMBDA=256,256 restores the unramped bitstream. */
-        int v[4] = { 256, 150, 28, 38 };
-        const char *e = getenv("Y264_TRELLIS_LAMBDA");
-        if (e) { v[0] = 256; v[1] = 256; v[2] = -1; v[3] = -1; }
-        for (int i = 0; e && i < 4; i++) {
-            v[i] = atoi(e);
-            e = strchr(e, ',');
-            if (e) e++;
-        }
-        if (v[3] <= v[2]) v[2] = -1;            /* degenerate ramp: constant */
-        s[1] = v[1] > 0 ? v[1] : 256;
-        s[2] = v[2]; s[3] = v[3];
-        s[0] = v[0] > 0 ? v[0] : 256;
-    }
-    return s;
-}
+ * lambda_mode. The table scales the lambda handed to those sites and to the
+ * skip probe (which must price like the inter coder it predicts):
+ * {inter_x256, intra_x256, qp0, qp1}, the scale 256 at qp<=qp0 ramping
+ * linearly to the configured value at qp>=qp1. The matched-rate band killed
+ * the unconditional form (median +0.71%) while the crf 32-41 band won 11/12,
+ * so the discount is priced only where the deep-quant mechanism lives.
+ * Intra sits at the 0.65^2/0.85^2 ratio, ramped in over qp 28..38. Gates:
+ * crf 32-41 band 11/12 negative (median -0.77%), matched-rate band median
+ * +0.01% worst bus +0.74% (a rate lean, +0.6-0.9% bits for +0.2 NEG at its
+ * bottom rung), t12 wall inside the control's spread, determ 16/16 under
+ * load. */
+static const int trellis_lambda_tab[4] = { 256, 150, 28, 38 };
 static int lambda_trellis(int qp, int intra)
 {
-    const int *s = trellis_lambda_env();
+    const int *s = trellis_lambda_tab;
     int sc = s[intra ? 1 : 0];
     if (sc != 256 && s[2] >= 0) {
         if (qp <= s[2])     sc = 256;
@@ -1699,7 +1633,7 @@ static void qp_load(y264_frame_t *f, const struct qp_chain *s)
  * is our form of the same rebalance, applied to the distortion side. */
 static int psy_chroma_x256(void)
 {
-    return 256;                 /* frozen; its Y264_PSY_CHROMA_X256 override is gone */
+    return 256;
 }
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. Its sum is the
  * block's SSD exactly, so a caller that wants the map gets the SSD for free. */
@@ -2275,40 +2209,21 @@ static void nb_flags_nxn(const intra_nb_t *nb, int bxm, int bym,
  * remainder. The per-block SATD screen used to charge a flat +4 for a miss at
  * every QP, and the RD bit proxy a flat 2 bits per block, hit or miss.
  *
- * Y264_INTRA_MODEBITS=<scale> prices the screen's miss at scale * 3 bits *
- * lambda_me(qp), doubled because the screen's SATD is the unhalved Hadamard
- * sum (48 at QP 30, 120 at QP 38 at scale 1). Y264_INTRA_MODEBITS_RD=1 has the
- * RD proxy charge 1 bit for a hit and 4 for a miss.
- *
- * DEFAULT ON since 2026-09-27 at scale 2.0 with the RD fix, the swept winner
- * (scale 0.5-2.0): CRF band at matched rate median -0.13% t1 / -0.28% t3,
- * worst clip +0.13 / +0.34; keyint 24 median -0.40%, worst +0.45 (mobile);
- * multi-shot -0.29% CIF / -0.47% 720p. Y264_INTRA_MODEBITS=0
- * Y264_INTRA_MODEBITS_RD=0 restores the flat values and the old bitstream. */
-static int intra_modebits_s256(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_INTRA_MODEBITS");
-                 double sc = e ? atof(e) : 2.0; int x = (int)(sc * 256.0 + 0.5); v = x > 0 ? x : 0; }
-    return v;
-}
-static int intra_modebits_rd(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_INTRA_MODEBITS_RD"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
+ * The screen prices a miss at 2 * 3 bits * lambda_me(qp), doubled because the
+ * screen's SATD is the unhalved Hadamard sum, and the RD proxy charges 1 bit
+ * for a hit and 4 for a miss. The scale 2 was the swept winner (0.5-2.0):
+ * CRF band at matched rate median -0.13% t1 / -0.28% t3, worst clip +0.13 /
+ * +0.34; keyint 24 median -0.40%, worst +0.45 (mobile); multi-shot -0.29% CIF /
+ * -0.47% 720p. */
 /* the SATD-screen charge for a non-predicted mode at this macroblock's QP */
 static int intra_miss_satd(const y264_frame_t *f)
 {
-    int s = intra_modebits_s256();
-    if (!s) return 4;
-    return (int)(((long)6 * lambda_me(f->cur_qp) * s + 128) >> 8);
+    return (int)(((long)6 * lambda_me(f->cur_qp) * 512 + 128) >> 8);
 }
 /* the RD proxy's mode-signal bits for one block */
-static inline int intra_mode_bits(int rdfix, int hit)
+static inline int intra_mode_bits(int hit)
 {
-    return rdfix ? (hit ? 1 : 4) : 2;
+    return hit ? 1 : 4;
 }
 
 /* Returns the trial's luma J (SSD + lambda * the i4 bit proxy), or -1 once
@@ -2328,7 +2243,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
     long dist = 0, bits = 0;
     int8_t loc[4][4];           /* decided nnz grid for exact cbf context */
     intra_nb_t nb = intra_nb(f, mbx, mby);
-    const int miss = intra_miss_satd(f), rdfix = intra_modebits_rd();
+    const int miss = intra_miss_satd(f);
     const int trd = ir_trdirty(f, mbx);
 
     for (int blk = 0; blk < 16; blk++) {
@@ -2399,7 +2314,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
             int q = blk >> 2, qx = mbx * 16 + B8_X[q] * 4, qy = mby * 16 + B8_Y[q] * 4;
             dist += ssd_block(f->src[0] + qy * ss + qx, ss, f->rec[0] + qy * rs + qx, rs, 8, 8);
         }
-        bits += intra_mode_bits(rdfix, best_mode == pred_mode);
+        bits += intra_mode_bits(best_mode == pred_mode);
         if (nz) bits += block_bits(r->lev[blk], 16);
         if (blk < 15 && dist + Y264_LAMJ(lam, bits) >= jlim)
             return -1;
@@ -2445,7 +2360,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
     int ms = f->i4mode_stride;
     long dist = 0, bits = 1;          /* transform_size_8x8_flag */
     intra_nb_t nb = intra_nb(f, mbx, mby);
-    const int miss = intra_miss_satd(f), rdfix = intra_modebits_rd();
+    const int miss = intra_miss_satd(f);
     const int trd = ir_trdirty(f, mbx);
 
     for (int blk = 0; blk < 4; blk++) {
@@ -2536,7 +2451,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
                     rec[y * rs + x] = (pixel)best_pred[y * 8 + x];
         }
         dist += ssd_block(src, ss, rec, rs, 8, 8);
-        bits += intra_mode_bits(rdfix, best_mode == pred_mode);
+        bits += intra_mode_bits(best_mode == pred_mode);
         if (nz) {
             /* the four interleaved sub-blocks priced in place, off the
              * scan-order mask the quantiser handed back */
@@ -3013,7 +2928,7 @@ static long ssd_luma_mb(y264_frame_t *f, int mbx, int mby)
  * (I frames, or the callers that don't pass one) always runs the full search. */
 static int intra_fine_m16(void)
 {
-    return 16;                 /* frozen; its Y264_INTRA_FINE_M override is gone */
+    return 16;
 }
 
 /* The 1080p class (y264_size_class 2). */
@@ -3021,32 +2936,18 @@ static int intra_hd_class(const y264_frame_t *f)
 {
     return f->size_class == 2;
 }
-/* Y264_INTER_I4 (unset = off in the 1080p class, on elsewhere; 0/1 force):
- * whether a P or B macroblock whose I_8x8 trial ran also tries I_4x4. */
-static int inter_i4_env(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_INTER_I4"); v = e ? (atoi(e) ? 1 : 0) : -1; }
-    return v;
-}
+/* whether a P or B macroblock whose I_8x8 trial ran also tries I_4x4: off in
+ * the 1080p class, on elsewhere. */
 static int inter_i4_on(const y264_frame_t *f)
 {
-    int v = inter_i4_env();
-    return v >= 0 ? v : !intra_hd_class(f);
+    return !intra_hd_class(f);
 }
-/* Y264_INTRA_FINE_WIDE=M (unset = 20 in the 1080p class, 0 elsewhere; 0 =
- * off): a P or B macroblock the fine gate refused whose I_16x16 SATD is
- * within M/16 of the inter winner still gets the I_8x8 trial. */
-static int intra_fine_wide_env(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_INTRA_FINE_WIDE"); v = e ? atoi(e) : -1; }
-    return v;
-}
+/* M (20 in the 1080p class, 0 = off elsewhere): a P or B macroblock the fine
+ * gate refused whose I_16x16 SATD is within M/16 of the inter winner still
+ * gets the I_8x8 trial. */
 static int intra_fine_wide(const y264_frame_t *f)
 {
-    int v = intra_fine_wide_env();
-    return v >= 0 ? v : (intra_hd_class(f) ? 20 : 0);
+    return intra_hd_class(f) ? 20 : 0;
 }
 
 static int intra_fine_on(int subme, long inter_satd, long i16_satd)
@@ -3103,7 +3004,7 @@ static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
  * screen it out. inter_satd<0 (unknown / subme>=9) always admits. */
 static int intra_admit_m16(void)
 {
-    return 24;                 /* frozen; its Y264_INTRA_ADMIT_M override is gone */
+    return 24;
 }
 
 
@@ -3120,11 +3021,10 @@ static int intra_admit_m16(void)
  * The curve saturates here: 8 reads the same wall on three of the four clips
  * and harms tempete as well (worst +0.71%), and 0 -- never admitting B intra
  * at all -- buys nothing beyond 8, so the trials still admitted are cheap.
- * (8 was the animation-heavy arm and -1 the shared P-side margin; the
- * Y264_B_INTRA_ADMIT_M override that reached them is gone.) */
+ * (8 was the animation-heavy arm and -1 the shared P-side margin.) */
 static int intra_admit_m16_b(void)
 {
-    return 12;                 /* frozen; its Y264_B_INTRA_ADMIT_M override is gone */
+    return 12;
 }
 
 static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
@@ -3165,40 +3065,15 @@ static inline int intra_admit(y264_frame_t *f, int mbx, int mby, long inter_satd
  * tenth of park_joy's P macroblocks (the reference encoder codes well under
  * 1% there): a flat prediction with a few DC and AC levels scores well on SSD
  * but erases texture, and VMAF-NEG read it as a 1.4-1.9% loss. A textured
- * macroblock (per-pixel source variance at or above Y264_I16_ADMIT_VAR,
- * default 48) now admits I_16x16 only when its SATD is within
- * Y264_I16_ADMIT_M sixteenths (default 16, i.e. no worse) of the inter
- * winner's; a flat one keeps the old margin, which is where I_16x16 earns its
- * keep (sintel). Y264_I16_ADMIT_M=0 turns the screen off. */
-static int i16_admit_var(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_I16_ADMIT_VAR"); v = e ? atoi(e) : 48; }
-    return v;
-}
-static int i16_admit_m(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_I16_ADMIT_M"); v = e ? atoi(e) : 16; }
-    return v;
-}
+ * macroblock (per-pixel source variance at or above I16_ADMIT_VAR) now
+ * admits I_16x16 only when its SATD is within I16_ADMIT_M sixteenths (16,
+ * i.e. no worse) of the inter winner's; a flat one keeps the old margin,
+ * which is where I_16x16 earns its keep (sintel). */
+#define I16_ADMIT_VAR 48
+#define I16_ADMIT_M   16
 
 static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
                               const struct intra_mb *o, int slice);
-/* Y264_INTRA_EST: which rate prices the intra size decision (16x16 / 8x8 /
- * 4x4). 0 = the per-size coefficient approximations (i4/i8/i16_luma_bits),
- * which under-price a 4x4 macroblock and pick it over 8x8 far too often;
- * 1 (default) = the CABAC estimate of the whole macroblock as it would be
- * coded, in I slices; 2 = in every slice (+1% instructions, no measured gain
- * over 1 in P and B). Measured 2026-09-27: all-intra Cosmos Laundromat
- * 1080p at QP 22, -4.9% bytes and +0.39 dB PSNR-Y; CRF band at matched rate
- * 10 of 11 better, median -0.21%, worst ducks +0.04%. */
-static int intra_est_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_INTRA_EST"); v = e ? atoi(e) : 1; }
-    return v;
-}
 static void intra_grid_set(y264_frame_t *f, int mbx, int mby, int size, const struct intra_mb *o)
 {
     int ms = f->i4mode_stride, bx0 = mbx * 4, by0 = mby * 4;
@@ -3213,24 +3088,16 @@ static void intra_grid_set(y264_frame_t *f, int mbx, int mby, int size, const st
  * i4mode grid, and fill `o`. Writes no bitstream. inter_satd (>=0) enables the
  * inter-frame early-out (skip I_4x4/I_8x8 when inter beats I_16x16); pass -1 to
  * always run the full search (I frames). */
-/* Y264_INTRA_COMMIT_SIZE=W (default 1920; 0 = off): the commit of an intra
- * winner re-runs the analysis with the full RDOQ. On pictures at least W luma
- * samples wide it keeps the block size (16x16, 8x8 or 4x4) the trial chose
+/* The commit of an intra winner re-runs the analysis with the full RDOQ. On
+ * pictures at least 1920 luma samples wide it keeps the block size (16x16, 8x8 or 4x4) the trial chose
  * and encodes only that size, instead of re-trying all three; the per-block
  * prediction modes are still chosen on the commit's own reconstruction.
  * At 1080p: -0.6..-8.4% instructions (riverbed -8.4, pedestrian -3.5); HD
  * band t1 1080p clips riverbed -0.23 .. bbb10s +0.18, t8 median -0.01 worst
  * +0.11. Below 1080p the CIF band read bus +1.01, hence the width gate. */
-static int intra_commit_size_w(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_INTRA_COMMIT_SIZE"); v = e ? atoi(e) : 1920; }
-    return v;
-}
 static int intra_commit_size_on(const y264_frame_t *f)
 {
-    int w = intra_commit_size_w();
-    return w > 0 && f->padded_w >= w;
+    return f->padded_w >= 1920;
 }
 static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                              long inter_satd, int force);
@@ -3306,8 +3173,13 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
  * decision below is strict: I8 needs J8 < J16; I4 needs J4 < J16 and must
  * not exceed J8 (an I4/I8 tie goes to I4). An abandoned trial reads -1,
  * exactly as a trial that never ran. */
-    int est = intra_est_env() && f->cabac && f->cf_idc != 3 &&
-              (intra_est_env() >= 2 || f->slice_type == 0);
+    /* In I slices the size decision is priced by the CABAC estimate of the
+ * whole macroblock as it would be coded: the per-size coefficient
+ * approximations (i4/i8/i16_luma_bits) under-price a 4x4 macroblock and
+ * pick it over 8x8 far too often. All-intra Cosmos Laundromat 1080p at QP
+ * 22: -4.9% bytes and +0.39 dB PSNR-Y. In P and B the estimate cost +1%
+ * instructions for no measured gain. */
+    int est = f->cabac && f->cf_idc != 3 && f->slice_type == 0;
     /* The early stop bounds the proxy J the non-est decision compares, not
  * the estimated rate the est decision prices, so under the est decision
  * every trial runs to the end. */
@@ -3327,15 +3199,14 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
                             est ? LONG_MAX : (J8 >= 0 && J8 + 1 < J16 ? J8 + 1 : J16), &D4);
 
     o->i16_satd = i16_satd;
-    int m16 = i16_admit_m();
-    int i16_ok = inter_satd < 0 || m16 <= 0 || (long)i16_satd * 16 <= inter_satd * m16;
-    if (!i16_ok && i16_admit_var() > 0) {
+    int i16_ok = inter_satd < 0 || (long)i16_satd * 16 <= inter_satd * I16_ADMIT_M;
+    if (!i16_ok) {
         /* the screen is for textured macroblocks; a flat one keeps I_16x16 */
         uint32_t v2[2];
         const pixel *s0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
         y264_dsp.var16x16(s0, f->src_stride[0], v2);
         long var = ((long)v2[1] - (((long)v2[0] * v2[0]) >> 8)) >> 8;   /* per-pixel variance */
-        if (var < i16_admit_var()) i16_ok = 1;
+        if (var < I16_ADMIT_VAR) i16_ok = 1;
     }
     o->i16_refused = 0;
     int mode = 16; long best = i16_ok ? J16 : LONG_MAX;
@@ -3399,8 +3270,7 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
 
 /* B intra with the fine gate armed (see analyze_b_mb). DEFAULT ON: ABR band
  * improves on 11/12 clips (median -1.0%, worst sintel +0.98%), CRF band
- * neutral within +-0.61%, samsung-lo wall -5.65%. Y264_B_INTRA_FINE=0 is the
- * escape back to the ungated trial. */
+ * neutral within +-0.61%, samsung-lo wall -5.65%. */
 /* Mid-tournament B_SKIP commit (see analyze_b_mb). DEFAULT ON at 1 (non-ref
  * B's only): CRF band byte-identical 12/12, ABR band worst +0.89.
  * 0 = full tournament, 2 = also exit reference B's under the absolute-SSD
@@ -4114,28 +3984,6 @@ static void build_inter_pred(y264_frame_t *f, int mbx, int mby, int part,
  * so 3/2 is the right partner. */
 static const uint8_t DECIMATE_T4[16] = { 3,2,2,1,1,1,1,1,0,0,0,0,0,0,0,0 };
 
-/* Y264_DCTDEC_TAB4: instrument. Override the 4x4 run-weight table with 16
- * comma-separated values, so its shape can be swept rather than asserted.
- * Measurement-only; unset resolves to DECIMATE_T4 above. */
-static const uint8_t *dctdec_tab4(void)
-{
-    static uint8_t ovr[16];
-    static int resolved = 0;
-    static const uint8_t *sel = DECIMATE_T4;
-    if (!resolved) {
-        const char *e = getenv("Y264_DCTDEC_TAB4");
-        if (e && *e) {
-            int n = 0;
-            for (const char *p = e; *p && n < 16; ) {
-                ovr[n++] = (uint8_t)strtol(p, (char **)&p, 10);
-                if (*p == ',') p++; else break;
-            }
-            if (n == 16) sel = ovr;
-        }
-        resolved = 1;
-    }
-    return sel;
-}
 static const uint8_t DECIMATE_T8[64] = {
     3,3,3,3,2,2,2,2,1,1,1,1,1,1,1,1, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -4146,14 +3994,12 @@ static int dctdec_cfg(int *t4, int *t8)
     /* Thresholds of 3/2 rather than a heavier 6/4: our full RDOQ already drops
  * the marginal coefficients, so 6/4 over-decimates. 3/2 is a net
  * BD win here (and a small speed win — fewer coeffs to entropy-code). */
-    static int on = -1, th4 = 3, th8 = 2;
+    static int on = -1;
     if (on < 0) {
-        const char *v;
-        on = (v = getenv("Y264_DCTDEC")) ? atoi(v) : 1;
-        if ((v = getenv("Y264_DCTDEC_T4"))) th4 = atoi(v);
-        if ((v = getenv("Y264_DCTDEC_T8"))) th8 = atoi(v);
+        const char *v = getenv("Y264_DCTDEC");
+        on = v ? atoi(v) : 1;
     }
-    *t4 = th4; *t8 = th8; return on;
+    *t4 = 3; *t8 = 2; return on;
 }
 
 /* Decimate score over a scan-order nonzero bitmask (callers pre-check that no
@@ -4239,7 +4085,7 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
         uint32_t msk;
         int big;
         y264_zigzag_scan_4x4(lev[blk], q, &msk, &big);
-        if (dcON && !big && decimate_mask(msk, dctdec_tab4()) < dt4) {
+        if (dcON && !big && decimate_mask(msk, DECIMATE_T4) < dt4) {
             memset(lev[blk], 0, sizeof(lev[blk]));
             msk = 0;
         }
@@ -4439,7 +4285,7 @@ _Atomic uint64_t g_rp_tr4, g_rp_tr8;
 static const char *tp_nm[TP_N] = { "quant+zerochk", "setup", "lattice", "writeback" };
 _Atomic uint64_t g_tp_ns[TP_N], g_tp_calls;
 _Atomic uint64_t g_tp_cat[8], g_tp_cat_tr[8];
-/* Selective-RD sizing (Y264_RESPROF=2 with Y264_TR_PRE=0): bucket each
+/* Selective-RD sizing (Y264_RESPROF=2, at subme >= 9): bucket each
  * RD-decided MB by the CHEAP metric's margin m = c8*2*100/c4, and record how
  * often the metric's verdict matches RD's and how much J is at stake. If the
  * margin predicts the stake, RD only the ambiguous buckets. */
@@ -4455,7 +4301,7 @@ static _Atomic uint64_t g_rs_n[RS_NB], g_rs_4win[RS_NB], g_rs_agree[RS_NB], g_rs
  * Swept: 103 -1.11%, 105 -1.30%, 107 -0.96%, 110 -0.88% (band median). */
 static int tr_pre_bias(void)
 {
-    return 105;                 /* frozen; its Y264_TR_PRE_BIAS override is gone */
+    return 105;
 }
 static int trprof_on(void)
 {
@@ -4523,7 +4369,7 @@ static int direct_score_on(void)
  * temporal decisions. Below 8 not swept further. */
 static int dauto_stride_env(void)
 {
-    return 8;                 /* frozen; its Y264_DIRECT_AUTO_STRIDE override is gone */
+    return 8;
 }
 int y264_mb_dauto_stride(void) { return dauto_stride_env(); }
 static inline int dauto_sampled(int mbx, int mby)
@@ -4723,11 +4569,12 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
  * pick 4x4 vs 8x8 by SA8D-vs-SATD of the residual and encode ONLY that size,
  * instead of fully encoding both and comparing by RD -- the redundant second
  * transform is ~16% of the pure-C encode. subme>=9 keeps encode-both + RD pick
- * (byte-identical max-quality default). Y264_TR_PRE forces on(1)/off(-1). */
+ * (byte-identical max-quality default). A caller may pass a decision already
+ * taken for the macroblock in *trpre. */
     int pre = -1;   /* -1 = encode both (RD-decide); 0 = 4x4 only; 1 = 8x8 only */
     if (f->transform8x8 && allow8x8 && tr_pre_on(f->subme) &&
         trpre && *trpre >= 0) {
-        pre = *trpre;               /* shared per-MB decision (Y264_TR_PRE_SHARE) */
+        pre = *trpre;               /* shared per-MB decision */
     } else if (f->transform8x8 && allow8x8 && tr_pre_on(f->subme)) {
         extern uint64_t y264_bp2_pre; extern int y264_bp2_on;
         uint64_t t0 = 0;
@@ -4745,9 +4592,8 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
  * conventional scale, while sa8d_c_8x8 carries the conventional
  * ((sum+2)>>2) normalisation and is 1x. Comparing them directly makes the
  * pre-decision degenerate: 8x8 wins 81114/81114 calls on bus, i.e. the
- * 4x4 transform is unreachable at the medium tier. Y264_TR_PRE_FIX=1
- * puts both on our scale before the compare, and is the DEFAULT. Set 0
- * to recover the degenerate behaviour byte-exactly.
+ * 4x4 transform is unreachable at the medium tier. So both go on our
+ * scale before the compare.
  *
  * Do NOT treat this screen as an approximation to be improved toward
  * full RD: measured head-to-head, encode-both-and-RD-pick is WORSE
@@ -4759,7 +4605,6 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
         pre = ((long)c8 * 2 * 100 < (long)c4 * tr_pre_bias()) ? 1 : 0;
         if (y264_bp2_on) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
                            y264_bp2_pre += (uint64_t)ts.tv_sec*1000000000ull + ts.tv_nsec - t0; }
-        if (trpre) *trpre = pre;    /* first trial decides for the MB */
     }
 
     pixel rec4[256], rec8[256];
@@ -5435,114 +5280,12 @@ static inline size_t rec_sz_b(const y264_frame_t *f);
 static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r);
 static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *r);
 
-/* est-vs-real self-check: Y264_EST_CHECK prints the est-total / actual-frame-bit
- * ratio per CABAC frame; ~1.0 confirms the est model tracks the arithmetic coder. */
 /* Y264_VBV_ROWBRAKE_TRACE=1: one RBT line per picture, the pass-1 entropy
- * estimate and the real coded bits of every MB row (the 3h row brake's
- * input, measured before anything acts on it). */
+ * estimate and the real coded bits of every MB row. */
 int y264_rb_trace_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_VBV_ROWBRAKE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
-    return v;
-}
-
-/* Y264_VBV_ROWBRAKE (default 0): the row-level VBV brake. 9 = the forced test
- * ramp (step 2: no rule yet; every picture's lower half steps up one QP per
- * row to _DMAX), which proves the map offset, the K-row gate and their
- * determinism before a rule acts on real data. 8 = the gate alone (every
- * offset 0): output identical to off, so it prices the K-row gate's wall
- * cost and proves the gate changes nothing by itself. CABAC only: the pass-1
- * estimate the rule will read exists only there. _K (default 4) rows of lag,
- * _DMAX (default 6), _MARGIN (0.10), _ARM (2.0: on the step-3 cells 1.5 fired
- * on 4-17x more frames and lost VMAF-NEG on two of them; 2.0 gained on all
- * four). Returns the mode. */
-int y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm)
-{
-    static int m = -1, k = 4, d = 6;
-    static double mg = 0.10, ar = 2.0;
-    if (m < 0) {
-        const char *e = getenv("Y264_VBV_ROWBRAKE_K");    if (e && atoi(e) > 0) k = atoi(e);
-        e = getenv("Y264_VBV_ROWBRAKE_DMAX");             if (e && atoi(e) >= 0) d = atoi(e);
-        e = getenv("Y264_VBV_ROWBRAKE_MARGIN");           if (e && atof(e) >= 0) mg = atof(e);
-        e = getenv("Y264_VBV_ROWBRAKE_ARM");              if (e && atof(e) > 0) ar = atof(e);
-        e = getenv("Y264_VBV_ROWBRAKE");                  m = e ? atoi(e) : 0;
-    }
-    if (K) *K = k;
-    if (dmax) *dmax = d;
-    if (margin) *margin = mg;
-    if (arm) *arm = ar;
-    return m;
-}
-
-/* The brake offset of row r, decided once, at the row's first macroblock
- * (before any of its QPs is read), from coding-order facts only. */
-static void rowbrake_row(y264_frame_t *f, int r)
-{
-    struct y264_rowbrake *b = f->brk;
-    if (!b) return;
-    int q = 0;
-    if (b->mode == 9) {
-        int h2 = b->hmb / 2;
-        q = r < h2 ? 0 : r - h2 + 1;
-    } else if (b->mode == 1 && r > 0) {
-        /* The rule. Rows 0..n-1 (n = r - K + 1) have finished pass 1, so
- * their estimate S is final and the same at every thread count. The
- * frame is projected at the rate those rows ran (S over d = n / hmb, with
- * a prior, below);
- * the brake arms only when that rate is past the decide's own prediction
- * by `arm` (the bits model missed: a cut, a fade end) AND the projection
- * passes the budget by `margin`. Then QP steps toward the offset that
- * would bring the projection back to the budget, one step per row, up
- * only, capped at dmax. A frame the model priced right never arms. */
-        q = b->q[r - 1];
-        int n = r - b->K + 1;
-        if (n > 0 && b->bud > 0.0 && b->pred > 0.0 && b->est) {
-            double S = 0.0;
-            for (int i = 0; i < n; i++) S += (double)b->est[i];
-            S /= 256.0;
-            double d = (double)n / b->hmb;
-            /* the running rate, shrunk toward the prediction by a prior worth
- * a quarter of the picture: one row of a top-heavy frame cannot arm
- * it, a sustained 2x miss does by about a quarter of the way down */
-            double rate = (S + 0.25 * b->pred) / (d + 0.25);
-            double proj = S + (1.0 - d) * rate;
-            if (rate > b->arm * b->pred && proj > b->bud * (1.0 + b->margin)) {
-                int target = (int)ceil(6.0 * log2(proj / b->bud));
-                int up = q + 1;
-                q = up < target ? up : (target > q ? target : q);
-            }
-        }
-    }
-    if (q > b->dmax) q = b->dmax;
-    b->q[r] = (int8_t)q;
-}
-
-/* Row r has finished pass 1 (wavefront): advance the watermark the K-row gate
- * reads. Rows of one picture finish in order. */
-static void rowbrake_row_done(y264_frame_t *f, int r)
-{
-    struct y264_rowbrake *b = f->brk;
-    if (!b) return;
-    atomic_store_explicit(&b->done, r + 1, memory_order_release);
-    if (b->pool) ntp_pool_kick((ntp_pool_t *)b->pool);
-}
-
-/* The K-row claim gate: row r may start once rows 0..r-K have finished, so
- * its decision reads the same rows at every thread count. Chains the
- * staircase's gate when there is one. */
-static int rowbrake_ready(void *ctx, int r)
-{
-    struct y264_rowbrake *b = ctx;
-    if (r >= b->K && atomic_load_explicit(&b->done, memory_order_acquire) < r - b->K + 1)
-        return 0;
-    return b->inner_ready ? b->inner_ready(b->inner_ctx, r) : 1;
-}
-
-static int est_check_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_EST_CHECK"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -5651,10 +5394,6 @@ static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
 }
 
 
-/* CABAC-accurate RD rate is on by default for CABAC streams; Y264_CABAC_RD=0
- * disables it (A/B testing), reverting to the CAVLC bit-count proxy. */
-
-
 /* Y264_P_SKIP_EXIT: the P-side late-skip class. 35% of P_Skip verdicts fail
  * the zero-residual early probe, run the full tournament and end skip by RD
  * anyway. Two bracketing
@@ -5685,16 +5424,16 @@ static int fast_pskip_on(void)
 }
 
 
-/* Early-termination partition gate. The CONSTANT-threshold modes are KILLED,
- * default OFF, kept env-gated as a documented negative + a reproducer (like
- * Y264_ADME / midskip). The gate runs p16x16 and p8x8, then runs 16x8/8x16 ONLY
+/* Early-termination partition gate. The CONSTANT-threshold modes are KILLED
+ * and kept env-gated as a documented negative + a reproducer (like
+ * midskip). The gate runs p16x16 and p8x8, then runs 16x8/8x16 ONLY
  * when the 8x8 split looks promising vs 16x16: the 8x8 cost < the 16x16 cost +
  * a rectangle threshold. Without it yah264 runs all four shapes
  * unconditionally -- extra ME work (two partition searches over all refs) when
  * 16x16 or 8x8 is clearly best.
  *
  * WHY KILLED: a genuine quality/speed trade, not a quality-free win, with a
- * SHARP frontier. At the constant-threshold sweep (mlam units; knob removed 2026-10-04):
+ * SHARP frontier. At the constant-threshold sweep (mlam units):
  * thresh 0 -> ~6% faster (foreman CIF pure-C 1t), but +0.55% VMAF-NEG mean
  * over 6 CIF clips (foreman +0.84, mobile +0.69, coastguard +1.02,
  * stefan +0.35, bus +0.32, tempete +0.09) -- fails the <=0 gate,
@@ -5748,16 +5487,10 @@ static int part_earlyterm(void)
  * candidate -> needs the search" wall, measured a FIFTH way (after blanket-
  * UMH-off, blanket-rect-off, flat early-term, oracle-gate). No frontier point has
  * both mean<=+0.10 AND meaningful speed. Redirect: quality-per-candidate. */
-static int part_slack_x4(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PART_SLACK_X4"); v = e ? atoi(e) : 4; }
-    return v;
-}
 #define PART_IMPORTANT_OFF 2    /* mb-tree offset (QP) that marks an MB important */
 static int part_hetero_pct(void)          /* protect when CoV^2*100 exceeds this */
 {
-    return 16;                 /* frozen; its Y264_PART_HETERO override is gone */
+    return 16;
 }
 /* True when the 3x3 lowres-inter-cost neighbourhood around (mbx,mby) is dispersed
  * (relative variance above the CoV^2 threshold) -- a motion/texture boundary the
@@ -5793,21 +5526,13 @@ static int band_rows_env(void)
     return v;
 }
 int y264_band_rows(void) { return band_rows_env(); }
-/* Y264_BAND_TAB: 1 builds the table always, 0 never, and the default -1 builds
- * it only for a frame that has a band rule armed. The table costs under a
+/* The band table is built only for a frame that has a band rule armed. It costs under a
  * hundredth of a percent of a 1080p encode, which is a null and not a zero, and
  * no band rule ships on -- so the default path does not pay for a table nothing
- * reads. 1 is what prices it. */
-static int band_tab_env(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_BAND_TAB"); v = e ? atoi(e) : -1; }
-    return v;
-}
+ * reads. */
 static int band_tab_on(const y264_frame_t *f)
 {
-    int v = band_tab_env();
-    return v >= 0 ? v : (f->b8_band || f->b_intra_band);
+    return f->b8_band || f->b_intra_band;
 }
 /* Y264_BAND_PRECOMP=1 moves the P sub-partition gate's two interlocks into the
  * frame-open pass. Byte-identical, and OFF, on its own number: it reads
@@ -5841,7 +5566,7 @@ static void band_build_gate_bits(y264_frame_t *f, uint8_t *bits)
 {
     const int wmb = f->wmb, hmb = f->hmb;
     const int pct = part_hetero_pct();
-    const int imp = -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1);
+    const int imp = -PART_IMPORTANT_OFF;
     long long *cs = NULL, *cq = NULL;
     if (f->lr_seed_cost) {
         cs = malloc((size_t)wmb * sizeof *cs);
@@ -6016,7 +5741,7 @@ static int p_part_gate_ok(y264_frame_t *f, int mbx, int mby, long cost16, long m
     if (part_hetero(f, mbx, mby))
         return 0;
     if (f->mbtree_off &&
-        f->mbtree_off[mby * f->wmb + mbx] <= -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1))
+        f->mbtree_off[mby * f->wmb + mbx] <= -PART_IMPORTANT_OFF)
         return 0;
     return 1;
 }
@@ -6039,17 +5764,14 @@ static int part_search_rect(y264_frame_t *f, int mbx, int mby,
  * margin would prune. The BD the gate spends should concentrate exactly
  * on propagation-heavy MBs, so rescuing them aims to buy back most of
  * the band cost (bus -2.50 at matched rate) for a
- * minority of the pruned searches. Threshold = Y264_PART_IMPORTANT (the
+ * minority of the pruned searches. Threshold = PART_IMPORTANT_OFF (the
  * parked mode-2 machinery, same units). */
     if (part_earlyterm() >= 3) {
-        /* Y264_PART_SLACK_X4 scales the adaptive margin
- * in quarters (4 = x1.0 = byte-identical default; 2 = prune twice as
- * hard). Swept jointly with Y264_PART_IMPORTANT (the rescue axis). */
-        if (cost8_raw < cost16_raw + ((mv_slack * part_slack_x4()) >> 2)) return 1;
+        if (cost8_raw < cost16_raw + mv_slack) return 1;
         if (part_earlyterm() == 4) {
             int ii = mby * f->wmb + mbx;
             if (f->mbtree_off &&
-                f->mbtree_off[ii] <= -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1))
+                f->mbtree_off[ii] <= -PART_IMPORTANT_OFF)
                 return 1;
         }
         return 0;
@@ -6058,7 +5780,7 @@ static int part_search_rect(y264_frame_t *f, int mbx, int mby,
     if (part_earlyterm() != 2) return 0;                        /* mode 1: flat gate, skip */
     int i = mby * f->wmb + mbx;
     if (f->mbtree_off &&
-        f->mbtree_off[i] <= -PART_IMPORTANT_OFF * (f->mbt_frac ? 2 : 1)) return 1;  /* important */
+        f->mbtree_off[i] <= -PART_IMPORTANT_OFF) return 1;  /* important */
     if (part_hetero_g(f, mbx, mby)) return 1;                   /* boundary: protect */
     return 0;
 }
@@ -6256,7 +5978,7 @@ static void mru_dump(void)
 }
 static void mru_reg(void){ static int d = 0; if (!d) { d = 1; atexit(mru_dump); } }
 
-/* v3 staircase (Y264_STAIR_DEPTH): does this slice's list-0 reference r need
+/* v3 staircase: does this slice's list-0 reference r need
  * the fixed vertical clamp? True for any (possibly in-flight) recent anchor in
  * the clamp SET, keyed by POC -- a machine-invariant function, never of thread
  * count. The set is packed, so the loop exits on the first empty slot and the
@@ -6278,7 +6000,7 @@ long y264_pstat_part[4], y264_pstat_srch[4];   /* BPROF: eval_inter_part calls /
  * Plain globals: counted only under Y264_BPROF, which is t1-only (TSan caught
  * the ungated version racing across the wavefront). */
 static int bprof_env(void);
-/* Y264_RECT_REFS: the rect reference set. A 16x8 or 8x16 partition is
+/* The rect reference set. A 16x8 or 8x16 partition is
  * searched only on the list-0 references its two 8x8 halves chose, not on
  * every reference. Only meaningful in the 8x8-first partition order (8x8 before the
  * rects, PART_EARLYTERM), which is where the 8x8 refs exist; the single-thread
@@ -6289,11 +6011,10 @@ static int bprof_env(void);
  * sunflower_1080p; t12 wall sunflower -7.5%, shields -3.5%, pedestrian -3.1%,
  * park_joy -3.5%, samsung -3%, foreman -3% (medians of 5, control inside 1%).
  * CRF band (both arms in the threaded order, 14 clips, 150f): median +0.06%,
- * range -0.43 (pedestrian) .. +0.72 (bus, saturated). Y264_RECT_REFS=0 escapes
- * to the all-refs rect search. */
+ * range -0.43 (pedestrian) .. +0.72 (bus, saturated). */
 static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NULL */
 
-/* Y264_P8_REFCLAMP=1: the 8x8-stage reference clamp (plan item B2). When
+/* The 8x8-stage reference clamp (plan item B2). When
  * the 16x16 search chose ref 0 and both the top and left neighbours are
  * coded inter, the P_8x8 stage searches only refs 0..max(neighbour refs)
  * over the six neighbour positions (top-left, top, top+2,
@@ -6307,8 +6028,7 @@ static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NUL
  * -2.2%; t12 -2.2 / -1.6 / -1.0 / -1.3 / -1.5 / -0.6%. CRF band, 14 clips,
  * 150f, t1: median -0.04% (stq order) / -0.07% (threaded order), worst clip
  * +0.19 / +0.27, best -1.04 / -0.65. Record:
- * local/records/p8-refclamp-2026-09-02.md. Y264_P8_REFCLAMP=0 escapes to the
- * unclamped all-refs 8x8 search. */
+ * local/records/p8-refclamp-2026-09-02.md. */
 static _Thread_local int tl_ref16 = -1;         /* the 16x16 winner's ref for the 8x8 clamp, -1 = none */
 /* --no-mixed-refs: the one list-0 slot the partition searches of this P
  * macroblock visit, or -1 when each partition picks its own. Under --weightp 2
@@ -6322,65 +6042,34 @@ static int mixref_slot(const y264_frame_t *f, int ref16)
     return ref16;
 }
 
-/* Y264_P_REF0EXIT=1: the post-ref-0 exit, shape-preserving (plan item B1).
- * After the ref-0 16x16 search, if its MV lands within L1 distance 1 qpel of the P_Skip MV, the remaining references are not
- * searched at 16x16 and the 8x8 stage and the rectangles are skipped: the
- * inter candidate IS that 16x16, and it still goes through the full RD
- * three-way compare against skip and intra. The verdict changes only where a split or a non-zero ref would
- * have beaten a 16x16 already on the skip MV: 0.6-1.2% of the full-tournament
- * MBs on the low-rate HD clips, 8.8% on park_joy (Y264_PSKIP_CENSUS,
- * local/records/pskip-census-2026-09-02.md). Applies at every thread count.
- * =1 is the MV test alone: band median +0.15..+0.38%, sita/bus/foreman
- * +0.7..+1.6 (local/records/p-ref0exit-2026-09-02.md). =2 adds a second
- * term, the winner's raw SATD (mv and ref bits stripped) under
- * K x mlam, so the exit is taken only
- * where the residual is small enough that skip is plausible anyway.
- * DEFAULT 2 (2026-09-02) at K=600 (see p_ref0exit_k), on top of Y264_P8_REFCLAMP. Walls at K=300, medians of 5
- * round-robin, control inside 0.4%: t1 sunflower -5.2%, samsung -3.2%,
- * pedestrian -2.6%, park_joy -0.7%, foreman -0.5%, shields -0.4%; t12
- * sunflower -1.5%, pedestrian -1.2%. CRF band, 14 clips, 150f, t1: median
- * +0.03% (stq order) / +0.10% (threaded), worst foreman +0.68 / stockholm
- * +0.68. Mode 1 is the larger prize (t1 shields -14.9%, sunflower -7.2%,
- * the rest -5.6..-6.7%) at a band cost of +0.15..+0.38% median with sita /
- * bus / foreman / stockholm at +0.7..+1.6: a rate trade left to the owner
- * (local/records/p-ref0exit-2026-09-02.md). =0 escapes to the full search. */
-static int p_ref0exit_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT"); v = e ? atoi(e) : 2; if (v < 0) v = 0; }
-    return v;
-}
-/* K=1200 default since 2026-09-03 (owner delegated the trade): vs 600 on the
- * 09-03 tree, shields t1 -8.4% / t12 -3.3% (the goal-1 worst clip), foreman
- * t1 -2.5%, the rest within 1%; CRF band 14 clips t1: median +0.26% (stq
- * order) / +0.16% (threaded order), worst foreman +1.37% in one order and
- * -0.21% in the other, so the per-clip worst is CIF noise; the bar it is
- * held to is the board's 1.0% size metric. 600 remains the tighter trade
- * (worst clip under +0.5%), at K = 600. */
-/* K sweep 2026-09-02 (local/records/p-ref0exit-ksweep-2026-09-02.log), each
- * vs K=300 with B2 on: K=600 t1 shields -5.6% / pedestrian -2.7 / foreman
- * -2.0, band median +0.02 (stq) / +0.05 (threaded), worst +0.49 / +0.90;
- * K=1200 t1 shields -14.0% / foreman -5.5 / park_joy -3.1 / pedestrian
- * -3.1, band median +0.27 / +0.11, worst +0.92 / +1.01 with foreman,
- * stockholm, coastguard at +0.8..+0.9. DEFAULT 600: the largest K whose
- * worst clip stays under +0.5% in the goal-1 order. 1200 and mode 1 are the
- * owner's worst-clip trades. */
-/* Y264_P_REF0EXIT_MINMB (default 1200; 0 = every size): the ref-0 exit only on
- * pictures of at least this many macroblocks. It is a speed trade sized on
- * HD clips; on CIF it costs 0.6-1.5% BD-VMAF-NEG and 0.8-2.2% BD-PSNR (all
- * six CIF clips, CRF, t1) for 5-6.5% of the instructions. 1200 keeps it at
- * 720p and up and turns it off at CIF. DEFAULT since 2026-10-05: CRF band
- * t1 median -0.27 / t8 -0.28, every CIF clip better, 720p+ byte-identical;
- * multi-shot CIF about -0.96. 0 restores the exit at every size. */
-static int p_ref0exit_minmb(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_MINMB"); v = e ? atoi(e) : 1200; if (v < 0) v = 0; }
-    return v;
-}
+/* The post-ref-0 exit, shape-preserving. After the ref-0 16x16 search, if
+ * its MV lands within L1 distance 1 qpel of the P_Skip MV and the winner's
+ * raw SATD (mv and ref bits stripped) is under K x mlam, the remaining
+ * references are not searched at 16x16 and the 8x8 stage and the rectangles
+ * are skipped: the inter candidate IS that 16x16, and it still goes through
+ * the full RD three-way compare against skip and intra. The SATD bound keeps
+ * the exit to where the residual is small enough that skip is plausible
+ * anyway. The verdict changes only where a split or a non-zero ref would have
+ * beaten a 16x16 already on the skip MV: 0.6-1.2% of the full-tournament MBs
+ * on the low-rate HD clips, 8.8% on park_joy. Applies at every thread count.
+ * The MV test alone is the larger prize (t1 shields -14.9%, sunflower -7.2%)
+ * at a band cost of +0.15..+0.38% median with sita / bus / foreman /
+ * stockholm at +0.7..+1.6. K sweep, each vs K=300: K=600 t1 shields -5.6% /
+ * pedestrian -2.7 / foreman -2.0, band median +0.02 / +0.05, worst +0.49 /
+ * +0.90; K=1200 shields t1 -8.4% / t12 -3.3% against 600, foreman t1 -2.5%,
+ * the rest within 1%, CRF band 14 clips t1 median +0.26% / +0.16%, the
+ * per-clip worst CIF noise.
+ *
+ * The exit runs only on pictures of at least 1200 macroblocks. It is a speed
+ * trade sized on HD clips; on CIF it costs 0.6-1.5% BD-VMAF-NEG and 0.8-2.2%
+ * BD-PSNR (all six CIF clips, CRF, t1) for 5-6.5% of the instructions. 1200
+ * keeps it at 720p and up and turns it off at CIF: CRF band t1 median -0.27 /
+ * t8 -0.28, every CIF clip better, 720p+ byte-identical; multi-shot CIF about
+ * -0.96. */
+#define P_REF0EXIT_MINMB 1200
 static long p_ref0exit_k(void)
 {
-    return 1200;                 /* frozen; its Y264_P_REF0EXIT_K override is gone */
+    return 1200;
 }
 static _Thread_local int tl_rx_armed, tl_rx_hit, tl_rx_smvx, tl_rx_smvy;   /* the exit's skip MV, per P MB */
 static int mvd_bits(int d);
@@ -6712,10 +6401,9 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 }
                 if (part == 0 && r == 0 && tl_rx_armed &&
                     labs(tx - tl_rx_smvx) + labs(ty - tl_rx_smvy) <= 1 &&
-                    (tl_rx_armed < 2 ||
-                     c - (long)mlam * (ref_bits(0, f->nref) + mvd_bits(tx - px) + mvd_bits(ty - py))
-                         < p_ref0exit_k() * (long)mlam)) {
-                    tl_rx_hit = 1;               /* Y264_P_REF0EXIT: refs 1..N-1 not searched */
+                    c - (long)mlam * (ref_bits(0, f->nref) + mvd_bits(tx - px) + mvd_bits(ty - py))
+                        < p_ref0exit_k() * (long)mlam) {
+                    tl_rx_hit = 1;               /* the post-ref-0 exit: refs 1..N-1 not searched */
                     break;
                 }
             }
@@ -6991,13 +6679,10 @@ static int rich_seeds(void)
     return y264_me_hex_features();      /* on for --me hex + auto medium/fast tiers */
 }
 
-/* Lowres/lookahead MV seed for the P search; only when rich_seeds is on.
- * Y264_LR_SEED forces on(1)/off(0) within that. */
+/* Lowres/lookahead MV seed for the P search; only when rich_seeds is on. */
 static int lr_seed_on(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_LR_SEED"); v = e ? atoi(e) : 1; }
-    return rich_seeds() && v;
+    return rich_seeds() != 0;
 }
 
 /* Seed the B L0/L1 searches with the spatial-neighbour MVs, the direct MV, and
@@ -7015,27 +6700,9 @@ static int b_seeds_on(void)
     return y264_me_hex_features();      /* mirrors rich_seeds */
 }
 
-/* Y264_B_REF_ET=K: a B macroblock whose list-0 ref-0 16x16 result already
- * costs at most K/16 per sample (SATD plus motion rate, the search's own
- * units) searches no further list-0 references. A match that good leaves
- * little for an older picture to win. 0 = off (every reference searched).
- *
- * Kept off. On sunflower_1080p at its matched point
- * K=76 takes 2.2% of the instructions at 12 threads and K=84 3.4%; the HD
- * band reads median +0.00 / +0.02 with perseverance_720p the worst raw
- * clip (+0.30 / +0.51), and sunflower itself +0.25 / +0.16 raw but +0.55 /
- * +0.46 against a control that reads -0.30 there. The gate is absolute, so
- * it is inert on every high-cost clip (riverbed, ducks, crowd_run read
- * exactly 0.00), which is also why it collects so little. The standard CRF
- * band puts foreman_cif at +0.63 / +0.57. */
-static int b_ref_et(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_B_REF_ET"); v = e ? atoi(e) : 0; }
-    return v;
-}
 /* Y264_B_REF_ET_STAT=1: how often a later list-0 reference beat ref 0, by
- * ref 0's cost per sample -- the ceiling the gate above works against. t1. */
+ * ref 0's cost per sample: the ceiling for any gate that stops the list-0
+ * search on a good ref-0 result. t1. */
 static int b_ref_stat(void)
 {
     static int v = -2;
@@ -7442,13 +7109,12 @@ struct bpart_mo {
  * partition's per-list winner into that list's grid so partition 1's
  * predictors see partition 0 (both grids restored before returning). List 0
  * searches all active references with ref bits in the cost (mixed refs). */
-/* Y264_B_RECT_SEED: search each rectangular partition from the 16x16 winner
+/* Search each rectangular partition from the 16x16 winner
  * instead of cold and over every reference. The cold form is what made
  * the B rectangles unaffordable -- two partitions x two splits x nref list-0
  * searches per macroblock, ~12 at --ref 3, none of them seeded, on top of the
- * 16x16 work that had already found a winner per list.
- * 1 = seed + pin list 0 to the 16x16 winner's reference (default), 0 = the
- * cold form, for the A/B. */
+ * 16x16 work that had already found a winner per list. List 0 is pinned to
+ * the 16x16 winner's reference. */
 /* Y264_B_8X8: code B macroblocks as four independently predicted 8x8 quadrants
  * (B_8x8, sub_mb_types B_Direct/L0/L1/Bi_8x8). The same analysis yields the
  * estimates that make the rectangular searches affordable. */
@@ -7476,14 +7142,6 @@ static int b8_direct_on(void)
     return v;
 }
 
-/* Y264_B8_NORD=1: measurement probe, see the call site. */
-static int b8_nord_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B8_NORD"); v = e ? (atoi(e) ? 1 : 0) : 0; }
-    return v;
-}
-
 /* The ABSOLUTE distortion bound (frozen at 512) under which
  * Y264_B_SKIP_EXIT=2 readmits a REFERENCE B to the mid-tournament skip exit.
  *
@@ -7505,7 +7163,7 @@ static int b8_nord_on(void)
  * decide to skip. */
 static long b_skip_exit_ssd(void)
 {
-    return 512;                 /* frozen; its Y264_B_SKIP_EXIT_SSD override is gone */
+    return 512;
 }
 
 /* Ref-B readmission to the mid-tournament exit: is THIS reference B macroblock
@@ -7551,7 +7209,7 @@ static uint64_t b8s_mb, b8s_search, b8s_gated, b8s_rd, b8s_win, b8s_skipexit, b8
 /* Mid-tournament skip-exit population, for Y264_B_SKIP_EXIT: macroblocks
  * reaching the check, and why each is or is not admitted. */
 static uint64_t bx_reach, bx_exitok, bx_isref, bx_mode0, bx_taken, bx_refblocked, bx_refadmit;
-/* E2 stages A/C population, for Y264_BSKIP_ADMIT / _CGUARD. The whole arm is a
+/* E2 stages A/C population, for the B-skip admission. The whole arm is a
  * population argument -- the confirmation's decision is not the problem, the
  * number of macroblocks paying for it is -- so every stage prints its own
  * count and no null is believed without them. */
@@ -7848,21 +7506,6 @@ static int bprof2_env(void)
     if (v < 0) { const char *e = getenv("Y264_BPROF2"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
-/* Y264_TR_PRE_SHARE=1: decide the trial transform size ONCE per B MB (on the
- * first trial's residual) and reuse it across that MB's direct + 16x16 mode
- * trials. The s4 winner re-encode keeps its own decision. */
-static int tr_share_on(void)
-{
-    static int v = -1;
-    /* 1 = the first trial's residual decides for the macroblock; 2 = the B
-     * 16x16 survivors share one decision taken on the screen's winning
-     * prediction (its SATD is already paid; one SA8D more), direct keeping
-     * its own. DEFAULT 2 (2026-09-29): HD band median +0.04 at t1 and +0.06
-     * at t8, multi-shot +0.08 / -0.03 / +0.04, for -0.3% / -0.14% of the
-     * instructions at 1080p / 4K; 0 restores the per-trial decision. */
-    if (v < 0) { const char *e = getenv("Y264_TR_PRE_SHARE"); v = e ? atoi(e) : 2; if (v < 0 || v > 2) v = 0; }
-    return v;
-}
 static uint64_t bp2_enc, bp2_dist, bp2_bits; static long bp2_n;
 uint64_t y264_bp2_pre; int y264_bp2_on;
 static void bp2_dump(void)
@@ -7894,14 +7537,6 @@ static inline long mvd_bypass_lb(int mvd)
     return 256 * nb;
 }
 
-/* Y264_RD_ABORT=0: turn the exact survivor early exit off (it changes no
- * output, so this is only the A/B escape). */
-static int rd_abort_on(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_RD_ABORT"); v = e ? atoi(e) : 1; }
-    return v;
-}
 
 /* Y264_RD_ABORT_STAT=1: how many B survivor trials the exact early exit cut
  * after luma [0] and after the full distortion [1], of [2] run. t1. */
@@ -8460,98 +8095,42 @@ static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
  * competitiveness guard reads it, nothing else does */
 }
 
-/* Per-MB analysis lambda (Y264_MB_LAMBDA). Rebuilding the ME lambda and the
- * RD lambdas from the macroblock QP at analysis entry makes the motion search
- * and RD mode decision use the SAME QP the quantiser will use for that
- * macroblock. Without it we compute both ONCE PER SLICE from the FRAME QP while mb_qp_pre
- * hands the quantiser a per-MB QP from mb-tree and AQ. So every modulated
- * macroblock decides its modes and motion at one rate-distortion tradeoff and
- * is quantised at another.
+/* Per-MB analysis lambda. Rebuilding the ME lambda and the RD lambdas from
+ * the macroblock QP at analysis entry makes the motion search and RD mode
+ * decision use the SAME QP the quantiser will use for that macroblock.
+ * Without it we compute both ONCE PER SLICE from the FRAME QP while
+ * mb_qp_pre hands the quantiser a per-MB QP from mb-tree and AQ. So every
+ * modulated macroblock decides its modes and motion at one rate-distortion
+ * tradeoff and is quantised at another.
  *
  * That is exactly the shape of the mb-tree result: propagation bought us ~0
  * where --no-mbtree shows it buys the reference encoder 9-14% of its bits --
- * and raising the strength makes ours WORSE,
- * because the mismatch grows with the modulation amplitude. */
-static int mb_lambda_on(void)
-{
-    /* DEFAULT 5 since 08-27: mbtree-component lambda on non-flat MBs. Bands
- * -2.06/-2.81 medians with no loser outside noise, ABR side 5/5 negative,
- * wall free; the one payer is CGI animation (bbb +3.14) against the
- * -29.76% lead there. Battery: conformance 518/518, recon_thread_gate,
- * determ_repeat 16/16x12, abr_decode_gate, all armed. Y264_MB_LAMBDA=0
- * restores the frame-level lambda. */
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MB_LAMBDA"); v = e ? atoi(e) : 5; }
-    return v;
-}
-
-/* Y264_MB_LAMBDA=<mode>[,<qp0>]: qp0 (default 30) is mode 6's frame-QP floor. */
-static int mb_lambda_qp0(void)
-{
-    static int v = -1;
-    if (v < 0) {
-        const char *e = getenv("Y264_MB_LAMBDA");
-        const char *c = e ? strchr(e, ',') : NULL;
-        v = c ? atoi(c + 1) : 30;
-    }
-    return v;
-}
-
-/* Mode 1: lambda follows the full modulated QP (mb-tree + AQ). Mode 2: the
- * mb-tree component only -- mbtree_off is the COMBINED offset, so
- * subtracting aq_off recovers the propagation term. The AQ half of the
- * modulation measured as a small lambda-following loss on its own while the
- * mb-tree half carried the whole win, so mode 2 chases that split. Modes 3/4
- * are gated forms of 2, hunting sita's win without bbb's price: 3 engages
- * only on FLAT source MBs (var16x16 below the psy flat gate's 25 threshold),
- * 4 only where the mb-tree component is NEGATIVE (mb-tree invested there;
- * where it taxes, keep the frame lambda). */
-/* Returns the QP to derive the analysis lambdas from, or -1 = NOT ENGAGED
- * (the caller must then leave the per-slice lambdas untouched -- returning a
- * QP here instead silently substituted lambda(f->qp) or, worse, mode-1
- * behaviour on the mbtree-less non-ref B frames, and that leak was
- * byte-visible under Y264_MB_LAMBDA=6,99 which should be a no-op). */
+ * and raising the strength makes ours WORSE, because the mismatch grows with
+ * the modulation amplitude.
+ *
+ * The lambda follows the mb-tree component only -- mbtree_off is the
+ * COMBINED offset, so subtracting aq_off recovers the propagation term. The
+ * AQ half of the modulation measured as a small lambda-following loss on its
+ * own while the mb-tree half carried the whole win. And it engages only on
+ * non-flat source MBs (var16x16 at or above the psy flat gate's 25
+ * threshold): sita's whole win lives on the non-flat minority while bbb's
+ * loss is mostly flat-borne (+5.53 of +6.19). Bands -2.06/-2.81 medians with
+ * no loser outside noise, ABR side 5/5 negative, wall free; the one payer is
+ * CGI animation (bbb +3.14) against the -29.76% lead there.
+ *
+ * Returns the QP to derive the analysis lambdas from, or -1 = NOT ENGAGED
+ * (the caller must then leave the per-slice lambdas untouched; the
+ * mbtree-less non-ref B frames are never engaged). */
 static int mb_lambda_qp(const y264_frame_t *f, int mbx, int mby)
 {
-    int mode = mb_lambda_on();
-    if (mode == 1) return f->cur_qp;
-    /* Mode 7 = mode 5 plus a non-ref-B leg: a frame with NO mb-tree field but
- * a cascade-raised QP (the flat-B / pyramid-leaf case) decides its modes
- * and motion at the anchor-grade lambda (cur_qp - lambda_casc) while the
- * quantiser keeps the cascade. Built chasing sita's B-half: at the starved
- * band we hold 84% of B MBs in the direct-or-skip bucket vs the reference encoder's 79% and
- * code ~25% fewer searched-MV MBs (scripts/b_census.py). REFUSED 08-29: it
- * moves the census toward the reference encoder (direct-or-skip 84.1->83.1, searched-MV
- * 14.5->15.1%) and reads +2.16% BD-NEG at matched rate on that band -- the
- * bought MVs pay fair-to-worse, same as the bought intra did on the P side.
- * The census signature is a symptom, not a recipe. Kept as the probe that
- * records that. */
-    if (mode == 7 && !f->mbtree_off && f->lambda_casc > 0) {
-        int q = f->cur_qp - f->lambda_casc;
-        if (q < 0) q = 0; else if (q > 51) q = 51;
-        return q;
-    }
-    if (mode < 2 || !f->mbtree_off || !f->aq_off) return -1;
-    /* Mode 6 = mode 5 with a frame-QP floor: the arm is regime-shaped (deep
- * band uniformly won, standing-band losses all at the qp~22-26 rungs), so
- * engage only at frame QP >= qp0. */
-    if (mode == 6 && f->qp < mb_lambda_qp0()) return -1;
+    if (!f->mbtree_off || !f->aq_off) return -1;
     int q = f->cur_qp - f->aq_off[mby * f->wmb + mbx];
     if (q < 0) q = 0; else if (q > 51) q = 51;
-    if (mode == 3 || mode == 5 || mode == 6 || mode == 7) {
-        /* 3 = flat MBs only; 5 = the inverse, non-flat only. Measured: sita's
- * whole win lives on the NON-flat minority (mode 3 reads +0.98 there,
- * the win gone) while bbb's loss is mostly flat-borne (+5.53 of +6.19),
- * so 5 is the separating gate. */
-        const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
-        uint32_t v2[2];
-        y264_dsp.var16x16(s, f->src_stride[0], v2);
-        int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
-        int isflat = var256sq < (int64_t)25 << 16;
-        if (isflat != (mode == 3)) return -1;
-    } else if (mode == 4) {
-        if (q >= f->qp) return -1;
-    }
+    const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
+    uint32_t v2[2];
+    y264_dsp.var16x16(s, f->src_stride[0], v2);
+    int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
+    if (var256sq < (int64_t)25 << 16) return -1;
     return q;
 }
 
@@ -8843,14 +8422,12 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int refs0 = f->ref_stride[0], refs1 = f->ref1_stride[0];
     int pw = f->padded_w, ph = f->padded_h;
     mb_qp_pre(f, mbx, mby);
-    if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
-                          if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
-    y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
+    int lq = mb_lambda_qp(f, mbx, mby);
+    if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(1);                 /* oracle attribution: B frame */
     y264_me_set_stq(f->stq);
-    y264_me_set_et_class(f->slice_is_ref ? 2 : 4);
     const pixel *src = f->src[0] + (mby * 16) * ss + mbx * 16;
 
     y264_bs_t sb;
@@ -8878,7 +8455,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * range checks, and the ME seed list), so an uninitialised dmv feeds STACK
  * GARBAGE into the motion search. That is deterministic exactly as long as the
  * worker's stack history is -- and two sibling B leaves sharing the pool's
- * workers (Y264_FPIPE) make it not, which is why per-macroblock temporal
+ * workers (fpipe) make it not, which is why per-macroblock temporal
  * direct was irreproducible above one thread. Zero it once: an 84-byte stack
  * clear per B macroblock, against the RD tournament that follows, and it closes
  * the class rather than the one reader that happened to show it. */
@@ -8901,8 +8478,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * coded MVs (the v1 closure), and only reachable at nref > 1 on list 0. */
     int b8_thresh = 0x7fffffff;     /* B_8x8's RD screen; set by the subme<9 path */
     long bdist_x = LONG_MAX;        /* skip candidate's distortion (mid-tournament exit) */
-    int trpre_mb = -1;              /* shared per-MB trial transform size (Y264_TR_PRE_SHARE) */
-    int *tp = tr_share_on() == 1 ? &trpre_mb : NULL;
+    int trpre_mb = -1;              /* shared per-MB trial transform size */
+    int *tp = NULL;
     /* DIAG Y264_DIAG_COLWATCH: hash the co-located field at the FIRST and LAST
      * macroblock of a B frame. A prep-time hash proves nothing about a field
      * that is read during the macroblock loop -- if the picture supplying it is
@@ -9101,12 +8678,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         long preme_bound = f->b_preme_skip >= 3
                          ? (long)f->b_preme_bits
                          : Y264_LAMJ(lam, f->b_preme_bits);
-        /* Y264_PSY4K bit 2 (2160p tier): the pre-ME bound reads the skip's SSD
-         * without the psy term, which otherwise sends the macroblocks the bound
-         * would commit through the whole search only to end as a skip anyway;
-         * bit 4 keeps half of the psy term in it */
+        /* on the 2160p tier the pre-ME bound keeps only half of the skip's
+         * psy term, which otherwise sends the macroblocks the bound would
+         * commit through the whole search only to end as a skip anyway */
         if (f->b_preme_skip && f->subme <= 8 && direct_ok &&
-            ((f->psy4k & 2) ? bssd : (f->psy4k & 4) ? (bssd + bdist_x) / 2 : bdist_x) <= preme_bound &&
+            (f->psy4k ? (bssd + bdist_x) / 2 : bdist_x) <= preme_bound &&
             (!f->slice_is_ref ||
              ((f->b_preme_skip == 2 || f->b_preme_skip == 4) && f->mbtree_off &&
               f->mbtree_off[mby * f->wmb + mbx] >= 0))) {
@@ -9177,18 +8753,15 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     if (reorder)
         (void)search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
                           seed1, ns1, pL1, mvL1, &satd_l1);
-    const int bret = b_ref_et();
     long c_ref0 = -1;
     struct pred_nb pn0;             /* list-0 predictor neighbours, every ref */
     pred_nb_fetch(f, mbx * 4, mby * 4, 4, 0, 0, &pn0);
-    /* Y264_B_REFQ: every reference searched to half-pel; the winner alone is
+    /* every reference searched to half-pel; the winner alone is
      * taken on to quarter-pel after the loop */
     const int refq = f->nref > 1 && y264_me_b_refq(pw);
     if (refq) y264_me_set_noqpel(1);
     for (int r = 0; r < f->nref; r++) {
         int px, py, tx, ty, tsx, tsy;
-        if (r == 1 && bret && c_ref0 >= 0 && c_ref0 * 16 <= (long)bret * 256)
-            break;
         pred_from_nb(&pn0, 0, 0, r, &px, &py);
         ns0 = nsp0;
         if ((bsm & 4) && temporal_seed(f, mbx, mby, r, &tsx, &tsy)) {
@@ -9380,7 +8953,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             bexit_ok = 1;
         if (direct_ok && dsatd < isi_pure) isi_pure = dsatd;  /* direct carries no mv rate */
         for (int bm = 0; bm < 3; bm++) if (satd16[bm] < isi) isi = satd16[bm];
-        int thresh16 = isi * (17 + (f->psy_rd > 0.0f && !(f->psy4k & 1) ? 1 : 0)) / 16 + 1;
+        int thresh16 = isi * (17 + (f->psy_rd > 0.0f ? 1 : 0)) / 16 + 1;
 
         BPCUT(4);
         /* HD parity stage 2, candidate 3: the survivor set by RANK as well as
@@ -9399,7 +8972,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 for (int b = a; b > 0 && satd16[rdord[b]] < satd16[rdord[b - 1]]; b--) {
                     int t = rdord[b]; rdord[b] = rdord[b - 1]; rdord[b - 1] = t;
                 }
-        if (tr_share_on() == 2 && f->transform8x8 && tr_pre_on(f->subme)) {
+        /* the 16x16 survivors share one transform decision, taken on the
+ * screen's winning prediction (its SATD is already paid; one SA8D more),
+ * direct keeping its own: HD band median +0.04 at t1 and +0.06 at t8 for
+ * -0.3% / -0.14% of the instructions at 1080p / 4K. */
+        if (f->transform8x8 && tr_pre_on(f->subme)) {
             int c4 = bd_d[bw16];
             int c8 = y264_dsp.sa8d16x16(src, ss, p16[bw16], 16);
             trpre_mb = ((long)c8 * 2 * 100 < (long)c4 * tr_pre_bias()) ? 1 : 0;
@@ -9415,7 +8992,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             /* a survivor that cannot beat the best J so far stops early,
              * exactly (encode_inter_res_tp, rd_b_mode); the Bi penalty below
              * only adds, so it cannot bring one back */
-            f->rd_abort = rd_abort_on() && best < DBL_MAX / 2 ? best : -1.0;
+            f->rd_abort = best < DBL_MAX / 2 ? best : -1.0;
             f->rd_hdr_lb = (bm != 1 ? mvd_bypass_lb(mvL0[0] - pL0[0]) + mvd_bypass_lb(mvL0[1] - pL0[1]) : 0)
                          + (bm != 0 ? mvd_bypass_lb(mvL1[0] - pL1[0]) + mvd_bypass_lb(mvL1[1] - pL1[1]) : 0);
             if (rd_abort_stat()) {
@@ -9518,7 +9095,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * asymmetry (it was calibrated against this same screen). Env-gated for
  * the A/B; NOT byte-identical, so it needs a BD round before it ships. */
         b_isatd = isi;
-        int thresh = isi * (17 + (f->psy_rd > 0.0f && !(f->psy4k & 1) ? 1 : 0)) / 16 + 1;
+        int thresh = isi * (17 + (f->psy_rd > 0.0f ? 1 : 0)) / 16 + 1;
         b8_thresh = thresh;         /* the B_8x8 candidate rides the same screen */
 
         /* --- RD phase: only the survivors, reusing the prediction built above.
@@ -9613,11 +9190,6 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * board's cells), and most macroblocks are not close. At subme >= 9 the
  * screen is inactive, as it is for every other candidate there. */
         if (sum8 >= (long)b8_thresh) goto b8_done;
-        /* Y264_B8_NORD=1: run the search + sub-type ranking and throw the
- * result away, so the wall A/B splits mode's cost into its search
- * half and its RD half. Output must be byte-identical to the default
- * (the candidate is never taken) -- that is the probe's own gate. */
-        if (b8_nord_on()) goto b8_done;
         if (b8_stat_on()) b8s_rd++;
         pixel p8[256], c8[2][256];
         build_b8_pred(f, mbx, mby, &i8, p8, c8);
@@ -9645,7 +9217,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
 b8_done: ;
     }
 
-    /* Y264_B_INTRA_FINE: arm the i4/i8 fine gate on the B side by passing the
+    /* Arm the i4/i8 fine gate on the B side by passing the
  * inter SATD reference instead of -1, symmetric with the P path. */
     if ((!b_intra_band_refuses(f, mby) && intra_admit_g(f, mbx, mby, b_isatd, 1))
         || best >= 1e29) {
@@ -9863,9 +9435,8 @@ static void emit_b_cavlc(y264_bs_t *bs, y264_frame_t *f, struct b_rec *recs,
 /* B-slice analyze (W2 split): passes 1+1b -> recs + qc0 + slice_ctx (CABAC).
  * Returns the malloc'd records array; caller emits via emit_b_{cabac,cavlc}. */
 static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
-                                     uint8_t *out_slice_ctx, long *out_est_total)
+                                     uint8_t *out_slice_ctx)
 {
-    *out_est_total = 0;
     int mlam = lambda_me(f->qp);            /* B ME lambda (SATD/SAD domain) */
     long lam = lambda_mode16(f->qp);
     int8_t nzbuf[16 + 32];
@@ -9887,14 +9458,12 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
  * RD trials), rewound, re-driven in pass 2. est_commit_b clobbers bc->ctx, so
  * restore slice-init before pass 2. The WPP estimator is BD-gated. */
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
-        long est_total = 0;
         struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(bc->est_ctx, bc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
         memcpy(slice_ctx, bc->ctx, Y264_CABAC_CTX);
         memcpy(wpp_ctx, bc->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-        int pred = wt > 1 || wf_predqp_env();
         int done_1a = wt > 1 && bcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
@@ -9905,8 +9474,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
-                    if (mbx == 0) rowbrake_row(f, mby);
-                    if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
+                    f->prev_qp = predict_prev_qp(f, mbx, mby);
                     est_mb_begin(bc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, r);
                     if (r->mode == 0) {                 /* B_Skip */
@@ -9926,23 +9494,19 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                         set_mb_intra_motion(f, mbx, mby);
                     }
                     long eb = est_commit_b(f, mbx, mby, r);
-                    est_total += eb;
                     if (f->rb) f->rb[mby] += eb;
                     if (mbx == 1) memcpy(wpp_ctx, bc->est_ctx, Y264_CABAC_CTX);
-                    if (!pred) commit_qpy(f, mbx, mby, b_codes_qpd(f, r));
                 }
             }
-        if (pred) {                                   /* serial QPY-chain resolve */
-            qp_load(f, &qc0);
-            for (int mby = 0; mby < f->hmb; mby++)
-                for (int mbx = 0; mbx < f->wmb; mbx++) {
-                    mb_qp_pre(f, mbx, mby);
-                    commit_qpy(f, mbx, mby, b_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
-                }
-        }
+        /* serial QPY-chain resolve */
+        qp_load(f, &qc0);
+        for (int mby = 0; mby < f->hmb; mby++)
+            for (int mbx = 0; mbx < f->wmb; mbx++) {
+                mb_qp_pre(f, mbx, mby);
+                commit_qpy(f, mbx, mby, b_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
+            }
         *out_qc0 = qc0;
         memcpy(out_slice_ctx, slice_ctx, sizeof slice_ctx);
-        *out_est_total = est_total;
         return recs;
     }
 
@@ -9953,7 +9517,6 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
     struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
     struct qp_chain qc0; qp_save(f, &qc0);
     int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-    int pred = wt > 1 || wf_predqp_env();
     int done_1a = wt > 1 && b_wf_run(f, recs, mlam, lam, wt);   /* 1a: parallel analyze */
     if (!done_1a)
         for (int mby = 0; mby < f->hmb; mby++)      /* 1a: serial analyze + author */
@@ -9961,7 +9524,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                 struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
                 if (f->row_gate && mbx == 0)        /* staircase (serial fallback) */
                     f->row_gate(f->row_gate_ctx, mby);
-                if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
+                f->prev_qp = predict_prev_qp(f, mbx, mby);
                 analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, r);
                 if (r->mode == 0) {                 /* B_Skip */
                     clear_mb_nnz(f, mbx, mby);
@@ -9978,17 +9541,14 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     author_intra_residual(f, mbx, mby, &r->u.intra);
                     set_mb_intra_motion(f, mbx, mby);
                 }
-                if (!pred)
-                    commit_qpy(f, mbx, mby, b_codes_qpd(f, r));
             }
-    if (pred) {                                     /* 1b: serial QPY-chain resolve */
-        qp_load(f, &qc0);
-        for (int mby = 0; mby < f->hmb; mby++)
-            for (int mbx = 0; mbx < f->wmb; mbx++) {
-                mb_qp_pre(f, mbx, mby);
-                commit_qpy(f, mbx, mby, b_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
-            }
-    }
+    /* 1b: serial QPY-chain resolve */
+    qp_load(f, &qc0);
+    for (int mby = 0; mby < f->hmb; mby++)
+        for (int mbx = 0; mbx < f->wmb; mbx++) {
+            mb_qp_pre(f, mbx, mby);
+            commit_qpy(f, mbx, mby, b_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
+        }
 
     *out_qc0 = qc0;
     return recs;
@@ -11307,7 +10867,7 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
         msk |= 1u << (i + base);
     }
     *any = msk != 0;
-    return msk ? decimate_mask(msk, dctdec_tab4()) : 0;
+    return msk ? decimate_mask(msk, DECIMATE_T4) : 0;
 }
 
 /* `tol`, when non-NULL, comes back 1 if this acceptance DEPARTS from the shipped
@@ -12401,16 +11961,6 @@ static inline size_t rec_sz_p(const y264_frame_t *f)
          : REC_ROUND(offsetof(struct p_mb, u) + rec_union_cut(), _Alignof(struct p_mb));
 }
 
-/* Y264_MVSLACK_FIX (default 1): the rect gate's margin reads the real motion
- * of 8x8 quadrants 1 and 2. Read at three threads, the one place the gate
- * runs: HD band median -0.02%, CIF band +0.04%, and 1-4 points more rect
- * admissions. =0 restores the constant margin it replaced. */
-static int mvslack_fix_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MVSLACK_FIX"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
 static int mb_codes_qpd(const y264_frame_t *f, const struct p_mb *r)
 {
     if (r->eff_skip) return 0;                      /* P_Skip: no residual, no delta */
@@ -12482,21 +12032,19 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     NLED_SITE(Y264_LED_SITE_PME); NLED(mb_p, 1);
     int rs = f->rec_stride[0], refs = f->ref_stride[0];
     mb_qp_pre(f, mbx, mby);
-    if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
-                          if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
-    y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
+    int lq = mb_lambda_qp(f, mbx, mby);
+    if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(0);                 /* oracle attribution: P frame */
     y264_me_set_stq(f->stq);
-    y264_me_set_et_class(1);
     int smvx, smvy;
     mv_skip(f, mbx, mby, &smvx, &smvy);
     pixel *rec = f->rec[0] + (mby * 16) * rs + mbx * 16;
     int s4 = trellis_commit_on(f->subme, f->trellis);
     s_rd_trial = s4;                /* S4: deadzone quant in the RD trials below */
 
-    /* v3 staircase (Y264_STAIR_DEPTH): P_Skip predicts from ref 0. When ref 0
+    /* v3 staircase: P_Skip predicts from ref 0. When ref 0
  * is the (possibly in-flight) previous anchor, its reads must respect the
  * fixed clamp -- but the derived skip MV is a median that can include
  * neighbours coded against OTHER (unclamped) references, so it may exceed
@@ -12626,7 +12174,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     } else {
         PPCUT(2);
         tl_rx_hit = 0;
-        tl_rx_armed = skip_ok && f->wmb * f->hmb >= p_ref0exit_minmb() ? p_ref0exit_on() : 0;   /* 1 = MV test, 2 = MV + SATD bound */
+        tl_rx_armed = skip_ok && f->wmb * f->hmb >= P_REF0EXIT_MINMB;
         tl_rx_smvx = smvx; tl_rx_smvy = smvy;
         best_satd = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires0, 0);
         tl_rx_armed = 0;
@@ -12640,7 +12188,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
         pires = pi0;
         tl_mixref_only = mixref_slot(f, ires0.ref[0]);
-        if (tl_rx_hit) {                     /* Y264_P_REF0EXIT: the 16x16 is the candidate */
+        if (tl_rx_hit) {                     /* the post-ref-0 exit: the 16x16 is the candidate */
         } else if (!(f->partitions & YAH264_PART_P8X8)) {
             /* p8x8 off: 16x16 is the whole inter candidate set, and the two
  * orders below (gated and all-four alike) have nothing left to run. */
@@ -12661,11 +12209,10 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             /* rectangle threshold: the mv cost of the 8x8 blocks a rect merges
  * (the two 8x8 halves' MV cost), from THIS MB's own search result. */
             /* P_8x8 keeps its motion at [b*4 + sub-block], so quadrants 1
-             * and 2 start at 4 and 8. Y264_MVSLACK_FIX=0 restores the old
-             * read of [1] and [2] -- quadrant 0's second and third sub-blocks,
-             * which are empty under the 8x8 sub-type, so the slack was a
-             * constant four bits. */
-            int q1 = mvslack_fix_on() ? 4 : 1, q2 = mvslack_fix_on() ? 8 : 2;
+             * and 2 start at 4 and 8. Reading their real motion, rather than
+             * a constant margin, read HD band median -0.02%, CIF band +0.04%,
+             * and 1-4 points more rect admissions at three threads. */
+            const int q1 = 4, q2 = 8;
             long mv_slack = (long)mlam *
                 (mvd_bits(cand.mvx[q1] - cand.pmvx[q1]) + mvd_bits(cand.mvy[q1] - cand.pmvy[q1]) +
                  mvd_bits(cand.mvx[q2] - cand.pmvx[q2]) + mvd_bits(cand.mvy[q2] - cand.pmvy[q2]));
@@ -13117,7 +12664,6 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     }
     if (f->row_gate && c == 0)      /* staircase v3: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0) rowbrake_row(f, r);
     if (c == 0)                             /* WPP: seed est_ctx from row above MB-1,
                                              * or from slice-init at a slice start */
         memcpy(cb->est_ctx,
@@ -13144,7 +12690,6 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
                            &w->rowqc[r], REC_AT(f, w->recs, r * w->wmb));
         f->row_done(f->row_done_ctx, r);
     }
-    if (c == w->wmb - 1) rowbrake_row_done(f, r);
 }
 static int pcb_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
@@ -13164,14 +12709,8 @@ static int pcb_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam,
              w.rowqc;
     if (ok) {
         ntp_prof_tag("analyze_Pcb");
-        {
-            int (*rb_gate)(void *, int) = f->row_ready; void *rb_ctx = f->row_gate_ctx;
-            if (f->brk) { f->brk->inner_ready = f->row_ready; f->brk->inner_ctx = f->row_gate_ctx;
-                          f->brk->pool = pool; atomic_store(&f->brk->done, 0);
-                          rb_gate = rowbrake_ready; rb_ctx = f->brk; }
-            ntp_wavefront_gated(pool, f->hmb, f->wmb, pcb_wf_init, pcb_wf_attach,
-                            pcb_wf_cell, &w, rb_gate, rb_ctx);
-        }
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, pcb_wf_init, pcb_wf_attach,
+                            pcb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
 }
@@ -13216,7 +12755,6 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
     struct b_rec *rec = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0) rowbrake_row(f, r);
     if (c == 0)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
@@ -13242,7 +12780,6 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
     long eb = est_commit_b(f, c, r, rec);
     if (f->rb) f->rb[r] += eb;
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
-    if (c == w->wmb - 1) rowbrake_row_done(f, r);
 }
 static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
@@ -13257,14 +12794,8 @@ static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
     int ok = wpp && w.fc && w.cb && w.nzbuf  && w.snap_best;
     if (ok) {
         ntp_prof_tag("analyze_Bcb");
-        {
-            int (*rb_gate)(void *, int) = f->row_ready; void *rb_ctx = f->row_gate_ctx;
-            if (f->brk) { f->brk->inner_ready = f->row_ready; f->brk->inner_ctx = f->row_gate_ctx;
-                          f->brk->pool = pool; atomic_store(&f->brk->done, 0);
-                          rb_gate = rowbrake_ready; rb_ctx = f->brk; }
-            ntp_wavefront_gated(pool, f->hmb, f->wmb, bcb_wf_init, bcb_wf_attach,
-                            bcb_wf_cell, &w, rb_gate, rb_ctx);
-        }
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, bcb_wf_init, bcb_wf_attach,
+                            bcb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
 }
@@ -13310,7 +12841,6 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     struct intra_mb *o = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)              /* staircase: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0) rowbrake_row(f, r);
     if (c == 0)                             /* WPP: seed est_ctx from row above MB-1,
                                              * or from slice-init at a slice start */
         memcpy(cb->est_ctx,
@@ -13323,7 +12853,6 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     long eb = est_commit_i(f, c, r, o);     /* advance this row's est_ctx */
     if (f->rb) f->rb[r] += eb;
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
-    if (c == w->wmb - 1) rowbrake_row_done(f, r);
 }
 static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
                       const uint8_t *slice_ctx)
@@ -13336,14 +12865,8 @@ static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
     int ok = wpp && w.fc && w.cb;
     if (ok) {
         ntp_prof_tag("analyze_Icb");
-        {
-            int (*rb_gate)(void *, int) = f->row_ready; void *rb_ctx = f->row_gate_ctx;
-            if (f->brk) { f->brk->inner_ready = f->row_ready; f->brk->inner_ctx = f->row_gate_ctx;
-                          f->brk->pool = pool; atomic_store(&f->brk->done, 0);
-                          rb_gate = rowbrake_ready; rb_ctx = f->brk; }
-            ntp_wavefront_gated(pool, f->hmb, f->wmb, icb_wf_init, icb_wf_attach,
-                            icb_wf_cell, &w, rb_gate, rb_ctx);
-        }
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, icb_wf_init, icb_wf_attach,
+                            icb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
 }
@@ -13461,17 +12984,14 @@ static void emit_i_cavlc(y264_bs_t *bs, y264_frame_t *f, struct intra_mb *recs,
 
 /* W2 emit-overlap: the job produced by y264_frame_analyze and consumed by
  * y264_frame_emit. Owns the malloc'd records array. qc0 is the frame-start QP
- * chain; slice_ctx (CABAC) is the slice-init context to restore before pass 2;
- * est_total feeds the optional est-vs-real self-check (Y264_EST_CHECK). */
+ * chain; slice_ctx (CABAC) is the slice-init context to restore before pass 2. */
 struct y264_emit_job {
     int  slice_type;        /* 0 = I, 1 = P, 2 = B */
     int  cabac;
     void *recs;             /* struct intra_mb* / p_mb* / b_rec* per slice_type */
     struct qp_chain qc0;
     uint8_t slice_ctx[Y264_CABAC_CTX];
-    long est_total;
     int64_t *rb;            /* the picture's row-brake trace, or NULL */
-    struct y264_rowbrake *brk;  /* the picture's row brake, or NULL */
     int  rb_poc, rb_hmb;
 };
 
@@ -13491,34 +13011,24 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f);
  * picture size set it), the cache never holds more than it saw in flight at
  * once, and it empties when the last open encoder closes, so a library caller
  * gets the memory back. The records are written before they are read, so a
- * recycled array codes the same bytes as a fresh one. Y264_RECS_CACHE=0
- * frees every array as before. */
+ * recycled array codes the same bytes as a fresh one. */
 #define RECS_HDR 64                 /* keeps the records 64-byte aligned */
 #define RECS_CACHE_MAX 64
 static pthread_mutex_t g_recs_mx = PTHREAD_MUTEX_INITIALIZER;
 static void *g_recs_free[RECS_CACHE_MAX];
 static int g_recs_nfree, g_recs_users;
 
-static int recs_cache_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RECS_CACHE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-
 static void *recs_alloc(size_t bytes)
 {
-    if (recs_cache_on()) {
-        pthread_mutex_lock(&g_recs_mx);
-        for (int i = g_recs_nfree - 1; i >= 0; i--)
-            if (*(size_t *)g_recs_free[i] == bytes) {
-                void *b = g_recs_free[i];
-                g_recs_free[i] = g_recs_free[--g_recs_nfree];
-                pthread_mutex_unlock(&g_recs_mx);
-                return (char *)b + RECS_HDR;
-            }
-        pthread_mutex_unlock(&g_recs_mx);
-    }
+    pthread_mutex_lock(&g_recs_mx);
+    for (int i = g_recs_nfree - 1; i >= 0; i--)
+        if (*(size_t *)g_recs_free[i] == bytes) {
+            void *b = g_recs_free[i];
+            g_recs_free[i] = g_recs_free[--g_recs_nfree];
+            pthread_mutex_unlock(&g_recs_mx);
+            return (char *)b + RECS_HDR;
+        }
+    pthread_mutex_unlock(&g_recs_mx);
     void *b = NULL;
     if (posix_memalign(&b, RECS_HDR, bytes + RECS_HDR) != 0) return NULL;
     *(size_t *)b = bytes;
@@ -13529,14 +13039,12 @@ static void recs_release(void *recs)
 {
     if (!recs) return;
     void *b = (char *)recs - RECS_HDR;
-    if (recs_cache_on()) {
-        pthread_mutex_lock(&g_recs_mx);
-        if (g_recs_users > 0 && g_recs_nfree < RECS_CACHE_MAX) {
-            g_recs_free[g_recs_nfree++] = b;
-            b = NULL;
-        }
-        pthread_mutex_unlock(&g_recs_mx);
+    pthread_mutex_lock(&g_recs_mx);
+    if (g_recs_users > 0 && g_recs_nfree < RECS_CACHE_MAX) {
+        g_recs_free[g_recs_nfree++] = b;
+        b = NULL;
     }
+    pthread_mutex_unlock(&g_recs_mx);
     free(b);
 }
 
@@ -13583,9 +13091,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
     struct y264_emit_job *j = malloc(sizeof *j);
     j->slice_type = f->slice_type;
     j->cabac = f->cabac ? 1 : 0;
-    j->est_total = 0;
     j->rb = f->rb; j->rb_poc = f->poc; j->rb_hmb = f->hmb;
-    j->brk = f->brk;
     aq_analyze(f);
     if (f->mb_tr8)
         memset(f->mb_tr8, 0, (size_t)f->wmb * f->hmb);
@@ -13605,7 +13111,6 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         memcpy(j->slice_ctx, c->ctx, Y264_CABAC_CTX);
         memcpy(wpp_ctx, c->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-        int pred = wt > 1 || wf_predqp_env();
         int done_1a = wt > 1 && icb_wf_run(f, recs, wt, j->slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
@@ -13616,26 +13121,23 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     struct intra_mb *o = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
-                    if (mbx == 0) rowbrake_row(f, mby);
                     mb_qp_pre(f, mbx, mby);
-                    if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
+                    f->prev_qp = predict_prev_qp(f, mbx, mby);
                     est_mb_begin(c, mbx, mby, f->cf_idc);   /* RDOQ in analyze reads est_ctx via c->ctx */
                     analyze_intra(f, mbx, mby, o);
                     author_intra_cabac(f, mbx, mby, o);
                     long eb = est_commit_i(f, mbx, mby, o);  /* advance est_ctx for the next MB */
                     if (f->rb) f->rb[mby] += eb;
                     if (mbx == 1) memcpy(wpp_ctx, c->est_ctx, Y264_CABAC_CTX);
-                    if (!pred) commit_qpy(f, mbx, mby, intra_codes_qpd(f, o));
                 }
             }
-        if (pred) {                                   /* serial QPY-chain resolve */
-            qp_load(f, &qc0);
-            for (int mby = 0; mby < f->hmb; mby++)
-                for (int mbx = 0; mbx < f->wmb; mbx++) {
-                    mb_qp_pre(f, mbx, mby);
-                    commit_qpy(f, mbx, mby, intra_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
-                }
-        }
+        /* serial QPY-chain resolve */
+        qp_load(f, &qc0);
+        for (int mby = 0; mby < f->hmb; mby++)
+            for (int mbx = 0; mbx < f->wmb; mbx++) {
+                mb_qp_pre(f, mbx, mby);
+                commit_qpy(f, mbx, mby, intra_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
+            }
         j->recs = recs;
         j->qc0 = qc0;
         return j;
@@ -13678,7 +13180,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         return j;
     }
     if (f->slice_type == 2) {
-        j->recs = analyze_b_slice(f, &j->qc0, j->slice_ctx, &j->est_total);
+        j->recs = analyze_b_slice(f, &j->qc0, j->slice_ctx);
         return j;
     }
 
@@ -13706,17 +13208,12 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * is restored to slice-init before pass 2. The WPP estimator was BD-gated,
  * not byte-identical, against tracking the live ctx. */
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
-        long est_total = 0;
         struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(pc->est_ctx, pc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
         memcpy(slice_ctx, pc->ctx, Y264_CABAC_CTX);
         memcpy(wpp_ctx, pc->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-        /* the wavefront needs the per-row WPP est_ctx; predecessor pricing then
- * makes analyze position-deterministic. Serial WPP stays true-chain unless
- * Y264_WF_PREDQP forces the predecessor path for BD comparison. */
-        int pred = wt > 1 || wf_predqp_env();
         int done_1a = wt > 1 && pcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
@@ -13727,8 +13224,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
-                    if (mbx == 0) rowbrake_row(f, mby);
-                    if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
+                    f->prev_qp = predict_prev_qp(f, mbx, mby);
                     est_mb_begin(pc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
                     if (r->eff_skip) {
@@ -13742,13 +13238,11 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                         author_intra_cabac(f, mbx, mby, &r->u.intra);
                     }
                     long eb = est_commit_p(f, mbx, mby, r);
-                    est_total += eb;
                     if (f->rb) f->rb[mby] += eb;
                     if (mbx == 1) memcpy(wpp_ctx, pc->est_ctx, Y264_CABAC_CTX);
-                    if (!pred) commit_qpy(f, mbx, mby, mb_codes_qpd(f, r));
                 }
             }
-        if (pred && !(done_1a && f->row_done)) {      /* serial QPY-chain resolve
+        if (!(done_1a && f->row_done)) {      /* serial QPY-chain resolve
  * (staircase did it per row) */
             qp_load(f, &qc0);
             for (int mby = 0; mby < f->hmb; mby++)
@@ -13760,7 +13254,6 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         j->recs = recs;
         j->qc0 = qc0;
         memcpy(j->slice_ctx, slice_ctx, sizeof slice_ctx);
-        j->est_total = est_total;
         return j;
     }
 
@@ -13776,7 +13269,6 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
     struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
     struct qp_chain qc0; qp_save(f, &qc0);          /* frame-start QP chain */
     int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-    int pred = wt > 1 || wf_predqp_env();           /* W1: deterministic delta pricing */
     int done_1a = wt > 1 && p_wf_run(f, recs, mlam, lam, wt);  /* 1a: parallel analyze */
     if (!done_1a)
         for (int mby = 0; mby < f->hmb; mby++)      /* 1a: serial analyze + author */
@@ -13784,7 +13276,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                 struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
                 if (f->row_gate && mbx == 0)        /* staircase (serial fallback) */
                     f->row_gate(f->row_gate_ctx, mby);
-                if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
+                f->prev_qp = predict_prev_qp(f, mbx, mby);
                 analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
                 if (r->eff_skip) {
                     clear_mb_nnz(f, mbx, mby);
@@ -13796,10 +13288,8 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     author_intra_residual(f, mbx, mby, &r->u.intra);
                     if (f->slice_type == 1) set_mb_intra_motion(f, mbx, mby);
                 }
-                if (!pred)                          /* interleaved true chain (default) */
-                    commit_qpy(f, mbx, mby, mb_codes_qpd(f, r));
             }
-    if (pred && !(done_1a && f->row_done)) {        /* 1b: serial QPY-chain resolve
+    if (!(done_1a && f->row_done)) {        /* 1b: serial QPY-chain resolve
  * (staircase did it per row) */
         qp_load(f, &qc0);
         for (int mby = 0; mby < f->hmb; mby++)
@@ -13829,20 +13319,7 @@ void y264_frame_emit_free(y264_emit_job_t *job)
                     (long long)job->rb[h + r]);
         fputc('\n', stderr);
     }
-    free(job->rb);              /* the trace's, or the rule's estimate */
-    if (job->brk) {
-        /* with the trace on, one RBK line per picture the brake touched */
-        struct y264_rowbrake *b = job->brk;
-        if (y264_rb_trace_on()) {
-            int maxq = 0, first = -1;
-            for (int r = 0; r < b->hmb; r++)
-                if (b->q[r] > 0) { if (first < 0) first = r; if (b->q[r] > maxq) maxq = b->q[r]; }
-            if (first >= 0)
-                fprintf(stderr, "RBK poc=%d type=%c bud=%.0f pred=%.0f maxq=%d first_row=%d of %d\n",
-                        job->rb_poc, "IPB"[job->slice_type], b->bud, b->pred, maxq, first, b->hmb);
-        }
-        free(b->q); free(b);
-    }
+    free(job->rb);
     recs_release(job->recs);
     free(job);
 }
@@ -13852,7 +13329,6 @@ void y264_frame_emit_slice(y264_bs_t *bs, y264_frame_t *f, y264_emit_job_t *job,
     IP_SCOPE_B(IP_EMIT);
     int y0 = f->slice_row0 ? f->slice_row0[s] : 0;
     int y1 = f->slice_row0 ? f->slice_row0[s + 1] : f->hmb;
-    uint8_t *cst = (job->cabac && f->cabac) ? f->cabac->p : NULL;
     if (unsafe_no_emit())           /* ceiling probe: garbage out, see above */
         return;
     switch (job->slice_type) {
@@ -13868,13 +13344,6 @@ void y264_frame_emit_slice(y264_bs_t *bs, y264_frame_t *f, y264_emit_job_t *job,
         if (job->cabac) emit_p_cabac(f, job->recs, &job->qc0, job->slice_ctx, y0, y1);
         else            emit_p_cavlc(bs, f, job->recs, &job->qc0, y0, y1);
         break;
-    }
-    /* est-vs-real self-check (Y264_EST_CHECK), P/B CABAC only; I has no est. */
-    if (cst && job->slice_type != 0 && est_check_on()) {
-        long ab = (long)(f->cabac->p - cst) * 8;
-        fprintf(stderr, "EST-CHECK %c poc=%d est=%ld actual=%ld ratio=%.3f\n",
-                job->slice_type == 2 ? 'B' : 'P', f->poc, job->est_total / 256,
-                ab, ab ? (job->est_total / 256.0) / ab : 0);
     }
 }
 
@@ -13901,19 +13370,15 @@ void y264_frame_encode(y264_bs_t *bs, y264_frame_t *f)
 void y264_mb_warm_statics(void)
 {
     (void)diag_tdirlim(); (void)diag_colwatch(); (void)diag_directok();
-    (void)mb_log_on(); (void)wf_predqp_env(); (void)tr_pre_on(10);
-        (void)intra_est_env(); (void)i16_admit_m(); (void)i16_admit_var();
-    (void)intra_modebits_s256(); (void)intra_modebits_rd();
-    (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
+    (void)mb_log_on();
+    (void)band_rows_env(); (void)band_precomp_on();
     (void)lambda_me(26);
-    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL, NULL, NULL); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
-    (void)unsafe_no_emit(); (void)recs_cache_on();
+    (void)lambda_mode(26); (void)y264_rb_trace_on(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
+    (void)unsafe_no_emit();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
-    (void)inter_i4_env(); (void)intra_fine_wide_env(); (void)wp_me_on();
-    (void)intra_commit_size_w();
     (void)me_dump_fp();              /* likewise me_dump */
     (void)pskip_exit_mode(); (void)fast_pskip_on();
-    (void)b_skip_exit_env(); (void)mvslack_fix_on(); (void)tr_share_on();
+    (void)b_skip_exit_env();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();
     (void)resprof_on(); (void)trprof_on(); (void)est_prof_on(); (void)est_scrtrace_on();
     /* Read-compare-write, not a plain store: this warm runs on EVERY
@@ -13924,12 +13389,11 @@ void y264_mb_warm_statics(void)
  * env-gate class was warmed. The prime encoder does the first write on the
  * main thread; after that this compares equal and no worker writes. */
     { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
-        (void)part_earlyterm(); (void)lr_seed_on(); (void)p_ref0exit_on(); (void)p_ref0exit_minmb();     (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat();
+        (void)part_earlyterm(); (void)lr_seed_on();     (void)b_ref_stat(); (void)rd_abort_stat();
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
-    (void)aq_mode_env(); (void)aq2_cfg();
+    (void)aq_mode_env();
         (void)probe_deadzone_env();
-    (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
  * is a lazy env static read from analyse on wavefront workers, so first
@@ -13937,8 +13401,7 @@ void y264_mb_warm_statics(void)
  * a report that fogs the next real hunt. Resolved here on the main thread
  * so the workers only ever read. (scripts/env_gate_audit.py enumerates the
  * class; run it after adding a gate.) */
-    (void)dctdec_tab4();
-    (void)b_8x8_on(); (void)b8_direct_on(); (void)b8_nord_on();
+    (void)b_8x8_on(); (void)b8_direct_on();
     (void)b8_stat_on();
     (void)b8_qgate();
     (void)flatskip_stat_on(); (void)bdir_stat_on();
