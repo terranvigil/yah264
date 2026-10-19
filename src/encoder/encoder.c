@@ -17831,7 +17831,7 @@ const char *yah264_encoder_backend(const yah264_encoder_t *e)
     return e && e->hw ? y264_hw_name(e->hw) : "yah264";
 }
 
-/* Our scene-cut, applied causally to the hardware path (docs/videotoolbox-plan.md
+/* Our scene-cut, applied causally to the hardware path (docs/hardware-mode.md
  * step 2, item 4; --no-scenecut turns it off). The same
  * lowres intra / zero-motion / exact-diamond costs and the same decision rule
  * as the lookahead and the pre-scan, run on each frame as it arrives against

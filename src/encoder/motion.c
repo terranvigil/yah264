@@ -488,7 +488,7 @@ static int me_et_stat_on(void)
  * This is a search-level early-out, NOT a skip decision: the macroblock still
  * runs its whole tournament and can still come out inter. That distinction is
  * why it is worth trying at all -- committing to skip before ME is a
- * measured-refused route (docs/b-skip-decision-design.md), and this does not
+ * measured-refused route (docs/b-frames.md), and this does not
  * do it.
  *
  * K = 48 sub-16x16 plus a K = 4 16x16 exit reads the best board dVMAF of any
