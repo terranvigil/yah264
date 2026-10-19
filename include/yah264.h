@@ -1092,7 +1092,7 @@ YAH264_EXPORT int yah264_encoder_frame_stats(yah264_encoder_t *enc, yah264_frame
 
 YAH264_EXPORT int yah264_frame_thread_cap(int width, int height);
 
-/* What param.threads = 0 resolves to on this machine: every online core, cached.
+/* What param.threads = 0 resolves to on this machine: the online cores, at most 16.
  * Exported so a caller splitting work across several encoder instances sizes its
  * budget from the same number the library would have used, instead of asking the
  * OS separately and drifting. Clamp per instance with yah264_frame_thread_cap:

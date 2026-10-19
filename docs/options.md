@@ -139,7 +139,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
-| `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
+| `--aq-mode` | 1 or 2 | 2 | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
 | `--abr-model` | `default`, `rf` | `default` | ABR bit allocation. `rf` (spelled `x264` in older scripts, still accepted) spends a given bitrate markedly better and hits it less reliably. See below. |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
@@ -388,9 +388,10 @@ worse at both offsets tried (3 and 6).
 
 #### `--b-bias` is a tuning dial
 
-The adaptive placement keeps a candidate frame as a B while its best
-bidirectional lowres cost stays under 0.77 of its intra cost, and turns it
-into an anchor otherwise. `--b-bias` moves that 0.77 in a straight line: up to
+The adaptive placement keeps a candidate frame as a B while its lowres cost
+stays under 0.77 of its intra cost. That cost is, per block, the cheapest of
+the forward leg, the backward leg and intra. Otherwise the frame becomes an
+anchor. `--b-bias` moves that 0.77 in a straight line: up to
 1.0 at +100, where a frame becomes an anchor only if nothing predicts it
 better than intra, and down to 0 at -100, where every frame is an anchor. The
 B-run limit (`--bframes`), the key-frame interval and scene cuts don't move. At
@@ -1017,7 +1018,7 @@ rate and DPB size per Annex A.
 
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
-| `--threads` | N or `auto` | 0 = auto (online cores) | Total thread budget, split across GOP workers and in-frame wavefront threads. |
+| `--threads` | N or `auto` | 0 = auto: online cores, at most 16 | Total thread budget, split across GOP workers and in-frame wavefront threads. |
 | `--max-memory` | MiB | half of physical RAM | Memory budget for the threaded encode. When the GOP workers would not fit, fewer run at once, each with a wider wavefront. See [Memory](#memory-the-parallel-path-streams-through-a-bounded-window). |
 | `--sync-lookahead` | frames or `auto` | auto | Input frames buffered so the lookahead runs ahead of the encode on its own thread. `0` disables. A negative count is refused. |
 
@@ -1415,7 +1416,7 @@ Options that differ, and how:
 | `--crf` | The CRF scale moved with this release. The frame-level AQ strength under uncapped CRF went from 1.04 to 1.3 (capped CRF keeps 1.04), so at the same CRF value busy content now codes smaller than it did before: 5% on foreman, 13% on stefan and 19% on bus at CRF 23. Quality per bit is better. If you tuned a CRF value on an earlier yah264, check your sizes again, and compare encoders at matched size or quality, never at matched CRF. |
 | `--crf 0` | x264's lossless. Not implemented here, and refused rather than accepted, because `rc.rf = 0` means "CRF unarmed" in the param struct. |
 | `--direct` | x264's `none` is not implemented and is refused. `auto` (the default, as in x264) picks per slice by skippability. `spatial` and `temporal` behave the same as x264's. |
-| `--qp` | x264 forces mb-tree and AQ off at constant QP. yah264 forces AQ off *at the CLI* but leaves mb-tree running. `--qp 26` is not the same workload on both encoders. |
+| `--qp` | Both encoders turn mb-tree and AQ off at constant QP, so `--qp N` is the same workload on each. |
 | `--scenecut` | On the CLI, `--scenecut 0` means off, same as x264. In the C API, `param.scenecut = 0` means **default (40)** and off is spelled with a negative. Assign `YAH264_SCENECUT_OFF`. See [Calling it from C](#calling-it-from-c). |
 | `--sync-lookahead` | Same 0-means-off spelling on the CLI. The API spells off with a negative: assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
 | `--input-y4m` / `--input-raw` | x264 sniffs the input format. Here the two are separate flags and nothing is guessed. |
