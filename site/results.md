@@ -49,11 +49,11 @@ couldn't be fed as fast as yah264 encoded, so it's an upper bound on our ratio.
 | 2160p | S | 0.50 / 0.52 | 0.55 / 0.60 | 0.67 / 0.73 |
 | 2160p | M | 0.47 / 0.58 | 0.49 / 0.60 | 0.53 / 0.57 |
 | 2160p | L | 0.52 / 0.55 | ≤0.58 / 0.62 | ≤0.57 / 0.59 |
-| 2160p | C | not measured | not measured | void |
+| 2160p | C | 0.56 / 0.56 | 0.57 / 0.57 | 0.62 / 0.62 |
 
-The slowest cell anywhere is 0.88, a short CIF clip with SIMD on. The 4K
-content-type clips are the one gap. Goals 1 and 2 haven't been timed there, and
-the goal 3 run failed a validity rule. Those cells sit outside the parity count.
+The slowest cell anywhere is 0.88, a short CIF clip with SIMD on. Content-type
+cells are shown but sit outside the parity count. The 4K one is a single
+four-second clip, so treat it as a thin reading.
 
 ## Quality at the same size
 
