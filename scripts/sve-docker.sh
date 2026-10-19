@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # sve-docker.sh -- the SVE tier's correctness battery, on a machine with no SVE
-# (docs/x86-plan.md, "The ARM SVE tier").
+# (docs/simd.md).
 #
 # Apple silicon has no SVE, so the tier is EXECUTED under QEMU user mode inside
 # a native arm64 Linux container: the compiler, the unit tests and the NEON leg

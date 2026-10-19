@@ -5,7 +5,7 @@
 
 `band_at_rate.py` answers the same question for the standing twelve-clip
 ladder, which is seven CIF clips and five HD ones. The clips engineers test
-with are 720p and 1080p at the bitrates people use, and docs/hd-parity-plan.md
+with are 720p and 1080p at the bitrates people use, and docs/plan.md
 makes that band the bar every stage-2 candidate is read against. This is that
 band.
 

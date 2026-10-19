@@ -187,7 +187,7 @@ c_budget_ok() {   # c_budget_ok <estimated-seconds>
 # ---------------------------------------------------------------------------
 # Where we are, and whether a clock here means anything.
 #
-# THE RULE (docs/x86-plan.md; the owner's box rule). Under an emulator a wall
+# THE RULE (docs/simd.md; the owner's box rule). Under an emulator a wall
 # time is the EMULATOR's, and an instruction count is the emulator's too. The
 # rehearsal proves the kit runs; it proves nothing about how fast anything is.
 # So the kit does not decide this per leg or per reviewer: CLOUD=1 asserts real

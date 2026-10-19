@@ -1,5 +1,5 @@
 /*
- * transform_sve.c - SVE forward quant (docs/x86-plan.md, "The ARM SVE tier")
+ * transform_sve.c - SVE forward quant (docs/simd.md)
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *

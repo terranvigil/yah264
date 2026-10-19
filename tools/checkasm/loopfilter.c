@@ -16,7 +16,7 @@
  * Half the trials add a wide-swing term on top so the gate's reject side is
  * exercised too.
  *
- * Since wave 3b of docs/x86-plan.md each group's BODY is written once and
+ * Since docs/simd.md each group's BODY is written once and
  * takes its kernel as an argument, with one thin row per tier on top -- wave
  * 1's shape, so a twin that lands later inherits the fills and the guards of
  * the row it joins instead of restating the ones it happened to notice.

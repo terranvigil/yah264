@@ -1,6 +1,6 @@
 /*
  * stgprof.h - fine-grained stage profiler for the pure-C speed-parity work
- * (docs/pure-c-speed-parity.md). Attributes the per-MB analyze "orchestration"
+ * (docs/plan.md). Attributes the per-MB analyze "orchestration"
  * that the frame-level Y264_THREAD_PROF buckets lump into TP_ANALYZE.
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later

@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 1 of docs/x86-plan.md: the SSE4.2 twin of every pixel-family kernel the
+ * Wave 1 of docs/simd.md: the SSE4.2 twin of every pixel-family kernel the
  * NEON twin covers. Each one is bit-exact with the portable reference in
  * src/dsp/metrics.c -- not close, exact -- which is what lets the tier be a
  * runtime axis (Y264_SIMD_FORCE) that cannot move a byte of output.

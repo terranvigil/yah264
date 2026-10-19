@@ -6,17 +6,17 @@ stripped.
 
 ## 1. The identification string
 
-x264 and x265 write a "user data unregistered" SEI at the start of the
-stream. It holds a 16-byte UUID followed by text naming the encoder, its
-version, a copyright line, a URL and the options in force. `strings` and
+The common practice among H.264 and HEVC encoders is a "user data
+unregistered" SEI at the start of the stream: a 16-byte UUID followed by text
+naming the encoder, its version and the options in force. `strings` and
 ffprobe show it. People use it to check a stream's configuration after the
 fact, and support uses it to learn what made a file.
 
 | codec | carrier | state |
 |---|---|---|
-| yah264 | user data unregistered SEI, on by default, `--no-sei` to drop it | done. The payload lacks the copyright and URL line. The UUID still spells the project's old name |
-| yah265 | the same SEI, built but off by default. Turning it on changes every stream by one message. The identity harness reads that as a diff on every cell | todo: on by default with a re-baselined harness, plus the options list |
-| yaav1 | AV1 has no unregistered user data. A padding OBU carries arbitrary bytes that decoders must ignore. An ITU-T T.35 metadata OBU is the registered route and needs a manufacturer code | todo: the padding OBU form first |
+| yah264 | user data unregistered SEI, on by default, `--no-sei` drops it | built. The payload is `yah264 <version> - options: cabac= ref= bframes= 8x8dct= subme= aq= mbtree= keyint=` plus the rate mode. It has no copyright or URL part yet, and the UUID spells the project's old name (`next264-sei-v1`) |
+| yah265 | the same SEI, built but off by default. Turning it on changes every stream by one message, which the identity harness reads as a diff on every cell | to do: on by default with a re-baselined harness, plus the options list |
+| yaav1 | AV1 has no unregistered user data. A padding OBU carries arbitrary bytes that decoders must ignore. An ITU-T T.35 metadata OBU is the registered route and needs a manufacturer code | to do: the padding OBU form first |
 
 All three use one format: `<name> <version> - <codec> - Copyright <years> the
 <name> authors - <url> - options: k=v ...`. Each codec gets one UUID, fixed
@@ -44,12 +44,11 @@ Choice points, by cost:
   forms in AV1. They're cheap to read and carry few bits of identity. Only a
   re-serialization strips them.
 
-The design will land with a verifier, `scripts/provenance_check.py` (not written yet), that parses
-a stream and prints which of the two marks it finds. The fingerprint changes
-the default stream, so it lands as one flip with the identity harness
-re-baselined. It must keep two `--threads 1` runs byte-identical, the hard
-gate the encoder already runs. Threaded output doesn't have to match across
-runs or thread counts.
+The design lands with a verifier, `scripts/provenance_check.py` (not written
+yet), that parses a stream and prints which of the two marks it finds. The
+fingerprint changes the default stream, so it lands as one flip with the
+identity harness re-baselined. It must keep two `--threads 1` runs
+byte-identical, the hard gate the encoder already runs. Threaded output
+doesn't have to match across runs or thread counts.
 
-Status: todo on all three. yah264 ideas backlog, yah265 ideas log, yaav1
-plan phase 7.
+Status: the fingerprint isn't built on any of the three codecs.

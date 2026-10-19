@@ -265,7 +265,7 @@ void y264_cpu_name(uint32_t flags, char *buf, int size)
  * TODAY'S POLICY IS THE SUM, i.e. every online core. That is a measurement, not
  * an assumption: at 450 frames of 1080p the full count beat two thirds of it on
  * both input shapes, with and without a decoder competing in the same process
- * (docs/threading-ownership-plan.md, S0b). An earlier reading said the opposite
+ * (docs/threading.md). An earlier reading said the opposite
  * and was an artefact of streaming the source off an external disk, where I/O
  * and not the thread count was the constraint.
  *

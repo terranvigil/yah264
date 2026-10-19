@@ -7,7 +7,7 @@
  * not linked (-Dgpu=disabled), when Metal is unavailable, or when the runtime
  * knob is not armed -- so call sites need no #ifdef and the CPU path stays
  * complete and default. That is the contract in
- * docs/gpu-shared-library-design.md, and the conformance gate rests on it.
+ * docs/gpu.md, and the conformance gate rests on it.
  *
  * Scope, deliberately narrow: this replaces the WIDE INTEGER half of the lowres
  * search and nothing else. Our lowres is quarter-pel and the library's search is

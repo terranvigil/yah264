@@ -110,7 +110,7 @@ static const uint8_t flat16[64] = {
     16,16,16,16,16,16,16,16, 16,16,16,16,16,16,16,16,
 };
 
-/* Since wave 1 of docs/x86-plan.md a group's BODY is written once and takes
+/* Since docs/simd.md a group's BODY is written once and takes
  * its kernel as an argument, with one thin row per tier on top: an x86 twin
  * then inherits the adversarial fills, the corner cases and the page guards
  * of the row it joins instead of restating them, and the two tiers cannot

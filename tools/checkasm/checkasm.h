@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Layout (split out of the single-file checkasm.c for the x86 programme,
- * docs/x86-plan.md W0a):
+ * docs/simd.md):
  *
  *   checkasm.h   this file: the table type, the rng, the bench macros, the
  *                guard buffers and the page guard
@@ -62,7 +62,7 @@
  *
  * The x86 slots (Y264_CPU_SSE4, Y264_CPU_AVX2, Y264_CPU_AVX512BW) are live in
  * the CLI and in this type from day one with no rows behind them, so the kernel
- * items of docs/x86-plan.md waves 1-3 only ever ADD rows.
+ * items of docs/simd.md only ever ADD rows.
  */
 typedef struct ca_test {
     const char *name;       /* the kernel group, as printed and as --list shows */

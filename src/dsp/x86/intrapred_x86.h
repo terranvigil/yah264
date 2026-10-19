@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 3b of docs/x86-plan.md. Every helper here is `static inline` and
+ * Wave 3b of docs/simd.md. Every helper here is `static inline` and
  * 128-bit, so the SSE4.2 file gets SSE encodings and the AVX2 file gets VEX
  * encodings of the same source; the AVX2 file uses several of them whole,
  * because an 8x8 prediction row and an eight-wide chroma row have no second

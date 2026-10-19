@@ -37,7 +37,7 @@
  * PROT_NONE page at both tails, so a load is sized to the block and never to
  * the register: an 8-wide block is loaded eight bytes at a time and a 4-wide
  * one four. Planes in this encoder are plain malloc with no alignment
- * guarantee (docs/dsp-coverage-inventory.md section 3), so every load here is
+ * guarantee (docs/simd.md section 3), so every load here is
  * an unaligned one.
  */
 #ifndef YAH264_DSP_X86_PIXEL_X86_H

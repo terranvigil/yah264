@@ -320,7 +320,7 @@ __attribute__((destructor)) static void hpc_dump(void)
  * maps cleanly) and clears it otherwise. The search only READS it to record
  * distributions -- no gate acts, so the default is byte-identical.
  * Thread-local like s_met.hpel (safe under the wavefront).
- * docs/adaptive-me-design.md. */
+ * docs/motion-and-modes.md. */
 void y264_me_set_oracle(int valid, long cost, int mvx, int mvy)
 {
     s_met.orc_valid = valid;
@@ -511,7 +511,7 @@ static int me_et_stat_on(void)
  * This is a search-level early-out, NOT a skip decision: the macroblock still
  * runs its whole tournament and can still come out inter. That distinction is
  * why it is worth trying at all -- committing to skip before ME is a
- * measured-refused route (docs/b-skip-decision-design.md), and this does not
+ * measured-refused route (docs/b-frames.md), and this does not
  * do it. */
 static int me_et_k(void)
 {
@@ -1827,7 +1827,7 @@ void y264_me_stats_dump(void)
 {
     me_et_stats_dump();
     if (!me_stats_on()) return;
-    fprintf(stderr, "\n=== Y264_ME_STATS (E2, adaptive-me-design.md) ===\n");
+    fprintf(stderr, "\n=== Y264_ME_STATS (E2, motion-and-modes.md) ===\n");
     fprintf(stderr, "searches=%ld  umh_ran=%ld  umh_improved=%ld (%.1f%%)  16x16-oracle=%ld\n",
             g_ms.searches, g_ms.umh_ran, g_ms.umh_improved,
             g_ms.umh_ran ? 100.0 * g_ms.umh_improved / g_ms.umh_ran : 0.0, g_ms.s16_oracle);

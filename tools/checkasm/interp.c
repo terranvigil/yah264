@@ -77,7 +77,7 @@ static void mplane(void)
 
 /* ---- one body per group, the kernel as an argument ------------------------
  *
- * Wave 1 of docs/x86-plan.md put the pixel family on this shape and wave 2
+ * Wave 1 of docs/simd.md put the pixel family on this shape and wave 2
  * puts this family on it: a group's checks, its adversarial fills and its page
  * guards are written ONCE and take the kernel they run as a parameter, with
  * one thin row function per tier on top. A tier is then a list of names and

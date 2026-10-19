@@ -8295,7 +8295,7 @@ static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
  * and the queue item's premise is wrong. The signal that DOES work is the skip
  * distortion the mid-tournament exit already uses; the only safe pre-tournament
  * bound (97% precision) covers 5% of the escaped population, which is not worth
- * the bits risk. See docs/work-queue.md.
+ * the bits risk. See docs/plan.md.
  *
  * t1 only (plain globals), default inert, verified md5-identical on/off. */
 #define FS_EB 8                       /* texture-energy buckets, log2 */

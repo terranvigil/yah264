@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef Y264_HW_VT_MAP_H
 #define Y264_HW_VT_MAP_H
-/* The option map for the hardware mode (docs/videotoolbox-plan.md step 3), in
+/* The option map for the hardware mode (docs/hardware-mode.md), in
  * one place so the warnings, the docs and the behaviour cannot drift: what
  * each yah264 CLI option becomes on the hardware. Built on every platform
  * (it is data), consulted by the CLI's warnings block. */

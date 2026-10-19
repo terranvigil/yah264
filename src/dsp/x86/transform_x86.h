@@ -4,7 +4,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 3a of docs/x86-plan.md. Same arrangement as metrics_x86.h: everything
+ * Wave 3a of docs/simd.md. Same arrangement as metrics_x86.h: everything
  * here is `static inline` and 128-bit, the SSE4.2 file gets SSE encodings of
  * it and the AVX2 file gets VEX encodings of the same source, so a shape with
  * nothing for a second lane to do -- a lone 4x4 transform, a lone 8x8 forward
@@ -19,7 +19,7 @@
  *    site feeds them. The inverse transforms run in 32-bit lanes because their
  *    input is a full-range int16 coefficient and the first stage of the 8x8
  *    inverse already reaches ~4x that: narrowing it is the refusal recorded in
- *    docs/dsp-coverage-inventory.md and it stands here for the same reason it
+ *    docs/simd.md and it stands here for the same reason it
  *    stands on NEON.
  *
  * 2. THE 1-D PASSES ARE MACROS, not inline functions, because the AVX2 file

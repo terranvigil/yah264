@@ -470,7 +470,7 @@ Content outside that set behaves differently enough that the only summary that
 holds is a range. Two clips both fairly called animation are 33 BD-rate points
 apart. yah264 is well ahead on 3D CGI and behind on hand-drawn 2D. So we claim no
 animation result here as a single number.
-[animation-content.md](https://github.com/terranvigil/yah264/blob/main/docs/animation-content.md)
+[animation.md](https://github.com/terranvigil/yah264/blob/main/docs/animation.md)
 has the measurements and the preset-ladder rows. That spread is also why a
 preset-for-preset speed comparison stops meaning much once content leaves the
 set the presets were tuned on.

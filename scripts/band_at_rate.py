@@ -35,7 +35,7 @@ ladders = json.load(open(os.path.join(HERE, "ladders.json")))
 # where the regime-shaped arms live), or all (both ladders concatenated per
 # clip). The deep ladders exist so a deep-quant win is visible in THIS gate
 # instead of needing bd.sh's fixed CRF windows with their 29-32 hole
-# (docs/hf-mechanism-portfolio.md's two hand-bisected crossovers).
+# (two hand-bisected crossovers).
 BANDS = os.environ.get("BANDS", "band")
 if BANDS in ("deep", "all"):
     deep = json.load(open(os.path.join(HERE, "ladders_deep.json")))

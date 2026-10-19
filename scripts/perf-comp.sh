@@ -90,7 +90,7 @@ THREADS="${THREADS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 # "8x, +76% size" readings. yah264's preset only sets subme (NOT the ME method or
 # subpel tier), so pin ref/bframes to x264 medium too (ref=3 bframes=3, matching
 # hex/subme7/8x8dct) for a TRUE medium-vs-medium number. Override YAH264_ARGS/
-# X264_ARGS for other tiers; see docs/pure-c-speed-parity.md.
+# X264_ARGS for other tiers; see docs/plan.md.
 YAH264_ARGS="${YAH264_ARGS:---preset medium --cabac --transform-8x8 --ref 3 --bframes 3}"
 X264_ARGS="${X264_ARGS:-}"   # empty = x264's full --preset medium defaults (ref3/bframes3/hex/subme7)
 # VMAF SAMPLING. Default 0 = score every frame. This used to be 5 fps, i.e. a
@@ -185,7 +185,7 @@ print(1 if want <= 0 else max(1, int(round(fps / want))))" "$fps" "$VMAF_FPS")
 # 2026-08-11, second pass: the scoreboard had only ever run ABR, so "goal 2" was
 # an ABR number that wasn't labelled one. RC_MODE now selects explicitly and the
 # inference below is only a fallback for old callers. The modes are NOT
-# interchangeable measurements -- see docs/rc-mode-matrix.md for which of them
+# interchangeable measurements -- see docs/rate-control.md for which of them
 # compare a matched operating point and which do not.
 rc_mode="${RC_MODE:-}"
 if [ -z "$rc_mode" ]; then

@@ -70,7 +70,7 @@ AXES = [
     ("vui",       ["", "--range full --colorprim bt709 --transfer bt709 --colormatrix bt709 --chromaloc 0"]),
     ("misc",      ["", "--direct temporal", "--aq-strength 0",
                    "--trellis 2", "--ref 1", "--cqm jvt", "--sar 16:11"]),
-    # The hardware mode (docs/videotoolbox-plan.md): a quarter of the draws
+    # The hardware mode (docs/hardware-mode.md): a quarter of the draws
     # go through VideoToolbox when the machine has it and the format is
     # 4:2:0 8-bit; everywhere else `auto` falls back to our encoder with one
     # line, so the cell still exercises the CLI's fall-back path.
@@ -214,7 +214,7 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
         # same cell twice: the rerun has to succeed. Byte identity is required
         # at --threads 1 and informational above it (owner, 2026-09-25), and
         # not checked at all for the hardware mode, whose encoder is not
-        # byte-stable run to run (docs/videotoolbox-plan.md step 5).
+        # byte-stable run to run (docs/hardware-mode.md).
         out2 = out + ".2"
         r2 = sh(cmd.replace(out, out2))
         hw_used = "encoder: VideoToolbox" in r.stderr

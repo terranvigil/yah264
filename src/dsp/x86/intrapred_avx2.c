@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 3b of docs/x86-plan.md, the AVX2 twins of intrapred_sse4.c.
+ * Wave 3b of docs/simd.md, the AVX2 twins of intrapred_sse4.c.
  *
  * WHICH SHAPES WIDEN. A 16x16 prediction ROW is sixteen bytes and a 16x16
  * plane row is sixteen 16-bit lanes, so two rows are one 256-bit register on

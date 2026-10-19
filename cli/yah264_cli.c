@@ -257,7 +257,7 @@ static int read_plane(FILE *in, void *dst, size_t n)
  * --chromaloc and the Y4M XCOLORRANGE tag. H.273 codes; names for the
  * common ones. Unset = nothing signalled. */
 static yah264_video_signal_t g_vs = { 0, 2, 2, 2, -1 };
-static int g_cut_split, g_shot_table, g_shot_crf;   /* --cut-split, --shot-table, --shot-crf (docs/shot-based-plan.md S1/S2) */
+static int g_cut_split, g_shot_table, g_shot_crf;   /* --cut-split, --shot-table, --shot-crf (docs/shot-based.md) */
 static const char *g_scan_in, *g_scan_out;         /* --scan-in / --scan-out FILE: the pre-scan's answer, reused or saved */
 /* The engine hooks (docs/engine-interface.md, shot-based plan S4): a plan file
  * of zones, per-GOP frame-thread pinning, per-segment output and per-frame
@@ -1064,7 +1064,7 @@ static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp, int d
  * A GOP's bytes do not depend on WHICH thread encodes it. They CAN depend on
  * how many: --threads sets the per-worker frame-thread share k, and k=1 vs
  * k>=2 take different in-frame paths. Thread-count invariance is NOT offered
- * here (docs/advantages.md); the reference encoder's output also varies with
+ * here (docs/plan.md); the reference encoder's output also varies with
  * thread count. What holds is
  * that the same input,
  * config AND thread count always give the same output -- anything else would
@@ -3297,7 +3297,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * decidable rather than guessing, which costs nothing: either EOF
  * arrives first and n is exact, or a (nthreads+1)'th GOP arrives and the
  * schedule is pinned WITHOUT n. The second case is why this fallback
- * costs no quality (docs/streaming-input-plan.md): once n_gops > nthreads
+ * costs no quality (docs/threading.md): once n_gops > nthreads
  * the code below takes g = nthreads,
  * k = 1, and the longest-first queue's own per-GOP share
  * ceil(len*nthreads/n) is exactly 1 for every GOP too (n > nthreads*keyint
@@ -5781,7 +5781,7 @@ int main(int argc, char **argv)
                 "encoding serially: %s\n", threads, why);
     }
     if (hw != YAH264_HW_OFF) {
-        /* docs/videotoolbox-plan.md step 4: one block at open naming the options
+        /* docs/hardware-mode.md: one block at open naming the options
  * the user set that the hardware does not honour, from the one table in
  * src/hw/vt_map.c; nothing on defaults. */
         int n = 0;
@@ -5948,7 +5948,7 @@ int main(int argc, char **argv)
         }
     }
     /* The hardware mode counts what came back, not what went in: the session
- * may drop a frame (docs/videotoolbox-plan.md step 2). One slice per frame
+ * may drop a frame (docs/hardware-mode.md). One slice per frame
  * there; our own streams can carry several NALs per frame, so the count is
  * only reported for the hardware. */
     if (hw != YAH264_HW_OFF && strcmp(g_api->encoder_backend(enc), "yah264"))

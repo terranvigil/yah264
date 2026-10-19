@@ -158,7 +158,7 @@ exist for SSE4.2 and AVX2 on x86-64, picked at run time. AVX-512 kernels cover
 the pixel comparisons. They beat AVX2 on both an AMD and an Intel machine, so
 every x86-64 build carries them and uses them where the chip has AVX-512. On
 Linux ARM servers with 256-bit SVE, such as AWS Graviton3, SVE kernels take
-over the widest NEON ones. [x86-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/x86-plan.md)
+over the widest NEON ones. [simd.md](https://github.com/terranvigil/yah264/blob/main/docs/simd.md)
 has the plan and the order the kernel families shipped in.
 
 ## Decoder
@@ -167,5 +167,5 @@ The tree has a decoder. It exists to verify the encoder, by decoding our own
 output for the bitstream validation above. It has never been benchmarked and has no
 standalone command, so no number on this site is a decode number. Making it
 fast is a separate track that hasn't started.
-[decoder-speed-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/decoder-speed-plan.md)
+[plan.md](https://github.com/terranvigil/yah264/blob/main/docs/plan.md)
 is the plan.

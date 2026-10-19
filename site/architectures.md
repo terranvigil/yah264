@@ -61,15 +61,15 @@ split into rows that run in parallel, with a frame pipeline on top, as the
 |---|---|--:|---|
 | Apple silicon, other 64-bit ARM | NEON | 53 of 67 entry points | shipped, at parity on Apple M5 Max, checked on AWS Graviton4 |
 | ARM with SVE at 256 bits: AWS Graviton3 | SVE | 10, plus quant | shipped, checked and timed on a cloud machine |
-| ARM with the dot-product extension: Apple M1 and later, Graviton 2 and later | NEON + dot product | 2 extra | shipped, measured |
+| ARM with the dot-product extension: Apple M1 and later, Graviton 2 and later | NEON + dot product | 3 extra | shipped, measured |
 | x86-64, anything since 2008 | SSE4.2 | 58 | shipped, checked, not timed |
 | x86-64 with AVX2, most chips from the last decade | AVX2 | 58 | shipped, checked, timed on a cloud machine |
 | x86-64 with AVX-512 | AVX-512 | 18, pixel comparison only | shipped, on by default where the chip has it; timed on AMD and Intel |
 
 The parity tables on the [results](results.md) page come from the ARM tier on
 the Mac. The same page has separate cloud readings for arm64 and x86-64. The
-two dot-product kernels are the 16x16 sum of absolute differences and the
-block variance. Each uses one instruction that multiplies sixteen byte pairs
+three dot-product kernels are the 16x16 and 8x16 sums of absolute differences
+and the block variance. Each uses one instruction that multiplies sixteen byte pairs
 and adds them up.
 
 The x86 tiers pass every correctness check we have. Their output is

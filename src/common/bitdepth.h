@@ -7,7 +7,7 @@
  * and everything is byte-identical to the pre-abstraction encoder; a 10/12-bit
  * build sets Y264_BIT_DEPTH and `pixel` becomes uint16_t. Only TRUE image
  * samples use `pixel` -- bitstream bytes, nnz counts, mode ids and flags stay
- * uint8_t. See docs/high-bit-depth-plan.md.
+ * uint8_t. See docs/formats.md.
  */
 #ifndef YAH264_BITDEPTH_H
 #define YAH264_BITDEPTH_H

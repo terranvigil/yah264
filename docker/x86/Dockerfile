@@ -1,7 +1,7 @@
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# The linux/amd64 validation image (docs/x86-plan.md, W0d).
+# The linux/amd64 validation image (docs/simd.md).
 #
 # The owner has no x86 machine, so every x86 correctness claim this project
 # makes before it rents one is made from inside this image, run under an

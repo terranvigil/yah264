@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 2 of docs/x86-plan.md, the wide half. The same nine kernels as the
+ * Wave 2 of docs/simd.md, the wide half. The same nine kernels as the
  * SSE4.2 file and the same values out of them, bit for bit: the two tiers are
  * an A/B axis for speed and never for output, which is what the kit's identity
  * leg exists to hold them to.

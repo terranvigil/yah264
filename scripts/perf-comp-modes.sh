@@ -10,7 +10,7 @@
 # labelled one, and the modes are NOT small variations on each other here -- they
 # take structurally different paths through the encoder:
 #
-#   - 2-pass threads as of docs/rc-mode-matrix.md's follow-up: it used to be
+#   - 2-pass threads as of docs/rate-control.md's follow-up: it used to be
 #     SERIAL regardless of --threads, because cli/yah264_cli.c routed only
 #     `rc.method != 3` to encode_threaded(). That exclusion was load-bearing --
 #     the stats file matches records to frames by position with no frame index,
@@ -49,7 +49,7 @@
 # harness flags any cell whose two encodes differ by more than 5% in size. A
 # stale calibration announces itself as an UNMATCHED cell rather than quietly
 # biasing a speed number. Regenerate with the bisection described in
-# docs/rc-mode-matrix.md.
+# docs/rate-control.md.
 #
 # Usage: scripts/perf-comp-modes.sh [pure|asm]
 # Env: MODES SET_THREADS SET_SECONDS CLIPS RUNS
@@ -70,7 +70,7 @@ MODES="${MODES:-crf cqp abr cbr cvbr 2pass}"
 # put ducks at VMAF 75. These targets were chosen from a measured rate/VMAF
 # ladder so every clip lands in VMAF ~88-94, where the metric still
 # discriminates and where both encoders track their target. See
-# docs/rc-mode-matrix.md for the ladder and the selection rule.
+# docs/rate-control.md for the ladder and the selection rule.
 CLIPS="${CLIPS:-foreman_cif:400:21.4:22.7:27:27 bus_cif:400:28.6:27.9:34:35 stefan_cif:400:26.2:27.4:33:34 samsung_720p:1200:21.4:25.5:27:28 park_joy_720p:12000:26.2:25.0:33:33 ducks_720p:25000:22.6:20.8:29:30}"
 
 script="$root/scripts/perf-comp.sh"

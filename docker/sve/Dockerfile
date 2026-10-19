@@ -1,7 +1,7 @@
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# The linux/arm64 image for the SVE tier (docs/x86-plan.md, "The ARM SVE
+# The linux/arm64 image for the SVE tier (docs/simd.md
 # tier"). Apple silicon has no SVE, so the tier is executed under QEMU user
 # mode, which emulates SVE and SVE2 at any vector length: scripts/sve-docker.sh
 # runs the same aarch64 binary at 128 and 256 bits. The container itself is

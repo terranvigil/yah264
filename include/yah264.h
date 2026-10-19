@@ -927,7 +927,7 @@ YAH264_EXPORT int yah264_param_apply_preset(yah264_param_t *param, const char *p
  * produced is not worth having. */
 YAH264_EXPORT yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param);
 
-/* The hardware mode (docs/videotoolbox-plan.md): the same handle and calls,
+/* The hardware mode (docs/hardware-mode.md): the same handle and calls,
  * backed by Apple's fixed-function H.264 encoder through VideoToolbox. The
  * output is the hardware's stream, not this encoder's, so reconstruction and
  * the rate-control state calls return -1 on it. YAH264_HW_AUTO falls back to

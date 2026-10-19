@@ -59,7 +59,7 @@ int y264_me_hex_features(void);
  * Y264_SUBPEL env overrides it. Call once per encode before any worker runs ME. */
 void y264_me_set_subpel(int subpel);
 
-/* Lowres oracle for the escalation gates (docs/adaptive-me-design.md). Set
+/* Lowres oracle for the escalation gates (docs/motion-and-modes.md). Set
  * before a 16x16 ref0 search with the per-MB lookahead prior (lr_inter cost +
  * lr_seed MV, full-res qpel); pass valid=0 to clear for searches where it
  * doesn't map. The search only records distributions from it

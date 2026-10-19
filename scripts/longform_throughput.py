@@ -174,7 +174,7 @@ FEED_WORKERS_TIMED   = int(os.environ.get("FEED_WORKERS_TIMED", "3"))
 # What decodes a master: VideoToolbox here, ffmpeg's software decoder on any
 # other system (scripts/lf_feed.py, LF_DECODER). Records and reports name it.
 DECODE_LABEL = os.environ.get("LF_DECODER") or ("vt" if sys.platform == "darwin" else "sw")
-# PINNING ON A RENTED BOX (docs/x86-plan.md, "Measuring on rented machines"):
+# PINNING ON A RENTED BOX (docs/simd.md):
 # every one-thread timed encode runs on the one CPU LF_PIN_T1 names, and its
 # feeder on LF_PIN_FEED, a different core, so the scheduler cannot move the
 # encoder or put the feeder on its core. Default-thread legs are never pinned.

@@ -20,7 +20,7 @@
 /* One lowres 8x8 block analysed against one reference leg. Distortion and rate
  * stay in SEPARATE fields (TPL-ready): consumers compose a scalar via lr_cost;
  * TPL (later) reads the fields apart. d_inter is pure SATD; r_inter is a bit
- * count (0 until motion is priced). See docs/rate-aware-lookahead-design.md. */
+ * count (0 until motion is priced). See docs/rate-control.md. */
 typedef struct y264_lr_blk {
     int32_t d_inter;
     int32_t r_inter;
@@ -29,7 +29,7 @@ typedef struct y264_lr_blk {
 
 /* Ring array size for the lookahead window (struct yah264_encoder.la[] and
  * la_thread.q[]): la_depth's own clamp (64) plus headroom for Y264_LA_BUF's
- * extra input buffering (docs/sync-lookahead-design.md). la_depth itself --
+ * extra input buffering (docs/rate-control.md). la_depth itself --
  * the WINDOW a given mb-tree/scene-cut walk is capped at -- never grows past
  * 64; only ring CAPACITY (la_cap = la_depth + la_buf) uses the extra room. */
 #define Y264_LA_CAP_MAX 80
@@ -1079,7 +1079,7 @@ struct yah264_encoder {
     double   tp_kact, tp_kmod;  /* actual / modelled bits of the frames the bias is read on */
 
     /* Deterministic fixed-lag RC feedback (always on for ABR / 2-pass / VBV;
- * docs/rc-parallel-design.md). Lets ABR/2-pass ride the frame pipeline:
+ * docs/rate-control.md). Lets ABR/2-pass ride the frame pipeline:
  * a frame's QP decision reads the committed ledger plus PREDICTIONS for
  * the in-flight frames; actuals commit on a schedule keyed purely to
  * decide order (a burst pops right after the next anchor's decision), so
@@ -1162,7 +1162,7 @@ struct yah264_encoder {
     double   rcp_cur_cvi;       /* VBV complexity for the frame being decided */
 
     /* VBV under the pipeline (always;
- * docs/rc-parallel-design.md). The buffer ledger e->vbv_fill
+ * docs/rate-control.md). The buffer ledger e->vbv_fill
  * advances ONLY on actuals (at pops); decides see a virtual buffer that
  * charges each in-flight entry a conservative r_hi * vpred. The per-burst
  * fallback trigger (rcp_vbv_gate, at anchor arrival on the API thread with
@@ -1324,7 +1324,7 @@ struct yah264_encoder {
  * so same config + same --threads always gives the same value (single-run
  * determinism); a DIFFERENT --threads may legitimately choose a different
  * value and therefore different bits, which is permitted by policy
- * (docs/advantages.md).
+ * (docs/plan.md).
  * stair_mvy_max = 4*(16*stair_lag-24), the runtime twin of motion.h's
  * Y264_STAIR_MVY_MAX macro (which holds the floor's own value). */
     int              stair_lag;
