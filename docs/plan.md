@@ -88,81 +88,76 @@ goes into its subsystem doc's "What didn't work" table.
    ([threading.md](threading.md), [simd.md](simd.md)).
 2. The goal board on AMD x86-64. Its first run was stopped by spot reclaims.
 
-### The parity table
-
-3. The 4K content-type cells. G1 and G2 haven't been timed there, and the G3
-   run failed a validity rule, so they sit outside the parity count.
-
 ### Rate control ([rate-control.md](rate-control.md))
 
-4. Threaded ABR depends on when GOP workers start. The shared rate factor
+3. Threaded ABR depends on when GOP workers start. The shared rate factor
    reacts to start timing, which moves output by up to about 9% BD-rate on two
    short clips. CRF and one-thread output aren't affected.
-5. Quality-target rate control: hold a perceptual score instead of a CRF.
-6. Better coded-size prediction: a fitted model of frame bits from lookahead
+4. Quality-target rate control: hold a perceptual score instead of a CRF.
+5. Better coded-size prediction: a fitted model of frame bits from lookahead
    features (intra cost, inter cost, motion spread, QP).
 
 ### Frame types and the lookahead ([b-frames.md](b-frames.md))
 
-7. Whole-run B placement, off by default. It helps Cosmos Laundromat
+6. Whole-run B placement, off by default. It helps Cosmos Laundromat
    and some short clips and costs coastguard. It needs a real-title round
    before it can be the default.
-8. Trajectory-aware propagation that keeps rate and distortion separate. No
+7. Trajectory-aware propagation that keeps rate and distortion separate. No
    known gap waits on it.
 
 ### Coding tools ([motion-and-modes.md](motion-and-modes.md))
 
-9. Intra refresh on near-static scenes costs about 50% more than keyframes,
+8. Intra refresh on near-static scenes costs about 50% more than keyframes,
    against 5 to 13% on moving content. The likely lever is having mb-tree
    treat the refresh column as intra.
-10. Lossless coding. `--crf 0` is refused today.
-11. The 8x8 transform in 4:4:4 ([formats.md](formats.md)).
-12. Chroma weights in explicit weighted prediction. Chroma is identity today.
-13. Chroma QP by B-pyramid level, to steady quality across frames.
-14. Saliency-weighted AQ: a cheap heuristic (center weighting, motion against
+9. Lossless coding. `--crf 0` is refused today.
+10. The 8x8 transform in 4:4:4 ([formats.md](formats.md)).
+11. Chroma weights in explicit weighted prediction. Chroma is identity today.
+12. Chroma QP by B-pyramid level, to steady quality across frames.
+13. Saliency-weighted AQ: a cheap heuristic (center weighting, motion against
     global motion, skin tones) on top of variance AQ.
-15. Learned mode pruning: small decision trees, exported as C arrays, to skip
+14. Learned mode pruning: small decision trees, exported as C arrays, to skip
     P8x8 sub-modes and 4x4 intra trials that won't win.
 
 ### Memory and input
 
-16. GOP worker memory, about 0.5 GB each at 1080p. The lookahead ring, the
+15. GOP worker memory, about 0.5 GB each at 1080p. The lookahead ring, the
     lowres sets and the per-frame decision records are where to shrink it.
-17. `--cut-split` and `--shot-crf` on piped input still hold the input up to
+16. `--cut-split` and `--shot-crf` on piped input still hold the input up to
     the memory limit. A bounded version would rate shots against a running
     average, so its output would differ from a file encode.
 
 ### Shots and ladders ([shot-based.md](shot-based.md))
 
-18. A measured per-shot hull with a resolution ladder. It belongs to the
+17. A measured per-shot hull with a resolution ladder. It belongs to the
     orchestrator, outside this repository, and a prototype has run.
-19. A predicted hull, trained on the measured one. It starts only after 18.
-20. One analysis for a whole ladder: seed the lower rungs from the top one.
-21. Content-adaptive scaler choice per shot, for the ladder's resizes.
+18. A predicted hull, trained on the measured one. It starts only after 17.
+19. One analysis for a whole ladder: seed the lower rungs from the top one.
+20. Content-adaptive scaler choice per shot, for the ladder's resizes.
 
 ### New features
 
-22. A live control plane: per-frame bitrate, CRF, QP limits, keyframe and
+21. A live control plane: per-frame bitrate, CRF, QP limits, keyframe and
     resolution events, echoed in the stats and fed to the rate control, with a
     replayable log ([live-control.md](live-control.md)). It also answers the
     ffmpeg wrapper's question of mid-stream reconfiguration.
-23. Film grain synthesis via the H.264 film grain SEI, with `--mcstf` as the
+22. Film grain synthesis via the H.264 film grain SEI, with `--mcstf` as the
     denoiser ([denoise.md](denoise.md)). yah265 already has one to port.
-24. Segment output (CMAF/fMP4), then MPEG-TS.
-25. A prefilter trained against this encoder. It's the riskiest item here.
+23. Segment output (CMAF/fMP4), then MPEG-TS.
+24. A prefilter trained against this encoder. It's the riskiest item here.
 
 ### Verification
 
-26. A fuzz harness. There isn't one.
-27. A flat-gradient banding test set, so AQ changes are checked for banding
+25. A fuzz harness. There isn't one.
+26. A flat-gradient banding test set, so AQ changes are checked for banding
     as well as VMAF-NEG.
 
 ### Decoding
 
-28. A fast decoder. The in-tree decoder exists to verify the encoder and has
+27. A fast decoder. The in-tree decoder exists to verify the encoder and has
     never been timed. The first steps would be a `--decode` mode and a
     baseline against threaded ffmpeg.
 
 ### Outside the code
 
-29. A position on the AVC patent pool before any commercial distribution.
+28. A position on the AVC patent pool before any commercial distribution.
