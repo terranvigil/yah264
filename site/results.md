@@ -28,7 +28,8 @@ under 1.00 and its worst cell at or under 1.15, with its quality holding. All 27
 | L, 10-minute excerpts | seven open-licensed films at 720p, 1080p and 4K: Tears of Steel, Meridian, StEM2, Sintel, Big Buck Bunny, Cosmos Laundromat and Nocturne, with end credits cut off |
 | C, content types | film grain, sports and screen content, where quality counts toward parity and speed is shown but doesn't |
 
-Both encoders read the same 8-bit 4:2:0 frames on stdin.
+For the tables in this section, both encoders run as their command-line
+programs and read the same 8-bit 4:2:0 frames on stdin from one feeder.
 
 ## Speed
 
@@ -270,7 +271,10 @@ opening is fitted on seventeen non-board cells, with the board held out.
 
 ## How to reproduce them
 
-Both encoders run as libraries inside a single ffmpeg process. Every encode
+The parity tables at the top come from `scripts/longform_throughput.py`, which
+runs both command-line encoders on stdin from one feeder. The ten-clip board
+and the sections built on it run both encoders as libraries inside a single
+ffmpeg process instead. Every encode
 hands the same thread count to both. Goal 1 fixes that count at one on each
 side. Goals 2 and 3 pass 0 for auto and let each encoder resolve its own
 number, because auto is how each one ships. The pure C rows need one adjustment
