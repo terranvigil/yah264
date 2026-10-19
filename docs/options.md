@@ -140,7 +140,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
 | `--aq-mode` | 1 or 2 | 2 | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
-| `--abr-model` | `default`, `rf` | `default` | ABR bit allocation. `rf` (spelled `x264` in older scripts, still accepted) spends a given bitrate markedly better and hits it less reliably. See below. |
+| `--abr-model` | `default`, `rf` | `default` | ABR bit allocation without mb-tree (`--bframes 0 --rc-lookahead 0`). With mb-tree, both use the rate-factor ledger. `rf` is also accepted under its older spelling `x264`. See below. |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
 | `--ipratio`, `--pbratio` | float | 1.4, 1.3 | **Two-pass only.** The I-to-P and P-to-B qscale factors of the offline allocator. They keep x264's names, numbers and defaults. The single-pass modes anchor I and B their own way and never read these. |
@@ -174,29 +174,21 @@ The ceiling is read on the CODED QP after the frame-type cascade, where
 At `--crf-max 34` on foreman the P frames landed on 34 and the B frames on 37, a
 bound nobody can see in the picture.
 
-### `--abr-model rf`, and why it is not the default
+### `--abr-model rf` matters only without mb-tree
 
-`default` is the shipped allocator. `rf` selects the rate-factor one, which
-gives P frames a self-normalizing rate factor and anchors I and B to the running
-non-B QP track. An ABR encoder has two jobs: spending a bitrate well and hitting
-it exactly. They come apart here. `rf` is better at the first and worse at the
-second, so it is opt-in.
+ABR with mb-tree, which runs whenever there are B frames or a lookahead (the
+default), always uses the rate-factor ledger: P frames get a self-normalizing
+rate factor, and I and B frames are anchored to the running non-B QP track.
+`--abr-model` doesn't change that path. A one-thread foreman encode at
+500 kbit/s is byte-identical under `default` and `rf`, with or without
+`--no-mbtree`, because `--no-mbtree` skips propagation but leaves the ledger in
+place.
 
-**Spending it.** At 1200 kbit/s on samsung_720p the default's I frames are 3.4x
-smaller than x264's and its B frames 2.7x larger. `--abr-model rf` puts both
-within a few percent of x264's own sizes. Across the 12-clip band that is a
-median **-5.65% BD-rate**. 9 clips get better (samsung -26.6%, akiyo -49.2%) and
-3 get worse (ducks +5.8%).
-
-**Hitting it.** When the complexity signal collapses, usually on a near-black
-opening, the rate factor drifts. Its per-type slew (one `--qpstep` per frame)
-and the feedback term bound how far: sintel_720p at 1200 kbit/s reads **+4.4%
-over target** at 900 frames. Elsewhere the error is a warm-up transient that
-decays with length (ducks_720p at 25 Mbit/s: +11.2% at 180 frames, -0.6% at
-480).
-
-Choose it when quality per bit matters more than landing the target exactly. Do
-not choose it for a hard bitrate budget on unknown content.
+The flag matters only at `--bframes 0 --rc-lookahead 0`, where there is no
+mb-tree at all. There `default` falls back to the per-frame model, and `rf`
+keeps a rate factor on the blurred complexity instead. The older measurements
+that compared the two came from before the ledger was the default, and they
+haven't been re-run on this path.
 
 **`--qp`, `--bitrate` and `--crf` each name a mode. The last one on the command
 line wins**, as in x264. A warning on stderr names what the loser still does:
