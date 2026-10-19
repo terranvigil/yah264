@@ -810,7 +810,7 @@ parallelism, not encoder speed.
 | --- | --- | --- | --- |
 | `--sar` | `W:H` | unspecified (square) | Sample aspect ratio. Accepts `16:11` or `16/11`. |
 | `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level. Range 1.0 to 6.2. |
-| `--no-sei` | | SEI on | Suppress the x264-style settings SEI. |
+| `--no-sei` | | SEI on | Drop the identification message at the start of the stream: a user-data SEI naming the encoder, its version and the options in force. |
 | `--profile` | `baseline`\|`main`\|`high`\|`high10`\|`high422`\|`high444` | derived | Constrain the tool-set to a profile and write its `profile_idc`. See below. |
 | `--aud` | | off | An access unit delimiter (NAL type 9) opens every access unit, ahead of the parameter sets. |
 | `--pic-struct` | | off | VUI `pic_struct_present_flag` plus a `pic_timing` SEI per picture. A frame picture writes 0. Under `--tff`/`--bff` each field writes its own parity, 1 for a top field and 2 for a bottom one. |

@@ -28,7 +28,6 @@ the [results page](https://terranvigil.github.io/yah264/results.html).
 - [hardware-mode.md](hardware-mode.md): `--hw videotoolbox`, the Mac's hardware encoder behind our options.
 - [ffmpeg.md](ffmpeg.md): using yah264 from ffmpeg.
 - [live-control.md](live-control.md): the planned per-frame control plane for live encoding.
-- [stream-provenance.md](stream-provenance.md): the identification string and the stream fingerprint.
 
 ## Reference
 
