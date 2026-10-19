@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # bootstrap.sh -- put a bare x86-64 box into a state where campaign.sh can
-# measure on it, and prove it got there (docs/x86-plan.md, wave 4).
+# measure on it, and prove it got there (docs/simd.md).
 #
 # THE POINT. The owner has no x86 machine, so every x86 number this project
 # will ever publish comes off a box that exists for a few hours and is then

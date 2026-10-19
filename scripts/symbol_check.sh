@@ -23,7 +23,7 @@
 # libyah264.a. That is the fold working, not a collision, so the tier archives
 # are excluded here. They were invisible to this check while the tier files
 # were empty -- an archive with no symbols in it collides with nothing -- so
-# the first x86 kernel (docs/x86-plan.md wave 1) is what made the glob wrong.
+# the first x86 kernel (docs/simd.md) is what made the glob wrong.
 # The pairing this check exists for is one DEPTH against the other.
 #
 # usage: scripts/symbol_check.sh [builddir...]   (default: build)

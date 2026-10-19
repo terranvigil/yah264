@@ -12,7 +12,7 @@
 # one of them. Sourcing it makes that impossible by construction.
 #
 # clip:bitrate(kbps) -- chosen PER CLIP from a measured rate/VMAF ladder
-# (docs/rc-mode-matrix.md), not per resolution.
+# (docs/rate-control.md), not per resolution.
 #
 # 2026-08-11: these were CIF 2500 / 720p 12000, one rate per resolution. Both
 # were wrong, and not in the way the resolution split suggests. Measured on this
@@ -85,7 +85,7 @@
 #                          set is not stacked toward the regime we lose.
 #
 # Deliberately NOT added: blue_sky_1080p reads dVMAF -3.24 at its matched point
-# (the B-direct failure, docs/b-direct-mode.md), so it would report a quality
+# (the B-direct failure, docs/b-frames.md), so it would report a quality
 # defect in the board's dVMAF column; crowd_run_1080p at 22000 kbps roughly
 # doubles runtime for a cell riverbed already covers; in_to_tree, parkrun,
 # fourpeople and station2 are calibrated and available in docs/corpus-sources.md

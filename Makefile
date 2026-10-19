@@ -102,7 +102,7 @@ PERF_SECONDS ?= 15
 # in the 88-94 band where the metric discriminates); and the args forced
 # `--ref 1 --bframes 2`, which the scoreboard dropped for the preset defaults.
 # That last one is not cosmetic: at --ref 1 the frame-concurrency machinery
-# ENGAGES, and at ref 3 two predicates refuse it (docs/rc-parallel-design.md
+# ENGAGES, and at ref 3 two predicates refuse it (docs/rate-control.md
 # session 17), so the threaded variant was measuring a different encoder.
 # Aligned with scripts/perf-comp-set.sh so the numbers are comparable; it stays
 # single-clip for iteration speed, which is the one difference that remains.
@@ -221,7 +221,7 @@ parity-status-crf: build
 # of parity-status, which stays an ABR-only scoreboard that is quick enough to
 # run routinely. Quote a mode, never a cross-mode average -- the modes take
 # structurally different paths through the encoder and 2-pass in particular
-# ignores --threads entirely. See docs/rc-mode-matrix.md.
+# ignores --threads entirely. See docs/rate-control.md.
 #   make parity-modes                       pure-C, all online CPUs
 #   make parity-modes MODE=asm THREADS=1    as-shipped SIMD, single thread
 #   make parity-modes MODES="cbr 2pass"     just those rows
@@ -235,7 +235,7 @@ parity-modes: build
 # default-threads and --threads 1 arms) against 18 x264 reference cells. The cvbr row of
 # parity-modes samples one cap on one path; this is the whole surface. Exits
 # non-zero unless every cell is clean. Frame rate is never passed in -- it comes
-# from each clip's Y4M header. See docs/archive/capped-vbr-cap-overshoot.md.
+# from each clip's Y4M header. See docs/rate-control.md.
 #   make cvbr-compliance                     6s windows (crosses a keyint at 50fps)
 #   make cvbr-compliance CVBR_FRAMES=180     one GOP per clip, the historical number
 cvbr-compliance: build

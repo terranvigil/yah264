@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 3b of docs/x86-plan.md, the AVX2 twins of loopfilter_sse4.c.
+ * Wave 3b of docs/simd.md, the AVX2 twins of loopfilter_sse4.c.
  *
  * WHICH OF THE FIRST FOUR ACTUALLY WIDENS, AND WHY THE OTHER THREE DO NOT. A luma
  * edge segment is FOUR lines and a chroma edge is EIGHT, because four lines is

@@ -147,7 +147,7 @@ simd_tiers = {'NEON' : have_neon, 'SSE4' : have_sse4,
 # NEON kernels are uint8/int16-specific (8-bit only). At BD>8 the scalar C path
 # is used, so the NEON translation units are simply not compiled in. The test
 # is now per LIBRARY rather than per build directory, since both depths are
-# compiled here; 16-bit lanes are phase E of docs/high-bit-depth-plan.md.
+# compiled here; 16-bit lanes are docs/formats.md.
 neon_sources = []
 if have_neon
   # NEON is baseline on aarch64; no extra flags needed.
@@ -230,7 +230,7 @@ foreach f : x86_families_built
   endif
 endforeach
 
-# nextgpu, the shared Metal compute library (docs/gpu-shared-library-design.md).
+# nextgpu, the shared Metal compute library (docs/gpu.md).
 # Pinned by subprojects/nextgpu.wrap; the pin is the revision this encoder has
 # asserted its conventions against, never a floating branch.
 #
@@ -264,7 +264,7 @@ if want_gpu
 endif
 lib_deps = [m_dep, threads_dep]
 
-# The VideoToolbox hardware mode (docs/videotoolbox-plan.md).
+# The VideoToolbox hardware mode (docs/hardware-mode.md).
 vt_opt = get_option('videotoolbox')
 want_vt = vt_opt == 'enabled' or (vt_opt == 'auto' and host_machine.system() == 'darwin')
 if want_vt

@@ -1,5 +1,5 @@
 # nextgpu: the shared Metal compute library (G1/G2/G3/G5 kernels).
-# See yah264/docs/gpu-shared-library-design.md. The pinned revision records
+# See yah264/docs/gpu.md. The pinned revision records
 # exactly which library version yah264 has validated against; bump it
 # deliberately, never floating. The url is the canonical remote so the pin is
 # reproducible from any checkout; for offline iteration point it at the sibling

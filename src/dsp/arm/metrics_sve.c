@@ -1,5 +1,5 @@
 /*
- * metrics_sve.c - SVE pixel metrics (docs/x86-plan.md, "The ARM SVE tier")
+ * metrics_sve.c - SVE pixel metrics (docs/simd.md)
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *

@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 2 of docs/x86-plan.md: the SSE4.2 twin of every mc and hpel kernel the
+ * Wave 2 of docs/simd.md: the SSE4.2 twin of every mc and hpel kernel the
  * NEON twin covers. Each one is bit-exact with the portable reference in
  * src/dsp/interp.c -- the luma half-pel planes, the chroma bilinear, the two plane
  * fetches, the weighted average and the two half-pel plane build rows -- which

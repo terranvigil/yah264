@@ -1,7 +1,7 @@
 option('bit_depth', type : 'integer', min : 8, max : 12, value : 8,
   description : 'Pixel sample bit depth (8 or 10). Selects the pixel/dctcoef types and the High 10 code path at BD>8.')
 
-# The nextgpu offload (docs/gpu-shared-library-design.md, "Build contract").
+# The nextgpu offload (docs/gpu.md).
 # 'auto' = enabled on darwin/aarch64 and disabled elsewhere; 'disabled' builds
 # with no reference to the subproject at all.
 #
@@ -14,7 +14,7 @@ option('gpu', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
   value : 'disabled',
   description : 'Link the nextgpu Metal compute library (auto = on for darwin/aarch64).')
 
-# The hardware mode (docs/videotoolbox-plan.md): Apple's fixed-function H.264
+# The hardware mode (docs/hardware-mode.md): Apple's fixed-function H.264
 # encoder behind the yah264 option surface. 'auto' = enabled on darwin,
 # disabled elsewhere; 'disabled' compiles the stub whose open returns NULL.
 # Whether it is USED is the API's / CLI's --hw choice, default off.
@@ -44,7 +44,7 @@ option('simd', type : 'combo',
 option('avx512', type : 'boolean', value : true,
   description : 'Compile the AVX-512 tier (x86-64, pixel metrics and MC only).')
 
-# The aarch64 SVE tier (docs/x86-plan.md, "The ARM SVE tier"). 'auto' builds it
+# The aarch64 SVE tier (docs/simd.md). 'auto' builds it
 # on aarch64 Linux whenever the compiler has the SVE ACLE, and never on darwin:
 # no Apple part has SVE, so there it would be code that can never run. Like
 # NEON it is 8-bit only and folded into the 8-bit library. Building it changes

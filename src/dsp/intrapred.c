@@ -440,7 +440,7 @@ void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
  * net loss). All routed builders are bit-exact (checkasm, every mode x
  * availability combination).
  *
- * The x86 tiers (wave 3b of docs/x86-plan.md) take the SAME routing table.
+ * The x86 tiers (docs/simd.md) take the SAME routing table.
  * Those routes were measurements about the SHAPE -- sixteen samples do not
  * amortize an edge-filter precompute, and a flat fill auto-vectorizes about as
  * well as anything written by hand -- so they are inherited rather than

@@ -289,7 +289,7 @@ void y264_quant_8x8_f_n_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
  * refuses any under src/dsp/x86/.
  *
  * The names below are declared and not yet defined. Wave 1 of
- * docs/x86-plan.md defines the pixel family; nothing calls one until then, and
+ * docs/simd.md defines the pixel family; nothing calls one until then, and
  * the empty family files under src/dsp/x86/ exist so that the build shape --
  * three static libraries, their -m flags, the per-family opt-in lists -- is
  * exercised by every x86 build from now on rather than written blind on the
@@ -426,7 +426,7 @@ void y264_mc_chroma_bi8_sse4(pixel *dst, int dstride,
                              const pixel *r1, int s1, int fx1, int fy1,
                              int w0, int w1);
 
-/* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
+/* Transform, quant and scan (docs/simd.md). The quant and
  * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
  * the NEON twins do, so a checker names the kernel and supplies the row
  * itself. The explicit-bias forward quant is spelled `_f_sse4` here where the
@@ -648,7 +648,7 @@ void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
 void y264_ssd4x4_map16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
                             uint32_t out[16]);
 
-/* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
+/* Transform, quant and scan (docs/simd.md). The quant and
  * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
  * the NEON twins do, so a checker names the kernel and supplies the row
  * itself. The explicit-bias forward quant is spelled `_f_avx2` here where the

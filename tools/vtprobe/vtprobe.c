@@ -3,7 +3,7 @@
 /* Print what this machine's hardware H.264 encoder supports: whether a
  * hardware-only session opens at the given size, and its supported property
  * dictionary. The option map in src/hw/vt.c is checked against this output,
- * not against memory (docs/videotoolbox-plan.md step 1). */
+ * not against memory (docs/hardware-mode.md). */
 #include <VideoToolbox/VideoToolbox.h>
 #include <stdio.h>
 #include <stdlib.h>

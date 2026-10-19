@@ -325,7 +325,7 @@ def main():
     ap.add_argument("--class", dest="klass", default=None,
                     help="select all clips of a content class from the "
                          "tests/corpus/CLASSES manifest (e.g. grain, motion); "
-                         "overrides --clips. See docs/corpus-broadening-plan.md")
+                         "overrides --clips. See docs/corpus-sources.md")
     ap.add_argument("--frames", type=int, default=120)
     ap.add_argument("--vmaf", action="store_true", help="VMAF instead of PSNR")
     ap.add_argument("--subsample", type=int, default=5,

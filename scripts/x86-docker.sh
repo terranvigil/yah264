@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # x86-docker.sh -- the whole correctness battery as linux/amd64, on a machine
-# that has no x86 in it (docs/x86-plan.md, W0d).
+# that has no x86 in it (docs/simd.md).
 #
 # THE POINT. Every x86 claim this project makes before it rents real silicon is
 # made from inside a container here, so the thing that matters is knowing
@@ -27,7 +27,7 @@
 # finding, and that is the whole reason to run this matrix BEFORE the kernels
 # land rather than with them.
 #
-# BOX RULE (docs/x86-plan.md, "Box rule for every Docker run"). An emulated run
+# BOX RULE (docs/simd.md). An emulated run
 # is CPU load like an encode. Coordinate it the way a timed leg is coordinated,
 # keep jobs x encoder threads inside the cap, and prefer Rosetta for the
 # routine matrix with QEMU reserved for an item's final gate. This script reads
@@ -454,7 +454,7 @@ done
     echo
     echo "AVX-512 is absent from both emulators by construction. Nothing above"
     echo "is AVX-512 coverage, whatever it says; that tier is first executed on"
-    echo "real silicon (docs/x86-plan.md, session A)."
+    echo "real silicon (docs/simd.md)."
 } | tee "$report"
 
 echo

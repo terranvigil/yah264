@@ -792,7 +792,7 @@ static int rcp_lag_nowide_on(void)
  * encoder_open, so a decide never asks what is currently in flight. */
 static int stair_lag_capable(const yah264_encoder_t *e);
 /* Y264_DIRECT_PERMB: the temporal-direct legality check is per macroblock
- * (default) rather than per slice. See docs/b-direct-mode.md, third round. */
+ * (default) rather than per slice. See docs/b-frames.md, third round. */
 static int direct_permb_env(void)
 {
     static int v = -2;
@@ -814,7 +814,7 @@ static int direct_permb_env(void)
  * construction -- it pre-screens the whole colpoc grid and demotes the frame,
  * so inside a temporal frame the derivation never refuses -- which is why
  * per-MB gating is the change that made the partial fill reachable at all. See
- * analyze_b_mb and docs/b-direct-mode.md.
+ * analyze_b_mb and docs/b-frames.md.
  *
  * Stack garbage is reproducible for as long as the worker's call history is,
  * which is why it only showed above one thread and only with two sibling B
@@ -20059,7 +20059,7 @@ static int scan_core(const yah264_param_t *param,
     return rc;
 }
 
-/* The streamed pre-scan (docs/streaming-input-plan.md): the same per-frame
+/* The streamed pre-scan (docs/threading.md): the same per-frame
  * step over a ring of eight frames instead of the whole clip, so a GOP split
  * on the cuts needs neither the input's length nor all of it resident. A
  * frame's decision needs its successor (the flash guard), so it lands one
@@ -20395,7 +20395,7 @@ int yah264_scan_idr_frames(const yah264_param_t *param,
                      idr, NULL, NULL, NULL);
 }
 
-/* The shot table (docs/shot-based-plan.md, stage S1): the pre-scan's
+/* The shot table (docs/shot-based.md): the pre-scan's
  * per-frame costs, aggregated per cut-delimited run. A keyint IDR inside a
  * shot does not split it -- a shot spanning several GOPs shares one entry.
  * Returns the number of shots written (at most max_shots), or -1. */
@@ -20442,7 +20442,7 @@ YAH264_EXPORT int yah264_scan_shots(const yah264_param_t *param,
     return rc < 0 ? -1 : (ns < max_shots ? ns : max_shots);
 }
 
-/* The hardware mode (docs/videotoolbox-plan.md). Y264_HW: off | auto |
+/* The hardware mode (docs/hardware-mode.md). Y264_HW: off | auto |
  * videotoolbox, the harnesses' override of the API's choice. */
 static int hw_env(void)
 {
@@ -20517,7 +20517,7 @@ const char *yah264_encoder_backend(const yah264_encoder_t *e)
     return e && e->hw ? y264_hw_name(e->hw) : "yah264";
 }
 
-/* Our scene-cut, applied causally to the hardware path (docs/videotoolbox-plan.md
+/* Our scene-cut, applied causally to the hardware path (docs/hardware-mode.md
  * step 2, item 4; Y264_HW_SCENECUT=0 or --no-scenecut turns it off). The same
  * lowres intra / zero-motion / exact-diamond costs and the same decision rule
  * as the lookahead and the pre-scan, run on each frame as it arrives against

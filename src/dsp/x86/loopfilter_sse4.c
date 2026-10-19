@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 3b of docs/x86-plan.md. Four kernels: the two luma edge shapes, the
+ * Wave 3b of docs/simd.md. Four kernels: the two luma edge shapes, the
  * eight-line chroma horizontal edge, and the whole-macroblock strength
  * derivation. The filters themselves live in loopfilter_x86.h, written once at
  * 128 bits and shared with the AVX2 tier, because a four-line luma segment and

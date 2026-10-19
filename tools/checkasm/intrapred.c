@@ -13,7 +13,7 @@
  * the edge-filter precompute and it measured a net loss -- so its row is
  * portable and guards the dispatching wrapper rather than a kernel.
  *
- * Since wave 3b of docs/x86-plan.md each group's BODY is written once and takes
+ * Since docs/simd.md each group's BODY is written once and takes
  * its kernel as an argument, with one thin row per tier on top, and the
  * destination of every builder is page-guarded: a prediction block is a
  * tightly packed 256, 64 or 8*ch bytes with no padding anywhere, so a store

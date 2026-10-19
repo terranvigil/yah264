@@ -14,7 +14,7 @@
  * and variance kernels -- which still ship, and still run on a box without
  * dotprod -- entirely untested. Both forms are rows here.
  *
- * Since the x86 wave (docs/x86-plan.md wave 1) every group's BODY is written
+ * Since the x86 wave (docs/simd.md) every group's BODY is written
  * once and takes the kernel it checks as an argument, with one thin row
  * function per tier on top. A tier is then a list of names and symbols rather
  * than a copy of the checks, which is what puts the SSE4.2 and AVX2 twins

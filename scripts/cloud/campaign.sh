@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # campaign.sh -- the measurement session on a rented x86-64 box
-# (docs/x86-plan.md, "Measuring on rented machines").
+# (docs/simd.md).
 #
 # It runs after bootstrap.sh and reads everything it knows about the machine
 # out of `bootstrap.ok`. It invents nothing: no CPU name, no thread count, no

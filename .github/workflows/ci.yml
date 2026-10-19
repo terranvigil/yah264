@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------
-  # x86-64: the AVX2 gate (docs/x86-plan.md, W0e)
+  # x86-64: the AVX2 gate (docs/simd.md)
   # ---------------------------------------------------------------------
   linux:
     runs-on: ubuntu-latest
@@ -60,8 +60,8 @@ jobs:
       - name: Hygiene gate
         run: ./scripts/hygiene_check.sh
 
-      # -Dsimd=auto on x86-64 compiles the SSE4.2 and AVX2 tier libraries
-      # (AVX-512 stays behind -Davx512=true). It is the default, and it is
+      # -Dsimd=auto on x86-64 compiles the SSE4.2, AVX2 and AVX-512 tier
+      # libraries (-Davx512=false leaves AVX-512 out). It is the default, and it is
       # named here so the log says which shape was built.
       - name: Configure (-Dsimd=auto)
         run: meson setup build -Dsimd=auto

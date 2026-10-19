@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 2 of docs/x86-plan.md. Every helper here is `static inline` and
+ * Wave 2 of docs/simd.md. Every helper here is `static inline` and
  * 128-bit, so the SSE4.2 file gets SSE encodings and the AVX2 file gets VEX
  * encodings of the same source -- and the AVX2 file uses several of them
  * whole, because a shape with no second half has nothing to put in an upper

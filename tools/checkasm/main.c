@@ -16,7 +16,7 @@
  *   checkasm --bench [family]       correctness, then the timing tables
  *
  * The ISA slots for SSE4.2, AVX2 and AVX-512 exist here with no rows behind
- * them yet; docs/x86-plan.md waves 1-3 fill them in.
+ * them yet; docs/simd.md fill them in.
  */
 
 #include <signal.h>

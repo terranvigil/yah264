@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 3b of docs/x86-plan.md. Four kernels: the 16x16 builder, the cw == 8
+ * Wave 3b of docs/simd.md. Four kernels: the 16x16 builder, the cw == 8
  * chroma builder, the 8x8 builder, and the 8x8 builder's from-edge form -- the
  * shape a nine-mode decision loop wants, because the 8.3.2.2.1 reference
  * filter depends on the NEIGHBOURHOOD and not on the mode, so a loop that

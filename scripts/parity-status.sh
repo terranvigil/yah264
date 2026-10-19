@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # parity-status.sh -- one scoreboard for the three owner speed-parity goals
-# (docs/pure-c-speed-parity.md header; memory: speed-parity-goals):
+# (docs/plan.md header; memory: speed-parity-goals):
 #   GOAL 1  pure-C, single-threaded   (yah264 no-asm vs x264-noasm-autovec)
 #   GOAL 2  pure-C, multi-threaded    (same binaries, all online CPUs)
 #   GOAL 3  as-shipped SIMD, multi-threaded (yah264 SIMD vs x264-asm)
@@ -184,5 +184,5 @@ echo " CRF -- the mode most users actually run -- has its own scoreboard:"
 echo " 'make parity-status-crf'.  Its numbers are NOT comparable to these."
 fi
 echo " Run 'make parity-modes' for the per-mode matrix before quoting any of"
-echo " the above as \"the\" gap.  docs/rc-mode-matrix.md"
+echo " the above as \"the\" gap.  docs/rate-control.md"
 echo "=================================================================="

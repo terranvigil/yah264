@@ -1,6 +1,6 @@
 /* Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later */
-/* VideoToolbox H.264 behind the yah264 API (docs/videotoolbox-plan.md).
+/* VideoToolbox H.264 behind the yah264 API (docs/hardware-mode.md).
  *
  * A compression session that REQUIRES the hardware encoder; the software
  * VideoToolbox encoder is never accepted (if the hardware session fails we are
@@ -141,8 +141,8 @@ static void set_f64(VTCompressionSessionRef s, CFStringRef key, double v)
     if (n) { VTSessionSetProperty(s, key, n); CFRelease(n); }
 }
 
-/* --crf onto the hardware's 0..1 quality key (docs/videotoolbox-plan.md step
- * 0 item 1): a fixed monotone table, RATE-matched, not quality-matched. Each
+/* --crf onto the hardware's 0..1 quality key (docs/hardware-mode.md):
+ * a fixed monotone table, RATE-matched, not quality-matched. Each
  * point is the quality at which the hardware spends what yah264 spends at
  * that CRF, the median over six clips (foreman, samsung, park_joy, sunflower,
  * pedestrian, riverbed; 150 frames; 2026-09-04): crf 20 -> 0.69, 24 -> 0.59,
@@ -200,7 +200,7 @@ struct y264_hw *y264_hw_open(const yah264_param_t *p, char *why, size_t whylen)
     } else
         FAIL("VideoToolbox will not say whether the session is hardware; refused");
 
-    /* the option map (docs/videotoolbox-plan.md step 3), the part that maps */
+    /* the option map (docs/hardware-mode.md), the part that maps */
     /* --tune zerolatency arrives as bframes 0 + no lookahead: the hardware's
      * real-time mode, which emits each frame as it is encoded. The frame
      * delay count is read-only on this hardware, so that is the whole map. */

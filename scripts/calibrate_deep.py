@@ -7,7 +7,7 @@ band (88-94), where this campaign's regime-shaped arms (the trellis-lambda
 ramp, the psy gates) do their work and where the standing gate was blind: the
 crossover of a regime arm sat in the unsampled 29-32 CRF hole between
 `band_at_rate.py` and `bd.sh`, and two arms had to be bisected by hand to find
-it (docs/hf-mechanism-portfolio.md).
+it (docs/plan.md).
 
 Method is calibrate_band.py's, over the deep CRF range. Writes
 ladders_deep.json / curves_deep.json; `BANDS=deep` or `BANDS=all` in

@@ -17,7 +17,7 @@
 # as the headline -- the CLI board is cheaper and measures the same thing.
 #
 # It also needs an ffmpeg built against libyah264, so it cannot run from a
-# stock checkout. See docs/ffmpeg-integration-plan.md.
+# stock checkout. See docs/ffmpeg.md.
 #
 # Usage:  RC=crf THREADS=12 X264LIB=... NOASM=1 scripts/ffboard.py
 #
@@ -119,7 +119,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch                                                  # noqa: E402
 
 _ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# The ffmpeg with both encoders is the one docs/ffmpeg-integration-plan.md
+# The ffmpeg with both encoders is the one docs/ffmpeg.md
 # builds; a stock ../FFmpeg tree has neither and used to be the default here,
 # failing one cell at a time.
 #
@@ -356,7 +356,7 @@ def _lib_identity(varname, prefix, token, pcname, avoid=()):
             "sha": _sha12(lib), "version": _pc_version(prefix, pcname)}
 
 # The header the ffmpeg's wrapper was compiled against, recorded beside the
-# binary at build time. See docs/ffmpeg-integration-plan.md; one line of the
+# binary at build time. See docs/ffmpeg.md; one line of the
 # recipe writes it.
 HEADER_REC   = os.path.join(os.path.dirname(os.path.abspath(FF)),
                             "yah264-header.sha")
@@ -403,7 +403,7 @@ def header_gate(y):
             "that produced the install:\n"
             f"    git hash-object include/yah264.h > {HEADER_REC}\n"
             "  and rebuild the ffmpeg if the header has moved since. The "
-            "recipe is in docs/ffmpeg-integration-plan.md.")
+            "recipe is in docs/ffmpeg.md.")
     if not os.path.exists(inst):
         sys.exit(f"ffboard: {y['var']}={y['prefix']} installs no "
                  f"include/yah264.h, so the wrapper's header cannot be "
@@ -981,13 +981,13 @@ def preflight():
     if missing:
         sys.exit(f"ffboard: set {' and '.join(missing)} to the library install prefix(es)")
     if not os.path.exists(FF):
-        sys.exit(f"ffboard: no ffmpeg at {FF} -- set FF (see docs/ffmpeg-integration-plan.md)")
+        sys.exit(f"ffboard: no ffmpeg at {FF} -- set FF (see docs/ffmpeg.md)")
     encs = subprocess.run([FF, "-hide_banner", "-encoders"], capture_output=True,
                           text=True).stdout
     for name in (ENC, "libx264"):
         if name not in encs:
             sys.exit(f"ffboard: {FF} has no {name} encoder -- point FF at the build "
-                     "from docs/ffmpeg-integration-plan.md "
+                     "from docs/ffmpeg.md "
                      f"({os.path.join(_FFB_ROOT, 'ffmpeg-yah264', 'ffmpeg')})")
     if RC not in ("crf", "abr", "abrm"):
         sys.exit(f"ffboard: RC must be crf, abr or abrm, got '{RC}'")
