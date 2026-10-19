@@ -182,8 +182,7 @@ The inputs:
 | Intel Xeon | c7i.8xlarge | 102.4 | $1.428 | $0.356 |
 
 Treat it as an estimate, because the three CPU times don't come from one run.
-Graviton4's comes from the parity run's full-thread rows on a c8g.24xlarge. That
-was an earlier build. AMD's comes from the short 60-frame run, which is why its
+Graviton4's comes from the parity run's full-thread rows on a c8g.24xlarge. AMD's comes from the short 60-frame run, which is why its
 ratios say "about". Only Intel's is the reading above. The on-demand prices are AWS's published rates,
 not fetched live. Intel's vCPUs are hyperthreads, and a measure per unit of CPU
 time absorbs that. For x264 the order differs: at spot, AMD is cheapest.
