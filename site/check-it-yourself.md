@@ -73,9 +73,7 @@ This board is the quick check. It runs four HD clips through the two
 encoders as separate programs at twelve threads each, and asks both for a
 bitrate. The results page is the full test. It covers clips from CIF to 4K and
 real titles up to ten minutes, runs each encoder at its own default thread
-count, and compares them at the same file size across a range of rates. The
-two pages now agree that yah264 is faster. Before
-parity, this board read 1.04x.
+count, and compares them at the same file size across a range of rates.
 
 ## Why these four clips
 
