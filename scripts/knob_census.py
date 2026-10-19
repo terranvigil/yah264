@@ -84,6 +84,7 @@ DEFAULT_OVERRIDES = {
     "Y264_SIMD_FORCE": "unset",          # none | sse4 | avx2 | avx512 (a string)
     # computed defaults, read by a parser the idioms can't see
     "Y264_AQ_DC": "= rate mode: 1.3 uncapped CRF, 1.04 capped CRF or bitrate target",
+    "Y264_MBTREE_STRENGTH": "= 5*(1-qcomp)*0.7, 1.4 at qcomp 0.6 (fallback path 2.0)",
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
     # overrides of a public param or CLI flag: unset follows the param

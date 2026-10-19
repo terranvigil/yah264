@@ -1092,7 +1092,7 @@ An unknown preset name is an error, not a warning.
 | --- | --- |
 | `grain` | psy-trellis 1.0, psy-rd 1.5. The 1.5 was a measured VMAF-NEG win on heavy grain against a 1.0 default. The default has since moved to 2.0, so the tune now lowers psy-rd and has not been re-measured against it. |
 | `film` | psy-trellis 0.5. psy-rd left at the 2.0 default. The film value has not been BD-measured for want of a film clip. |
-| `animation` | psy-trellis 0.5, aq-strength 0.6, and bframes +2 (capped at 8). |
+| `animation` | 4 more B frames, only when `--bframes` isn't given and the preset's count is under 8. psy-trellis and AQ stay at the preset's values: raising one and lowering the other measured as a coin flip across two cartoon clips. |
 | `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. |
 | `ssim` | psy-rd 0, psy-trellis 0, AQ kept. |
 | `zerolatency` | bframes 0, rc-lookahead 0, sync-lookahead off. |

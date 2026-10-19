@@ -99,7 +99,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_LRSUB_PROBE` | 0 | src/encoder/encoder.c:6866 |
 | `Y264_MBTREE_DBG` | ? | src/encoder/encoder.c:8993 |
 | `Y264_MBTREE_OFF` | ? | src/encoder/encoder.c:5438 |
-| `Y264_MBTREE_STRENGTH` | 5.0 | src/encoder/encoder.c:8435 |
+| `Y264_MBTREE_STRENGTH` | = 5*(1-qcomp)*0.7, 1.4 at qcomp 0.6 (fallback path 2.0) | src/encoder/encoder.c:8435 |
 | `Y264_MBT_DEPFLOOR` | = param | src/encoder/encoder.c:4620 |
 | `Y264_MBT_MISSWHY` | 0 | src/encoder/encoder.c:8271 |
 | `Y264_MBT_PLAY` | ? | src/encoder/encoder.c:9658 |
