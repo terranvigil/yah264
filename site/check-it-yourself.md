@@ -9,7 +9,7 @@ One command runs both encoders on the same clips. It prints how fast each
 was, how big the files came out and how good they look. This page explains
 those three numbers.
 
-## The one command
+## Run it
 
 ```
 scripts/fetch_corpus.sh --review
