@@ -12,16 +12,17 @@ those three numbers.
 ## The one command
 
 ```
-make review
+scripts/fetch_corpus.sh --review
+X264_ASM=$(command -v x264) make review
 ```
 
-It encodes four HD clips twice, once with yah264 and once with x264. Both
+The first line fetches the four test clips (about 250 MB). The second encodes them twice, once with yah264 and once with x264. Both
 aim at the same bitrate. Then it prints how long each took, how big each file
 came out and how good each looked. `make review-720` and
 `make review-1080` run half of it.
 
-You need x264 built alongside this repository and `ffmpeg` on your path.
-[Getting started](start.md) covers the build.
+You need `x264`, `ffmpeg` and `vmaf` on your path. [Getting started](start.md)
+covers the build.
 
 ## What comes back
 
@@ -52,6 +53,10 @@ smaller.
 
 **`PSNR-Y`** is a second, simpler quality score in decibels. The site's floor
 is that no clip may fall more than 1 dB behind x264.
+
+`perseverance_1080p` can dip just past it and print `PSNR-FLOOR FAIL`. Our file
+there is about 6% smaller at equal VMAF, so the gap is mostly bits we didn't
+spend.
 
 ## Reading size and quality together
 
