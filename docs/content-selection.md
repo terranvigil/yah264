@@ -19,7 +19,7 @@ count. None is a per-clip classifier.
 
 | gate | feature | what it switches | default |
 |---|---|---|---|
-| `--direct auto` | per B slice, the running count of macroblocks each direct derivation would have made skippable | spatial or temporal direct | on. CRF band median 0.0%, station2 -30%, stockholm -7%, bus -4%; worst sunflower +0.9 to +1.4%; wall 1.01-1.05x at 12 threads |
+| `--direct auto` | per B slice, the running count of macroblocks each direct derivation would have made skippable | spatial or temporal direct | on. CRF band median 0.0%, station2 -33%, stockholm -14%, bus -4%; worst sunflower +3.6%; wall 1.01-1.05x at 12 threads |
 | psy flat gate | share of 16x16 luma macroblocks with variance under 25 | raises the psy-trellis floor on frames that are at least 75% flat | on. Fires on every sintel frame and on no frame of any other corpus clip: sintel -5.6% to -9.0% |
 | per-MB lambda | the same variance test, per macroblock | mode decision follows mb-tree's QP on non-flat macroblocks only | on. See [animation.md](animation.md) |
 | `--nr` noise gate | spatial Laplacian percentile | coefficient noise reduction on or off per picture | gate armed whenever `--nr` is on |
