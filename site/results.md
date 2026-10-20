@@ -321,8 +321,8 @@ more at 720p. Nothing here was ever tuned against that set.
 | 720p | -17.1% | 6 of 6 |
 | 1080p | -12.7% | 5 of 6 |
 
-Each clip runs 150 frames, both encoders at two threads, with CRF points chosen
-per clip so the top rung lands between VMAF-NEG 89 and 96. crowd_run is the one
+Each clip runs 150 frames with both encoders at two threads. The CRF points are
+chosen per clip so the top rung sits between VMAF-NEG 89 and 96. crowd_run is the one
 1080p clip behind, at +0.5%.
 
 ## The hardware mode
@@ -358,9 +358,9 @@ the median.
 The numbers: each cell is the median of five runs per side, taken in
 interleaved order on a quiet machine. Wall times spread under 10% within a
 cell, except foreman at 17% on both sides. CPU counts the encoder process only,
-so it leaves out work the hardware does elsewhere. Both encoders land within
-about 10% of target on eight clips. On bus and stefan every encoder on this page
-lands well under the 400 kbit/s target. The hardware
+so it leaves out work the hardware does elsewhere. Both encoders come within
+about 10% of target on eight clips. On bus and stefan, every encoder on this
+page undershoots the 400 kbit/s target by a wide margin. The hardware
 spends more bits than we do on eight of the ten, which favors it in the quality
 column. Ducks and riverbed are the exceptions.
 
@@ -420,7 +420,7 @@ rebuilds all three byte for byte.
 | five 720p shots (750 frames) | -6.4% | -12.5% |
 | five 1080p shots (750 frames) | -6.5% | -15.1% |
 
-BD-rate on VMAF-NEG, both encoders at two threads, against x264 medium.
+BD-rate on VMAF-NEG against x264 medium. Both encoders ran at two threads.
 Negative means yah264 spends fewer bits at equal quality.
 
 How bits move across shots is what this table adds to the single-shot board.
@@ -436,8 +436,8 @@ scripts/multishot_bd.py --arms flat=env:Y264_AQ_DC=0.4 new=env: x264
 ```
 
 The numbers: each sequence runs 150 frames per shot, except the CIF sequence's
-third shot at 90. CIF runs at 30 fps, 720p at 50 and 1080p at 25. The four CRF
-points are 22 to 34, and 26 to 38 at 1080p, where CRF 22 tops VMAF-NEG 96. One clip at a time the same content reads -5.7% on CIF,
+third shot at 90. CIF runs at 30 fps, 720p at 50 and 1080p at 25. The CRF points
+are 22 to 34. At 1080p they're 26 to 38, because CRF 22 there tops VMAF-NEG 96. One clip at a time the same content reads -5.7% on CIF,
 -14% on 720p and +0.4% on 1080p.
 
 ## The corpus
@@ -477,7 +477,7 @@ has the measurements. That spread is also why a
 preset-for-preset speed comparison stops meaning much once content leaves the
 set the presets were tuned on.
 
-The numbers: on a 180-frame window of Big Buck Bunny (3D CGI) yah264 needs
-39% fewer bits than x264 medium, and on 140 frames of Sita Sings the Blues
-(hand-drawn 2D) 4% fewer. Short windows exaggerate both ways. Over the
-10-minute Big Buck Bunny excerpt in the parity tables the lead is about 3%.
+The numbers: on a 180-frame window of Big Buck Bunny, which is 3D CGI, yah264
+needs 39% fewer bits than x264 medium. On 140 frames of the hand-drawn Sita
+Sings the Blues it needs 4% fewer. Short windows exaggerate. Over the 10-minute
+Big Buck Bunny excerpt in the parity tables the lead is about 3%.

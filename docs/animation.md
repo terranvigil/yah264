@@ -27,8 +27,8 @@ against x264 medium.
 | bbb_720p | 3D CGI | -38.6% |
 | sita_720p | hand-drawn 2D | -3.9% |
 
-Both are short windows (180 and 140 frames), both encoders at two threads, CRF
-30 to 42. A median over the two would read about -21%, which describes neither,
+Both are short windows of 180 and 140 frames, read at CRF 30 to 42 with both
+encoders at two threads. A median over the two would read about -21%, which describes neither,
 so animation results are always quoted per clip. Short windows also exaggerate:
 over the 10-minute Big Buck Bunny excerpt in the parity tables the lead is about
 3%.

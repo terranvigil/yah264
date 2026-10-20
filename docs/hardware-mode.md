@@ -97,9 +97,9 @@ The hardware uses about an eighteenth of our CPU and about the same wall time at
 the median. It's faster on high-rate clips and most HD, and slower on CIF and
 fourpeople, where opening the session is a large share of a short run. Quality
 pays for it: the hardware scores below us at the same bitrate on all ten clips,
-by 4.7 points at the median. It lands within about 6% of its rate target on
-eight clips (on bus and stefan every encoder undershoots the 400 kbit/s target)
-and spends more bits than we do on eight of ten, which favors it in the
+by 4.7 points at the median. It comes within about 6% of its rate target on
+eight clips. On bus and stefan every encoder undershoots the 400 kbit/s target.
+It spends more bits than we do on eight of ten, which favors it in the
 quality column. CPU counts the encoder process only, so it leaves out work the
 hardware does elsewhere. Use it when CPU matters more than bits.
 
