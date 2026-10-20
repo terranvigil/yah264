@@ -3,7 +3,7 @@
 Animation isn't one class for yah264. Rendered 3D (Big Buck Bunny, Sintel) and
 hand-drawn 2D (Sita Sings the Blues) behave differently, so every animation
 change is measured on both kinds. Against x264 medium we're far ahead on CGI
-and a few points behind on hand-drawn, and a setting that helps one kind often
+and a few points ahead on hand-drawn, and a setting that helps one kind often
 costs the other.
 
 All numbers here are BD-rate on VMAF-NEG (negative is better). Self-A/Bs are
@@ -24,11 +24,14 @@ against x264 medium.
 
 | clip | kind | BD-rate vs x264 medium |
 |---|---|--:|
-| bbb_720p | 3D CGI | about -25% |
-| sita_720p | hand-drawn 2D | +5.9% |
+| bbb_720p | 3D CGI | -38.6% |
+| sita_720p | hand-drawn 2D | -3.9% |
 
-A median over the two would read about -9%, which describes neither. That's
-why animation results are always quoted per clip.
+Both are short windows of 180 and 140 frames, read at CRF 30 to 42 with both
+encoders at two threads. A median over the two would read about -21%, which describes neither,
+so animation results are always quoted per clip. Short windows also exaggerate:
+over the 10-minute Big Buck Bunny excerpt in the parity tables the lead is about
+3%.
 
 ## What doesn't help
 
@@ -51,9 +54,9 @@ why animation results are always quoted per clip.
 
 ## Open questions
 
-- **Hand-drawn trails x264 by about 6%.** All of it is inter coding: on all-intra
-  (`--keyint 1`) we're 4.75% ahead on sita. Per-MB lambda addresses the P-frame
-  share. The B-frame share has no lever yet, and the obvious ones are in the
+- **Hand-drawn leads by less than CGI.** On sita we're about 4% ahead, against
+  4.75% ahead on all-intra (`--keyint 1`), so inter coding still gives back a
+  little. The B-frame share has no lever yet, and the obvious ones are in the
   table above.
 - **The tune doesn't carry hand-drawn content.** With both encoders on
   `--tune animation`, sita trails by about 14%. Adding `--ref 6`,

@@ -127,7 +127,7 @@ pay for it.
 
 | choice | why |
 |---|---|
-| `--direct auto` as the default | 14-clip CRF band median 0.0% against spatial, station2 -30%, stockholm and in_to_tree -7%, bus -4%. The worst clip is sunflower, about +1% |
+| `--direct auto` as the default | 14-clip CRF band median 0.0% against spatial: station2 -33%, stockholm -14%, in_to_tree -7%, shields -5%, bus -4%. The worst clip is sunflower at +3.6%, all of it on the two lowest rungs |
 | Per-slice vote over a pinned mode | pinned temporal swings from -26.5% to +18.5% against x264 medium depending on the clip (table below). Under the vote sunflower's loss is about +1%, and station2 still gains |
 | Per-macroblock temporal legality | the clause binds per derivation. Per-frame enforcement wasted the mode on almost every frame |
 | No slice-level guard under auto | adding it lost on every clip it touched: station2 +9.7%, stockholm +3.6%, in_to_tree +2.5%, sunflower +1.7% |

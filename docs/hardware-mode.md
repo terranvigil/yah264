@@ -82,23 +82,24 @@ threads, median of five runs per side on a quiet machine:
 
 | clip | wall, hardware / ours | CPU, ours / hardware | VMAF, hardware minus ours |
 |---|--:|--:|--:|
-| foreman_cif | 1.85 | 14 | -0.6 |
-| bus_cif | 1.82 | 12 | -5.2 |
-| stefan_cif | 2.26 | 9 | -3.0 |
-| ducks_720p | 0.62 | 61 | -8.2 |
-| park_joy_720p | 0.65 | 36 | -7.2 |
-| fourpeople_720p | 1.42 | 20 | -3.8 |
-| shields_720p | 0.99 | 22 | -4.2 |
-| sunflower_1080p | 0.93 | 20 | -3.0 |
-| pedestrian_1080p | 0.80 | 35 | -3.8 |
-| riverbed_1080p | 0.33 | 55 | -13.6 |
+| foreman_cif | 1.88 | 12 | -0.7 |
+| bus_cif | 1.78 | 11 | -6.0 |
+| stefan_cif | 2.29 | 8 | -3.9 |
+| ducks_720p | 0.62 | 48 | -8.1 |
+| park_joy_720p | 0.65 | 32 | -7.4 |
+| fourpeople_720p | 1.45 | 16 | -4.2 |
+| shields_720p | 1.02 | 18 | -4.7 |
+| sunflower_1080p | 0.93 | 18 | -3.9 |
+| pedestrian_1080p | 0.80 | 27 | -4.7 |
+| riverbed_1080p | 0.32 | 46 | -13.9 |
 
-The hardware uses about a twentieth of our CPU and about the same wall time at
+The hardware uses about an eighteenth of our CPU and about the same wall time at
 the median. It's faster on high-rate clips and most HD, and slower on CIF and
 fourpeople, where opening the session is a large share of a short run. Quality
 pays for it: the hardware scores below us at the same bitrate on all ten clips,
-by 4 points at the median. It lands within 5% of its rate target on every clip
-and spends more bits than we do on eight of ten, which favors it in the
+by 4.7 points at the median. It comes within about 6% of its rate target on
+eight clips. On bus and stefan every encoder undershoots the 400 kbit/s target.
+It spends more bits than we do on eight of ten, which favors it in the
 quality column. CPU counts the encoder process only, so it leaves out work the
 hardware does elsewhere. Use it when CPU matters more than bits.
 
