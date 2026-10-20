@@ -16,15 +16,13 @@ scripts/fetch_corpus.sh --review
 X264_ASM=$(command -v x264) make review
 ```
 
-The first line downloads the four test clips and trims them to length, about
-250 MB. They aren't in the repository. The second runs the board. It encodes four HD clips twice, once with yah264 and once with x264. Both
+The first line fetches the four test clips (about 250 MB). The second encodes them twice, once with yah264 and once with x264. Both
 aim at the same bitrate. Then it prints how long each took, how big each file
 came out and how good each looked. `make review-720` and
 `make review-1080` run half of it.
 
-`make review` looks for an x264 build at `../x264/x264-asm`. Setting `X264_ASM`
-as above uses the x264 already on your path instead. You also need `ffmpeg` and
-`vmaf` on your path. [Getting started](start.md) covers the build.
+You need `x264`, `ffmpeg` and `vmaf` on your path. [Getting started](start.md)
+covers the build.
 
 ## What comes back
 
@@ -56,11 +54,9 @@ smaller.
 **`PSNR-Y`** is a second, simpler quality score in decibels. The site's floor
 is that no clip may fall more than 1 dB behind x264.
 
-On the current build `perseverance_1080p` can read just past that floor. The
-summary then prints `PSNR-FLOOR FAIL`. On that clip our file comes out
-about 6% smaller than x264's at the same bitrate target, with VMAF level, so
-the PSNR-Y gap is mostly the bits we didn't spend. This board can't separate
-the two. The BD-rate on the results page can.
+`perseverance_1080p` can dip just past it and print `PSNR-FLOOR FAIL`. Our file
+there is about 6% smaller at equal VMAF, so the gap is mostly bits we didn't
+spend.
 
 ## Reading size and quality together
 
