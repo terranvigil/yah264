@@ -33,8 +33,7 @@ programs and read the same 8-bit 4:2:0 frames on stdin from one feeder.
 
 ## Speed
 
-Median and worst ratio in each group. A ≤ marks a reading where the source
-couldn't be fed as fast as yah264 encoded, so it's an upper bound on our ratio.
+Median and worst ratio in each group.
 
 | class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
 |---|---|--:|--:|--:|
@@ -48,7 +47,7 @@ couldn't be fed as fast as yah264 encoded, so it's an upper bound on our ratio.
 | 1080p | C | 0.62 / 0.62 | 0.66 / 0.66 | 0.65 / 0.65 |
 | 2160p | S | 0.50 / 0.52 | 0.55 / 0.60 | 0.67 / 0.73 |
 | 2160p | M | 0.47 / 0.58 | 0.49 / 0.60 | 0.53 / 0.57 |
-| 2160p | L | 0.52 / 0.55 | ≤0.58 / 0.62 | ≤0.57 / 0.59 |
+| 2160p | L | 0.52 / 0.55 | 0.58 / 0.62 | 0.56 / 0.59 |
 | 2160p | C | 0.56 / 0.56 | 0.57 / 0.57 | 0.62 / 0.62 |
 
 The slowest cell anywhere is 0.88, a short CIF clip with SIMD on. Content-type
@@ -96,9 +95,7 @@ did best at 50 in at least one mode. Sintel at 4K and Sol Levante at 1080p did
 best at 40 in at least one mode. Every other figure on this page uses 40.
 
 In capped VBR, with the target set to x264's CRF 23 rate, every encode came
-within 4% of its target. Goal 3 read between 0.49 and 0.67 on every VBR cell. On
-two of them the source couldn't be fed as fast as yah264 encoded, so those
-readings are upper bounds on our ratio.
+within 4% of its target. Goal 3 read between 0.45 and 0.67 on every VBR cell.
 
 ## By processor
 
