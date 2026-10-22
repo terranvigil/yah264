@@ -476,6 +476,7 @@ STAGED = "--staged" in sys.argv
 AUTO_STAGE = os.environ.get("LF_AUTO_STAGE", "1") == "1"
 AUTO_STAGE_KEEP = os.environ.get("LF_AUTO_STAGE_KEEP") == "1"
 AUTO_STAGED = {}        # cell -> the staged file this run made for it, or None
+AUTO_TRIED = set()      # cells whose staging failed; not tried again this run
 _STAGE_ALL_INTERNAL = False
 # TEST MODE: every cell is cut to its first LF_TEST_FRAMES frames. For dry
 # runs of the machinery only; refused unless Y264_CACHE points away from the
@@ -2097,22 +2098,29 @@ def auto_stage(cell, why):
     and left alone; only a file this run made is removed after the cell."""
     global _STAGE_ALL_INTERNAL
     src = uncropped(cell) or cell
-    if not AUTO_STAGE or cell in AUTO_STAGED or kind(src) != "x10" \
-            or not master_fed(cell):
+    if not AUTO_STAGE or cell in AUTO_STAGED or cell in AUTO_TRIED \
+            or kind(src) != "x10" or not master_fed(cell):
         return False
     print(f"  {cell}: AUTO-STAGE ({why}): the master decode cannot outrun the "
           f"encoder by {FEED_MARGIN:g}x, so {src} is staged on {STAGE_INTERNAL}",
           flush=True)
     had = staged_file(src)
     if not had:
+        # a failed staging (short disk, feeder error, failed verify) must not
+        # end the run: the caller falls back to the refusal before a leg, or
+        # to a feeder-bound record after one, as with auto-staging off
         _STAGE_ALL_INTERNAL = True
         try:
             do_stage_excerpt(src)
+        except SystemExit as e:
+            print(f"  {cell}: AUTO-STAGE failed, timing from the master: {e}",
+                  flush=True)
         finally:
             _STAGE_ALL_INTERNAL = False
     p = staged_file(src)
     if not p:
-        sys.exit(f"longform: {cell}: staging {src} did not verify; not timing it")
+        AUTO_TRIED.add(cell)
+        return False
     AUTO_STAGED[cell] = None if had else p
     return True
 
