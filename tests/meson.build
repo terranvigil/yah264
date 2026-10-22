@@ -53,6 +53,11 @@ test_denoise = executable('test_denoise',
   dependencies : yah264_dep)
 test('denoise', test_denoise)
 
+test_darkaq = executable('test_darkaq',
+  'test_darkaq.c',
+  dependencies : yah264_dep)
+test('darkaq', test_darkaq)
+
 test_cutscan = executable('test_cutscan',
   'test_cutscan.c',
   dependencies : yah264_dep)

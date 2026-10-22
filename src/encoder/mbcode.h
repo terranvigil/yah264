@@ -321,6 +321,7 @@ typedef struct {
  * RD candidates); keyed on (te_mbx,te_mby), -1 = unset. Values are a pure
  * function of src(mbx,mby), so the memo is byte-identical. */
     long te_src4, te_src8;
+    float te_psyw;              /* psy weight with the dark-block boost, same key */
     /* The luma distortion terms of the reconstruction an inter trial just
  * made, taken from the trial's own contiguous buffer instead of re-read
  * from the frame: SSD against the source and both texture terms. Valid for
@@ -497,6 +498,10 @@ void             y264_mb_warm_statics(void);
  * frame's per-MB log2(variance + floor)), and the floors of that metric for
  * the anchored field (afloor) and for aq_analyze (bfloor). */
 double           y264_aq_gain(double mean, double sd, int bpath, int abr);
+double           y264_aq_dark(double mean, double var);
+double           y264_psy_dark_gain(double mean, double var);
+int              y264_aq_bright(double mean);
+double           y264_aq_dark_gate(double bright_share);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
 int              y264_rb_trace_on(void);

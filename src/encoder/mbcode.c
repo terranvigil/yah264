@@ -383,6 +383,110 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
     return (abr & 1) && !(abr & 2) ? g * AQ2_ABR_K : g;
 }
 
+/* The dark-block term: an extra QP cut, on top of the variance offset, for a
+ * macroblock that is both dark and smooth. Banding shows first in dark
+ * gradients and faint dark grain, and the variance offset alone cannot reach
+ * them where it matters most: in a frame with bright, busy areas beside the
+ * dark ones the field's centre sits high, so at a low --aq-strength a dark
+ * block gets only a point or two below the frame and codes to a flat step.
+ * The cut is strength x dark weight x smooth weight, with both weights linear
+ * ramps: the dark weight is 1 at a luma mean of half the limit and 0 at the
+ * limit (8-bit scale), the smooth weight 1 at a quarter of the variance limit
+ * and 0 at the limit. The cut is for frames that hold bright areas as well:
+ * it is scaled by a frame gate on the share of macroblocks with a luma mean
+ * of AQ_BRIGHT or more, 0 at a share of B0 and 1 at B1. A dark frame with
+ * nothing bright in it already centres the field low, and there the cut only
+ * spent bits VMAF-NEG reads as waste (sunflower_1080p +1.1% ungated at
+ * strength 4). Swept 1.5 / 2.5 / 4 / 6 with the psy boost below, at matched
+ * size: on a frame with a third of it bright, 6 takes the share of flat dark
+ * blocks from 19% to 4% and CAMBI from 3.6 to 0.76, level with the reference
+ * encoder. Y264_AQ_DARK sets the strength (0 turns it off),
+ * Y264_AQ_DARK_M the mean limit, Y264_AQ_DARK_V the variance limit and
+ * Y264_AQ_DARK_B0 / _B1 the gate (B1 0 turns the gate off). */
+#define AQ_DARK_STR 6.0
+#define AQ_DARK_M  64.0
+#define AQ_DARK_V  16.0
+#define AQ_DARK_B0  0.08
+#define AQ_DARK_B1  0.20
+#define AQ_BRIGHT 170.0
+static double aq_dark_env(int which)
+{
+    static double v[5] = { -1.0, -1.0, -1.0, -1.0, -1.0 };
+    if (v[0] < 0) {
+        const char *s = getenv("Y264_AQ_DARK"), *m = getenv("Y264_AQ_DARK_M"),
+                   *q = getenv("Y264_AQ_DARK_V"), *b0 = getenv("Y264_AQ_DARK_B0"),
+                   *b1 = getenv("Y264_AQ_DARK_B1");
+        v[1] = m ? atof(m) : AQ_DARK_M;
+        v[2] = q ? atof(q) : AQ_DARK_V;
+        v[3] = b0 ? atof(b0) : AQ_DARK_B0;
+        v[4] = b1 ? atof(b1) : AQ_DARK_B1;
+        double d = s ? atof(s) : AQ_DARK_STR;
+        v[0] = d > 0 ? d : 0.0;
+    }
+    return v[which];
+}
+
+/* 1 for a macroblock the dark-cut gate counts as bright */
+int y264_aq_bright(double mean)
+{
+    return mean >= AQ_BRIGHT * (double)(1 << (Y264_BIT_DEPTH - 8));
+}
+
+/* the frame gate on the dark cut, from the share of bright macroblocks */
+double y264_aq_dark_gate(double bright_share)
+{
+    double b0 = aq_dark_env(3), b1 = aq_dark_env(4);
+    if (b1 <= 0.0) return 1.0;
+    double g = (bright_share - b0) / (b1 - b0);
+    return g < 0.0 ? 0.0 : (g > 1.0 ? 1.0 : g);
+}
+
+/* Y264_PSY_DARK: a multiplier on the psy-rd weight for the same dark, smooth
+ * blocks, scaled by the same two ramps (1 = off). At one QP, with AQ and
+ * mb-tree out of the picture, the RD decision codes faint dark grain to a flat
+ * block far more often than the reference encoder does (nocturne window 3960
+ * at QP 28: 78% of the dark smooth 8x8 blocks flat against 47%); the
+ * variance offset cannot fix that, since it is a decision, not an
+ * allocation. Swept 3 / 5 / 8 at matched size on five dark windows; 5 holds
+ * the HD band (median +0.03%, worst +0.46%). */
+#define PSY_DARK 5.0
+static double psy_dark_env(void)
+{
+    static double v = -1.0;
+    if (v < 0) { const char *s = getenv("Y264_PSY_DARK"); v = s ? atof(s) : PSY_DARK;
+                 if (v < 1.0) v = 1.0; }
+    return v;
+}
+
+/* the dark weight times the smooth weight, in [0, 1]; mean and var on this
+ * build's pixel scale */
+static double aq_dark_weight(double mean, double var)
+{
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    double m = mean / sc, vv = var / (sc * sc);
+    double ml = aq_dark_env(1), vl = aq_dark_env(2);
+    double dw = (ml - m) / (0.5 * ml), sw = (vl - vv) / (0.75 * vl);
+    if (dw <= 0.0 || sw <= 0.0) return 0.0;
+    if (dw > 1.0) dw = 1.0;
+    if (sw > 1.0) sw = 1.0;
+    return dw * sw;
+}
+
+/* returns a QP offset <= 0 */
+double y264_aq_dark(double mean, double var)
+{
+    double str = aq_dark_env(0);
+    if (str <= 0.0) return 0.0;
+    return -str * aq_dark_weight(mean, var);
+}
+
+/* the factor on the psy-rd weight, >= 1 */
+double y264_psy_dark_gain(double mean, double var)
+{
+    double k = psy_dark_env();
+    return k > 1.0 ? 1.0 + (k - 1.0) * aq_dark_weight(mean, var) : 1.0;
+}
+
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
  * and banding are visible), raise it on busy ones (where distortion is masked).
  * The offset is strength * gain * (l - centre), l = log2(variance + bfloor). The
@@ -397,12 +501,14 @@ static void aq_analyze(y264_frame_t *f)
         for (int i = 0; i < n; i++) f->aq_off[i] = 0;
         return;
     }
-    float *lv = malloc((size_t)n * sizeof(float));
+    float *lv = malloc((size_t)n * 2 * sizeof(float));
     if (!lv) {
         for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
     }
+    float *dk = lv + n;
     const uint32_t *mbv = f->mbvar && *f->mbvar_src == f->src[0] ? f->mbvar : NULL;
     double sum = 0, sum2 = 0;
+    int nbright = 0;
     for (int mby = 0; mby < f->hmb; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
             const pixel *s = f->src[0] + (mby * 16) * ss + mbx * 16;
@@ -419,14 +525,17 @@ static void aq_analyze(y264_frame_t *f)
             if (var < 0) var = 0;
             float l = log2f((float)(var + y264_aq_bfloor(f->aq_abr)));
             lv[mby * f->wmb + mbx] = l;
+            dk[mby * f->wmb + mbx] = (float)y264_aq_dark(mean, var);
+            nbright += y264_aq_bright(mean);
             sum += l; sum2 += (double)l * l;
         }
     double avg = sum / n, sd2 = sum2 / n - avg * avg;
     double sd = sd2 > 0 ? sqrt(sd2) : 0;
     float strength = (float)(f->aq_strength * y264_aq_gain(avg, sd, 1, f->aq_abr));
     float center = (float)(avg - f->aq_pull * (avg - f->aq_anchor));
+    float dg = (float)y264_aq_dark_gate((double)nbright / n);
     for (int i = 0; i < n; i++) {
-        int off = (int)lroundf(strength * (lv[i] - center));
+        int off = (int)lroundf(strength * (lv[i] - center) + dg * dk[i]);
         if (off < -8) off = -8;
         if (off > 8) off = 8;
         f->aq_off[i] = (int8_t)off;
@@ -1852,12 +1961,19 @@ static long dist_psy_term(y264_frame_t *f, int mbx, int mby, int have)
  * them once per (mbx,mby) instead of recomputing every dist_mb call. */
         long ts4, ts8;
         if (f->te_mbx == mbx && f->te_mby == mby) {
-            ts4 = f->te_src4; ts8 = f->te_src8;
+            ts4 = f->te_src4; ts8 = f->te_src8; psyw = f->te_psyw;
         } else {
             long ts[2];
             texture_energy(s, f->src_stride[0], ts);
             ts4 = ts[0]; ts8 = ts[1];
-            f->te_src4 = ts4; f->te_src8 = ts8; f->te_mbx = mbx; f->te_mby = mby;
+            if (psy_dark_env() > 1.0) {
+                uint32_t v2[2];
+                y264_dsp.var16x16(s, f->src_stride[0], v2);
+                double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+                psyw *= (float)y264_psy_dark_gain(mean, var > 0 ? var : 0);
+            }
+            f->te_src4 = ts4; f->te_src8 = ts8; f->te_psyw = psyw;
+            f->te_mbx = mbx; f->te_mby = mby;
         }
         long tr[2];
         if (have) { tr[0] = f->te_rec4; tr[1] = f->te_rec8; }
@@ -13393,6 +13509,8 @@ void y264_mb_warm_statics(void)
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env();
+    (void)aq_dark_env(0);
+    (void)psy_dark_env();
         (void)probe_deadzone_env();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one

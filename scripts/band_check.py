@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""band_check.py - dark banding against the reference encoder, on real frames.
+
+    python3 scripts/band_check.py
+    WINDOWS=nocturne-x10_1080p:29280 ARGS='--aq-strength 0.7' python3 scripts/band_check.py
+
+VMAF-NEG does not see banding and CAMBI misses much of it, so an arm that
+flattens dark gradients can pass every BD band. This is the check that
+catches it. For each window (a title and a centre frame; 96 frames are cut
+around it) it encodes the reference at --preset medium --crf 23, solves
+yah264 onto the reference's size (within SIZE_TOL), decodes both and scores
+the 8x8 blocks the SOURCE makes dark and smooth (luma mean 17-50, standard
+deviation 0.3-2.5), the blocks where banding shows:
+
+  flat   share of those blocks the decode left perfectly flat (a band step)
+  keep   mean decoded/source standard deviation over them, capped at 2
+  dark   PSNR-Y over them
+  cambi  libvmaf's CAMBI, whole frame
+
+A window FAILS when yah264's flat share exceeds the reference's by more than
+FLAT_MARGIN or its CAMBI exceeds the reference's by more than CAMBI_MARGIN.
+A window whose size solve misses by more than SIZE_TOL is reported UNMATCHED
+and not judged. The default windows are the ones the dark-banding report was
+reproduced on: frames with both very bright and very dark areas, and mostly
+dark frames with faint grain.
+
+Env: WINDOWS (title:frame,...), SRC_DIR, YAH264, X264, ARGS (extra yah264
+arguments), FLAT_MARGIN (0.05), CAMBI_MARGIN (1.0), SIZE_TOL (0.03),
+THREADS (2), OUT (scratch directory, kept).
+"""
+import json, os, re, subprocess, sys, tempfile
+import numpy as np
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WINDOWS = os.environ.get("WINDOWS", "nocturne-x10_1080p:29280,nocturne-x10_1080p:3960,"
+                         "tears-x10_1080p:10200,tears-x10_1080p:9480,meridian-x10_1080p:2400")
+SRC_DIR = os.environ.get("SRC_DIR", "/Volumes/T7/staging/yah264/y4m")
+YAH264 = os.environ.get("YAH264", os.path.join(REPO, "build/cli/yah264"))
+X264 = os.environ.get("X264", "x264")
+ARGS = os.environ.get("ARGS", "").split()
+FLAT_MARGIN = float(os.environ.get("FLAT_MARGIN", "0.05"))
+CAMBI_MARGIN = float(os.environ.get("CAMBI_MARGIN", "1.0"))
+SIZE_TOL = float(os.environ.get("SIZE_TOL", "0.03"))
+THREADS = os.environ.get("THREADS", "2")
+FRAMES = 96
+
+
+def run(cmd):
+    r = subprocess.run(cmd, capture_output=True)
+    if r.returncode:
+        sys.exit(" ".join(cmd) + "\n" + r.stderr.decode(errors="replace")[-2000:])
+
+
+def y4m_geom(path):
+    with open(path, "rb") as f:
+        hdr = f.readline()
+    w = int(re.search(rb" W(\d+)", hdr).group(1))
+    h = int(re.search(rb" H(\d+)", hdr).group(1))
+    return hdr, w, h
+
+
+def cut(src, start, n, out):
+    hdr, w, h = y4m_geom(src)
+    fsz = w * h * 3 // 2
+    with open(src, "rb") as f, open(out, "wb") as o:
+        o.write(hdr)
+        f.readline()
+        first = f.readline()
+        step = len(first) + fsz            # every FRAME line here is bare
+        f.seek(len(hdr) + start * step)
+        for _ in range(n):
+            line = f.readline()
+            if not line.startswith(b"FRAME"):
+                break
+            o.write(line + f.read(fsz))
+
+
+def lumas(path):
+    hdr, w, h = y4m_geom(path)
+    fsz = w * h * 3 // 2
+    with open(path, "rb") as f:
+        f.readline()
+        while f.readline().startswith(b"FRAME"):
+            yield np.frombuffer(f.read(fsz)[: w * h], np.uint8).reshape(h, w).astype(np.float64)
+
+
+def band_metric(src, dec):
+    se_m = cnt_m = 0.0
+    keeps, flats, nblk = [], 0, 0
+    for s, d in zip(lumas(src), lumas(dec)):
+        h, w = (s.shape[0] // 8) * 8, (s.shape[1] // 8) * 8
+        sb = s[:h, :w].reshape(h // 8, 8, w // 8, 8).swapaxes(1, 2).reshape(-1, 64)
+        db = d[:h, :w].reshape(h // 8, 8, w // 8, 8).swapaxes(1, 2).reshape(-1, 64)
+        sm, ss, ds = sb.mean(1), sb.std(1), db.std(1)
+        m = (sm > 17) & (sm < 50) & (ss > 0.3) & (ss < 2.5)
+        if m.any():
+            se_m += ((sb[m] - db[m]) ** 2).sum(); cnt_m += m.sum() * 64
+            keeps.append(np.minimum(ds[m] / ss[m], 2))
+            flats += int((ds[m] == 0).sum()); nblk += int(m.sum())
+    mse = se_m / max(cnt_m, 1)
+    return {"blocks": nblk, "flat": flats / max(nblk, 1),
+            "keep": float(np.concatenate(keeps).mean()) if keeps else float("nan"),
+            "dark": 99.0 if mse == 0 else 10 * np.log10(255 ** 2 / mse)}
+
+
+def cambi(src, dec, js):
+    run(["vmaf", "-r", src, "-d", dec, "--no_prediction", "--feature", "cambi",
+         "--threads", "1", "-q", "--json", "-o", js])
+    return json.load(open(js))["pooled_metrics"]["cambi"]["mean"]
+
+
+def score(src, bs, tag, d):
+    dec = os.path.join(d, tag + ".dec.y4m")
+    run(["ffmpeg", "-v", "error", "-y", "-threads", "1", "-i", bs,
+         "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", "-strict", "-1", dec])
+    r = band_metric(src, dec)
+    r["cambi"] = cambi(src, dec, os.path.join(d, tag + ".cambi.json"))
+    r["bytes"] = os.path.getsize(bs)
+    os.unlink(dec)
+    return r
+
+
+def solve(src, target, out):
+    lo, hi, crf, ratio = 10.0, 40.0, 23.0, 0.0
+    for _ in range(14):
+        run([YAH264, "--input-y4m", src, "-o", out, "--crf", f"{crf:.3f}",
+             "--threads", THREADS, "--quiet", "--no-progress"] + ARGS)
+        ratio = os.path.getsize(out) / target
+        if abs(ratio - 1) < 0.02:
+            break
+        lo, hi = (crf, hi) if ratio > 1 else (lo, crf)
+        crf = round((lo + hi) / 2, 3)
+    return crf, ratio
+
+
+def main():
+    d = os.environ.get("OUT") or tempfile.mkdtemp(prefix="y264bandchk.")
+    os.makedirs(d, exist_ok=True)
+    print(f"# scratch {d}; margins flat +{FLAT_MARGIN}, cambi +{CAMBI_MARGIN}; args {' '.join(ARGS) or '(default)'}")
+    print(f"# {'window':26s} {'side':6s} {'bytes':>9s} {'flat':>6s} {'keep':>6s} {'dark':>6s} {'cambi':>6s}")
+    fails = 0
+    for spec in WINDOWS.split(","):
+        title, frame = spec.rsplit(":", 1)
+        name = f"{title}_{frame}"
+        src = os.path.join(d, name + ".y4m")
+        if not os.path.exists(src):
+            cut(os.path.join(SRC_DIR, title + ".y4m"), max(0, int(frame) - FRAMES // 2), FRAMES, src)
+        ref = os.path.join(d, name + ".ref.264")
+        run([X264, "--preset", "medium", "--crf", "23", "--threads", THREADS, "--quiet",
+             "-o", ref, src])
+        mine = os.path.join(d, name + ".yah.264")
+        crf, ratio = solve(src, os.path.getsize(ref), mine)
+        a, b = score(src, ref, name + ".ref", d), score(src, mine, name + ".yah", d)
+        for side, r in (("ref", a), ("yah264", b)):
+            print(f"  {name:26s} {side:6s} {r['bytes']:9d} {r['flat']:6.3f} {r['keep']:6.3f} "
+                  f"{r['dark']:6.2f} {r['cambi']:6.3f}")
+        if abs(ratio - 1) > SIZE_TOL:
+            verdict = f"UNMATCHED (size {ratio:.3f} at crf {crf})"
+        elif b["flat"] > a["flat"] + FLAT_MARGIN or b["cambi"] > a["cambi"] + CAMBI_MARGIN:
+            verdict = "FAIL"; fails += 1
+        else:
+            verdict = "pass"
+        print(f"  {name:26s} {verdict}: flat {b['flat'] - a['flat']:+.3f}, cambi {b['cambi'] - a['cambi']:+.3f}, "
+              f"size {ratio:.3f}")
+    print(f"# {fails} window(s) failed")
+    sys.exit(1 if fails else 0)
+
+
+if __name__ == "__main__":
+    main()
