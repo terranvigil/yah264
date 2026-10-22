@@ -467,6 +467,16 @@ STAGE_2160_INTERNAL = (os.environ.get("LF_STAGE_2160_INTERNAL") == "1"
 STAGE_FLOOR_GB = float(os.environ.get("STAGE_FLOOR_GB", "40"))
 STAGE_WORKERS = int(os.environ.get("STAGE_WORKERS", "1"))
 STAGED = "--staged" in sys.argv
+# AUTO-STAGE: an excerpt cell whose master decode cannot outrun the faster
+# encoder by FEED_MARGIN is staged on the internal disk, timed from the staged
+# file, and the file removed once the cell's legs are done. It applies both to
+# the feeder check before a leg and to the leg's own rates after it, so a build
+# faster than the records predict cannot leave a feeder-bound reading behind.
+# LF_AUTO_STAGE=0 restores the refusal; LF_AUTO_STAGE_KEEP=1 keeps the file.
+AUTO_STAGE = os.environ.get("LF_AUTO_STAGE", "1") == "1"
+AUTO_STAGE_KEEP = os.environ.get("LF_AUTO_STAGE_KEEP") == "1"
+AUTO_STAGED = {}        # cell -> the staged file this run made for it, or None
+_STAGE_ALL_INTERNAL = False
 # TEST MODE: every cell is cut to its first LF_TEST_FRAMES frames. For dry
 # runs of the machinery only; refused unless Y264_CACHE points away from the
 # real results, and staged files get a .test<N> suffix.
@@ -513,7 +523,8 @@ def excerpt_span(cell):
 
 
 def stage_path(cell):
-    d = STAGE_INTERNAL if (split(cell)[1] == "2160p" and STAGE_2160_INTERNAL) \
+    d = STAGE_INTERNAL if (_STAGE_ALL_INTERNAL or (split(cell)[1] == "2160p"
+                                                   and STAGE_2160_INTERNAL)) \
         else STAGE_Y4M
     return os.path.join(d, f"{cell}.test{TEST_FRAMES}.y4m" if TEST_FRAMES
                         else f"{cell}.y4m")
@@ -541,7 +552,7 @@ def staged_file(cell):
 
 def staged_now(cell):
     """The staged file this run reads for the cell (with --staged), else None."""
-    if not (STAGED and is_full(cell)):
+    if not ((STAGED or cell in AUTO_STAGED) and is_full(cell)):
         return None
     p = staged_file(cell)
     if not p:
@@ -2065,6 +2076,8 @@ def feed_guard(cell, cfgs, start=0, count=None, workers=1, pinned=()):
           f"encoder is expected at {exp:.1f} fps ({src}, {cfg}); needs "
           f"{FEED_MARGIN:g}x = {FEED_MARGIN*exp:.1f}: "
           f"{'OK' if free_ok else 'FEEDER-BOUND'}", flush=True)
+    if not ok and not over and auto_stage(cell, "the feeder check"):
+        return feed_guard(cell, cfgs, start, count, workers, pinned)
     if not ok:
         if over:
             print("  LF_FEEDER_OK=1: timing anyway, and the record says so",
@@ -2075,6 +2088,52 @@ def feed_guard(cell, cfgs, start=0, count=None, workers=1, pinned=()):
                      "Stage it (`stage-excerpt`, then `--staged`), or set "
                      "LF_FEEDER_OK=1 to time a void number knowingly.")
     return rec_
+
+
+def auto_stage(cell, why):
+    """Stage `cell` on the internal disk so its legs read a Y4M at block-copy
+    speed (see AUTO_STAGE). False when it cannot be staged: not an excerpt, already
+    staged, or auto-staging is off. A staged file that is already there is used
+    and left alone; only a file this run made is removed after the cell."""
+    global _STAGE_ALL_INTERNAL
+    src = uncropped(cell) or cell
+    if not AUTO_STAGE or cell in AUTO_STAGED or kind(src) != "x10" \
+            or not master_fed(cell):
+        return False
+    print(f"  {cell}: AUTO-STAGE ({why}): the master decode cannot outrun the "
+          f"encoder by {FEED_MARGIN:g}x, so {src} is staged on {STAGE_INTERNAL}",
+          flush=True)
+    had = staged_file(src)
+    if not had:
+        _STAGE_ALL_INTERNAL = True
+        try:
+            do_stage_excerpt(src)
+        finally:
+            _STAGE_ALL_INTERNAL = False
+    p = staged_file(src)
+    if not p:
+        sys.exit(f"longform: {cell}: staging {src} did not verify; not timing it")
+    AUTO_STAGED[cell] = None if had else p
+    return True
+
+
+def auto_unstage(cell):
+    p = AUTO_STAGED.pop(cell, None)
+    if p and not AUTO_STAGE_KEEP and os.path.exists(p):
+        os.remove(p)
+        print(f"  {cell}: removed the auto-staged {p}", flush=True)
+
+
+def outran(cell, fc, frames, walls):
+    """True when the leg's faster encoder (walls: seconds per arm for `frames`
+    frames) came within FEED_MARGIN of the feeder rate measured before it."""
+    fast = frames / max(min(walls), 1e-3)
+    if fc["feed_fps"] >= FEED_MARGIN * fast:
+        return False
+    print(f"  {cell}: FEEDER-BOUND after the leg: the faster encoder ran at "
+          f"{fast:.1f} fps, the feeder at {fc['feed_fps']:.1f}; needs "
+          f"{FEED_MARGIN:g}x", flush=True)
+    return True
 
 
 def read_baseline(cell, start=0, count=None, workers=1, pinned=False):
@@ -2228,6 +2287,11 @@ def do_timed(cell):
         shutil.rmtree(wd, ignore_errors=True)
     out["timed_dsize_pct"] = 100 * (med([m[5] for m in out["ours"]["default"]]) /
                                     med([m[5] for m in out["x264"]["default"]]) - 1)
+    if outran(cell, fc, frames, [med([m[0] for m in out[a]["default"]])
+                                 for a in ("ours", "x264")]):
+        if auto_stage(cell, "the timed leg"):
+            return do_timed(cell)
+        out["feeder_bound"] = True
     out["read"] = read_baseline(cell, workers=w)
     print(f"  {cell:<22}read  baseline {out['read'][0]:8.2f}s wall "
           f"{out['read'][1]:9.2f}s cpu  {frames/out['read'][0]:7.1f} fps", flush=True)
@@ -2300,6 +2364,14 @@ def do_purec(cell):
                 out.setdefault("read_pinned", []).append(read_baseline(cell, s, n, w, pinned=True))
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+    nwin = sum(n for _, n in wins)
+    walls = [sum(med([m[0] for m in ms]) for ms in out[g][a])
+             for g in out if g in ("G1", "G2", "S1") and out[g].get("ours")
+             for a in ("ours", "x264")]
+    if walls and outran(cell, fc, nwin, walls):
+        if auto_stage(cell, "the pure-C leg"):
+            return do_purec(cell)
+        out["feeder_bound"] = True
     put(f"purec:{cell}:{PRESET}{TSUFFIX}{feed_tag(cell)}{ident(X264_C, X264)}", out)
 
 
@@ -4850,7 +4922,10 @@ def main():
     if not fn:
         sys.exit(__doc__)
     for c in cells:
-        fn(c)
+        try:
+            fn(c)
+        finally:
+            auto_unstage(c)
 
 
 if __name__ == "__main__":
