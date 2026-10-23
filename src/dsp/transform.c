@@ -1455,7 +1455,7 @@ int y264_chroma_dc420_rt(const dctcoef dc[4], dctcoef lev[4], dctcoef rdc[4], in
     int qbits = 15 + qp / 6;
     int m = qp % 6;
     int mf = w0 == 16 ? MF[m][0] : (MF[m][0] * 16 + (w0 >> 1)) / w0;
-    int f2 = 2 * ((1 << qbits) / (intra ? 3 : 6));
+    int f2 = 2 * ((1 << qbits) / (intra == 2 ? 2 : intra ? 3 : 6));
     int a = dc[0] + dc[1], b = dc[2] + dc[3];
     int c = dc[0] - dc[1], d = dc[2] - dc[3];
     int h[4] = { a + b, c + d, a - b, c - d };
