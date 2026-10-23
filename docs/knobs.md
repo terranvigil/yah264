@@ -15,7 +15,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_AQ_DC` | = rate mode: 1.3 uncapped CRF, 1.04 capped CRF or bitrate target | src/encoder/encoder.c:5647 |
 | `Y264_AQ_MODE` | 2 | src/encoder/mbcode.c:311 |
 | `Y264_B8_DIRECT` | 1 | src/encoder/mbcode.c:7375 |
-| `Y264_B8_QGATE` | 10 | src/encoder/mbcode.c:7541 |
+| `Y264_B8_QGATE` | 10 | src/encoder/mbcode.c:7548 |
 | `Y264_BAND_ROWS` | 2 | src/encoder/mbcode.c:5759 |
 | `Y264_BSKIP_SCREEN` | 1 | src/encoder/encoder.c:4583 |
 | `Y264_B_8X8` | 1 | src/encoder/mbcode.c:7366 |
@@ -61,11 +61,11 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_AUTO_THREADS` | ? | src/encoder/encoder.c:3955 |
 | `Y264_AUTO_THREADS_MAX` | ? | src/encoder/encoder.c:3961 |
 | `Y264_B8_STAT` | 0 | src/encoder/mbcode.c:7439 |
-| `Y264_BDIR_STAT` | 0 | src/encoder/mbcode.c:8404 |
-| `Y264_BITSTAT` | 0 | src/encoder/mbcode.c:9982 |
+| `Y264_BDIR_STAT` | 0 | src/encoder/mbcode.c:8411 |
+| `Y264_BITSTAT` | 0 | src/encoder/mbcode.c:10025 |
 | `Y264_BLATE_STAT` | ? | src/encoder/encoder.c:5511 |
-| `Y264_BPROF` | 0 | src/encoder/mbcode.c:8379 |
-| `Y264_BPROF2` | 0 | src/encoder/mbcode.c:7740 |
+| `Y264_BPROF` | 0 | src/encoder/mbcode.c:8386 |
+| `Y264_BPROF2` | 0 | src/encoder/mbcode.c:7747 |
 | `Y264_BSKIP_PROBE` | 0 | src/encoder/encoder.c:4576 |
 | `Y264_B_REF_ET_STAT` | 0 | src/encoder/mbcode.c:6943 |
 | `Y264_CABAC_TRACE` | ? | src/encoder/cabac.c:69 |
@@ -86,7 +86,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_EST_PROF` | 0 | src/encoder/mbcode.c:4563 |
 | `Y264_EST_SCRTRACE` | 0 | src/encoder/mbcode.c:4574 |
 | `Y264_EST_TWICE` | 0 | src/encoder/mbcode.c:5551 |
-| `Y264_FLATSKIP_STAT` | 0 | src/encoder/mbcode.c:8186 |
+| `Y264_FLATSKIP_STAT` | 0 | src/encoder/mbcode.c:8193 |
 | `Y264_FQP_TRACE` | 0 | src/encoder/encoder.c:1170 |
 | `Y264_GOP_FORCE_G` | ? | cli/yah264_cli.c:2939 |
 | `Y264_GOP_FORCE_K` | ? | cli/yah264_cli.c:2940 |
@@ -122,10 +122,10 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_NR_TRACE` | 0 | src/encoder/encoder.c:2057 |
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:111 |
 | `Y264_NTP_STATS` | 0 | src/common/threadpool.c:82 |
-| `Y264_PPRUNE_PROBE` | 0 | src/encoder/mbcode.c:8444 |
+| `Y264_PPRUNE_PROBE` | 0 | src/encoder/mbcode.c:8451 |
 | `Y264_PROBE_DEADZONE` | 0 | src/encoder/mbcode.c:1096 |
-| `Y264_PROBE_TRELLIS` | 1 | src/encoder/mbcode.c:11026 |
-| `Y264_PSKIP_CENSUS` | 0 | src/encoder/mbcode.c:8541 |
+| `Y264_PROBE_TRELLIS` | 1 | src/encoder/mbcode.c:11069 |
+| `Y264_PSKIP_CENSUS` | 0 | src/encoder/mbcode.c:8548 |
 | `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:6529 |
 | `Y264_QP_TRACE` | 0 | src/encoder/encoder.c:3193 |
 | `Y264_RCP_DBG` | 0 | src/encoder/rate.c:2559 |
@@ -133,7 +133,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_RC_PLAY_K` | 1.0 | src/encoder/rcreplay.h:176 |
 | `Y264_RC_REC` | ? | src/encoder/rcreplay.h:156 |
 | `Y264_RC_TRACE` | ? | src/encoder/rate.c:562 |
-| `Y264_RD_ABORT_STAT` | 0 | src/encoder/mbcode.c:7780 |
+| `Y264_RD_ABORT_STAT` | 0 | src/encoder/mbcode.c:7787 |
 | `Y264_RESCENSUS` | 0 | src/encoder/mbcode.c:4474 |
 | `Y264_RESPROF` | 0 | src/encoder/mbcode.c:4549 |
 | `Y264_SIMD_FORCE` | unset | src/common/cpu.c:212 |
@@ -157,7 +157,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_VBV_STAT` | 0 | src/encoder/rate.c:2567 |
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:892 |
 
-## arm (27)
+## arm (28)
 
 | knob | default | reader |
 |---|---|---|
@@ -167,6 +167,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_AQ_DARK_M` | ? | src/encoder/mbcode.c:416 |
 | `Y264_AQ_DARK_V` | ? | src/encoder/mbcode.c:417 |
 | `Y264_BAND_PRECOMP` | 0 | src/encoder/mbcode.c:5780 |
+| `Y264_B_RECT` | 0 | src/encoder/mbcode.c:7535 |
 | `Y264_GPU_LOWRES` | 0 | src/encoder/gpu.c:15 |
 | `Y264_HW` | off | src/encoder/encoder.c:17772 |
 | `Y264_LR_QPEL_AVG` | 0 | src/encoder/encoder.c:7026 |

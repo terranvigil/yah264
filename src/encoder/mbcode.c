@@ -7529,6 +7529,13 @@ static void b8_stat_register(void)
  * n = 0 is inert (any imbalance at all admits, which is almost every MB); the
  * knob is the slack in sixteenths. Not byte-identical -- it is a quality/wall
  * trade and is priced on the CRF band like every other one. */
+static int b_rect_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_B_RECT"); v = e ? atoi(e) != 0 : 0; }
+    return v;
+}
+
 static int b8_qgate(void)
 {
     static int v = -1;
@@ -9161,9 +9168,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         pixel ppt[3][256], cpt[3][2][256];
         int ptsatd[3] = { 0, 0x7fffffff, 0x7fffffff }, ptcombo[3] = { 0, 0, 0 };
         /* B_8x8 first, so 16x8/8x16 can be ESTIMATED from its quadrants rather
- * than searched cold: four cold searches per macroblock is what
- * makes them cost 26-38% wall
- * for -0.79% BD, which is why they are off. */
+ * than searched cold: four cold searches per macroblock cost 26-38% wall. */
         /* --- direct's SATD, the screen the 16x16 modes ride, and their RD, all
  * BEFORE any subpartition analysis. The reason the order
  * matters is the skip return: a macroblock that leaves here has cost us
@@ -9306,13 +9311,51 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                 mvL0, r0, mvL1, &i8, &b8p);
             b8_have = 1;
         }
-        /* B 16x8/8x16 OFF at the medium tier: the rect searches are ~2/3 of
- * all subpel probe pixels (4 full hex+subpel searches per B MB before
- * gating), and the A/B measures 1.14-1.18x
- * pure-C wall for BD -0.26% VMAF-NEG (BETTER, 6/7 clips improve) -- the
- * modes' mv/mb-type overhead outweighed their prediction gain at this
- * operating point. The opt-in that restored them was removed on 2026-10-04 (it was kept off
- * on 2026-08-17). */
+        /* 16x8 or 8x16, searched from the 16x16 winners. The orientation is
+ * the one along which the 16x16 winner's error splits most unevenly
+ * (four satd8x8 of its prediction, top/bottom against left/right), and
+ * the partition's two halves are searched seeded with the winners' list-0
+ * reference and vectors, so one orientation costs two seeded searches
+ * per list instead of the cold multi-reference pair. Each uniform combo
+ * (L0, L1, Bi) is ranked by SATD plus mv, ref and mb_type rate, and the
+ * best one joins the RD screen. VMAF v1 reads the split's prediction gain
+ * where VMAF-NEG did not: against the reference at medium, stefan +2.4%
+ * to +0.8%, tempete +1.7% to +0.3%, bus -4.2% to -6.0%, every clip of the
+ * band better, but for 13-21% more instructions, so it is off by default
+ * (Y264_B_RECT=1 arms it). Both orientations kept a little more (stefan
+ * +1.0%) for 31-33%; half-pel-only halves, an imbalance gate, a 16x16
+ * cost gate and a single combo each gave the gain back about in
+ * proportion to what they saved. */
+        if (b_rect_on()) {
+            const pixel *wp = p16[bw16];
+            long q[4];
+            for (int b = 0; b < 4; b++) {
+                int ox = (b & 1) * 8, oy = (b >> 1) * 8;
+                q[b] = y264_dsp.satd8x8(src + oy * ss + ox, ss, wp + oy * 16 + ox, 16);
+            }
+            long dr = labs(q[0] + q[1] - q[2] - q[3]), dc = labs(q[0] + q[2] - q[1] - q[3]);
+            int bp = dr >= dc ? 1 : 2;
+            const struct bpart_mo *m = &mo_s[bp];
+            search_b_part(f, mbx, mby, bp, mlam, &mo_s[bp], mvL0, r0, mvL1);
+            int r0b = 0, r1b = 0;
+            for (int p = 0; p < 2; p++) {
+                r0b += mvd_bits(m->l0mv[p][0] - m->l0pmv[p][0]) + mvd_bits(m->l0mv[p][1] - m->l0pmv[p][1])
+                     + ref_bits(m->l0ref[p], f->nref);
+                r1b += mvd_bits(m->l1mv[p][0] - m->l1pmv[p][0]) + mvd_bits(m->l1mv[p][1] - m->l1pmv[p][1]);
+            }
+            struct bpart_cache bc;
+            pixel tp[256], tc[2][256];
+            for (int combo = 0; combo < 3; combo++) {
+                build_bpart_pred(f, mbx, mby, bp, combo, m, tp, tc, &bc);
+                /* about 6 bits more mb_type than a 16x16 B mode */
+                int bits = 6 + (combo == 0 ? r0b : combo == 1 ? r1b : r0b + r1b);
+                int c = satd_block(src, ss, tp, 16, 16, 16) + mlam * bits;
+                if (c < ptsatd[bp]) {
+                    ptsatd[bp] = c; ptcombo[bp] = combo;
+                    memcpy(ppt[bp], tp, sizeof tp); memcpy(cpt[bp], tc, sizeof tc);
+                }
+            }
+        }
         for (int bp = 1; bp <= 2; bp++) if (ptsatd[bp] < isi) isi = ptsatd[bp];
         /* sum8 deliberately does NOT join isi. It is the right running best for
  * the rectangular ESTIMATE gate (b8_best), but folding it
@@ -13641,7 +13684,7 @@ void y264_mb_warm_statics(void)
  * class; run it after adding a gate.) */
     (void)b_8x8_on(); (void)b8_direct_on();
     (void)b8_stat_on();
-    (void)b8_qgate();
+    (void)b8_qgate(); (void)b_rect_on();
     (void)flatskip_stat_on(); (void)bdir_stat_on();
     (void)pprune_on(); (void)pcen_on(); (void)tdir_why_on();
     y264_me_warm_statics();     /* + the motion-search env statics */

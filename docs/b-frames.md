@@ -121,7 +121,16 @@ Three things keep it cheap:
 The search runs after the skip exit, so macroblocks that leave as skips never
 pay for it.
 
-16x8 and 8x16 are off at medium. They're searched at `--subme 9` and up.
+### 16x8 and 8x16
+
+Medium searches no rectangular split by default. With `Y264_B_RECT=1`, each B
+macroblock that reaches the RD stage tries one. The orientation is the one along which the 16x16 winner's error splits
+most unevenly: four `satd8x8` of its prediction, top against bottom and left
+against right. Both halves are searched seeded with the 16x16 winners' list-0
+reference and vectors. Each uniform combination (both halves L0, L1 or Bi) is
+ranked by SATD plus motion, reference and mb_type rate, and the best one joins
+the same RD screen as the other candidates. `--subme 9` and up search both
+orientations cold and RD every combination.
 
 ## What we chose and why
 
@@ -135,7 +144,7 @@ pay for it.
 | QGATE 10 over 6 | 6 costs 2-4% of wall against 10's 1.1-1.3%, for about twice the gain, and it overshoots what the quality bar needs. 16 is past the knee (foreman goes positive) |
 | The rate charge with the gate | without it the gate costs half a BD point at its mildest setting. With it, three hundredths |
 | B_8x8 searched after the skip exit | searched before it, 19-30% of all quadrant searches are thrown away by the exit. Quality is the same either way |
-| No 16x8/8x16 at medium | searched cold they cost 26-38% of wall for -0.79% BD |
+| No 16x8/8x16 at medium by default | the one seeded search is worth it on VMAF v1 (against x264 medium: stefan +2.4% to +0.8%, tempete +1.7% to +0.3%, bus -4.2% to -6.0%, every band clip better), but it costs 13% more instructions at CIF and 21% at 1080p, and it would take medium's speed below where it was. Skipping it on blocks whose 16x16 already costs under K lambdas saves speed only by giving back quality in proportion: K 600 costs 2-4% and leaves stefan at +2.5%. Building only the combo that matches the 16x16 winner saves a quarter of the cost and loses almost all of the gain. Searched cold the split costs 26-38% of wall, and both orientations seeded cost 31-33% |
 | Mid-exit on non-reference B's only | reference B errors propagate. Byte-identical on the CRF band, worst +0.89% on the ABR band |
 | Direct-competitive precondition on the exit | without it the exit over-skips at low ABR rates (akiyo +2.21%, park_joy +1.56%) |
 | B intra margin 0.75x | median +0.01% at matched rate, for 0.5-2.5% of wall at 12 threads. Tighter buys nothing more |
