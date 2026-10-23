@@ -39,4 +39,5 @@ the [results page](https://terranvigil.github.io/yah264/results.html).
 
 - [instruments.md](instruments.md): the profilers, oracles and A/B harnesses that exist, by the question they answer. Read it before building a new one.
 - [corpus-sources.md](corpus-sources.md): where the test and tuning clips come from, and why the two corpora stay apart.
+- [vmaf.md](vmaf.md): how we score quality with VMAF v1, why it replaced VMAF-NEG, and how we follow Netflix's usage recommendations.
 - [vmaf-pipeline-audit.md](vmaf-pipeline-audit.md): the check that nothing about our output depresses the VMAF score.

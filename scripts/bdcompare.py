@@ -180,8 +180,11 @@ def _score_put(path, vals):
 
 
 def vmaf_of(bitstream, src_path, work, src_id=None):
-    """VMAF-NEG (and plain VMAF in "both"), plus VMAF v1 and CAMBI when
-    VMAF_V1=1. None when a pass that was asked for failed."""
+    """VMAF v1 and its CAMBI. Under VMAF_GATE=VMAF-NEG, the old VMAF-NEG (and
+    plain VMAF in "both") instead, plus v1 when VMAF_V1=1. None when a pass
+    that was asked for failed."""
+    if GATE == "VMAF-v1":
+        return _v1_of(bitstream, src_path, work, src_id)
     out = _v0_of(bitstream, src_path, work, src_id)
     if out is None or not V1:
         return out
@@ -192,17 +195,18 @@ def vmaf_of(bitstream, src_path, work, src_id=None):
     return out
 
 
-# VMAF v1 (libvmaf 3.x, model v1.0.16) runs as its own pass. It adds what v0
-# cannot see: banding (CAMBI is one of its features), chroma, blockiness and
-# frame rate. It wants a float-enabled libvmaf and SDR scored at 10-bit, so both
-# sides go through a 10-bit conversion, while the v0 pass above stays 8-bit and
-# its numbers stay comparable with every board before it. The model follows
-# the source: the 1080p 3H model below 1440 lines, the 4K 1.5H model at and
-# above, and the high-frame-rate twin of either at 50 fps and up.
+# VMAF v1 (libvmaf 3.x, model v1.0.16) is the quality score (docs/vmaf.md). It
+# sees what v0 cannot: banding (CAMBI is one of its features), chroma,
+# blockiness and frame rate, and its detail feature carries VMAF-NEG's
+# enhancement-gain cap. It wants a float-enabled libvmaf and SDR scored at
+# 10-bit, so both sides go through a 10-bit conversion, and CAMBI is told the
+# encode's real bit depth. The model follows the source: the 1080p 3H model
+# below 1440 lines, the 4K 1.5H model at and above, and the high-frame-rate
+# twin of either at 50 fps and up.
 V1 = os.environ.get("VMAF_V1", "0") == "1"
-# The score a band or ladder gates on. VMAF-NEG until the spec moves; setting
-# it to VMAF-v1 turns the v1 pass on.
-GATE = os.environ.get("VMAF_GATE", "VMAF-NEG")
+# The score a band or ladder gates on. VMAF-NEG remains only to reproduce
+# numbers measured on it; under it, VMAF_V1=1 adds the v1 pass.
+GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
 if GATE not in ("VMAF-NEG", "VMAF-v1"):
     sys.exit(f"bdcompare: VMAF_GATE '{GATE}' is not VMAF-NEG or VMAF-v1")
 V1 = V1 or GATE == "VMAF-v1"
@@ -230,8 +234,19 @@ def v1_model(src_path):
     return os.path.join(V1_MODELS, f"vmaf_{V1_VER}{'_hfr' if hfr else ''}", name)
 
 
+def _enc_bitdepth(bitstream):
+    """The stream's coded bit depth, for CAMBI: v1 is scored at 10-bit, and
+    CAMBI judges banding against the depth the encode really had."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=pix_fmt", "-of", "csv=p=0", bitstream],
+                       capture_output=True, text=True)
+    pf = r.stdout.strip()
+    return 10 if "10" in pf else (12 if "12" in pf else 8)
+
+
 def _v1_of(bitstream, src_path, work, src_id=None):
     model = v1_model(src_path)
+    ebd = _enc_bitdepth(bitstream)
     if not os.path.exists(model) or not os.access(V1_BIN, os.X_OK):
         sys.exit(f"bdcompare: VMAF_V1=1 needs {V1_BIN} and {model}")
     want = ["VMAF-v1", "CAMBI"]
@@ -239,7 +254,7 @@ def _v1_of(bitstream, src_path, work, src_id=None):
     if SCORE_CACHE:
         base = _score_path(bitstream, src_path, src_id)
         if base:
-            k = hashlib.sha1(f"{base}|v1|{os.path.basename(model)}".encode()).hexdigest()
+            k = hashlib.sha1(f"{base}|v1|{os.path.basename(model)}|eb{ebd}".encode()).hexdigest()
             cpath = os.path.join(os.path.dirname(os.path.dirname(base)), k[:2], k + ".json")
             hit = _score_get(cpath, want)
             if hit is not None:
@@ -259,7 +274,7 @@ def _v1_of(bitstream, src_path, work, src_id=None):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
     r = sh(f'{shlex.quote(V1_BIN)} -q -r "{ref}" -d "{dec}" --json -o "{js}" '
-           f'--model path={shlex.quote(model)}:name=vmaf_v1 {sub} {_VMAF_T}')
+           f'--model path={shlex.quote(model)}:name=vmaf_v1:cambi.enc_bitdepth={ebd} {sub} {_VMAF_T}')
     conv.kill()
     conv.wait()
     for p in (ref, dec):
@@ -546,7 +561,8 @@ def main():
 
     if args.vmaf:
         print(f"vmaf scores: {SCORE_STATS['miss']} computed, "
-              f"{SCORE_STATS['hit']} from the score cache, models {MODELS}")
+              f"{SCORE_STATS['hit']} from the score cache, "
+              + (f"VMAF {V1_VER}" if GATE == "VMAF-v1" else f"models {MODELS}"))
     table = {}
     for clip, tag, q, size, m in metrics:
         if m is None:

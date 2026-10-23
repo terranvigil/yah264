@@ -20,12 +20,15 @@ Usage:
   python3 scripts/hf_probe.py bus_cif 100 36,42
   ARMS="next-vs|next-med|x264-med" python3 scripts/hf_probe.py foreman_cif 100 42
   NEXT_EXTRA="--subme 9" X264_EXTRA="--trellis 0" ... to perturb either side.
+  HF_VMAF=1 adds a VMAF v1 column (scripts/bdcompare.py's v1 path).
 
 The MB grid comes from `ffmpeg -debug mb_type` (verified printing on ffmpeg 7/8;
 the probe hard-fails if no grid is found rather than reporting all-unknown).
 """
 import os, re, subprocess, sys
 import numpy as np
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bdcompare                                                # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRATCH = os.environ.get("HF_SCRATCH", "/tmp/hf_probe")
@@ -138,16 +141,16 @@ def encode(arm, clip, frames, qp, out):
     run([c for c in cmd if c])
     return os.path.getsize(out)
 
-def vmaf_neg(bitstream, src):
-    dec = bitstream + ".y4m"
-    js = bitstream + ".json"
-    run([FFMPEG, "-v", "error", "-y", "-i", bitstream, "-pix_fmt", "yuv420p", dec])
-    run([os.environ.get("VMAF", "vmaf"), "-r", src, "-d", dec, "--json", "-o", js,
-         "--model", "version=vmaf_v0.6.1neg:name=neg"])
-    import json
-    v = json.load(open(js))["pooled_metrics"]["neg"]["mean"]
-    os.unlink(dec); os.unlink(js)
-    return v
+def vmaf_v1(bitstream, src, frames):
+    # a prefix of the source, so the reference ends where the encode does
+    ref = bitstream + ".ref.y4m"
+    run([FFMPEG, "-v", "error", "-y", "-i", src, "-frames:v", str(frames), ref])
+    r = bdcompare._v1_of(bitstream, ref, SCRATCH,
+                         src_id=bdcompare.src_identity(src, f"f{frames}"))
+    os.unlink(ref)
+    if r is None:
+        sys.exit(f"hf_probe: VMAF v1 failed on {bitstream}")
+    return r["VMAF-v1"]
 
 def main():
     clip, frames, qps = sys.argv[1], int(sys.argv[2]), [int(q) for q in sys.argv[3].split(",")]
@@ -162,7 +165,7 @@ def main():
     moving = md > 2.0
     score = os.environ.get("HF_VMAF") == "1"
     print(f"# {clip} {w}x{h} {frames}f  bands: LF u+v 1-2, MF 3-6, HF 7-14 (8x8 DCT, luma)")
-    print(f"# arm qp bits psnrY{' NEG   ' if score else ''} | AC LF MF HF | HF@inter HF@skip HF@moving HF@static | skip% intra%")
+    print(f"# arm qp bits psnrY{' v1    ' if score else ''} | AC LF MF HF | HF@inter HF@skip HF@moving HF@static | skip% intra%")
     for qp in qps:
         for arm in arms:
             bs = os.path.join(SCRATCH, f"{clip}_{arm}_{qp}.264")
@@ -191,8 +194,8 @@ def main():
             split = [ret(BANDS["HF"], c8 == 1), ret(BANDS["HF"], c8 == 0),
                      ret(BANDS["HF"], m8), ret(BANDS["HF"], ~m8)]
             shares = [(cls[1:] == 0).mean() * 100, (cls[1:] == 2).mean() * 100]
-            neg = f" {vmaf_neg(bs, src):6.2f}" if score else ""
-            print(f"{arm:9s} {qp:2d} {bits:9d} {psnr:6.2f}{neg} | "
+            v1 = f" {vmaf_v1(bs, src, frames):6.2f}" if score else ""
+            print(f"{arm:9s} {qp:2d} {bits:9d} {psnr:6.2f}{v1} | "
                   + " ".join(f"{v:.3f}" for v in row) + " | "
                   + " ".join(f"{v:.3f}" for v in split) + " | "
                   + f"{shares[0]:5.1f} {shares[1]:4.1f}")

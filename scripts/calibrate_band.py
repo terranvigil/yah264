@@ -2,12 +2,12 @@
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Find, per clip, the ABR ladder whose x264-medium operating points land inside
-the VMAF-NEG 88-94 band.  Fixed multipliers off a 'calibrated centre' do NOT do
+the 88-94 band of the gate score (bdcompare's VMAF_GATE, VMAF v1 by default).  Fixed multipliers off a 'calibrated centre' do NOT do
 this -- they put akiyo/touchdown at saturation and sintel below the band, which
 makes the BD fit degenerate (touchdown read +341269%).
 
-Method: sweep x264 CRF, measure (bitrate, VMAF-NEG) for each, then interpolate
-the bitrates at four VMAF-NEG targets spanning the band.  The ladder is defined
+Method: sweep x264 CRF, measure (bitrate, score) for each, then interpolate
+the bitrates at four score targets spanning the band.  The ladder is defined
 by the REFERENCE encoder's own curve, which is what 'calibrated band' means.
 
 A run costs hours and the ladders are gate inputs, so the tree's copies are
@@ -53,9 +53,9 @@ def probe(clip, crf, work, frames):
     kbps = bits / (frames / fps) / 1000.0
     v = bd.vmaf_of(out, src, work)
     os.unlink(out)
-    if not v or "VMAF-NEG" not in v:
+    if not v or bd.GATE not in v:
         return None
-    return (crf, kbps, v["VMAF-NEG"])
+    return (crf, kbps, v[bd.GATE])
 
 
 _FPS = {}
@@ -93,7 +93,7 @@ def interp(pts, target):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="calibrate_band.py",
-        description="Solve the band (VMAF-NEG 88-94) ABR ladders onto x264 medium's "
+        description="Solve the band (88-94 on the gate score) ABR ladders onto x264 medium's "
                     "own CRF curve. Hours of encodes; nothing is written until they "
                     "finish.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -193,7 +193,7 @@ def main(argv=None):
                 results.setdefault(clip, []).append(r)
 
     ladders = {}
-    print("=== x264 medium curve (crf -> kbps / VMAF-NEG) ===")
+    print(f"=== x264 medium curve (crf -> kbps / {bd.GATE}) ===")
     for clip in args.clip_list:
         pts = sorted(results.get(clip, []), key=lambda x: x[1])
         if not pts:
@@ -212,7 +212,7 @@ def main(argv=None):
         else:
             lo = min(v for _, v in curve); hi = max(v for _, v in curve)
             print(f"    !! cannot span {TARGETS[0]}-{TARGETS[-1]}: "
-                  f"x264 VMAF-NEG range is {lo:.2f}-{hi:.2f}")
+                  f"x264 {bd.GATE} range is {lo:.2f}-{hi:.2f}")
     print()
     print("=== band-calibrated ABR ladders ===")
     for c, l in ladders.items():

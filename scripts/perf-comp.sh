@@ -4,7 +4,7 @@
 #
 # perf-comp.sh <clip.y4m> [crf] [seconds] -- head-to-head speed + quality of
 # yah264 vs x264 at matched settings. Trims the clip to a known frame count,
-# encodes it with both, wall-clocks each, and scores VMAF (subsampled to ~5fps).
+# encodes it with both, wall-clocks each, and scores VMAF v1 on every frame.
 #
 # RATE CONTROL. The [crf] argument is used ONLY when neither YAH264_ARGS nor
 # X264_ARGS selects a rate: pass --bitrate through those (perf-comp-set.sh does)
@@ -39,7 +39,7 @@
 #
 # Prints:
 #   yah264 took A s (XX fps),  x264 took B s (YY fps)
-#   yah264 vmaf is xxx,  x264 vmaf is yyy
+#   yah264 VMAF-v1 is xxx,  x264 VMAF-v1 is yyy
 #   yah264 psnr-y is xx.xx dB,  x264 psnr-y is yy.yy dB
 #
 # PSNR-Y IS A FLOOR, NOT A DECISION METRIC (2026-09-14, owner). It is scored
@@ -56,7 +56,9 @@
 #   X264_ASM     optimized x264 (default ../x264/x264-asm, NEON)
 #   X264_C       pure-C x264    (default ../x264/x264-noasm, cpu-caps none)
 #   X264         override either (wins over the mode-selected default)
-#   VMAF         libvmaf CLI    (default 'vmaf')
+#   VMAF_V1_BIN  float-enabled libvmaf 3.x CLI (default ~/.local/opt/vmaf-v1/bin/vmaf;
+#                the Homebrew vmaf cannot load the v1 models)
+#   VMAF_V1_MODELS  v1 model directory (default ~/.local/share/vmaf/model)
 #   THREADS      threads for both encoders (default: online CPU count)
 #   YAH264_ARGS extra/replacement yah264 flags (default: --cabac --bframes 2)
 #   X264_ARGS    extra/replacement x264 flags     (default: --bframes 2 --tune psnr:off)
@@ -82,7 +84,8 @@ YAH264="${YAH264:-$root/build/cli/yah264}"
 #   x264-noasm-autovec: configure --disable-asm ..., strip -fno-tree-vectorize from config.mak, make
 X264_ASM="${X264_ASM:-$root/../x264/x264-asm}"
 X264_C="${X264_C:-$root/../x264/x264-noasm-autovec}"
-VMAF="${VMAF:-vmaf}"
+VMAF="${VMAF_V1_BIN:-$HOME/.local/opt/vmaf-v1/bin/vmaf}"
+VMAF_MODELS="${VMAF_V1_MODELS:-$HOME/.local/share/vmaf/model}"
 THREADS="${THREADS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 # MATCHED-CONFIG DEFAULTS (fixed 2026-07-15, two sessions). The old defaults ran
 # yah264 with NO --preset -- its subme-10 PLACEBO default -- vs x264's medium
@@ -162,6 +165,20 @@ import sys
 fps, want = float(sys.argv[1]), float(sys.argv[2])
 print(1 if want <= 0 else max(1, int(round(fps / want))))" "$fps" "$VMAF_FPS")
 
+# The VMAF v1 model follows the source (docs/vmaf.md): the 3H model below 1440
+# lines, the 4K 1.5H model at and above, and the high-frame-rate twin of
+# either at 50 fps and up. Both sides are scored at 10-bit 4:2:0, so the
+# reference is converted once here and every decode below lands at 10-bit too.
+height=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$ref")
+v1model=$(python3 -c "
+import sys
+h, fps, d = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
+hfr = '_hfr' if fps >= 50 else ''
+print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h >= 1440 else '3d0h'}.json\")" \
+    "$height" "$fps" "$VMAF_MODELS")
+[ -f "$v1model" ] || { echo "perf-comp: VMAF v1 model not found: $v1model" >&2; exit 2; }
+ffmpeg -v error -y -i "$ref" -pix_fmt yuv420p10le -strict -1 "$wd/ref10.y4m"
+
 # WHICH RATE-CONTROL MODE ARE WE ACTUALLY MEASURING? This script used to append
 # `--crf $crf` to BOTH command lines unconditionally, and callers then added
 # `--bitrate` on top via YAH264_ARGS/X264_ARGS (perf-comp-set.sh does exactly
@@ -226,7 +243,7 @@ vbv_buf=$(printf '%s\n' "$YAH264_ARGS" | sed -n 's/.*--vbv-bufsize \([0-9]*\).*/
 
 # x264-side baseline cache: the reference numbers (seconds/vmaf/bytes) are a pure
 # function of (x264 binary, clip, frames, rate config, threads, runs, vmaf
-# sampling), so cache them and only re-measure yah264 on repeat runs. Keyed on
+# sampling, vmaf model), so cache them and only re-measure yah264 on repeat runs. Keyed on
 # the binary's md5 -- a rebuilt x264 invalidates itself. Y264_REFENC_CACHE=0
 # bypasses (and refreshes). Disabled when OUTDIR wants the x264.mp4 artifacts.
 cachedir="$root/tests/.perfcache"
@@ -234,7 +251,7 @@ xkey=""
 if [ "${Y264_REFENC_CACHE:-1}" = 1 ] && [ -z "${OUTDIR:-}" ]; then
     # rc_mode is in the key because it changes which rate flag x264 is handed;
     # without it a pre-2026-08-11 CRF entry can answer an ABR question.
-    xkey=$(python3 - "$X264" "$(basename "$clip")" "$N" "$crf" "$X264_ARGS" "$THREADS" "${RUNS:-1}" "$subsample" "$rc_mode" "$x_rc" <<'KEY'
+    xkey=$(python3 - "$X264" "$(basename "$clip")" "$N" "$crf" "$X264_ARGS" "$THREADS" "${RUNS:-1}" "$subsample" "$rc_mode" "$x_rc" "vmaf_v1:$(basename "$v1model")" <<'KEY'
 import hashlib, sys
 h = hashlib.md5()
 h.update(open(sys.argv[1], 'rb').read())
@@ -447,8 +464,11 @@ $(timed2 "$n_cmd" "$x_cmd")
 EOF
 fi
 
-ffmpeg -v error -y -i "$wd/next.264" -pix_fmt yuv420p "$wd/next.y4m"
-[ "$x_cached" = 1 ] || ffmpeg -v error -y -i "$wd/x264.264"  -pix_fmt yuv420p "$wd/x264.y4m"
+# passthrough, so the decoder's frames reach libvmaf one for one: never dropped,
+# never duplicated to fill a guessed frame rate
+ffmpeg -v error -y -i "$wd/next.264" -fps_mode passthrough -pix_fmt yuv420p10le -strict -1 "$wd/next.y4m"
+[ "$x_cached" = 1 ] || ffmpeg -v error -y -i "$wd/x264.264" -fps_mode passthrough \
+    -pix_fmt yuv420p10le -strict -1 "$wd/x264.y4m"
 
 n_bytes=$(wc -c < "$wd/next.264")
 [ "$x_cached" = 1 ] || x_bytes=$(wc -c < "$wd/x264.264")
@@ -462,6 +482,10 @@ n_bytes=$(wc -c < "$wd/next.264")
 # and off (checked to nine decimals on a CIF pair), so the dVMAF leg reproduces
 # to the digit across this change rather than "within noise".
 #
+# Both sides are 10-bit here, so the PSNR is on the 10-bit scale; the 8-bit
+# source shifted up two bits puts it within a few hundredths of a dB of the
+# 8-bit reading, and the same on both arms, so the delta is unchanged.
+#
 # It is scored on exactly the frames VMAF is scored on, because --subsample
 # applies to every feature in the run. That matters: a PSNR read over a
 # different frame set than the VMAF beside it would let the two disagree for a
@@ -471,22 +495,28 @@ n_bytes=$(wc -c < "$wd/next.264")
 # SSIM is NOT added. The owner's form is "SSIM-Y printed beside it where the
 # memo already has it", and nothing in this tree scores SSIM -- adding
 # --feature float_ssim would be a new measurement with no bar behind it.
-vmaf_of() {  # <decoded.y4m> -> "mean VMAF-NEG (v0.6.1neg)  mean PSNR-Y (dB)"
-    # NEG, the same model every other quality read in the tree uses (ffboard,
-    # bd_at_rate, the site): the default model rewards sharpening an encoder
-    # can do for free, NEG does not.
-    "$VMAF" -r "$ref" -d "$1" --subsample "$subsample" --feature psnr \
-        --model version=vmaf_v0.6.1neg:name=vmaf --json -o "$wd/v.json" >/dev/null 2>&1
+enc_bitdepth() {  # <bitstream> -> the coded bit depth, which CAMBI judges banding against
+    case "$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt -of csv=p=0 "$1")" in
+        *12*) echo 12 ;; *10*) echo 10 ;; *) echo 8 ;;
+    esac
+}
+vmaf_of() {  # <decoded.y4m> <bitstream> -> "mean VMAF v1  mean PSNR-Y (dB)"
+    # v1, the one quality score in the tree (docs/vmaf.md); its detail feature
+    # carries the enhancement-gain cap, so sharpening an encoder can do for
+    # free does not score.
+    "$VMAF" -r "$wd/ref10.y4m" -d "$1" --subsample "$subsample" --feature psnr \
+        --model "path=$v1model:name=vmaf_v1:cambi.enc_bitdepth=$(enc_bitdepth "$2")" \
+        --json -o "$wd/v.json" >/dev/null 2>&1
     python3 -c "import json,sys
 p = json.load(open(sys.argv[1]))['pooled_metrics']
-print(f\"{p['vmaf']['mean']:.3f} {p['psnr_y']['mean']:.3f}\")" "$wd/v.json"
+print(f\"{p['vmaf_v1']['mean']:.3f} {p['psnr_y']['mean']:.3f}\")" "$wd/v.json"
 }
 read -r n_vmaf n_psnr <<EOF
-$(vmaf_of "$wd/next.y4m")
+$(vmaf_of "$wd/next.y4m" "$wd/next.264")
 EOF
 if [ "$x_cached" = 0 ]; then
     read -r x_vmaf x_psnr <<EOF
-$(vmaf_of "$wd/x264.y4m")
+$(vmaf_of "$wd/x264.y4m" "$wd/x264.264")
 EOF
     if [ -n "$xkey" ]; then
         mkdir -p "$cachedir"
@@ -530,7 +560,7 @@ dpy = (npy - xpy) if (npy is not None and xpy is not None) else None
 def kbps(b): return b*8/1000.0/(N/fps)
 print()
 print(f"yah264 took {ns:.2f} s ({N/ns:.1f} fps),  x264 took {xs:.2f} s ({N/xs:.1f} fps)")
-print(f"yah264 vmaf is {nv:.2f},  x264 vmaf is {xv:.2f}")
+print(f"yah264 VMAF-v1 is {nv:.2f},  x264 VMAF-v1 is {xv:.2f}")
 if npy is not None:
     print(f"yah264 psnr-y is {npy:.2f} dB,  "
           + (f"x264 psnr-y is {xpy:.2f} dB" if xpy is not None
@@ -553,7 +583,7 @@ print()
 # line with positional seds, so a new term inserted between the existing ones
 # would have to be proved harmless for each of them; appended, the VMAF and
 # size patterns cannot see it at all and the old columns are untouched.
-print(f"[{clip}]  speed: x264 is {ns/xs:.2f}x faster   quality: yah264 {nv-xv:+.2f} VMAF   "
+print(f"[{clip}]  speed: x264 is {ns/xs:.2f}x faster   quality: yah264 {nv-xv:+.2f} VMAF-v1   "
       f"size: yah264 {nb/xb*100-100:+.1f}%   psnr-y: yah264 "
       + (f"{dpy:+.2f} dB" if dpy is not None else "n/a dB"))
 

@@ -140,7 +140,7 @@ def main():
         ns, rs = speed_for_preset(p, args.speed_clip, args)
         cells, vals = [], []
         for c in clips:
-            v = bd.get(c, {}).get(os.environ.get("VMAF_GATE", "VMAF-NEG"))
+            v = bd.get(c, {}).get(os.environ.get("VMAF_GATE", "VMAF-v1"))
             if v is None:
                 cells.append("n/a")
             else:

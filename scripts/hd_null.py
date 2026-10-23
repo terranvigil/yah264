@@ -61,7 +61,7 @@ def fit(points, pkey, frames, rungs, envs, min_rungs):
     """{clip: [(lib, env, bd), ...]} over every binary that has both curves."""
     curves = {}
     # a VMAF-NEG cell has no gate suffix; a v1 cell ends in ":VMAF-v1" (hd_band._key)
-    gate = os.environ.get("VMAF_GATE", "VMAF-NEG")
+    gate = os.environ.get("VMAF_GATE", "VMAF-v1")
     for k, v in points.items():
         if gate != "VMAF-NEG":
             if not k.endswith(":" + gate):
@@ -143,7 +143,7 @@ def main():
 
     cache = scratch.cache_dir("hdband")
     # a v1 null is its own file: the NEG fit stays what the NEG band reads
-    gate = os.environ.get("VMAF_GATE", "VMAF-NEG")
+    gate = os.environ.get("VMAF_GATE", "VMAF-v1")
     out_path = os.path.join(cache, "null.json" if gate == "VMAF-NEG" else f"null-{gate}.json")
     try:
         stored = json.load(open(out_path))

@@ -72,7 +72,7 @@ ARM_ARGS = os.environ.get("ARM_ARGS", "")
 # dVMAF columns are then NEG deltas. VMAF_MODELS=both restores the plain model.
 MODELS = os.environ.get("VMAF_MODELS", "neg")
 # the BD the band gates on, VMAF-NEG or VMAF-v1 (bdcompare reads the same variable)
-GATE = os.environ.get("VMAF_GATE", "VMAF-NEG")
+GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
 # EARLY STOP on the CRF band of a self-A/B, as in hd_band.py: once one clip
 # reads worse than EARLY_ONE or EARLY_N clips worse than EARLY_SOME (percent),
 # the remaining clips are not run. Never on the ABR band, whose per-clip noise
