@@ -1640,6 +1640,52 @@ static int lambda_trellis(int qp, int intra)
     return sc == 256 ? l : (int)(((long)l * sc + 128) >> 8);
 }
 
+/* The intra trellis lambda on a smooth block. A gentle gradient in a flat
+ * area (a studio wall, a sky) is carried by AC levels of one or two, and the
+ * trellis prices those as bits that buy almost no SSD, so it zeroes them and
+ * the block codes to a flat step: banding. In an I frame over a static
+ * background that step then lasts the whole GOP. The lambda falls linearly
+ * from full at a source variance of Y264_TREL_SMOOTH_V (8-bit scale, default
+ * 8) to zero at a quarter of it, where the trellis keeps the nearest levels.
+ * Against the reference at medium on the 12-clip band (VMAF v1), akiyo goes
+ * from +7.9% to -3.6% and tempete from +2.8% to +1.7%; the HD band reads a
+ * median of +0.02%. A limit of 16 cost sunflower and perseverance 0.55%, and
+ * cutting it in I slices only (Y264_TREL_SMOOTH=2) did no better.
+ * Y264_TREL_SMOOTH=0 turns it off. */
+static int trel_smooth_v(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *on = getenv("Y264_TREL_SMOOTH"), *lim = getenv("Y264_TREL_SMOOTH_V");
+        v = on && atoi(on) == 0 ? 0 : (lim ? atoi(lim) : 8);
+        if (v < 0) v = 0;
+    }
+    return v;
+}
+
+static int trel_smooth_ionly(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *on = getenv("Y264_TREL_SMOOTH"); v = on && atoi(on) == 2; }
+    return v;
+}
+
+static int lambda_trellis_smooth(const y264_frame_t *f, int qp, const pixel *s, int ss, int n)
+{
+    int l = lambda_trellis(qp, 1);
+    int vl = trel_smooth_v();
+    if (vl <= 0 || (trel_smooth_ionly() && f->slice_type != 0)) return l;
+    int64_t sum = 0, sum2 = 0;
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) { int p = s[y * ss + x]; sum += p; sum2 += p * p; }
+    /* n^4 x variance, on the 8-bit scale */
+    int64_t vq = ((int64_t)n * n * sum2 - sum * sum) >> (2 * (Y264_BIT_DEPTH - 8));
+    int64_t n4 = (int64_t)n * n * n * n, hi = vl * n4, lo = hi / 4;
+    if (vq >= hi) return l;
+    if (vq <= lo) return 0;
+    return (int)((l * (vq - lo) + (hi - lo) / 2) / (hi - lo));
+}
+
 /* Motion-search lambda: the standard exponential rate-distortion weight,
  * lambda(qp) = 2^((qp-12)/6), clamped at 1. Doubling every 6 QP is the same
  * relation the quantiser itself follows -- qstep doubles per 6 QP by
@@ -2203,7 +2249,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
             const pixel *bpred = best_pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
             nr_apply(f, coef, 16, 1, 0, 1);
-            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
+            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(f, f->cur_qp, bsrc, stride_s, 4), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
             loc16[by][bx] = (int8_t)(nz > 0);
@@ -2404,7 +2450,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, 0, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, 0, ax, ay - 1, 1);
         nr_apply(f, coef, 16, 1, 0, 0);
-        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
+        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(f, f->cur_qp, src, ss, 4), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
 
         int nz = 0;
         for (int k = 0; k < 16; k++) {
@@ -2552,7 +2598,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
         uint64_t msk;
         int big;
         nr_apply(f, coef, 64, 1, 0, 0);
-        rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
+        rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(f, f->cur_qp, src, ss, 8), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
 
         int nz = __builtin_popcountll(msk);     /* raster nonzeros == scan nonzeros */
         memcpy(r->lev[blk], lev, 64 * sizeof(dctcoef));
@@ -13582,6 +13628,7 @@ void y264_mb_warm_statics(void)
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env();
     (void)cdc_rd_on(); (void)cdc_lam_x256();
+    (void)trel_smooth_v(); (void)trel_smooth_ionly();
     (void)aq_dark_env(0);
     (void)psy_dark_env();
         (void)probe_deadzone_env();
