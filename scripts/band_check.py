@@ -28,7 +28,8 @@ dark frames with faint grain.
 
 Env: WINDOWS (title:frame,...), SRC_DIR, YAH264, X264, ARGS (extra yah264
 arguments), FLAT_MARGIN (0.05), CAMBI_MARGIN (1.0), SIZE_TOL (0.03),
-THREADS (2), OUT (scratch directory, kept).
+THREADS (2), OUT (scratch directory, kept), VMAF_V1 (1 adds VMAF v1 and its
+10-bit CAMBI as two more columns; the verdict stays on the columns above).
 """
 import json, os, re, subprocess, sys, tempfile
 import numpy as np
@@ -45,6 +46,10 @@ CAMBI_MARGIN = float(os.environ.get("CAMBI_MARGIN", "1.0"))
 SIZE_TOL = float(os.environ.get("SIZE_TOL", "0.03"))
 THREADS = os.environ.get("THREADS", "2")
 FRAMES = 96
+V1 = os.environ.get("VMAF_V1", "0") == "1"
+if V1:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import bdcompare
 
 
 def run(cmd):
@@ -119,6 +124,11 @@ def score(src, bs, tag, d):
     r["cambi"] = cambi(src, dec, os.path.join(d, tag + ".cambi.json"))
     r["bytes"] = os.path.getsize(bs)
     os.unlink(dec)
+    if V1:
+        v = bdcompare._v1_of(bs, src, d)
+        if v is None:
+            sys.exit(f"band_check: VMAF v1 failed on {bs}")
+        r["v1"], r["cambi10"] = v["VMAF-v1"], v["CAMBI"]
     return r
 
 
@@ -139,7 +149,8 @@ def main():
     d = os.environ.get("OUT") or tempfile.mkdtemp(prefix="y264bandchk.")
     os.makedirs(d, exist_ok=True)
     print(f"# scratch {d}; margins flat +{FLAT_MARGIN}, cambi +{CAMBI_MARGIN}; args {' '.join(ARGS) or '(default)'}")
-    print(f"# {'window':26s} {'side':6s} {'bytes':>9s} {'flat':>6s} {'keep':>6s} {'dark':>6s} {'cambi':>6s}")
+    print(f"# {'window':26s} {'side':6s} {'bytes':>9s} {'flat':>6s} {'keep':>6s} {'dark':>6s} {'cambi':>6s}"
+          + (f" {'v1':>6s} {'cambi10':>7s}" if V1 else ""))
     fails = 0
     for spec in WINDOWS.split(","):
         title, frame = spec.rsplit(":", 1)
@@ -155,7 +166,8 @@ def main():
         a, b = score(src, ref, name + ".ref", d), score(src, mine, name + ".yah", d)
         for side, r in (("ref", a), ("yah264", b)):
             print(f"  {name:26s} {side:6s} {r['bytes']:9d} {r['flat']:6.3f} {r['keep']:6.3f} "
-                  f"{r['dark']:6.2f} {r['cambi']:6.3f}")
+                  f"{r['dark']:6.2f} {r['cambi']:6.3f}"
+                  + (f" {r['v1']:6.2f} {r['cambi10']:7.3f}" if V1 else ""))
         if abs(ratio - 1) > SIZE_TOL:
             verdict = f"UNMATCHED (size {ratio:.3f} at crf {crf})"
         elif b["flat"] > a["flat"] + FLAT_MARGIN or b["cambi"] > a["cambi"] + CAMBI_MARGIN:

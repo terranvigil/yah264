@@ -180,6 +180,109 @@ def _score_put(path, vals):
 
 
 def vmaf_of(bitstream, src_path, work, src_id=None):
+    """VMAF-NEG (and plain VMAF in "both"), plus VMAF v1 and CAMBI when
+    VMAF_V1=1. None when a pass that was asked for failed."""
+    out = _v0_of(bitstream, src_path, work, src_id)
+    if out is None or not V1:
+        return out
+    v1 = _v1_of(bitstream, src_path, work, src_id)
+    if v1 is None:
+        return None
+    out.update(v1)
+    return out
+
+
+# VMAF v1 (libvmaf 3.x, model v1.0.16) runs as its own pass. It adds what v0
+# cannot see: banding (CAMBI is one of its features), chroma, blockiness and
+# frame rate. It wants a float-enabled libvmaf and SDR scored at 10-bit, so both
+# sides go through a 10-bit conversion, while the v0 pass above stays 8-bit and
+# its numbers stay comparable with every board before it. The model follows
+# the source: the 1080p 3H model below 1440 lines, the 4K 1.5H model at and
+# above, and the high-frame-rate twin of either at 50 fps and up.
+V1 = os.environ.get("VMAF_V1", "0") == "1"
+# The score a band or ladder gates on. VMAF-NEG until the spec moves; setting
+# it to VMAF-v1 turns the v1 pass on.
+GATE = os.environ.get("VMAF_GATE", "VMAF-NEG")
+if GATE not in ("VMAF-NEG", "VMAF-v1"):
+    sys.exit(f"bdcompare: VMAF_GATE '{GATE}' is not VMAF-NEG or VMAF-v1")
+V1 = V1 or GATE == "VMAF-v1"
+GATE_SHORT = "NEG" if GATE == "VMAF-NEG" else "v1"
+V1_BIN = os.environ.get("VMAF_V1_BIN", os.path.expanduser("~/.local/opt/vmaf-v1/bin/vmaf"))
+V1_MODELS = os.environ.get("VMAF_V1_MODELS", os.path.expanduser("~/.local/share/vmaf/model"))
+V1_VER = "v1.0.16"
+
+
+def _y4m_geometry(src_path):
+    """(width, height, fps) from a Y4M header."""
+    with open(src_path, "rb") as f:
+        head = f.readline(512).decode("ascii", "replace").split()
+    w = int(next(t[1:] for t in head if t.startswith("W")))
+    h = int(next(t[1:] for t in head if t.startswith("H")))
+    fr = next((t[1:] for t in head if t.startswith("F")), "30:1").split(":")
+    return w, h, int(fr[0]) / max(1, int(fr[1]))
+
+
+def v1_model(src_path):
+    """The v1 model file for a source, by its height and frame rate."""
+    _, h, fps = _y4m_geometry(src_path)
+    hfr = fps >= 50
+    name = f"vmaf_{V1_VER}{'_hfr' if hfr else ''}_{'1d5h_2160' if h >= 1440 else '3d0h'}.json"
+    return os.path.join(V1_MODELS, f"vmaf_{V1_VER}{'_hfr' if hfr else ''}", name)
+
+
+def _v1_of(bitstream, src_path, work, src_id=None):
+    model = v1_model(src_path)
+    if not os.path.exists(model) or not os.access(V1_BIN, os.X_OK):
+        sys.exit(f"bdcompare: VMAF_V1=1 needs {V1_BIN} and {model}")
+    want = ["VMAF-v1", "CAMBI"]
+    cpath = None
+    if SCORE_CACHE:
+        base = _score_path(bitstream, src_path, src_id)
+        if base:
+            k = hashlib.sha1(f"{base}|v1|{os.path.basename(model)}".encode()).hexdigest()
+            cpath = os.path.join(os.path.dirname(os.path.dirname(base)), k[:2], k + ".json")
+            hit = _score_get(cpath, want)
+            if hit is not None:
+                with _stats_lock:
+                    SCORE_STATS["hit"] += 1
+                return hit
+    fd, dec = tempfile.mkstemp(suffix=".dec10.y4m", dir=work); os.close(fd)
+    fd, js = tempfile.mkstemp(suffix=".v1.json", dir=work); os.close(fd)
+    sh(f'ffmpeg -v error -y {_FF_T} -i "{bitstream}" -fps_mode passthrough '
+       f'-pix_fmt yuv420p10le -strict -1 "{dec}"')
+    # the reference reaches 10-bit 4:2:0 on a FIFO, so no full-size copy lands on disk
+    ref = dec + ".ref.y4m"
+    os.mkfifo(ref)
+    conv = subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path,
+         "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
+    r = sh(f'{shlex.quote(V1_BIN)} -q -r "{ref}" -d "{dec}" --json -o "{js}" '
+           f'--model path={shlex.quote(model)}:name=vmaf_v1 {sub} {_VMAF_T}')
+    conv.kill()
+    conv.wait()
+    for p in (ref, dec):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    if r.returncode != 0:
+        return None
+    pm = json.load(open(js))["pooled_metrics"]
+    os.unlink(js)
+    cambi = next((k for k in pm if k.startswith("cambi")), None)
+    if "vmaf_v1" not in pm or cambi is None:
+        return None
+    out = {"VMAF-v1": pm["vmaf_v1"]["mean"], "CAMBI": pm[cambi]["mean"]}
+    if cpath:
+        _score_put(cpath, out)
+    with _stats_lock:
+        SCORE_STATS["miss"] += 1
+    return out
+
+
+def _v0_of(bitstream, src_path, work, src_id=None):
     margs, primary, plabel = _vmaf_models()
     want = ([plabel] if primary else []) + ["VMAF-NEG"]
     cpath = _score_path(bitstream, src_path, src_id) if SCORE_CACHE else None
@@ -451,7 +554,8 @@ def main():
         table.setdefault((clip, tag), []).append((q, size, m))
 
     # metric names come from the measured dict (e.g. VMAF-v1 + VMAF-NEG, or PSNR)
-    names = list(next(iter(table.values()))[0][2].keys())
+    # CAMBI is a banding score, lower is better, so it gets no BD-rate
+    names = [n for n in next(iter(table.values()))[0][2].keys() if n != "CAMBI"]
     for clip in clips:
         for i, nm in enumerate(names):
             rows = {}

@@ -71,6 +71,8 @@ ARM_ARGS = os.environ.get("ARM_ARGS", "")
 # gates on, for a little over half the scoring cost of both models; the per-rung
 # dVMAF columns are then NEG deltas. VMAF_MODELS=both restores the plain model.
 MODELS = os.environ.get("VMAF_MODELS", "neg")
+# the BD the band gates on, VMAF-NEG or VMAF-v1 (bdcompare reads the same variable)
+GATE = os.environ.get("VMAF_GATE", "VMAF-NEG")
 # EARLY STOP on the CRF band of a self-A/B, as in hd_band.py: once one clip
 # reads worse than EARLY_ONE or EARLY_N clips worse than EARLY_SOME (percent),
 # the remaining clips are not run. Never on the ABR band, whose per-clip noise
@@ -219,8 +221,8 @@ for mode in [m for m in ("abr", "crf") if m in _bands]:
         s = band_slope(c)
         flag = "  <-- reference curve too flat here, BD not meaningful" if (s is not None and s < 2.0) else ""
         for line in run(c, pts, mode):
-            print(line + (flag if "BD-rate(VMAF-NEG)" in line else ""), flush=True)
-            m = re.search(r"BD-rate\(VMAF-NEG\) A vs B: ([-+][\d.]+)%", line)
+            print(line + (flag if f"BD-rate({GATE})" in line else ""), flush=True)
+            m = re.search(rf"BD-rate\({re.escape(GATE)}\) A vs B: ([-+][\d.]+)%", line)
             if m and mode == "crf" and EARLY_STOP:
                 v = reads[c] = float(m.group(1))
                 some = [k for k, x in reads.items() if x > EARLY_SOME]
