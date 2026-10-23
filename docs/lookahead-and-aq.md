@@ -80,6 +80,18 @@ SSD alone. It only steers decisions, and the reconstruction stays exact. On
 2160p frames at medium, the pre-search skip bound keeps half the psy term,
 which saves about 4% of instructions on meridian 2160p.
 
+**Dark, smooth blocks.** Banding shows first in dark gradients and faint
+dark grain, and VMAF-NEG doesn't see it, so two terms guard those blocks
+directly. A macroblock counts as dark and smooth by two linear ramps: its luma
+mean (full weight at 32 or below, none at 64, on the 8-bit scale) and its
+variance (full at 4 or below, none at 16). On those blocks the psy-RD weight
+rises to 5x, because at one QP the RD decision would otherwise code faint
+grain to a flat block. In frames that also hold bright areas, those blocks
+also get up to 6 QP below the variance offset. There the field's center sits high
+and a low `--aq-strength` leaves the dark side coarse. That cut is scaled by
+the share of macroblocks with a luma mean of 170 or more: none at 8%, full at
+20%. A frame that is dark all over already centers low.
+
 **Psy-trellis and the flat-content lattice.** `--psy-trellis` defaults to 0.
 When on, the trellis rewards keeping the AC energy of the reconstructed
 coefficients, `J -= psy * sum_AC |fdct(pred + res)|`. On its own it's a
@@ -133,6 +145,8 @@ All BD figures are BD-VMAF-NEG at matched achieved bitrate; negative is better.
 | motion-rate lambda 8 in propagation | Without it a well-tracked block passes nearly all its cost on, and importance piles up along long chains until the offsets saturate. |
 | corrected lowres costs (source half-pel phases, subpel start, the six directional modes where needed) | t1 band median -0.43%, multi-shot -0.65 / -2.46 / -0.41%, for +0.7% instructions at 1080p. |
 | `--psy-rd 2.0` | Basin from 2.0 to 3.0. 2.0 is the most uniform: median -0.17%, 7 of 12 better, worst +0.74%. |
+| psy-RD 5x on dark, smooth blocks | Five dark windows from three titles, at the reference's size: the share of dark smooth blocks coded flat falls from 66% to 23% on a mostly dark frame (the reference: 32%). HD band median +0.03%, worst +0.46%. 3x keeps less grain; 8x keeps no more. |
+| a gated 6-point dark cut | On a frame a third bright, the flat share falls from 19% to 4% and CAMBI from 3.6 to 0.76 (the reference: 4% and 0.84). Ungated it cost sunflower 1.1% and pedestrian 0.8 to 1.1% at 2.5 to 4 points. Neither has bright areas, and the gate leaves both alone. |
 | flat-content psy-trellis gate | sintel -5.6% (high band) and -9.0% (low band) for +0.8% wall on sintel. Every other corpus clip is byte-identical. The class that gains is flat and dark content, not grain. |
 | scene-cut floor 0.90 | Real cuts read 0.93 or more. False cuts on continuous content read 0.62 to 0.89. Sunflower -3.66%, parkrun -1.42%. |
 | scene-cut jump 0.10 | Removes false cuts where the falling threshold walks onto a high, steady ratio (fog, water, a tilt): coastguard -2.66%, perseverance 720p -3.01%. Every real shot boundary is kept. |
@@ -188,3 +202,10 @@ re-sweep one alone. `Y264_PSY_FLAT_LOG=1` prints each frame's flat share and
 whether the psy gate fired. `Y264_MBTREE_DBG` prints the mb-tree offsets.
 `Y264_TYPE_ORACLE=<file>` replays a frame-type sequence through the encoder,
 which prices a placement policy apart from everything downstream of it.
+
+Any change to AQ, psy or the RD decision also runs `scripts/band_check.py`.
+VMAF-NEG doesn't see banding and CAMBI misses much of it, so a change can
+pass every BD band and still flatten dark gradients. The script compares
+yah264 with x264 at the same size on the dark windows the banding was found
+on, and fails a window that flattens more dark blocks or scores worse on
+CAMBI. `tests/test_darkaq.c` fails if either dark-block term is tuned off.
