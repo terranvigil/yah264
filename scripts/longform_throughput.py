@@ -58,8 +58,8 @@ command first times the feeder alone and refuses a FEEDER-BOUND cell (see
 feed_guard).
 
 RECORDS NAME THEIR BUILD (since 2026-09-26): every new point, ladder and
-timed key ends in the sha256 of both binaries and the VMAF subsample, so a
-rebuild cannot be served stale numbers. Older records are read as
+timed key ends in the sha256 of both binaries, the VMAF subsample and the
+metric (":v1"), so a rebuild or the old metric cannot be served as current. Older records are read as
 "legacy-key" (see ident()).
 
 SIZES: 720p is 1280 wide and 1080p 1920 wide, the height following the
@@ -68,7 +68,7 @@ Laundromat's master is 1920x804, so it has 720p and 1080p rows only.
 
 THE RATE MATCH. The reference runs at x264's own default rate factor, 23, at
 every size. Ours is solved onto the bytes it produced (secant, see do_point).
-Both are scored at that point, VMAF-NEG and PSNR-Y, every frame. Beside it, a
+Both are scored at that point, VMAF v1 and PSNR-Y, every frame. Beside it, a
 five-rung ladder gives a BD-rate on the same frames.
 
 THE TIMED LEGS (the coordinator books the exclusive windows; `plan` prints
@@ -153,7 +153,8 @@ X264_C  = os.environ.get("X264_C", os.path.expanduser(
     "~/src/build/x264cli-purec-b35605a/x264"))
 FFMPEG  = os.environ.get("FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("FFPROBE", "ffprobe")
-VMAF    = os.environ.get("VMAF", "vmaf")
+# the float-enabled libvmaf 3.x (VMAF_V1_BIN), as scripts/bdcompare.py has it
+VMAF    = bd.V1_BIN
 PRESET  = os.environ.get("PRESET", "medium")
 # Our pure-C arm: the same binary with the runtime dispatch forced to C. The
 # knob is PRESENCE-based (NO_ASM=0 still forces scalar), so the SIMD arm must
@@ -161,7 +162,8 @@ PRESET  = os.environ.get("PRESET", "medium")
 PURE_C_ENV = ("YAH264_NO_ASM", "NEXT264_NO_ASM")
 # The box share for the untimed phases. Six threads IN TOTAL: an encoder at
 # SOLVE_THREADS plus a one-thread feeder, or VMAF + the bitstream decode + a
-# feeder. An unpinned ffmpeg takes a thread per core.
+# feeder (and a one-thread 10-bit conversion of the reference for v1). An
+# unpinned ffmpeg takes a thread per core.
 VMAF_THREADS = os.environ.get("VMAF_THREADS", "3")
 FF_THREADS   = os.environ.get("FF_THREADS", "2")
 FEED_THREADS = os.environ.get("FEED_THREADS", "1")
@@ -393,7 +395,7 @@ EXCERPTS = {"tears-x10":    ("tears-full", 60),
             "nocturne-x10": ("nocturne-full", 50),   # representative window (scene scan)
             "lash1924-x10": ("lash1924-full", 40)}   # tier C grain; representative window
 
-# END CREDITS ARE NOT PART OF A CELL (PARITY-SPEC section 2, 2026-10-05): VMAF-NEG
+# END CREDITS ARE NOT PART OF A CELL (PARITY-SPEC section 2, 2026-10-05): VMAF
 # saturates on text over a flat background, and a wall ratio taken across the
 # credits times frames no viewer weighs. CREDITS_LAST is the last story frame of
 # an excerpt, excerpt-relative and the same at every size (luma scan and contact
@@ -821,7 +823,9 @@ def put(key, val):
 # either encoder the cache silently served the old build's numbers (and a
 # record scored at another VMAF subsample looked the same as one scored every
 # frame). Every record written since carries, at the end of its key,
-#   :b<ours>:r<reference[+reference]>:s<subsample>
+#   :b<ours>:r<reference[+reference]>:s<subsample>:v1
+# (":v1" since the move to VMAF v1; a key without it was scored on VMAF-NEG
+# and is another build as far as any computing command is concerned).
 # where <ours> and <reference> are the first 12 hex of a sha256 over the
 # binary and every non-system library it links. A key written by another
 # build is unreachable, not merely old. Records from before the change are
@@ -830,7 +834,7 @@ def put(key, val):
 
 _BIN_IDS = {}
 LEGACY_OK = os.environ.get("LF_LEGACY") == "1"
-IDENT_RE = re.compile(r":b[0-9a-f]{12}:r[0-9a-f+]+:s\d+$")
+IDENT_RE = re.compile(r":b[0-9a-f]{12}:r[0-9a-f+]+:s\d+(?::v1)?$")
 
 
 def linked_libs(path):
@@ -887,17 +891,19 @@ def bin_id(path):
 
 def ident(*refs):
     """The key suffix naming this build of ours, the reference binaries the
-    record used (the SIMD CLI unless given), and the VMAF subsample."""
+    record used (the SIMD CLI unless given), the VMAF subsample and the
+    metric."""
     refs = refs or (X264,)
     return (f":b{bin_id(YAH264)}:r{'+'.join(bin_id(r) for r in refs)}"
-            f":s{SUBSAMPLE}")
+            f":s{SUBSAMPLE}:v1")
 
 
 def ids(*refs):
     """The same identity, spelled out inside the record."""
     refs = refs or (X264,)
     return {"ours_sha": bin_id(YAH264),
-            "ref_sha": "+".join(bin_id(r) for r in refs), "subsample": SUBSAMPLE}
+            "ref_sha": "+".join(bin_id(r) for r in refs), "subsample": SUBSAMPLE,
+            "metric": "vmaf_v1"}
 
 
 def rec(base, *refs, legacy=None):
@@ -1094,15 +1100,11 @@ def _fifo(wd, name):
 
 
 # SUPPLEMENTARY QUALITY (PARITY-SPEC 5.2a, reported, not part of the bar):
-# harmonic-mean, minimum-frame, 1%-low and first-second VMAF-NEG from the
-# per-frame scores the VMAF pass already writes; YUV-PSNR 6:1:1 from the
-# psnr_cb/psnr_cr it also writes; SSIM 6:1:1 from a second, cheap pass
-# (ffmpeg's ssim filter, one more decode and feed, no encode); plain VMAF
-# v0.6.1 as a second model in the same libvmaf pass. The second model is
-# NOT cheap: it has its own adm/vif extractors (NEG's are the enhancement-
-# gain-limited variants), +80% libvmaf CPU on a 24-frame 1080p probe, so it
-# is opt-in (LF_PLAIN_VMAF=1). LF_SSIM=0 skips the SSIM pass.
-PLAIN_VMAF = os.environ.get("LF_PLAIN_VMAF", "0") == "1"
+# harmonic-mean, minimum-frame, 1%-low and first-second VMAF v1 from the
+# per-frame scores the VMAF pass already writes; CAMBI, v1's banding feature,
+# from the same pass; YUV-PSNR 6:1:1 from the psnr_cb/psnr_cr it also writes;
+# SSIM 6:1:1 from a second, cheap pass (ffmpeg's ssim filter, one more decode
+# and feed, no encode). LF_SSIM=0 skips the SSIM pass.
 SSIM_PASS = os.environ.get("LF_SSIM", "1") == "1"
 
 
@@ -1142,13 +1144,26 @@ def ssim_611(cell, bitstream, wd, start, count):
     return (sum(vals) / len(vals) if vals else None), len(vals)
 
 
+def v1_model(info):
+    """The v1 model for a cell, by its height and frame rate: the 3H model
+    below 1440 lines, the 4K 1.5H model at and above, and the high-frame-rate
+    twin of either at 50 fps and up (scripts/bdcompare.py picks the same)."""
+    hfr = "_hfr" if fps_of(info) >= 50 else ""
+    name = f"vmaf_{bd.V1_VER}{hfr}_{'1d5h_2160' if info['h'] >= 1440 else '3d0h'}.json"
+    return os.path.join(bd.V1_MODELS, f"vmaf_{bd.V1_VER}{hfr}", name)
+
+
 def score(cell, bitstream, wd, start=0, count=None):
-    """(VMAF-NEG, PSNR-Y, extra) of a bitstream against the frames it was
+    """(VMAF v1, PSNR-Y, extra) of a bitstream against the frames it was
     made from; `extra` holds the 5.2a columns and the frame-count check.
 
     Nothing lands on disk. The reference is the SAME feeder that fed the
-    encoder, into libvmaf's stdin; the bitstream is decoded by ffmpeg into a
-    named pipe. libvmaf aligns frame for frame, so the scored count is checked
+    encoder, taken to 10-bit 4:2:0 by a one-thread ffmpeg into libvmaf's
+    stdin; the bitstream is decoded by ffmpeg, also to 10-bit and with no
+    frame dropped or repeated, into a named pipe. v1 is scored at 10-bit and
+    CAMBI is told the stream's coded bit depth, so the PSNR columns are on the
+    10-bit scale (within a few hundredths of a dB of the 8-bit reading for an
+    8-bit source, the same on both arms). libvmaf aligns frame for frame, so the scored count is checked
     against the cell's: a short pass is a pooled mean over the wrong frames.
     Since 2026-09-26 a short count is RECORDED (frames_ok false, and the
     report marks the cell frame-mismatch) instead of aborting the run, and
@@ -1157,22 +1172,31 @@ def score(cell, bitstream, wd, start=0, count=None):
     count = count or info["frames"] - start
     dfifo = _fifo(wd, "dec.fifo")
     j = os.path.join(wd, "v.json")
+    model = v1_model(info)
+    if not os.path.exists(model) or not os.access(VMAF, os.X_OK):
+        sys.exit(f"longform: VMAF v1 needs {VMAF} and {model}")
     dec = subprocess.Popen(
         [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
-         "-i", bitstream, "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", dfifo],
+         "-i", bitstream, "-fps_mode", "passthrough", "-pix_fmt", "yuv420p10le",
+         "-strict", "-1", "-f", "yuv4mpegpipe", dfifo],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     ferr = tempfile.TemporaryFile()
     fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
                           stderr=ferr)
-    models = ["--model", "version=vmaf_v0.6.1neg:name=neg"]
-    if PLAIN_VMAF:
-        models += ["--model", "version=vmaf_v0.6.1:name=vmaf"]
+    conv = subprocess.Popen(
+        [FFMPEG, "-v", "error", "-nostdin", "-threads", "1", "-f", "yuv4mpegpipe",
+         "-i", "pipe:0", "-pix_fmt", "yuv420p10le", "-strict", "-1",
+         "-f", "yuv4mpegpipe", "pipe:1"],
+        stdin=fp.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    fp.stdout.close()
     v = subprocess.run(
         [VMAF, "--threads", VMAF_THREADS, "--subsample", SUBSAMPLE,
-         "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, "--feature", "psnr"]
-        + models,
-        stdin=fp.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    fp.stdout.close()
+         "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, "--feature", "psnr",
+         "--model", f"path={model}:name=vmaf_v1:cambi.enc_bitdepth="
+                    f"{bd._enc_bitdepth(bitstream)}"],
+        stdin=conv.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    conv.stdout.close()
+    conv.wait()
     frc = fp.wait()
     dec.wait()
     os.remove(dfifo)
@@ -1188,16 +1212,17 @@ def score(cell, bitstream, wd, start=0, count=None):
     want = (count + int(SUBSAMPLE) - 1) // int(SUBSAMPLE)
     pooled = jj["pooled_metrics"]
     frames = jj["frames"]
-    neg = [fr["metrics"]["neg"] for fr in frames]
-    low = sorted(neg)[:max(1, math.ceil(0.01 * len(neg)))]
+    per = [fr["metrics"]["vmaf_v1"] for fr in frames]
+    low = sorted(per)[:max(1, math.ceil(0.01 * len(per)))]
     fps = fps_of(info)
-    first = [fr["metrics"]["neg"] for fr in frames if fr["frameNum"] < fps]
+    first = [fr["metrics"]["vmaf_v1"] for fr in frames if fr["frameNum"] < fps]
+    cambi = next((k for k in pooled if k.startswith("cambi")), None)
     extra = {
-        "neg_hmean": pooled["neg"].get("harmonic_mean"),
-        "neg_min": pooled["neg"].get("min"),
-        "neg_low1": sum(low) / len(low) if low else None,
-        "neg_first1s": sum(first) / len(first) if first else None,
-        "vmaf": pooled["vmaf"]["mean"] if "vmaf" in pooled else None,
+        "v1_hmean": pooled["vmaf_v1"].get("harmonic_mean"),
+        "v1_min": pooled["vmaf_v1"].get("min"),
+        "v1_low1": sum(low) / len(low) if low else None,
+        "v1_first1s": sum(first) / len(first) if first else None,
+        "cambi": pooled[cambi]["mean"] if cambi else None,
         "psnr_yuv611": w611(pooled["psnr_y"]["mean"], pooled["psnr_cb"]["mean"],
                             pooled["psnr_cr"]["mean"])
         if "psnr_cb" in pooled else None,
@@ -1212,7 +1237,7 @@ def score(cell, bitstream, wd, start=0, count=None):
         print(f"  [FRAME-MISMATCH] {cell}: vmaf scored {len(frames)} (want "
               f"{want}), decoded {extra.get('frames_decoded', '?')} (want "
               f"{count}); recorded as frames_ok false", flush=True)
-    return pooled["neg"]["mean"], pooled["psnr_y"]["mean"], extra
+    return pooled["vmaf_v1"]["mean"], pooled["psnr_y"]["mean"], extra
 
 
 # ---------------------------------------------------------------------------
@@ -1283,13 +1308,13 @@ def do_ladder(cell):
                     continue
                 out = os.path.join(wd, "l.264")
                 sz = encode(arm, cell, crf, out, solve_threads(arm), 0, lim)
-                neg, psnr, qx = score(cell, out, wd, 0, lim)
-                put(key, {"bytes": sz, "neg": neg, "psnr_y": psnr, **qx,
+                v1, psnr, qx = score(cell, out, wd, 0, lim)
+                put(key, {"bytes": sz, "vmaf_v1": v1, "psnr_y": psnr, **qx,
                           "kbps": sz * 8 / (lf / fps) / 1000, "frames": lf,
                           "fps": fps, "threads": solve_threads(arm),
                           "date": time.strftime("%Y-%m-%d %H:%M"), **ids()})
                 print(f"  {cell:<20}{arm:<6}crf {crf:>5.1f}  "
-                      f"{sz*8/(lf/fps)/1000:>9.0f} kbit/s  NEG {neg:6.2f}  "
+                      f"{sz*8/(lf/fps)/1000:>9.0f} kbit/s  v1 {v1:6.2f}  "
                       f"PSNR-Y {psnr:6.2f}   ({lf} frames)", flush=True)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
@@ -1463,8 +1488,8 @@ def do_point(cell):
             t = time.monotonic()
             sz = encode("x264", cell, X264_CRF, out, solve_threads("x264"))
             el = time.monotonic() - t
-            neg, psnr, qx = score(cell, out, wd)
-            xr = put(xkey, {"crf": X264_CRF, "bytes": sz, "neg": neg, **qx,
+            v1, psnr, qx = score(cell, out, wd)
+            xr = put(xkey, {"crf": X264_CRF, "bytes": sz, "vmaf_v1": v1, **qx,
                             "psnr_y": psnr, "frames": frames, "fps": fps,
                             "solve_threads": solve_threads("x264"),
                             "untimed_encode_s": el,
@@ -1472,7 +1497,7 @@ def do_point(cell):
                             "kbps": sz * 8 / (frames / fps) / 1000})
             xtag = "new"
             print(f"  {cell:<20}x264  crf {X264_CRF:>5.1f}  {sz} bytes  "
-                  f"NEG {neg:6.2f}  PSNR-Y {psnr:6.2f}", flush=True)
+                  f"v1 {v1:6.2f}  PSNR-Y {psnr:6.2f}", flush=True)
 
         nr, ntag, _ = rec(nkey_base(cell, xr["bytes"]),
                           legacy=(xtag == "legacy-key"))
@@ -1562,11 +1587,11 @@ def do_point(cell):
             xcrf = X264_CRF + math.log(best[1] / xr["bytes"]) / slope
             _, xbest, xfile, _ = _secant("x264", cell, best[1], xcrf, slope, wd, "x")
             if xbest[2] < best[2]:
-                xneg, xpsnr, xqx = score(cell, xfile, wd)
+                xv1, xpsnr, xqx = score(cell, xfile, wd)
                 # the direct record is kept under its own key, never lost
                 if xkey in results():
                     put(xkey_base(cell) + ":direct" + ident(), results()[xkey])
-                xr = put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg,
+                xr = put(xkey, {"crf": xbest[0], "bytes": xbest[1], "vmaf_v1": xv1,
                                 **xqx,
                                 "psnr_y": xpsnr, "frames": frames, "fps": fps,
                                 "solve_threads": solve_threads("x264"),
@@ -1576,13 +1601,13 @@ def do_point(cell):
                 nkey = nkey_base(cell, xbest[1]) + ident()
                 best = (best[0], best[1], xbest[2])
                 print(f"  {cell:<20}x264  crf {xbest[0]:>6.3f}  {xbest[1]} bytes"
-                      f"  (reverse match)  NEG {xneg:6.2f}  PSNR-Y {xpsnr:6.2f}",
+                      f"  (reverse match)  v1 {xv1:6.2f}  PSNR-Y {xpsnr:6.2f}",
                       flush=True)
         if best[2] > MATCH_BAR / 100:
             print(f"    [warn] {cell}: {100*best[2]:.2f}% apart at the closest "
                   "reachable pair -- the timed legs will refuse it", flush=True)
-        neg, psnr, qx = score(cell, nbest, wd)
-        put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg, **qx,
+        v1, psnr, qx = score(cell, nbest, wd)
+        put(nkey, {"crf": best[0], "bytes": best[1], "vmaf_v1": v1, **qx,
                    "psnr_y": psnr, "frames": frames, "fps": fps,
                    "kbps": best[1] * 8 / (frames / fps) / 1000,
                    "md5": file_md5(nbest), "slope": slope, "solve": how,
@@ -1591,7 +1616,7 @@ def do_point(cell):
                    "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
                    "dsize_pct": 100 * (best[1] / xr["bytes"] - 1)})
         print(f"  {cell:<20}ours  crf {best[0]:>6.3f}  {best[1]} bytes  "
-              f"({100*(best[1]/xr['bytes']-1):+.2f}%)  NEG {neg:6.2f}  "
+              f"({100*(best[1]/xr['bytes']-1):+.2f}%)  v1 {v1:6.2f}  "
               f"PSNR-Y {psnr:6.2f}  [{how}, {len(pts)} encodes]", flush=True)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
@@ -1629,14 +1654,14 @@ def do_refine(cell):
         crf0 = nr["crf"] + math.log(target / nr["bytes"]) / slope
         pts, best, nbest, slope = _secant("ours", cell, target, crf0, slope, wd, "n")
         if best[2] <= 0.005:
-            neg, psnr, qx = score(cell, nbest, wd)
+            v1, psnr, qx = score(cell, nbest, wd)
             put(nkey_base(cell, target) + ident(),
-                {**nr, "crf": best[0], "bytes": best[1], "neg": neg, **qx, "psnr_y": psnr,
+                {**nr, "crf": best[0], "bytes": best[1], "vmaf_v1": v1, **qx, "psnr_y": psnr,
                  "kbps": best[1] * 8 / (frames / fps) / 1000, "md5": file_md5(nbest),
                  "slope": slope, "dsize_pct": 100 * (best[1] / target - 1),
                  "refined": before, "date": time.strftime("%Y-%m-%d %H:%M"), **ids()})
             print(f"  {cell:<20}{ttag()}: refined ours crf {before['crf']:.3f} -> {best[0]:.3f}, "
-                  f"{d:+.2f}% -> {100*(best[1]/target-1):+.2f}%  NEG {neg:6.2f}  "
+                  f"{d:+.2f}% -> {100*(best[1]/target-1):+.2f}%  v1 {v1:6.2f}  "
                   f"PSNR-Y {psnr:6.2f}  [{len(pts)} encodes]", flush=True)
             return
         print(f"    our curve steps over the target (closest {100*(best[1]/target-1):+.2f}% at "
@@ -1646,10 +1671,10 @@ def do_refine(cell):
         if xbest[2] >= abs(d) / 100:
             print(f"  {cell:<20}{ttag()}: no closer pair found; left at {d:+.2f}%", flush=True)
             return
-        xneg, xpsnr, xqx = score(cell, xfile, wd)
+        xv1, xpsnr, xqx = score(cell, xfile, wd)
         if not xr.get("matched"):
             put(xkey_base(cell) + ":direct" + ident(), xr)
-        put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg, **xqx, "psnr_y": xpsnr,
+        put(xkey, {"crf": xbest[0], "bytes": xbest[1], "vmaf_v1": xv1, **xqx, "psnr_y": xpsnr,
                    "frames": frames, "fps": fps, "solve_threads": solve_threads("x264"),
                    "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
                    "matched": "reverse: x264 moved onto ours",
@@ -1659,7 +1684,7 @@ def do_refine(cell):
              "date": time.strftime("%Y-%m-%d %H:%M")})
         print(f"  {cell:<20}{ttag()}: reference moved crf {before['x264_crf']:.3f} -> {xbest[0]:.3f}; "
               f"ours unchanged at crf {nr['crf']:.3f}: {d:+.2f}% -> "
-              f"{100*(nr['bytes']/xbest[1]-1):+.2f}%  reference NEG {xneg:6.2f}  PSNR-Y {xpsnr:6.2f}",
+              f"{100*(nr['bytes']/xbest[1]-1):+.2f}%  reference v1 {xv1:6.2f}  PSNR-Y {xpsnr:6.2f}",
               flush=True)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
@@ -1667,14 +1692,15 @@ def do_refine(cell):
 
 def do_rescore(cell):
     """Re-score every cached point/ladder entry of a cell at the CURRENT
-    subsample without solving. The re-encode must reproduce the recorded byte
+    subsample and metric (VMAF v1) without solving; this is how a NEG-era
+    record gets its v1 score. The re-encode must reproduce the recorded byte
     count or the entry is left alone: a different size was a different encode
     (thread count, binary, preset) and its score would silently replace a good
     number with one from somewhere else.
 
     Since 2026-09-26 the rescored entry is ADDED under the current identity
-    (build + subsample) and the old record is left as it was; a key that
-    already carries the current identity is skipped."""
+    (build + subsample + metric) and the old record is left as it was; a key
+    that already carries the current identity is skipped."""
     info = cell_info(cell)
     frames = info["frames"]
     r = results()
@@ -1701,13 +1727,17 @@ def do_rescore(cell):
                       f"says {v['bytes']} ({100*(sz/v['bytes']-1):+.3f}%). Not "
                       "the same encode -- left alone.", flush=True)
                 continue
-            neg, psnr, qx = score(cell, out, wd, 0, lim)
-            v2 = dict(v)
-            v2.update(neg=neg, psnr_y=psnr, rescored_from=key, **qx,
+            v1, psnr, qx = score(cell, out, wd, 0, lim)
+            # a NEG-era record's own scores and 5.2a columns do not carry over
+            v2 = {k_: x_ for k_, x_ in v.items()
+                  if k_ != "neg" and not k_.startswith("neg_") and k_ != "vmaf"}
+            v2.update(vmaf_v1=v1, psnr_y=psnr, rescored_from=key, **qx,
                       date=time.strftime("%Y-%m-%d %H:%M"), **ids())
             put(target, v2)
-            print(f"  {cell:<20}{arm:<6}crf {crf:>6.3f}  NEG {v['neg']:6.2f} -> "
-                  f"{neg:6.2f}  PSNR-Y {v['psnr_y']:6.2f} -> {psnr:6.2f}",
+            was = (f"v1 {v['vmaf_v1']:6.2f} -> " if v.get("vmaf_v1") is not None
+                   else "v1 ")
+            print(f"  {cell:<20}{arm:<6}crf {crf:>6.3f}  {was}"
+                  f"{v1:6.2f}  PSNR-Y {v['psnr_y']:6.2f} -> {psnr:6.2f}",
                   flush=True)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
@@ -2213,8 +2243,8 @@ def versions():
 def point_fields(xr, nr):
     return {"x264_crf": xr["crf"], "ours_crf": nr["crf"],
             "x264_bytes": xr["bytes"], "ours_bytes": nr["bytes"],
-            "dsize_pct": nr["dsize_pct"], "x264_neg": xr["neg"],
-            "ours_neg": nr["neg"], "x264_psnr_y": xr["psnr_y"],
+            "dsize_pct": nr["dsize_pct"], "x264_vmaf_v1": xr.get("vmaf_v1"),
+            "ours_vmaf_v1": nr.get("vmaf_v1"), "x264_psnr_y": xr["psnr_y"],
             "ours_psnr_y": nr["psnr_y"], "point_tag": xr["tag"],
             "point_keys": [xr["key"], nr["key"]],
             "solve_threads": nr.get("solve_threads"),
@@ -2791,14 +2821,15 @@ def point_pair(cell):
 
 
 def bd_of(cell):
-    """(BD-rate on VMAF-NEG, tag): ours against x264 over the shared rate
+    """(BD-rate on VMAF v1, tag): ours against x264 over the shared rate
     range; positive is worse. One build per curve pair (the current one, else
     the newest other, else the legacy keys), one window per curve: the
-    longest with a full set on both sides."""
+    longest with a full set on both sides. Rungs scored before v1 (no
+    "vmaf_v1" field) are left out."""
     r = results()
     groups = {}
     for k, v in r.items():
-        if not k.startswith(f"ladder:{cell}:"):
+        if not k.startswith(f"ladder:{cell}:") or v.get("vmaf_v1") is None:
             continue
         m = IDENT_RE.search(k)
         g = m.group(0) if m else ""
@@ -2822,7 +2853,7 @@ def bd_of(cell):
         w = max(both)
 
         def curve(arm):
-            pts = sorted((v["kbps"], v["neg"]) for v in arms[arm][w])
+            pts = sorted((v["kbps"], v["vmaf_v1"]) for v in arms[arm][w])
             return [p[0] for p in pts], [p[1] for p in pts]
         rx, mx = curve("x264")
         rn, mn = curve("ours")
@@ -3586,7 +3617,7 @@ def credits_lines():
     out = ["", "## End credits (supplementary rows, not a gate)",
            "Every cell above stops at its last story frame. The credits that follow are "
            "measured on their own so a weakness there stays visible: one matched point per "
-           "title, PSNR-Y only (VMAF-NEG on credits weighs frames no viewer does). \"extr\" = "
+           "title, PSNR-Y only (VMAF on credits weighs frames no viewer does). \"extr\" = "
            "the figure is extrapolated beyond the measured points. " + " ".join(head),
            tab[0] + " reading |", "|" + "---|" * (tab[0].count("|"))]
     for ln in tab[1:]:
@@ -3749,7 +3780,8 @@ def bar_line(ratios, dv, ds):
         return
     rs = sorted(ratios)
     print(f"\nBar (published): median {med(rs):.2f}x (<= 1.00), worst "
-          f"{rs[-1]:.2f}x (<= 1.15), dVMAF-NEG worst {min(dv):+.2f} (>= -0.5), "
+          f"{rs[-1]:.2f}x (<= 1.15), dVMAF-v1 worst "
+          + (f"{min(dv):+.2f}" if dv else "n/a") + " (>= -0.5), "
           f"|dsize| worst {max(abs(x) for x in ds):.2f}% (<= 1.0)")
 
 
@@ -3759,7 +3791,7 @@ def do_report(cells):
     print("\n## G3: SIMD, default threads, both encoders reading stdin\n")
     print("| cell | frames | ours crf | x264 crf | dsize | ours fps | x264 fps |"
           " **ours/x264** | read fps | ours cpu-s | x264 cpu-s | ours RSS |"
-          " x264 RSS | dVMAF-NEG | dPSNR-Y | BD-rate | t1 ours/x264 |")
+          " x264 RSS | dVMAF-v1 | dPSNR-Y | BD-rate | t1 ours/x264 |")
     print("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
     ratios, dv, ds = [], [], []
     for grp in (live, anim):
@@ -3786,13 +3818,19 @@ def do_report(cells):
             bdr = bd_of(cell)[0]
             rd = t["read"][0]
             flag = " (feeder-bound?)" if min(ow, xw) < FEED_VALID * rd else ""
-            ratios.append(ow / xw); dv.append(t["ours_neg"] - t["x264_neg"])
+            # a timed record from before v1 carries no v1 scores
+            tv = (t["ours_vmaf_v1"] - t["x264_vmaf_v1"]
+                  if t.get("ours_vmaf_v1") is not None and t.get("x264_vmaf_v1") is not None
+                  else None)
+            ratios.append(ow / xw)
+            if tv is not None:
+                dv.append(tv)
             ds.append(t["dsize_pct"])
             print(f"| {cell}{flag} | {t['frames']} | {t['ours_crf']:.3f} | "
                   f"{t['x264_crf']:.3f} | {t['dsize_pct']:+.2f}% | "
                   f"{t['frames']/ow:.1f} | {t['frames']/xw:.1f} | **{ow/xw:.2f}x** | "
                   f"{t['frames']/rd:.0f} | {oc:.0f} | {xc:.0f} | {orss:.2f} GiB | "
-                  f"{xrss:.2f} GiB | {t['ours_neg']-t['x264_neg']:+.2f} | "
+                  f"{xrss:.2f} GiB | " + (f"{tv:+.2f}" if tv is not None else "-") + " | "
                   f"{t['ours_psnr_y']-t['x264_psnr_y']:+.2f} | "
                   + (f"{bdr:+.2f}% |" if bdr is not None else "n/a |")
                   + (f" {o1/x1:.2f}x{'' if t['ours']['t1'] else ' (sampled)'} |"
@@ -3852,16 +3890,16 @@ BOARD_QUAL = os.environ.get("LF_BOARD_QUAL", os.path.expanduser(
     "~/.cache/yah264/ffboard/quality.json"))
 CSV_COLS = ("codec,date,commit,ref,ref_version,tier,class,title,size,goal,"
             "ours_wall_s,ref_wall_s,ratio,feed_fps,ours_bytes,ref_bytes,dsize_pct,"
-            "ours_vmafneg,ref_vmafneg,dvmafneg,ours_psnr_y,ref_psnr_y,dpsnr_y,"
-            "bd_vmafneg_pct,ours_vmafneg_hmean,ref_vmafneg_hmean,ours_vmafneg_min,"
-            "ref_vmafneg_min,ours_vmafneg_low1,ref_vmafneg_low1,"
-            "ours_vmafneg_first1s,ref_vmafneg_first1s,ours_vmaf,ref_vmaf,"
+            "ours_vmaf_v1,ref_vmaf_v1,dvmaf_v1,ours_psnr_y,ref_psnr_y,dpsnr_y,"
+            "bd_vmaf_v1_pct,ours_vmaf_v1_hmean,ref_vmaf_v1_hmean,ours_vmaf_v1_min,"
+            "ref_vmaf_v1_min,ours_vmaf_v1_low1,ref_vmaf_v1_low1,"
+            "ours_vmaf_v1_first1s,ref_vmaf_v1_first1s,ours_cambi,ref_cambi,"
             "ours_psnr_yuv611,ref_psnr_yuv611,ours_ssim_yuv611,ref_ssim_yuv611,"
             "frames_decoded_ok,rounds,valid,note").split(",")
 # 5.2a columns: CSV name suffix -> record field
-SUPP = (("vmafneg_hmean", "neg_hmean", 2), ("vmafneg_min", "neg_min", 2),
-        ("vmafneg_low1", "neg_low1", 2), ("vmafneg_first1s", "neg_first1s", 2),
-        ("vmaf", "vmaf", 2), ("psnr_yuv611", "psnr_yuv611", 2),
+SUPP = (("vmaf_v1_hmean", "v1_hmean", 2), ("vmaf_v1_min", "v1_min", 2),
+        ("vmaf_v1_low1", "v1_low1", 2), ("vmaf_v1_first1s", "v1_first1s", 2),
+        ("cambi", "cambi", 2), ("psnr_yuv611", "psnr_yuv611", 2),
         ("ssim_yuv611", "ssim_yuv611", 4))
 CLASS_OF = {"cif": "CIF", "720p": "720p", "1080p": "1080p", "2160p": "2160p"}
 SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("720p", "C"),
@@ -3871,8 +3909,9 @@ GOALS = ("G1", "G2", "G3")
 # section 4.2 (spec update 2026-09-26): the report's validity line is the
 # same margin the timing refusal uses, feed fps >= 1.5x the faster arm
 FEED_VALID = FEED_MARGIN
-# quality (spec update 2026-09-26): the MEDIAN dVMAF-NEG of a class and tier
-# against the published -0.5 bar, a per-cell floor of -1.0 VMAF-NEG and
+# quality (spec update 2026-09-26, on VMAF v1 since the metric moved): the
+# MEDIAN dVMAF-v1 of a class and tier against the published -0.5 bar, a
+# per-cell floor of -1.0 VMAF v1 and
 # -1.0 dB PSNR-Y, and every cell's size within 1%
 SIZE_BAR, VMAF_BAR, MED_BAR, WORST_BAR = 1.0, -0.5, 1.00, 1.15
 VMAF_FLOOR, PSNR_FLOOR = -1.0, -1.0
@@ -3903,10 +3942,14 @@ def parse_board(goal):
     samples = int(m.group(1)) if m else 1
     win = (re.search(r"window=(\S+)", text) or [None, "?"])[1]
     bid = (re.search(r"binaries \[(\w+)\]", text) or [None, "?"])[1]
+    # a board scored on VMAF v1 says dVMAF-v1 in its header and keys its
+    # quality cache with ":v1"; an older board's quality columns are NEG and
+    # are left out
+    v1 = "dVMAF-v1" in text
     q = {}
-    for ln in BOARD_QLINE.finditer(text):
+    for ln in BOARD_QLINE.finditer(text) if v1 else ():
         b, codec, clip, pt, th = ln.groups()
-        pre, suf = f"{b}:crf:lib{codec}:{clip}:", f":{pt}:{PRESET}:t{th}"
+        pre, suf = f"{b}:crf:lib{codec}:{clip}:", f":{pt}:{PRESET}:t{th}:v1"
         hit = next((v for k, v in qc.items() if k.startswith(pre)
                     and k.endswith(suf)), None)
         if hit:
@@ -3920,7 +3963,8 @@ def parse_board(goal):
         ys, xs = float(mm.group(5)), float(mm.group(6))
         rows[clip] = dict(kbps=int(mm.group(2)), ncrf=float(mm.group(3)),
                           xcrf=float(mm.group(4)), ours_wall=ys, ref_wall=xs,
-                          ratio=float(mm.group(7)), dvmaf=float(mm.group(9)),
+                          ratio=float(mm.group(7)),
+                          dvmaf=float(mm.group(9)) if v1 else None,
                           dsize=float(mm.group(10)), dpsnr=float(mm.group(11)),
                           ours_q=q.get(("yah264", clip)), ref_q=q.get(("x264", clip)))
     date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
@@ -4026,7 +4070,11 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         pass
     notes.append(LOOKAHEAD)
     if bdv is None and LAD_JSON:
-        bdv, _, bnote = lad_bd(cell, "crf", tier)
+        # the ladder lane's store is still scored on VMAF-NEG: its BD goes in
+        # the notes, named as such, never in the v1 column
+        lb, _, bnote = lad_bd(cell, "crf", tier)
+        if lb is not None:
+            notes.append(f"CRF BD-VMAF-NEG {lb:+.2f}% (ladder lane, not v1)")
         if bnote:
             notes.append(bnote)
         vb, _, vnote = lad_bd(cell, "vbr", tier)
@@ -4042,13 +4090,14 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         oks = [rr.get("frames_ok", True) for rr in (xr, nr)]
         fok = "yes" if all(oks) else "no"
         q = dict(ours_bytes=nr["bytes"], ref_bytes=xr["bytes"],
-                 dsize=nr["dsize_pct"], oneg=nr["neg"], xneg=xr["neg"],
+                 dsize=nr["dsize_pct"], ov1=nr.get("vmaf_v1"), xv1=xr.get("vmaf_v1"),
                  opsnr=nr["psnr_y"], xpsnr=xr["psnr_y"],
                  ocrf=nr["crf"], xcrf=xr["crf"], st=nr.get("solve_threads"),
                  matched=xr.get("matched"))
     else:
         q = dict(ours_bytes=t["ours_bytes"], ref_bytes=t["x264_bytes"],
-                 dsize=t["dsize_pct"], oneg=t["ours_neg"], xneg=t["x264_neg"],
+                 dsize=t["dsize_pct"], ov1=t.get("ours_vmaf_v1"),
+                 xv1=t.get("x264_vmaf_v1"),
                  opsnr=t["ours_psnr_y"], xpsnr=t["x264_psnr_y"],
                  ocrf=t["ours_crf"], xcrf=t["x264_crf"], st=t.get("solve_threads"),
                  matched=t.get("x264_matched"))
@@ -4084,12 +4133,14 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
                  ours_bytes=q["ours_bytes"], ref_bytes=q["ref_bytes"],
                  dsize_pct=fmt(q["dsize"], sign=True), rounds=rounds or "")
         if quality:
-            r.update(ours_vmafneg=fmt(q["oneg"]), ref_vmafneg=fmt(q["xneg"]),
-                     dvmafneg=fmt(q["oneg"] - q["xneg"], sign=True),
+            # a record scored before v1 has no v1 score: blank, not NEG
+            both = q["ov1"] is not None and q["xv1"] is not None
+            r.update(ours_vmaf_v1=fmt(q["ov1"]), ref_vmaf_v1=fmt(q["xv1"]),
+                     dvmaf_v1=fmt(q["ov1"] - q["xv1"], sign=True) if both else "",
                      ours_psnr_y=fmt(q["opsnr"]), ref_psnr_y=fmt(q["xpsnr"]),
                      dpsnr_y=fmt(q["opsnr"] - q["xpsnr"], sign=True))
             if goal == "G3" and bdv is not None:
-                r["bd_vmafneg_pct"] = fmt(bdv, sign=True)
+                r["bd_vmaf_v1_pct"] = fmt(bdv, sign=True)
             r.update(supp)
         r["frames_decoded_ok"] = fok
         r["_frames_bad"] = fok == "no"
@@ -4231,12 +4282,12 @@ def board_rows(clip, boards):
                  ratio=fmt(x["ratio"]), feed_fps="",
                  ours_bytes=oq[0] if oq else "", ref_bytes=rq[0] if rq else "",
                  dsize_pct=fmt(x["dsize"], sign=True),
-                 ours_vmafneg=fmt(oq[1]) if oq else "",
-                 ref_vmafneg=fmt(rq[1]) if rq else "",
-                 dvmafneg=fmt(x["dvmaf"], sign=True),
+                 ours_vmaf_v1=fmt(oq[1]) if oq else "",
+                 ref_vmaf_v1=fmt(rq[1]) if rq else "",
+                 dvmaf_v1=fmt(x["dvmaf"], sign=True),
                  ours_psnr_y=fmt(oq[2]) if oq else "",
                  ref_psnr_y=fmt(rq[2]) if rq else "",
-                 dpsnr_y=fmt(x["dpsnr"], sign=True), bd_vmafneg_pct="",
+                 dpsnr_y=fmt(x["dpsnr"], sign=True), bd_vmaf_v1_pct="",
                  rounds=b["samples"])
         r["_size_off"] = abs(x["dsize"]) > SIZE_BAR
         r["_notes"] = [f"legacy board (rate-pinned): both solved to {x['kbps']} "
@@ -4397,11 +4448,11 @@ def do_report_spec():
     L.append("")
     L.append("How to read: a speed ratio is our time / the reference's time at the same file")
     L.append("size; below 1.00 we're faster. Pass = median <= 1.00 and worst <= 1.15, quality")
-    L.append('no worse than -0.5 VMAF-NEG. "-" = not measured yet.')
+    L.append('no worse than -0.5 VMAF v1. "-" = not measured yet.')
     L.append('A dagger (†) marks a figure that includes a cell timed in one run only; "void"')
     L.append("means every cell there was measured but failed a validity rule (see the last")
-    L.append("section). Quality holds for a class and tier when the median dVMAF-NEG is")
-    L.append("at least -0.5, no cell is more than 1.0 VMAF-NEG or 1.0 dB PSNR-Y behind,")
+    L.append("section). Quality holds for a class and tier when the median dVMAF-v1 is")
+    L.append("at least -0.5, no cell is more than 1.0 VMAF v1 or 1.0 dB PSNR-Y behind,")
     L.append("and every cell's size is within 1%. Both encoders read the same 8-bit")
     L.append("4:2:0 Y4M frames on stdin.")
     L.append("")
@@ -4446,27 +4497,27 @@ def do_report_spec():
     qual_lines, qual_state = [], []
     for cls, tier in SPEC_ROWS:
         rs = [r for r in grp(cls, tier) if r["goal"] == "G3"
-              and num(r, "dvmafneg") is not None
+              and num(r, "dvmaf_v1") is not None
               and r["valid"] != "frame-mismatch"]
         if not rs:
             qual_lines.append(f"| {cls} | {tier} | - | - | - | - |")
             qual_state.append((cls, tier, "none", None))
             continue
-        dv = sorted(rs, key=lambda r: num(r, "dvmafneg"))
+        dv = sorted(rs, key=lambda r: num(r, "dvmaf_v1"))
         dp = sorted(rs, key=lambda r: num(r, "dpsnr_y"))
-        wv, wp = num(dv[0], "dvmafneg"), num(dp[0], "dpsnr_y")
-        mv = med([num(r, "dvmafneg") for r in rs])
+        wv, wp = num(dv[0], "dvmaf_v1"), num(dp[0], "dpsnr_y")
+        mv = med([num(r, "dvmaf_v1") for r in rs])
         name = lambda r: f"{r['title']}_{r['size']}"          # noqa: E731
         worst = name(dv[0])
         why = []
         if mv < VMAF_BAR:
             why.append(f"median {mv:+.2f}")
-        floor = sorted((r for r in rs if num(r, "dvmafneg") < VMAF_FLOOR
+        floor = sorted((r for r in rs if num(r, "dvmaf_v1") < VMAF_FLOOR
                         or num(r, "dpsnr_y") < PSNR_FLOOR),
-                       key=lambda r: (num(r, "dvmafneg"), num(r, "dpsnr_y")))
+                       key=lambda r: (num(r, "dvmaf_v1"), num(r, "dpsnr_y")))
         if floor:
             why.append("floor: " + ", ".join(
-                f"{name(r)} {num(r, 'dvmafneg'):+.2f} VMAF / "
+                f"{name(r)} {num(r, 'dvmaf_v1'):+.2f} VMAF / "
                 f"{num(r, 'dpsnr_y'):+.2f} dB" for r in floor))
             worst = name(floor[0])
         off = [r for r in rs if num(r, "dsize_pct") is not None
@@ -4527,16 +4578,16 @@ def do_report_spec():
         L.append(f"Tier L comes from {len(standins)} whole-title cells standing in for "
                  "the 10-minute excerpts, which are not measured yet.")
     L.append("")
-    L.append("## Quality at matched size (VMAF-NEG delta median / worst; PSNR-Y worst)")
-    L.append("| class | tier | dVMAF | dPSNR-Y | worst cell | verdict |")
+    L.append("## Quality at matched size (VMAF v1 delta median / worst; PSNR-Y worst)")
+    L.append("| class | tier | dVMAF-v1 | dPSNR-Y | worst cell | verdict |")
     L.append("|---|---|---|---|---|---|")
     L += qual_lines
     # spec 5.2: a cell inside the floor but below the published bar is named
     # even when its class and tier pass, so a median cannot hide it
-    soft = sorted((num(r, "dvmafneg"), f"{r['title']}_{r['size']}", r["tier"])
+    soft = sorted((num(r, "dvmaf_v1"), f"{r['title']}_{r['size']}", r["tier"])
                   for r in rows if r["goal"] == "G3"
-                  and num(r, "dvmafneg") is not None
-                  and VMAF_FLOOR <= num(r, "dvmafneg") < VMAF_BAR)
+                  and num(r, "dvmaf_v1") is not None
+                  and VMAF_FLOOR <= num(r, "dvmaf_v1") < VMAF_BAR)
     L.append("")
     L.append("Soft cells (within the floor, below -0.5): " + (", ".join(
         f"{c} {d:+.2f} ({t})" for d, c, t in soft) if soft else "none") + ".")
@@ -4851,11 +4902,10 @@ def invalid_lines(rows, missing, board_used, standins, boards):
                    "recorded. It feeds frames from memory inside ffmpeg, so it has "
                    "no feeder rate.")
     out.append("- The supplementary columns (spec 5.2a: harmonic-mean, minimum, "
-               "1%-low and first-second VMAF-NEG, plain VMAF, YUV-PSNR and SSIM "
-               "6:1:1) are blank for every record scored before 2026-09-26, which "
-               "kept only the pooled VMAF-NEG and PSNR-Y. Plain VMAF is opt-in "
-               "(LF_PLAIN_VMAF=1) because its second model costs about 80% more "
-               "scoring CPU.")
+               "1%-low and first-second VMAF v1, CAMBI, YUV-PSNR and SSIM "
+               "6:1:1) and every VMAF v1 column are blank for a record scored "
+               "on VMAF-NEG; `rescore` gives such a record its v1 scores "
+               "without re-solving.")
     out.append("- No output md5 was recorded before 2026-09-26 (spec rule 5); "
                "timed legs record and print one from now on.")
     out.append("- The long-form legs ran with the harness's load-average guard "

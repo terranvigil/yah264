@@ -56,7 +56,9 @@
 #             timed sample. The untimed half of a board round: it reads no
 #             clock, so it runs beside other work, and the timed half that
 #             follows spends its window on encodes and nothing else
-#   RUNS, REPEAT_FLOOR, SECONDS, PRESET, VMAF
+#   RUNS, REPEAT_FLOOR, SECONDS, PRESET
+#   VMAF_V1_BIN, VMAF_V1_MODELS  the float-enabled libvmaf 3.x and the v1 model
+#             directory (scripts/bdcompare.py's defaults)
 #   Y264_NO_SOLVE_CACHE=1, or the flag --no-solve-cache: neither read nor write
 #             the solve cache. The cache is keyed by the identity of all three
 #             binaries (see below), so this is for a box whose cache is under
@@ -117,6 +119,7 @@
 import os, subprocess, sys, time, json, math, resource, hashlib, glob
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch                                                  # noqa: E402
+import bdcompare                                                # noqa: E402
 
 _ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The ffmpeg with both encoders is the one docs/ffmpeg.md
@@ -167,7 +170,7 @@ scratch.df_guard(20, what='ffboard')
 # scratch, several GB of it at 4K, and it is removed when the board exits.
 CACHE   = scratch.cache_dir("ffboard")
 WD      = os.environ.get("WD") or scratch.mkdtemp("ffboard")
-VMAF    = os.environ.get("VMAF", "vmaf")
+VMAF    = bdcompare.V1_BIN
 VMAF_THREADS = os.environ.get("VMAF_THREADS", "1")
 # Timed encodes write to /dev/null; the file the size and VMAF columns need is
 # produced once, untimed. docs/instruments.md records a timed 9.5 MB write
@@ -613,7 +616,9 @@ def kbps_of(size, frames, fps):
 # x264 writes 4 462 782 / 4 475 437 at t6 / auto. A t1 cell and an auto cell are
 # different bitstreams and get different entries; a solve taken at one thread
 # count and timed at another is the rate-mismatch the size guard exists to
-# catch. (This is also why SOLVE_THREADS follows THREADS by default.)
+# catch. (This is also why SOLVE_THREADS follows THREADS by default.) The key
+# ends in the metric, so an entry scored on the old VMAF-NEG can never be read
+# back as a v1 score.
 QUAL_CACHE = f"{CACHE}/quality.json"
 NO_QUAL_CACHE = (os.environ.get("Y264_NO_QUAL_CACHE", "0") == "1"
                  or "--no-qual-cache" in sys.argv[1:])
@@ -636,14 +641,14 @@ def _qcache_put(key, val):
         json.dump(c, f)
 
 def quality(codec, clip, frames, point, cmd_for, e, out):
-    """(bytes, VMAF-NEG, PSNR-Y) for one cell, encoded and scored once.
+    """(bytes, VMAF v1, PSNR-Y) for one cell, encoded and scored once.
 
     cmd_for(path) builds the encode; it is called only on a miss. A cell that
     failed to score is cached as None for its metrics rather than not cached,
     because re-running a 4K VMAF pass that already returned nothing costs the
     same minutes the second time."""
     key = (f"{BOARD_ID}:{RC}:{codec}:{clip}:{frames}:{point:.3f}:{PRESET}"
-           f":t{THREADS}")
+           f":t{THREADS}:v1")
     what = f"{codec.replace('lib','')} {clip} @ {point:.3f} t{THREADS}"
     c = _qcache()
     if key in c:
@@ -652,7 +657,7 @@ def quality(codec, clip, frames, point, cmd_for, e, out):
     print(f"    qual cache: miss [{BOARD_ID}] {what}", flush=True)
     sh(cmd_for(out), e, out)
     sz = os.path.getsize(out)
-    nv, npy = vmaf_neg(clip, frames, out)
+    nv, npy = vmaf_v1(clip, frames, out)
     _qcache_put(key, [sz, nv, npy])
     return sz, nv, npy
 
@@ -928,35 +933,42 @@ def measure(clip, frames, kbps):
     bw, bc = med2(bs); nw, nc = med2(ns); xw, xc = med2(xs)
     return (nw - bw, xw - bw, nc - bc, xc - bc), qn, qx
 
-def vmaf_neg(clip, frames, bitstream):
-    """Decode and score against the same frames of the source. VMAF-NEG because
+def vmaf_v1(clip, frames, bitstream):
+    """Decode and score against the same frames of the source. VMAF v1 because
     that is what the quality gate uses, and PSNR-Y alongside it because the
     floor (2026-09-14, owner) is read at equal bytes on the same frames.
 
+    v1 is scored the way scripts/bdcompare.py scores it: both sides at 10-bit
+    4:2:0, the decode in passthrough so no frame is dropped or repeated, the
+    model by the source's height and frame rate, and CAMBI told the stream's
+    coded bit depth. The PSNR-Y is then on the 10-bit scale; an 8-bit source
+    shifted up two bits reads within a few hundredths of a dB of its 8-bit
+    PSNR, the same on both arms, so dPSNR-Y is unchanged.
+
     `--feature psnr` is one more extractor on a pass that has already decoded
     and read both files, so the second number costs no encode and no decode.
-    It is inert for the first: the pooled neg mean is bit-identical with the
-    feature on and off (checked to nine decimals), so the dVMAF column
-    reproduces to the digit across the change that added this.
     """
     ref, dec = f"{WD}/ref.y4m", f"{WD}/dec.y4m"
     if not os.path.exists(ref):
         sh(["ffmpeg", "-v", "error", "-y", "-i", clip_path(clip),
-            "-frames:v", str(frames), "-pix_fmt", "yuv420p", ref])
-    sh(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-pix_fmt", "yuv420p", dec])
+            "-frames:v", str(frames), "-pix_fmt", "yuv420p10le", "-strict", "-1", ref])
+    sh(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-fps_mode", "passthrough",
+        "-pix_fmt", "yuv420p10le", "-strict", "-1", dec])
     j = f"{WD}/v.json"
     # VMAF_THREADS, because scoring is not part of any measurement here: it runs
     # outside sample(), it is skipped entirely when the quality cache hits, and
     # libvmaf is bit-identical across thread counts, so a cell scored at 1 and a
     # cell scored at 8 sit on the same ladder. At CIF the default of one thread
     # cost nothing; a 2160p pass at one thread is three minutes per arm.
+    model = bdcompare.v1_model(clip_path(clip))
     sh([VMAF, "--threads", VMAF_THREADS,
         "-r", ref, "-d", dec, "--json", "-o", j, "--feature", "psnr",
-        "--model", "version=vmaf_v0.6.1neg:name=neg"])
+        "--model", f"path={model}:name=vmaf_v1:cambi.enc_bitdepth="
+                   f"{bdcompare._enc_bitdepth(bitstream)}"])
     try:
         with open(j) as f:
             pooled = json.load(f)["pooled_metrics"]
-        return pooled["neg"]["mean"], pooled["psnr_y"]["mean"]
+        return pooled["vmaf_v1"]["mean"], pooled["psnr_y"]["mean"]
     except Exception:
         return None, None
 
@@ -1096,13 +1108,13 @@ def class_of(clip):
     return "other"
 
 def class_block(rows):
-    """rows: [(clip, ratio, work, dVMAF, dsize, dPSNR-Y)]."""
+    """rows: [(clip, ratio, work, dVMAF-v1, dsize, dPSNR-Y)]."""
     if not rows:
         return
     seen = [n for n, _ in CLASSES] + ["other"]
     print("  " + "-" * 100)
     print(f"  {'class':<16}{'clips':>8}{'median':>9}{'worst':>9}"
-          f"{'worst clip':>20}{'dVMAF':>9}{'dsize':>8}{'dPSNR-Y':>9}")
+          f"{'worst clip':>20}{'dVMAF-v1':>9}{'dsize':>8}{'dPSNR-Y':>9}")
     for name in seen:
         got = [r for r in rows if class_of(r[0]) == name]
         if not got:
@@ -1127,7 +1139,7 @@ def main():
     enc_col = ENC.replace("lib", "")[:6]
     if RC == "crf":
         print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{enc_col+' s':>9}"
-              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}"
+              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF-v1':>9}{'dsize':>8}"
               f"{'dPSNR-Y':>9}")
         print("  " + "-" * 100)
     elif RC == "abrm":
@@ -1136,12 +1148,12 @@ def main():
         # proof the match worked and should sit near zero -- if it does not, the
         # solve did not converge and the row is not a speed reading.
         print(f"  {'clip':<16}{'kbps':>8}{'n targ':>7}{'x targ':>7}{enc_col+' s':>9}"
-              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}"
+              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF-v1':>9}{'dsize':>8}"
               f"{'dPSNR-Y':>9}")
         print("  " + "-" * 100)
     else:
         print(f"  {'clip':<16}{'kbps':>7}{enc_col+' s':>9}{'x264 s':>9}{'x264 x':>9}"
-              f"{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}{'dPSNR-Y':>9}"
+              f"{'work':>7}{'cores':>12}{'dVMAF-v1':>9}{'dsize':>8}{'dPSNR-Y':>9}"
               f"{'n rate':>8}{'x rate':>8}")
         print("  " + "-" * 100)
     ratios, dvs, dss, works, dps, dsc = [], [], [], [], [], []
@@ -1174,7 +1186,7 @@ def main():
             dsc.append((clip, ds))
             print(f"  {clip:<16}{'prepared':>8}"
                   + (f"{ncrf:>7.2f}{xcrf:>7.2f}" if ncrf is not None else f"{'':>14}")
-                  + f"{'':>27}{dv:>+8.2f}{ds:>+7.1f}%{dp:>+9.2f}", flush=True)
+                  + f"{'':>27}{dv:>+9.2f}{ds:>+7.1f}%{dp:>+9.2f}", flush=True)
             continue
         nt, xt, ncpu, xcpu = timing
         r  = nt / xt
@@ -1206,13 +1218,13 @@ def main():
             fmt = "{:>7.0f}" if RC == "abrm" else "{:>7.2f}"
             print(f"  {clip:<16}{nk:>8.0f}{fmt.format(ncrf)}{fmt.format(xcrf)}"
                   f"{nt:>9.2f}{xt:>9.2f}{r:>8.2f}x{w:>6.2f}x{cores:>12}"
-                  f"{dv:>+8.2f}{ds:>+7.1f}%{dp:>+9.2f}", flush=True)
+                  f"{dv:>+9.2f}{ds:>+7.1f}%{dp:>+9.2f}", flush=True)
         else:
             secs = frames / fps
             nre = 100.0 * ((nsz * 8 / secs / 1000) / kbps - 1)
             xre = 100.0 * ((xsz * 8 / secs / 1000) / kbps - 1)
             print(f"  {clip:<16}{kbps:>7}{nt:>9.2f}{xt:>9.2f}{r:>8.2f}x"
-                  f"{w:>6.2f}x{cores:>12}{dv:>+8.2f}{ds:>+7.1f}%{dp:>+9.2f}"
+                  f"{w:>6.2f}x{cores:>12}{dv:>+9.2f}{ds:>+7.1f}%{dp:>+9.2f}"
                   f"{nre:>+7.1f}%{xre:>+7.1f}%", flush=True)
     if prep:
         print("  " + "-" * 100)
@@ -1234,7 +1246,7 @@ def main():
         # not blank this column, it would quietly print the wrong clip's number.
         pv = [d for _, d in dps if d == d]
         print(f"  {'MEDIAN':<16}{pad}{median(ratios):>8.2f}x"
-              f"{median(works):>6.2f}x{'':>12}{median(dvs):>+8.2f}"
+              f"{median(works):>6.2f}x{'':>12}{median(dvs):>+9.2f}"
               f"{median(dss):>+7.1f}%"
               + (f"{median(pv):>+9.2f}" if pv else f"{'n/a':>9}"), flush=True)
         print(f"  {'MAX':<16}{pad}{max(ratios):>8.2f}x{max(works):>6.2f}x",

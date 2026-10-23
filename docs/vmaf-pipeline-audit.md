@@ -17,8 +17,8 @@ axis is either identical between the two encoders or measurably score-neutral:
 | frame count / dup-drop | decoded y4m is 300/300 frames, file sizes byte-identical apart from the SAR header tag; no ffmpeg dup/drop warnings |
 | frame rate / timing | both decoded y4m headers read F30000:1001; the vmaf CLI pairs frames by ORDER, not timestamps, so timing metadata can't resample either side |
 | color range / space / primaries / transfer | both streams unsignaled ("unknown"), so ffmpeg treats them identically with no range conversion on either side. A full-range mismatch would be catastrophic, not -0.5 |
-| chroma siting | `left` on both; irrelevant anyway, since vmaf_v0.6.1 is luma-only |
-| pix_fmt / depth | yuv420p 8-bit on both; `-pix_fmt yuv420p` is a no-op |
+| chroma siting | `left` on both. It matters now that VMAF v1 scores chroma, and it's identical |
+| pix_fmt / depth | yuv420p 8-bit on both. Scoring converts both sides to 10-bit, as v1 expects ([vmaf.md](vmaf.md)) |
 | reference | ONE trimmed ref.y4m feeds both encoders AND the scorer |
 | subsample | 0, every frame (the ~5 fps aliasing trap is closed) |
 | decode fidelity | conformance recon-match: ffmpeg's decode of our stream IS our encoder's recon |
