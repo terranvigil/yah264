@@ -105,9 +105,11 @@ def band_slope(clip):
 
 
 def crf_ladder(clip):
-    """CRFs whose x264 VMAF-NEG lands on the same four band targets."""
-    crfs = [40, 36, 32, 28, 24, 20, 16]
+    """CRFs whose x264 gate score lands on the same four band targets."""
     c = CURVE[clip]
+    # calibrate_band steps the CRF by 4 down from 40; a clip that needs the
+    # top of the band from below CRF 16 carries more points
+    crfs = [40 - 4 * i for i in range(len(c))]
     out = []
     for t in (88.0, 90.0, 92.0, 94.0):
         got = None
