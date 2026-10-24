@@ -886,7 +886,8 @@ static void usage(const char *argv0)
         "                     inter-coded neighbour, so an intra macroblock decodes\n"
         "                     from intra data alone. Error resilience; costs bits.\n"
         "                     Off by default.\n"
-        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default 0).\n"
+        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default: +2\n"
+        "                     below 720p, -2 at 720p, 0 from 1080p up).\n"
         "                     Reaches the quantiser and the deblock chroma edge QP.\n"
         "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
         "                     (defaults 0 and 51)\n"
@@ -4075,7 +4076,7 @@ int main(int argc, char **argv)
     int deblock_on = -1, deblock_a = 0, deblock_b = 0, deblock_set = 0;
     int b_pyramid = -1, weightb = -1, weightp = -2;   /* -2 = unset, -1 = off */
     int constrained_intra = 0;
-    int chroma_qp_offset = 0;
+    int chroma_qp_offset = YAH264_CQP_AUTO;
     int qp_min = 0, qp_max = 0, qp_step = 0;
     double vbv_init = 0.0;
     double crf_max = 0.0, ratetol = 0.0;        /* both zero-as-unset (see yah264_param_t) */

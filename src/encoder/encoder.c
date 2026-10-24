@@ -4221,6 +4221,18 @@ static void deblock_auto_resolve(yah264_param_t *p)
     int off = y264_size_class(p->width, p->height) >= 1 ? -1 : 0;
     if (p->deblock_alpha == YAH264_DEBLOCK_AUTO) p->deblock_alpha = off;
     if (p->deblock_beta == YAH264_DEBLOCK_AUTO) p->deblock_beta = off;
+    /* The chroma offset, by picture size, as VMAF v1 reads it. Below 720p +2
+     * moves bits from chroma to luma and every CIF band clip gains against the
+     * reference (stefan +0.4% to -0.9%, tempete +0.4% to -2.6%) for about
+     * 0.7 dB of chroma PSNR. At 720p the chroma planes weigh more and -2 wins
+     * on every band clip (park_joy -5.9% to -7.8%, ducks -7.0% to -9.0%). At
+     * 1080p -2 still helps most clips but costs sunflower +3.5% against our
+     * own 0, and -1 costs it +2.4%, so 1080p and up keep 0. An explicit
+     * --chroma-qp-offset always wins. */
+    if (p->chroma_qp_index_offset == YAH264_CQP_AUTO) {
+        int sc = y264_size_class(p->width, p->height);
+        p->chroma_qp_index_offset = sc == 0 ? 2 : sc == 1 ? -2 : 0;
+    }
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
@@ -4293,7 +4305,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         (param->deblock_beta != YAH264_DEBLOCK_AUTO &&
          (param->deblock_beta  < -6 || param->deblock_beta  > 6)))
         return NULL;
-    if (param->chroma_qp_index_offset < -12 || param->chroma_qp_index_offset > 12)
+    if (param->chroma_qp_index_offset != YAH264_CQP_AUTO &&
+        (param->chroma_qp_index_offset < -12 || param->chroma_qp_index_offset > 12))
         return NULL;
     if (param->sps_id < 0 || param->sps_id > 31)
         return NULL;
