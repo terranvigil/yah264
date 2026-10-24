@@ -3744,18 +3744,26 @@ static inline void add_dc_4x4(pixel *rec, int rs, const pixel *pred, int ps, int
  * RD instead of the inter deadzone, which the trellis never revisits and
  * which drops the small DC shifts VMAF v1's chroma feature reads as lost
  * texture. 0 = the deadzone. Y264_CDC_LAM scales the trellis lambda for the
- * choice, x256 (default 128: the band and the long-form cells read best
- * there). */
+ * choice, x256. Unset, it follows the picture size: 64 from 720p up, where
+ * the DC shifts pay most (ducks and park_joy read best there and worse at
+ * every step above it), and 512 below, where the same levels cost CIF clips
+ * more than they buy (stefan +3.7% against the reference at 64, +0.6% at
+ * 512). */
+static int cdc_lam_env(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_CDC_LAM"); v = e ? atoi(e) : -1; }
+    return v;
+}
+static int cdc_lam_x256(const y264_frame_t *f)
+{
+    int v = cdc_lam_env();
+    return v >= 0 ? v : f->size_class ? 64 : 512;
+}
 static int cdc_rd_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_CDC_RD"); v = e ? atoi(e) != 0 : 1; }
-    return v;
-}
-static int cdc_lam_x256(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? atoi(e) : 128; }
     return v;
 }
 
@@ -3771,7 +3779,7 @@ static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
     int qp = f->cur_chroma_qp_scaled, w0 = cqm_dc4p(f, 0, 1 + c);
     dctcoef near[4], tr[4];
     y264_chroma_dc420_rt(dc, near, tr, qp, 2, w0, f->lev_max);
-    long lam = ((long)lambda_trellis(f->cur_chroma_qp, 0) * cdc_lam_x256() + 128) >> 8;
+    long lam = ((long)lambda_trellis(f->cur_chroma_qp, 0) * cdc_lam_x256(f) + 128) >> 8;
     long bestJ = -1;
     int nvar = 0, vi[4];
     for (int i = 0; i < 4; i++)
@@ -13670,7 +13678,7 @@ void y264_mb_warm_statics(void)
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env();
-    (void)cdc_rd_on(); (void)cdc_lam_x256();
+    (void)cdc_rd_on(); (void)cdc_lam_env();
     (void)trel_smooth_v(); (void)trel_smooth_ionly();
     (void)aq_dark_env(0);
     (void)psy_dark_env();

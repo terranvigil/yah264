@@ -87,6 +87,7 @@ DEFAULT_OVERRIDES = {
     "Y264_MBTREE_STRENGTH": "= 5*(1-qcomp)*0.7, 1.4 at qcomp 0.6 (fallback path 2.0)",
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
+    "Y264_CDC_LAM": "= picture size: 64 from 720p up, 512 below",
     # overrides of a public param or CLI flag: unset follows the param
     "Y264_MBT_DEPFLOOR": "= param", "Y264_ABR_TOL": "= param",
 }
