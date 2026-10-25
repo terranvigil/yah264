@@ -216,7 +216,7 @@ def cell(clip, arm, rate):
     m = bdcompare.vmaf_of(out, srcs[clip], work, sids[clip])
     kbps = os.path.getsize(out) * 8 / (nfr[clip] / fps[clip]) / 1000
     ins = instr_of(clip, binp, env, rate, st) if INSTR else None
-    return (clip, name, rate, kbps, m["VMAF-NEG"] if m else None, psnr_y(out, clip), ins)
+    return (clip, name, rate, kbps, m.get(bdcompare.GATE) if m else None, psnr_y(out, clip), ins)
 
 
 def rungs(clip):

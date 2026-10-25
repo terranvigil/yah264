@@ -113,9 +113,9 @@ def one(srcfile, work, points, frames=None):
     for crf in points:                      # baseline curve IS the target set
         sz, _ = encode(y4m, float(crf), out)
         v = bd.vmaf_of(out, y4m, work)
-        if not sz or not v or "VMAF-NEG" not in v:
+        if not sz or not v or bd.GATE not in v:
             return {"seq": row["seq"], "error": f"baseline crf {crf} failed"}
-        base_pts.append((sz, v["VMAF-NEG"]))
+        base_pts.append((sz, v[bd.GATE]))
         targets.append(sz)
     row["base_bytes"] = targets
     row["base_neg"] = [p[1] for p in base_pts]
@@ -126,10 +126,10 @@ def one(srcfile, work, points, frames=None):
             q = solve(y4m, t, out, env)
             sz, _ = encode(y4m, q, out, env)
             v = bd.vmaf_of(out, y4m, work)
-            if not sz or not v or "VMAF-NEG" not in v:
+            if not sz or not v or bd.GATE not in v:
                 pts = None
                 break
-            pts.append((sz, v["VMAF-NEG"]))
+            pts.append((sz, v[bd.GATE]))
         if pts is None:
             row[name] = None
             continue

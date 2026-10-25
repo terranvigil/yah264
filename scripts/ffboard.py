@@ -647,8 +647,9 @@ def quality(codec, clip, frames, point, cmd_for, e, out):
     failed to score is cached as None for its metrics rather than not cached,
     because re-running a 4K VMAF pass that already returned nothing costs the
     same minutes the second time."""
+    w, h, _ = bdcompare._y4m_geometry(clip_path(clip))
     key = (f"{BOARD_ID}:{RC}:{codec}:{clip}:{frames}:{point:.3f}:{PRESET}"
-           f":t{THREADS}:v1")
+           f":t{THREADS}:v1{'d' if bdcompare.v1_scaled(w, h) else ''}")
     what = f"{codec.replace('lib','')} {clip} @ {point:.3f} t{THREADS}"
     c = _qcache()
     if key in c:
@@ -961,14 +962,32 @@ def vmaf_v1(clip, frames, bitstream):
     # cell scored at 8 sit on the same ladder. At CIF the default of one thread
     # cost nothing; a 2160p pass at one thread is three minutes per arm.
     model = bdcompare.v1_model(clip_path(clip))
-    sh([VMAF, "--threads", VMAF_THREADS,
-        "-r", ref, "-d", dec, "--json", "-o", j, "--feature", "psnr",
-        "--model", f"path={model}:name=vmaf_v1:cambi.enc_bitdepth="
-                   f"{bdcompare._enc_bitdepth(bitstream)}"])
+    w, h, _ = bdcompare._y4m_geometry(clip_path(clip))
+    opts = bdcompare.v1_model_opts(w, h, bdcompare._enc_bitdepth(bitstream))
+    if bdcompare.v1_scaled(w, h):
+        # v1 at display resolution, PSNR at the coded size
+        rs, ds = f"{WD}/ref.disp.y4m", f"{WD}/dec.disp.y4m"
+        for a, b in ((ref, rs), (dec, ds)):
+            sh(["ffmpeg", "-v", "error", "-y", "-i", a, "-vf", bdcompare.V1_SCALE_VF,
+                "-pix_fmt", "yuv420p10le", "-strict", "-1", b])
+        pj = f"{WD}/p.json"
+        sh([VMAF, "--threads", VMAF_THREADS, "-r", ref, "-d", dec, "--json", "-o", pj,
+            "--no_prediction", "--feature", "psnr"])
+        sh([VMAF, "--threads", VMAF_THREADS, "-r", rs, "-d", ds, "--json", "-o", j,
+            "--model", f"path={model}:{opts}"])
+        for p in (rs, ds):
+            os.unlink(p)
+    else:
+        pj = j
+        sh([VMAF, "--threads", VMAF_THREADS,
+            "-r", ref, "-d", dec, "--json", "-o", j, "--feature", "psnr",
+            "--model", f"path={model}:{opts}"])
     try:
         with open(j) as f:
-            pooled = json.load(f)["pooled_metrics"]
-        return pooled["vmaf_v1"]["mean"], pooled["psnr_y"]["mean"]
+            v = json.load(f)["pooled_metrics"]["vmaf_v1"]["mean"]
+        with open(pj) as f:
+            p = json.load(f)["pooled_metrics"]["psnr_y"]["mean"]
+        return v, p
     except Exception:
         return None, None
 

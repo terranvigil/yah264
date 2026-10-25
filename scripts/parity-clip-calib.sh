@@ -101,6 +101,27 @@ print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h >= 1440 else 
 [ -f "$v1model" ] || { echo "missing VMAF v1 model: $v1model" >&2; exit 2; }
 ref10="$wd/ref10.y4m"
 ffmpeg -v error -y -i "$ref" -pix_fmt yuv420p10le -strict -1 "$ref10" || exit 2
+# v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080 in
+# both dimensions is fitted to it, both sides, and CAMBI is told the coded size
+read -r v1scaled v1w v1h v1vf <<GEO
+$(python3 "$root/scripts/bdcompare.py" --v1-display "$ref")
+GEO
+v1disp() {  # <10-bit y4m> -> the file v1 scores: itself, or a display-fitted copy
+    if [ "$v1scaled" = 1 ]; then
+        ffmpeg -v error -y -i "$1" -vf "$v1vf" -pix_fmt yuv420p10le -strict -1 "$1.disp.y4m"
+        echo "$1.disp.y4m"
+    else
+        echo "$1"
+    fi
+}
+v1copts() {  # <coded bit depth> -> the --model options after the path
+    if [ "$v1scaled" = 1 ]; then
+        echo "name=vmaf_v1:cambi.enc_bitdepth=$1:cambi.enc_width=$v1w:cambi.enc_height=$v1h"
+    else
+        echo "name=vmaf_v1:cambi.enc_bitdepth=$1"
+    fi
+}
+ref10d=$(v1disp "$ref10")
 
 nargs="--preset $PRESET --cabac --transform-8x8"
 xargs_="--preset $PRESET"
@@ -115,8 +136,11 @@ vmaf_of() {  # <decoded.y4m> <bitstream> -> "<v1> <CAMBI>"
     case "$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt -of csv=p=0 "$2")" in
         *12*) ebd=12 ;; *10*) ebd=10 ;;
     esac
-    "$VMAF" -r "$ref10" -d "$1" --model "path=$v1model:name=vmaf_v1:cambi.enc_bitdepth=$ebd" \
-        --json -o "$1.json" >/dev/null 2>&1 || { echo "NaN NaN"; return; }
+    local d
+    d=$(v1disp "$1")
+    "$VMAF" -r "$ref10d" -d "$d" --model "path=$v1model:$(v1copts "$ebd")" \
+        --json -o "$1.json" >/dev/null 2>&1 || { [ "$d" = "$1" ] || rm -f "$d"; echo "NaN NaN"; return; }
+    [ "$d" = "$1" ] || rm -f "$d"
     python3 -c "
 import json,sys
 pm=json.load(open(sys.argv[1]))['pooled_metrics']
