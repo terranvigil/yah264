@@ -211,8 +211,9 @@ if GATE not in ("VMAF-NEG", "VMAF-v1"):
     sys.exit(f"bdcompare: VMAF_GATE '{GATE}' is not VMAF-NEG or VMAF-v1")
 V1 = V1 or GATE == "VMAF-v1"
 GATE_SHORT = "NEG" if GATE == "VMAF-NEG" else "v1"
-V1_BIN = os.environ.get("VMAF_V1_BIN", os.path.expanduser("~/.local/opt/vmaf-v1/bin/vmaf"))
-V1_MODELS = os.environ.get("VMAF_V1_MODELS", os.path.expanduser("~/.local/share/vmaf/model"))
+# an empty value counts as unset, as a caller passing VAR="" means
+V1_BIN = os.environ.get("VMAF_V1_BIN") or os.path.expanduser("~/.local/opt/vmaf-v1/bin/vmaf")
+V1_MODELS = os.environ.get("VMAF_V1_MODELS") or os.path.expanduser("~/.local/share/vmaf/model")
 V1_VER = "v1.0.16"
 
 
@@ -314,36 +315,54 @@ def _v1_of(bitstream, src_path, work, src_id=None):
     os.mkfifo(dec)
     os.mkfifo(ref)
     fd, js = tempfile.mkstemp(suffix=".v1.json", dir=work); os.close(fd)
-    dproc = subprocess.Popen(
-        ["ffmpeg", "-v", "error", "-nostdin", "-y", *shlex.split(_FF_T), "-i", bitstream,
-         "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
-         "-f", "yuv4mpegpipe", dec],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    conv = subprocess.Popen(
-        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path, *vf,
-         "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
-    r = sh(f'{shlex.quote(V1_BIN)} -q -r "{ref}" -d "{dec}" --json -o "{js}" '
-           f'--model path={shlex.quote(model)}:{v1_model_opts(w, h, ebd)} {sub} {_VMAF_T}')
-    for pr in (conv, dproc):
-        pr.kill()
-        pr.wait()
-    for p in (ref, dec, d):
-        try:
-            os.rmdir(p) if p == d else os.unlink(p)
-        except OSError:
-            pass
+    procs, ok = [], False
     try:
-        if r.returncode != 0:
-            return None
-        with open(js) as f:
-            pm = json.load(f)["pooled_metrics"]
+        procs.append(subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-y", *shlex.split(_FF_T), "-i", bitstream,
+             "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
+             "-f", "yuv4mpegpipe", dec],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        procs.append(subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path, *vf,
+             "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        sub = ["--subsample", str(SUBSAMPLE)] if SUBSAMPLE > 1 else []
+        v = subprocess.Popen(
+            [V1_BIN, "-q", "-r", ref, "-d", dec, "--json", "-o", js,
+             "--model", f"path={model}:{v1_model_opts(w, h, ebd)}", *sub, *shlex.split(_VMAF_T)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        procs.append(v)
+        # a producer that fails before it opens its FIFO leaves libvmaf blocked
+        # in open() for ever, so watch the producers and give up on a failure
+        while True:
+            try:
+                v.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if any(p.poll() not in (None, 0) for p in procs[:2]):
+                    break
+        ok = v.poll() == 0 and all(p.wait() == 0 for p in procs[:2])
+        if ok:
+            with open(js) as f:
+                pm = json.load(f)["pooled_metrics"]
+    except (OSError, ValueError, KeyError):
+        ok = False
     finally:
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+        for p in (ref, dec, js):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
         try:
-            os.unlink(js)
+            os.rmdir(d)
         except OSError:
             pass
+    if not ok:
+        return None
     cambi = next((k for k in pm if k.startswith("cambi")), None)
     if "vmaf_v1" not in pm or cambi is None:
         return None

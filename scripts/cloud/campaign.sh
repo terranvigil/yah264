@@ -333,6 +333,8 @@ st_board_tN_purec() { board pure "$TN" 0 "$RES/board-tN-purec.txt"; }
 st_ffboard() {
     [ -x "${FFBOARD_FFMPEG:-}" ] || { c_skip "no ffmpeg fork (build-ffmpeg skipped or failed)"; return; }
     [ -d "${Y264LIB:-}" ] || { c_skip "no installed libyah264"; return; }
+    [ -x "${VMAF_BIN:-}" ] && [ -d "${VMAF_MODELS_DIR:-}" ] \
+        || { c_skip "no libvmaf CLI or v1 models (the build-vmaf stage skipped or failed)"; return; }
     local out="$RES/ffboard.txt" thr
     for thr in 1 "$TN"; do
         {

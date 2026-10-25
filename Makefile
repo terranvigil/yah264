@@ -5,7 +5,7 @@
 #   make test       fast unit tests
 #   make repro      encode the repro clips and check they match tests/.golden
 #   make golden     (re)generate the golden references (after an intended change)
-#   make vmaf       encode a clip and print its VMAF / VMAF-NEG scores
+#   make vmaf       encode a clip and print its VMAF v1 and CAMBI scores
 #   make bench      wall-clock the wavefront (serial vs threaded)
 #   make perf-comp  vs x264, as-shipped (SIMD + threads)
 #   make perf-comp-purec  vs x264, single-CPU pure-C, matched preset (algo gap)
@@ -213,7 +213,6 @@ parity-status: build
 # the ABR board. `make parity-status` stays the fast default.
 #
 #   make parity-status-crf              matched achieved BITRATE (headline)
-#   make parity-status-crf POINT=vmaf   matched achieved VMAF instead
 #   make parity-status-crf QUICK=1      2-clip read
 parity-status-crf: build
 	@VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" YAH264="$(CLI)" PARITY_RC=crf POINT="$(if $(POINT),$(POINT),kbps)" \

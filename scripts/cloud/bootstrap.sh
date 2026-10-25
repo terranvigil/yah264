@@ -310,6 +310,12 @@ st_build_y264_10() {
 # files (VMAF_V1_MODELS), which come from the same checkout.
 st_build_vmaf() {
     command -v meson >/dev/null 2>&1 || { c_skip "no meson; the quality legs will skip"; return; }
+    # a work volume bootstrapped at another tag is re-cloned, so a tag bump
+    # takes effect rather than reusing the old build
+    if [ -d "$CLOUD_WORK/vmaf/.git" ] &&
+       [ "$(git -C "$CLOUD_WORK/vmaf" describe --tags --exact-match 2>/dev/null)" != "$VMAF_TAG" ]; then
+        rm -rf "$CLOUD_WORK/vmaf"
+    fi
     if [ ! -d "$CLOUD_WORK/vmaf/.git" ]; then
         git clone --branch "$VMAF_TAG" --depth 1 "$VMAF_REPO" "$CLOUD_WORK/vmaf" || return 1
     fi
