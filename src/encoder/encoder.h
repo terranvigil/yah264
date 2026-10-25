@@ -209,8 +209,6 @@ struct rc_knobs {
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
     double crf_level, crf_fps_slope;
-    int    rc_trace;            /* Y264_RC_TRACE */
-    int    dbg_cplx;            /* Y264_DBG_CPLX */
 };
 
 /* One calibrated bits model, the shape every rate-control mode predicts with:
@@ -561,7 +559,6 @@ struct yah264_encoder {
  * its mini-GOP depend on each of its macroblocks (backward propagation). */
     /* Early-skip probe settings, resolved once in encoder_open (never a lazy
  * static: workers read them concurrently). See y264_frame_t. */
-    int      bskip_probe;
     int      bskip_screen;                  /* exact zero-block screen, see y264_frame_t */
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
@@ -1006,8 +1003,6 @@ struct yah264_encoder {
     int      tp_plan_on;        /* master gate */
     int      tp_corr;           /* runtime correction against the plan */
     int      tp_resolve;        /* correct by re-solving the remaining curve */
-    int      tp_dbg;            /* Y264_TP_DBG: per-frame plan trace */
-    int      tp_rctrace;        /* Y264_RC_TRACE on the rcp commit path */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
     double   tp_ipf, tp_pbf;    /* qscale ip / pb factors */
     double  *tp_cost;           /* per record: QP-invariant cost, bits at qscale 1 */
@@ -1133,8 +1128,6 @@ struct yah264_encoder {
  * regime shock the model is only trusted as
  * far as it has recently earned. ~1 in steady
  * state (no effect); decays 0.7/account. */
-    /* Y264_VBV_STAT counters */
-    int      rcp_vbv_nburst, rcp_vbv_ntight, rcp_vbv_nclamp;
 
     /* PAFF (--tff / --bff). `fields` is 0 for frame coding, 1 top-field-first,
  * 2 bottom-field-first. Each input frame is then coded as TWO pictures, and
@@ -1234,7 +1227,7 @@ struct yah264_encoder {
     struct y264_nr_slot *nr_ring;
     int              nr_intra, nr_inter;
     int              nr_seq, nr_fold_next;
-    int              nr_gate_q8, nr_trace;
+    int              nr_gate_q8;
     pthread_mutex_t  nr_mx;
     /* --mcstf (mcstf.h): the pre-filter queue in front of the lookahead,
  * NULL when off. */

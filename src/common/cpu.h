@@ -144,7 +144,7 @@ enum {
 };
 /* The machine's thread budget: every online core, resolved once and cached.
  * Answers "how much machine is there", never "how much can this picture use" --
- * the caller clamps to yah264_frame_thread_cap. Y264_AUTO_THREADS pins it. */
+ * the caller clamps to yah264_frame_thread_cap. */
 int y264_machine_threads(void);
 
 extern uint32_t y264_asm_off_;

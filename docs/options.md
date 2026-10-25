@@ -1241,9 +1241,8 @@ RSS windowed against holding the whole input resident:
 | 900 | 1631 MB | 384 MB |
 | 1800 | 3035 MB | 385 MB |
 
-The windowed column is flat: 1.559 MB per frame of clip becomes 0.004. Set
-`Y264_STREAM_STAT=1` and the encoder reports what the window actually held,
-which is 100 frames of 100 at every one of those lengths.
+The windowed column is flat: 1.559 MB per frame of clip becomes 0.004. The
+window held 100 frames of 100 at every one of those lengths.
 
 On a pipe the window's worst case is generous, so size it before it surprises
 you. At the default keyint it is 500 frames on one thread and 4750 frames (14
@@ -1589,9 +1588,8 @@ Shared semantics worth knowing before you set any of them:
 - **Most are read once and cached** in a lazy static, warmed on the main thread
  at encoder open. Changing one mid-process does nothing. `Y264_MBTREE_STRENGTH`
  is read again on every mb-tree pass.
-- **Some are presence-only**, so setting them to `0` still turns them *on*:
- `YAH264_NO_ASM`, `Y264_RC_TRACE`, `Y264_TP_DBG`, `Y264_MBTREE_DBG`,
- `Y264_MBT_PRE_DBG`, `Y264_DBG_CPLX`.
+- **`YAH264_NO_ASM` is presence-only**, so setting it to `0` still turns it
+ *on*.
 - **Some are scaled.** `Y264_TP_IPF` and `Y264_TP_PBF` are percentages divided
  by 100.
 
@@ -1612,10 +1610,8 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_DCTDEC` | 1 (on) | Coefficient decimation. Promoted to `--no-dct-decimate`, and still overrides it. |
 | `Y264_2PASS_MT` | on | 0 forces two-pass onto the serial path, reproducing the serial output exactly. |
 | `Y264_MBTREE_OFF` | 0 (off) | Skip mb-tree entirely. Set it when comparing `--qp` runs against x264. Changes bits. Promoted to `--no-mbtree`, and still overrides it. |
-| `Y264_CUT_SPLIT` | 0 (off) | Split GOP workers on real scene cuts instead of arithmetic boundaries. Worth up to 17% of wall on multi-shot clips. Bitstream unchanged. Its pre-scan needs every frame at once, so it turns streaming off and brings back the whole-clip ceiling, plus a second whole-clip array on top (~+18%). |
 | `Y264_MAX_INPUT_MB` | 50% of physical RAM | How much memory the input window may take, in MiB. It refuses rather than being OOM-killed. Raise it if you know the box can take it; lower it to test the refusal. |
 | `Y264_STREAM_WINDOW` | `(--threads + 1) x --keyint` | Input frames held resident on the in-order reader (a pipe), overriding the default window. Below `2 x --keyint` the reader could block before a whole GOP is dispatchable, so that is the floor. Scheduling-only: the bitstream does not move with it. |
-| `Y264_STREAM_STAT` | 0 (off) | Report the window's high-water mark at the end of the encode: frames actually resident, and compressed bytes published but not yet written. |
 | `Y264_LA_BUF` | auto = `bframes+1` (4 at medium) | Overrides `--sync-lookahead`, **in both directions**: the auto default resolves a lead of `bframes+1` whenever there is a pool, so `=1` and `=0` REDUCE it and cost 1-6% of wall. Costs latency, and changes no bits **while the decoupled chain is on**, which is whenever the knob has any effect. |
 | `Y264_CRF_CPLX` | 1 (on) | Behavior-matched CRF content adaptation, on by default. Narrows the equal-CRF spread against x264 from 100 points to 41, and improves 9 of 11 corpus clips at the tuned anchor, worst +1.54%. 0 turns it off. |
 | `Y264_CRF_LEVEL` | 2.3 | The CRF base under mb-tree is `crf + level + 2.9 * log2(fps / 30)`, fitted against the reference CLI's bytes at equal `--crf`. This sets the level. |
@@ -1653,17 +1649,13 @@ Profiling counters, trace dumps, deliberately-racy ceiling probes, and gates on
 experiments that were measured and rejected. Setting any of these gets you
 diagnostics or a known-worse encode. Several change bits.
 
-`Y264_THREAD_PROF`, `Y264_NTP_PROF`, `Y264_NTP_STATS`, `Y264_NTP_PARK`,
-`Y264_STAIR_STAT`, `Y264_VBV_STAT`, `Y264_RCP_DBG`, `Y264_RC_TRACE`,
-`Y264_TP_DBG`, `Y264_MBTREE_DBG`, `Y264_MBT_PRE_DBG`, `Y264_DBG_CPLX`,
-`Y264_LA_STAT`, `Y264_ME_STATS`, `Y264_MB_LOG`, `Y264_SKIP_ORACLE`,
-`Y264_CUT_SPLIT_STAT`, `Y264_ADME_LOG`,
-`Y264_PROBE_DEADZONE`, `Y264_HEX_ORACLE`, `Y264_STAIR_BDEPTH`,
-`Y264_RCP_LAG`,
+`Y264_THREAD_PROF`, `Y264_NTP_PROF`,
+`Y264_LA_STAT`, `Y264_SKIP_ORACLE`, `Y264_ADME_LOG`,
+`Y264_HEX_ORACLE`, `Y264_STAIR_BDEPTH`, `Y264_RCP_LAG`,
 `Y264_UNSAFE_NO_REFBWAIT`, `Y264_UNSAFE_NO_PREVPWAIT`, `Y264_UNSAFE_NO_EMIT`,
 `Y264_UNSAFE_NO_NAL`, `Y264_GOP_FORCE_G`, `Y264_GOP_FORCE_K`.
 
-`Y264_MB_LOG` and `Y264_SKIP_ORACLE` take a **path**, not a boolean.
+`Y264_SKIP_ORACLE` takes a **path**, not a boolean.
 
 ### Not read by the encoder
 

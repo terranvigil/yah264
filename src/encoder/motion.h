@@ -59,13 +59,6 @@ int y264_me_hex_features(void);
  * Call once per encode before any worker runs ME. */
 void y264_me_set_subpel(int subpel);
 
-/* Lowres oracle for the escalation gates (docs/motion-and-modes.md). Set
- * before a 16x16 ref0 search with the per-MB lookahead prior (lr_inter cost +
- * lr_seed MV, full-res qpel); pass valid=0 to clear for searches where it
- * doesn't map. The search only records distributions from it
- * (byte-identical). Thread-local. */
-void y264_me_set_oracle(int valid, long cost, int mvx, int mvy);
-
 /* Reset the half-pel qpel-skip threshold. Call once at the start of
  * each MB's inter analysis (the threshold accumulates the best candidate cost
  * across that MB's partition x ref searches). TLS; deterministic under the
@@ -126,8 +119,8 @@ void y264_me_set_mvlim(int xlim_qpel, int ylim_qpel);
  * cap. */
 void y264_me_set_xmax(int xmax_qpel, int xmaxf_qpel);
 
-/* Dump the ME statistics (Y264_ME_STATS) to stderr; no-op when unset. Call
- * once at encoder close, on the main thread. */
+/* Dump the ME early-out statistics (Y264_ME_ETSTAT) to stderr; no-op when
+ * unset. Call once at encoder close, on the main thread. */
 void y264_me_stats_dump(void);
 
 /* One reference's precomputed half-pel planes (see y264_mc_build_hpel). `ref` is
@@ -153,15 +146,6 @@ void y264_me_warm_statics(void);
  * CAS-published, safe from any thread). y264_mb_warm_statics primes every value
  * lambda_me can produce; an unprimed lambda keeps the exact multiply path. */
 void y264_me_prime_lambda(int lambda);
-
-/* --- lazy-hpel census. Dead unless
- * Y264_HPEL_CENSUS=<band rows> is set; single-threaded measurement only.
- * The encoder calls _built once per half-pel plane build (rows in plane space,
- * i.e. -border .. padded_h+border), which flushes and reports what the previous
- * build of that same plane was actually read for. ME marks the rows it reads.
- * Report goes to stderr at process exit. */
-int  y264_hpel_census_on(void);
-void y264_hpel_census_built(const void *h, int y0, int y1, int stride);
 
 /* Plane-read luma MC, byte-identical to y264_mc_luma, reading the registered
  * half-pel planes (y264_me_set_hpel) when in bounds and interpolating otherwise.

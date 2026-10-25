@@ -211,10 +211,6 @@ typedef struct {
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
  * commit (our default),
  * 2 = in every RD trial. */
-    /* Y264_BSKIP_PROBE: the graded deadzone+trellis B skip probe in place of
- * the round-to-nearest one (default off). Resolved in encoder_open and
- * copied per frame, so workers only read it. */
-    int bskip_probe;
     /* Exact zero-block screen in front of the strict B skip probe: 1 on (the
  * default), 0 off, 2 on and cross-checked against the full probe (aborts on
  * a disagreement, prints fire counts at exit). Same output at every value. */

@@ -1089,7 +1089,7 @@ typedef struct {
     size_t   *gop_size;
     /* gop_start[g] is the first frame of GOP g, gop_start[n_gops] is n_frames.
  * Arithmetic by default (g*keyint); cut-aware
- * under Y264_CUT_SPLIT. Worker slicing reads only this, so the two paths
+ * under --cut-split. Worker slicing reads only this, so the two paths
  * differ in the array's contents and nowhere else. */
     int *gop_start;
     int n_gops;
@@ -1166,8 +1166,7 @@ typedef struct {
  * gop_cons[g] the next one its worker will take. */
     int seek_rd, readahead;
     int *gop_rd, *gop_cons;
-    int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
-    size_t held, max_held;          /* published-but-unwritten output bytes */
+    size_t held;                    /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
     int gops_final, gops_cap;
     unsigned char *gop_done;
@@ -1649,7 +1648,6 @@ static void *gop_worker(void *arg)
         if (j->gop_fst) j->gop_fst[g] = fst_buf; else free(fst_buf);
         j->gop_done[g] = 1;
         j->held += sz;
-        if (j->held > j->max_held) j->max_held = j->held;
         pthread_cond_broadcast(&j->cv_space);
         pthread_cond_broadcast(&j->cv_emit);
         pthread_mutex_unlock(&j->lock);
@@ -1756,7 +1754,7 @@ static void *y4m_reader(void *arg)
         pthread_mutex_lock(&j->lock);
         *slot = f;
         j->n_read = ++n;
-        if (++j->live > j->max_live) j->max_live = j->live;
+        ++j->live;
         /* Without a known frame count the GOP table is built as the frames
  * arrive: a GOP becomes dispatchable exactly when its last frame is
  * read, which is also what keeps the queue running forward. */
@@ -1878,7 +1876,7 @@ static void *y4m_reader_seek(void *arg)
         *slot = f;
         j->gop_rd[g] = i + 1;
         if (i + 1 > j->n_read) j->n_read = i + 1;
-        if (++j->live > j->max_live) j->max_live = j->live;
+        ++j->live;
         pthread_cond_broadcast(&j->cv_ready);
         pthread_mutex_unlock(&j->lock);
     }
@@ -2646,7 +2644,7 @@ out:
  * the plan and the frame file force. shots may be NULL (ns < 0) when none of
  * the options that read them is on. idr is modified. Returns the GOP count. */
 static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
-                      unsigned char *idr, const yah264_shot_t *shots, int ns, double scan_ms)
+                      unsigned char *idr, const yah264_shot_t *shots, int ns)
 {
     int nidr = 0;
     for (int i = 0; i < n; i++) nidr += idr[i];
@@ -2693,11 +2691,6 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
                     k, shots[k].first, shots[k].last, shots[k].last - shots[k].first + 1,
                     shots[k].icost_mean, shots[k].icost_peak, shots[k].pcost_mean, shots[k].ratio, k + 1 < ns ? "," : "");
         fprintf(stderr, "]\n");
-    }
-    if (y264_env("Y264_CUT_SPLIT_STAT") && atoi(y264_env("Y264_CUT_SPLIT_STAT"))) {
-        fprintf(stderr, "yah264: cut pre-scan %.1f ms, %d IDR(s) at", scan_ms, nidr);
-        for (int i = 0; i < n; i++) if (idr[i]) fprintf(stderr, " %d", i);
-        fprintf(stderr, "\n");
     }
     for (int z = 0; z < g_nzones; z++)          /* the plan's forced IDRs split GOPs too */
         if ((g_zones[z].flags & YAH264_ZONE_IDR) && g_zones[z].first > 0 && g_zones[z].first < n && !idr[g_zones[z].first]) {
@@ -2799,9 +2792,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * payload by arithmetic and measured +242 MiB of peak RSS on 1253 frames of
  * 720p (2058 -> 2300 MB), i.e. +14% of the array. Price it in there. From a
  * file none of this is resident: see scan_pass. */
-    int cut_split = (g_cut_split || g_plan_idr || g_force_idr ||
-                     (y264_env("Y264_CUT_SPLIT") && atoi(y264_env("Y264_CUT_SPLIT")))) &&
-                    keyint > 1;
+    int cut_split = (g_cut_split || g_plan_idr || g_force_idr) && keyint > 1;
     /* From a file the pre-scan is a pass of its own (scan_pass) and the encode
      * streams; only a pipe still reads the input whole. */
     int whole = cut_split && !y264_seekable(in);
@@ -2846,12 +2837,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
      * the rest is the ordinary known-length encode on the scan's GOP table. */
     scan_plan_t plan;
     memset(&plan, 0, sizeof plan);
-    double scan_ms = 0;
     if (cut_split && !whole) {
         off_t pos0 = ftello(in);
         int hl = nknown > 0 ? hdr_len : -1;
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
         if (g_scan_in) {
             long nin = nknown >= 0 ? nknown : scan_count_frames(in, pos0, max_frames, payload);
             if (nin < 0) {
@@ -2871,8 +2859,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 return 1;
             }
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        scan_ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
         if (plan.n == 0) return 0;              /* nothing to encode */
         nknown = plan.n;
     }
@@ -2992,7 +2978,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     if (plan.n > 0) {
         n = plan.n;
         job.gop_start = NULL;
-        n_gops = scan_apply(&job, param, n, plan.idr, plan.shots, plan.ns, scan_ms);
+        n_gops = scan_apply(&job, param, n, plan.idr, plan.shots, plan.ns);
         job.gops_final = 1;
         scan_plan_free(&plan);
     } else if (nknown > 0 && !cut_split) {
@@ -3089,8 +3075,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 luma[i] = (const uint8_t *)job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)].y + yoff;
                 lstride[i] = W;
             }
-            struct timespec t0, t1;
-            clock_gettime(CLOCK_MONOTONIC, &t0);
             yah264_shot_t *shots = NULL;
             int ns = -1;
             if (g_shot_table || g_shot_crf || g_open_gop) {
@@ -3104,9 +3088,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             } else
                 g_api->scan_idr_frames(param, luma, lstride, n, nthreads,
                                        g_api->depth, idr);
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
-            n_gops = scan_apply(&job, param, n, idr, shots, ns, ms);
+            n_gops = scan_apply(&job, param, n, idr, shots, ns);
             free(shots); free(luma); free(lstride); free(idr);
         }
         job.gops_final = 1;
@@ -3648,14 +3630,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             early ? " (early dispatch, per-GOP)" :
             gstart_known ? "" : " (streamed split)",
             job.window == INT_MAX ? n : job.window);
-    /* What the window ACTUALLY held, which is the claim worth checking: peak RSS
- * moves for reasons that are not this store, so measure the store. */
-    if (y264_env("Y264_STREAM_STAT") && atoi(y264_env("Y264_STREAM_STAT")))
-        fprintf(stderr, "yah264: stream peak %d frame(s) resident of %d "
-                "(%.1f MiB), output held %.1f MiB\n", job.max_live,
-                job.window == INT_MAX ? n : job.window,
-                (double)job.max_live * (double)per_frame / 1048576.0,
-                (double)job.max_held / 1048576.0);
 
     for (int i = 0; i < n_gops; i++) free(job.gop_data[i]);
     for (int i = 0; i < job.n_read; i++) {

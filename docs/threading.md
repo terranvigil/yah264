@@ -231,14 +231,11 @@ decoders.
   encoder, with correct output and no error. A harness that always passes
   `-threads` never exercises the path real invocations take, so test the
   default too.
-- **`Y264_AUTO_THREADS`** pins the auto budget and `Y264_AUTO_THREADS_MAX` moves
-  the ceiling, so a sweep needs no rebuild.
 - **`Y264_GOP_FORCE_G` and `Y264_GOP_FORCE_K` change the bytes.** A GOP's bits
   depend on its share, so a forced split is a different stream, not just a
   timing arm.
-- **`Y264_STREAM_STAT=1`** reports the input store's high-water mark, and
-  `/usr/bin/time -l` gives peak footprint. When a whole-input buffer goes away,
-  check for a per-open leak it had been hiding.
+- **`/usr/bin/time -l` gives peak footprint.** When a whole-input buffer goes
+  away, check for a per-open leak it had been hiding.
 - **Run determinism checks on a loaded box** with spinners, and gate the
   non-default modes too (`ARGS=` on `scripts/determ_repeat.sh`). An idle box
   runs the threaded path the same way every time. Count distinct md5s instead

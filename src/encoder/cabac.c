@@ -39,26 +39,6 @@ enum { TR_DEC = 0, TR_BYP, TR_UEG, TR_TERM, TR_RES, TR_RES8, TR_ENG, TR_CTX };
 static FILE *tr_f;
 static const y264_cabac_t *tr_c;
 static void tr_close(void) { if (tr_f) { fclose(tr_f); tr_f = NULL; } }
-/* Second, flat stream: one word per BIN, taken from inside the engine macros,
- * so the exact (ctxIdx, bin) sequence can be replayed through a per-bin coder
- * -- ours or another encoder's -- for an apples-to-apples comparison of the two bin
- * coders. Word layout: op in bits 0-1, bin in bit 2, ctxIdx in bits 16+. */
-static FILE *trf_f;
-static void trf_close(void) { if (trf_f) { fclose(trf_f); trf_f = NULL; } }
-static void trf_open(void)
-{
-    static int tried;
-    if (tried) return;
-    tried = 1;
-    const char *path = y264_env("Y264_CABAC_TRACE_FLAT");
-    if (path && *path && (trf_f = fopen(path, "wb"))) atexit(trf_close);
-}
-static inline void trf_bin(const y264_cabac_t *c, int op, int ctx, int bin)
-{
-    if (c != tr_c || !trf_f) return;
-    int32_t w = op | ((bin & 1) << 2) | (ctx << 16);
-    fwrite(&w, sizeof w, 1, trf_f);
-}
 /* Re-selected on every engine init: each slice's engine is a different stack
  * object, and every init_engine call site is a real slice engine (RD trials
  * reuse the live engine in est mode, which is not recorded). Single thread. */
@@ -70,17 +50,14 @@ static void tr_select(const y264_cabac_t *c)
         const char *path = y264_env("Y264_CABAC_TRACE");
         if (path && *path && (tr_f = fopen(path, "wb"))) atexit(tr_close);
     }
-    if (tr_f || trf_f) tr_c = c;
+    if (tr_f) tr_c = c;
 }
 static inline void tr_put(const y264_cabac_t *c, int n, const int32_t *v)
 {
     if (c != tr_c || !tr_f) return;
     fwrite(v, sizeof(int32_t), (size_t)n, tr_f);
 }
-#define TRACE_BIN(op, ctx, bin)   trf_bin(c, op, ctx, bin)
-#define TRACE_BIN_RUN(k, v) \
-    for (int tb_ = (k) - 1; tb_ >= 0; tb_--) trf_bin(c, 1, 0, (int)(((v) >> tb_) & 1))
-#define TRACE_SELECT(c)           do { trf_open(); tr_select(c); } while (0)
+#define TRACE_SELECT(c)           tr_select(c)
 #define TRACE1(c, op)             do { int32_t v_[1] = {op}; tr_put(c, 1, v_); } while (0)
 #define TRACE2(c, op, a)          do { int32_t v_[2] = {op, a}; tr_put(c, 2, v_); } while (0)
 #define TRACE3(c, op, a, b)       do { int32_t v_[3] = {op, a, b}; tr_put(c, 3, v_); } while (0)
@@ -93,8 +70,6 @@ static inline void tr_put(const y264_cabac_t *c, int n, const int32_t *v)
         } \
     } while (0)
 #else
-#define TRACE_BIN(op, ctx, bin)   ((void)0)
-#define TRACE_BIN_RUN(k, v)       ((void)0)
 #define TRACE_SELECT(c)           ((void)0)
 #define TRACE1(c, op)             ((void)0)
 #define TRACE2(c, op, a)          ((void)0)
@@ -487,7 +462,6 @@ static void ent_init(void);
 #define E_DEC(sp_, bin_) do { \
         NLED(bin_real, 1); c->nbins++; \
         uint8_t *cp_ = (sp_); \
-        TRACE_BIN(0, (int)(cp_ - c->ctx), (bin_)); \
         uint8_t s_ = *cp_; \
         uint32_t lps_ = rangeTabLPS[s_ >> 1][(rng >> 6) & 3]; \
         rng -= lps_; \
@@ -503,7 +477,6 @@ static void ent_init(void);
 #define E_BYPASS(b_) do { \
         c->nbins++; \
         NLED(bin_bypass, 1); \
-        TRACE_BIN(1, 0, (b_)); \
         lo = (lo << 1) + ((uint32_t)-(int)(b_) & rng); \
         qq += 1; \
         E_PUTBYTE(); \
@@ -520,7 +493,6 @@ static void ent_init(void);
         NLED(bin_bypass, (k_)); \
         int kn_ = (k_); \
         uint64_t vn_ = (v_); \
-        TRACE_BIN_RUN(kn_, vn_); \
         int cn_ = ((kn_ - 1) & 7) + 1; \
         do { \
             kn_ -= cn_; \
@@ -566,16 +538,10 @@ void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf)
 
 static int est_decision(uint8_t *st, int bin);
 
-extern int y264_tl_on;                       /* defined below, near trellis_core */
-extern _Atomic uint64_t y264_est_bins, y264_est_bypass;
-_Atomic uint64_t y264_est_coefs;   /* nonzero coefficients coded in est mode */
-_Atomic uint64_t y264_real_coefs;  /* nonzero coefficients in REAL emit */
-
 void y264_cabac_encode_decision_ext(y264_cabac_t *c, int ctxIdx, int bin)
 {
     if (c->est_mode) {                    /* RD estimate: bits, no arithmetic */
         NLED(bin_est, 1);
-        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed);
         if (c->est_frozen) {              /* trial: read-only, no adaptation */
             c->est_bits += (long)(est_tab[c->ctx[ctxIdx]][bin] >> 8);
             return;
@@ -595,14 +561,12 @@ void y264_cabac_encode_decision_ext(y264_cabac_t *c, int ctxIdx, int bin)
 long y264_cabac_est_bin(uint8_t state, int bin)
 {
     NLED(bin_est, 1);
-    if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed);
     return est_decision(&state, bin);
 }
 
 void y264_cabac_encode_bypass(y264_cabac_t *c, int bin)
 {
     if (c->est_mode) { NLED(bin_est, 1);
-                       if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bypass, 1, memory_order_relaxed);
                        c->est_bits += 256; return; }   /* bypass = 1 bit exactly */
     TRACE2(c, TR_BYP, bin);
     E_LOAD();
@@ -614,7 +578,6 @@ void y264_cabac_encode_terminate(y264_cabac_t *c, int bin)
 {
     if (c->est_mode) { NLED(bin_est, 1); c->est_bits += bin ? 1792 : 3; return; }   /* ~0 bits unless I_PCM */
     TRACE2(c, TR_TERM, bin);
-    TRACE_BIN(2, 0, bin);
     NLED(bin_term, 1);
     E_LOAD();
     rng -= 2;
@@ -669,10 +632,9 @@ void y264_cabac_encode_ueg_bypass(y264_cabac_t *c, int k, int val)
 
 /* est-mode mvd component: the same bins cabac_mvd_comp emits through
  * y264_cabac_encode_decision / encode_ueg_bypass / encode_bypass, priced in
- * one call with the per-bin call+instrument glue hoisted. Bin
- * sequence and counter totals identical: y264_est_bins counts the ctx
- * decisions, y264_est_bypass the sign (the batched UEG suffix lands in NLED
- * only, exactly as y264_cabac_encode_ueg_bypass books it). */
+ * one call with the per-bin call glue hoisted. Bin sequence and ledger totals
+ * identical (the batched UEG suffix lands in NLED only, exactly as
+ * y264_cabac_encode_ueg_bypass books it). */
 void y264_cabac_est_mvd(y264_cabac_t *c, int ctxbase, int ctx, int mvd)
 {
     static const uint8_t ce[8] = { 3, 4, 5, 6, 6, 6, 6, 6 };
@@ -732,12 +694,7 @@ void y264_cabac_est_mvd(y264_cabac_t *c, int ctxbase, int ctx, int mvd)
         eb += 256; nsign = 1;                             /* sign, bypass */
     }
     NLED(bin_est, ndec + nueg + nsign);
-    (void)nueg;                   /* consumed only by the (gated) ledger */
-    if (y264_tl_on) {
-        atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
-        if (nsign)
-            atomic_fetch_add_explicit(&y264_est_bypass, nsign, memory_order_relaxed);
-    }
+    (void)ndec; (void)nueg; (void)nsign;  /* consumed only by the (gated) ledger */
     c->est_bits += eb;
 }
 
@@ -1107,25 +1064,12 @@ typedef struct {
  * no term; a dropped run's |psyp[i]| is the same constant on every path, so
  * the argmin -- and the run batching above -- are untouched. psyp == NULL is
  * the shipped path, bit-identical. */
-/* Work census (gated by y264_tl_on, set from Y264_TRPROF): how much lattice
- * work a call does. ~7.8 coefficient steps and ~17 node updates per call,
- * which is very little work for the measured ~160 ns. */
-int y264_tl_on;
-_Atomic uint64_t y264_tl_calls, y264_tl_coef, y264_tl_node;
-/* Bins walked in est_mode, to split "more bins" from "slower bins". */
-_Atomic uint64_t y264_est_bins, y264_est_bypass;
-
 static int trellis_core(int n, const int *qn, const int *abscoef, const long *unmf,
                         const int *w2, long L, const uint8_t *lst0,
                         const uint8_t *sst, const uint8_t *ltt, int run_shared,
                         int psy256, const int *psyp, int psy_lo,
                         long zero_cost, long coded_cost, tr_level *tree, int lastq)
 {
-    /* the census flag is read once: a store through tree[] could alias the
-     * global, so a per-use read reloads it at every transition */
-    const int tl = y264_tl_on;
-    unsigned long tl_coef = 0, tl_node = 0;
-    if (tl) atomic_fetch_add_explicit(&y264_tl_calls, 1, memory_order_relaxed);
     rq_state A[8], B[8], *prev = A, *cur = B;
     prev[0].cost = 0;
     prev[0].chain = 0;
@@ -1164,10 +1108,6 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
                 rl_last = est_bits_noup(sst[i], 1) + est_bits_noup(ltt[i], 1);
             long keep = d1 + L * (rl_last + est_bits_noup(lst0[1], 0) + 256);
             if (i > 0) keep += L * rbs;
-            if (tl) {
-                atomic_fetch_add_explicit(&y264_tl_coef, i > 0 ? 2 : 1, memory_order_relaxed);
-                atomic_fetch_add_explicit(&y264_tl_node, 1, memory_order_relaxed);
-            }
             if (!(keep + coded_cost < dz + zero_cost))
                 return 0;
             tree[1].nxt = 0; tree[1].lev = 1; tree[1].pos = (uint16_t)i;
@@ -1188,7 +1128,6 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
  * stored. Ties keep the earlier writer, so transition order must stay j
  * ascending with the lower candidate first */
 #define TACC(d, j, a, fl_, rn_, sc_) do { \
-        if (tl) tl_node++; \
         long _s = (sc_); \
         if (!((cl >> (d)) & 1u) || _s < cur[d].cost) { \
             cl |= 1u << (d); \
@@ -1281,7 +1220,6 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
             int q = qn[i];
             if (q > 1)
                 break;
-            if (tl) tl_coef++;
             if (q == 0) {               /* forced-drop run, as below */
                 long rbs = 0;
                 do {
@@ -1321,7 +1259,6 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
     }
 
     while (i >= 0) {
-        if (tl) tl_coef++;
         int q = qn[i];
 
         if (q == 0) {
@@ -1480,10 +1417,6 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
         rq_state *t = prev; prev = cur; cur = t;
         pl = cl;
         i--;
-    }
-    if (tl) {
-        atomic_fetch_add_explicit(&y264_tl_coef, tl_coef, memory_order_relaxed);
-        atomic_fetch_add_explicit(&y264_tl_node, tl_node, memory_order_relaxed);
     }
 
 #undef TACC
@@ -1710,12 +1643,9 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
 #define EST_DEC(idx_, bin_) do { \
         NLED(bin_est, 1); \
-        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed); \
         eb += est_decision(&c->ctx[idx_], bin_); \
     } while (0)
-#define EST_BYP() do { NLED(bin_est, 1); \
-        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bypass, 1, memory_order_relaxed); \
-        eb += 256; } while (0)
+#define EST_BYP() do { NLED(bin_est, 1); eb += 256; } while (0)
 
 #define EST_LEVELS(gt1_, base_) do { \
         int node_ = 0; \
@@ -1830,8 +1760,8 @@ static void fz_extend8(y264_cabac_t *c, int upto)
         c->est_bits += eb_; \
     } while (0)
 
-/* The bin counts an est walk books in the op ledger and the work census,
- * recovered from its outcome so the walk itself counts nothing per bin:
+/* The bin counts an est walk books in the op ledger, recovered from its
+ * outcome so the walk itself counts nothing per bin:
  * `sig` decision bins in the coded_block_flag and significance map, then per
  * coefficient a greater-than-one bin, the unary prefix bins and the bypass
  * bins (exp-Golomb tail and sign). Same totals the per-bin counters gave. */
@@ -1857,12 +1787,7 @@ static void est_walk_counts(unsigned sig, const int *coeffs, int nc)
         nbyp++;                                           /* sign */
     }
     NLED(bin_est, ndec + npf + nbyp);
-    (void)npf;                /* consumed only by the (gated) ledger */
-    if (y264_tl_on) {
-        atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
-        atomic_fetch_add_explicit(&y264_est_bypass, nbyp, memory_order_relaxed);
-        atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
-    }
+    (void)ndec; (void)npf; (void)nbyp;    /* consumed only by the (gated) ledger */
 }
 
 /* Code one residual block (7.3.5.3.3): coded_block_flag, significance map, then
@@ -1942,9 +1867,8 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
     }
     if (c->est_mode) {
         /* specialised est walk: same est_decision/ctx sequence as the
- * EST_DEC/EST_LEVELS form, with the per-bin instrument glue
- * hoisted into bulk counter flushes at the end (totals preserved;
- * y264_est_bins counts est_decision steps only, as EST_DEC does). */
+ * EST_DEC/EST_LEVELS form, with the per-bin ledger glue hoisted
+ * into a bulk flush at the end (totals preserved). */
         long eb = 0;
         uint8_t *ctx = c->ctx;
         {
@@ -1953,8 +1877,6 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         }
         if (!msk) {
             NLED(bin_est, 1);
-            if (y264_tl_on)
-                atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed);
             c->est_bits += eb;
             return 0;
         }
@@ -2001,7 +1923,7 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
             }
             eb += 256;                                    /* sign, bypass */
         }
-        if (EST_COUNT_ON || y264_tl_on)
+        if (EST_COUNT_ON)
             est_walk_counts(sigbins, coeffs, nc);
         c->est_bits += eb;
         return nc;
@@ -2022,7 +1944,6 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         E_DEC(lst + scm[last], 1);
     }
     coeffs[nc++] = l[last];
-    if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
     E_LEVELS(gt1, &c->ctx[LVL_OFF[cat]]);
     E_STORE();
     return nc;
@@ -2078,7 +1999,6 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
             EST_DEC(LO8 + LAST8[last], 1);
         }
         coeffs[nc++] = l[last];
-        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
         EST_LEVELS(PFX_INC, 426);
         c->est_bits += eb;
         return nc;
@@ -2096,7 +2016,6 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
         E_DEC(lst + LAST8[last], 1);
     }
     coeffs[nc++] = l[last];
-    if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
     E_LEVELS(PFX_INC, &c->ctx[426]);
     E_STORE();
     return nc;
@@ -2161,7 +2080,6 @@ int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr)
         E_DEC(lst + LAST8[last], 1);
     }
     coeffs[nc++] = lr[SCAN8[last]];
-    if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
     E_LEVELS(PFX_INC, &c->ctx[426]);
     E_STORE();
     return nc;
@@ -2172,11 +2090,10 @@ int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr)
  * Bit-exact with y264_cabac_residual_8x8's est branch on the gathered array
  * (same est_decision/ctx sequence), with the per-bin instrument glue hoisted:
  * the round-15 attribution read the est walk at ~1.5 ns/bin against the
- * 0.436 ns primitive, and the gap was exactly this glue -- the per-bin
- * y264_tl_on load+branch, the second 64-element mask pass, and the separate
- * scan8 store/load round trip. Ledger/counter TOTALS are preserved (bulk
- * flush at the end; y264_est_bins counts est_decision steps only, matching
- * EST_DEC, while the fused-unary prefix bins land in NLED as before). */
+ * 0.436 ns primitive, and the gap was exactly this glue -- the second
+ * 64-element mask pass and the separate scan8 store/load round trip. Ledger
+ * TOTALS are preserved (bulk flush at the end, the fused-unary prefix bins
+ * landing in NLED as before). */
 int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
 {
     ent_ensure();
@@ -2291,7 +2208,7 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
         eb += 256;                                        /* sign, bypass */
     }
 
-    if (EST_COUNT_ON || y264_tl_on)
+    if (EST_COUNT_ON)
         est_walk_counts(sigbins, coeffs, nc);
     c->est_bits += eb;
     return nc;

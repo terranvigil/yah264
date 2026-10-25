@@ -417,5 +417,3 @@ and `--bframes 3`.
 - **Lag changes need decode gates**: `scripts/recon_thread_gate.sh` and
   `scripts/abr_decode_gate.sh`. Conformance forces the serial path and never
   reaches the lagged one.
-- `Y264_RCP_DBG=1` traces decides, fills and pops. `Y264_VBV_STAT=1` traces the
-  buffer.

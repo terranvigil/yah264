@@ -39,12 +39,6 @@
 #define frame_complexity_ilr            frame_complexity_ilr_10
 #define frame_complexity_me             frame_complexity_me_10
 #define frame_qp                        frame_qp_10
-#define g_rp_tr4                        g_rp_tr4_10
-#define g_rp_tr8                        g_rp_tr8_10
-#define g_tp_calls                      g_tp_calls_10
-#define g_tp_cat                        g_tp_cat_10
-#define g_tp_cat_tr                     g_tp_cat_tr_10
-#define g_tp_ns                         g_tp_ns_10
 #define ntp_bg_create                   ntp_bg_create_10
 #define ntp_bg_create_named             ntp_bg_create_named_10
 #define ntp_bg_destroy                  ntp_bg_destroy_10
@@ -66,7 +60,6 @@
 #define rc_head_crf                     rc_head_crf_10
 #define rc_head_serial                  rc_head_serial_10
 #define rc_knobs_resolve                rc_knobs_resolve_10
-#define rcp_dbg_on                      rcp_dbg_on_10
 #define rcp_decide                      rcp_decide_10
 #define rcp_drop                        rcp_drop_10
 #define rcp_fill                        rcp_fill_10
@@ -83,7 +76,6 @@
 #define tp_qscale2qp                    tp_qscale2qp_10
 #define vbv_bounded_now                 vbv_bounded_now_10
 #define vbv_limit_at                    vbv_limit_at_10
-#define vbv_stat_on                     vbv_stat_on_10
 #define y264_add4x4_idct                y264_add4x4_idct_10
 #define y264_add4x4_idct_c              y264_add4x4_idct_c_10
 #define y264_add4x4_idct_neon           y264_add4x4_idct_neon_10
@@ -182,9 +174,6 @@
 #define y264_dscore_ssd                 y264_dscore_ssd_10
 #define y264_dsp                        y264_dsp_10
 #define y264_dsp_init                   y264_dsp_init_10
-#define y264_est_bins                   y264_est_bins_10
-#define y264_est_bypass                 y264_est_bypass_10
-#define y264_est_coefs                  y264_est_coefs_10
 #define y264_fdct4x4                    y264_fdct4x4_10
 #define y264_fdct4x4_c                  y264_fdct4x4_c_10
 #define y264_fdct4x4_neon               y264_fdct4x4_neon_10
@@ -194,7 +183,6 @@
 #define y264_fieldscan4                 y264_fieldscan4_10
 #define y264_fieldscan8                 y264_fieldscan8_10
 #define y264_filler_write               y264_filler_write_10
-#define y264_flatskip_stat_dump         y264_flatskip_stat_dump_10
 #define y264_fldperm4                   y264_fldperm4_10
 #define y264_fldperm4ac                 y264_fldperm4ac_10
 #define y264_fldperm8                   y264_fldperm8_10
@@ -213,8 +201,6 @@
 #define y264_hadamard4x4                y264_hadamard4x4_10
 #define y264_hadamard_ac_8x8_neon       y264_hadamard_ac_8x8_neon_10
 #define y264_hpel_build_band_neon       y264_hpel_build_band_neon_10
-#define y264_hpel_census_built          y264_hpel_census_built_10
-#define y264_hpel_census_on             y264_hpel_census_on_10
 #define y264_hpel_hrow_neon             y264_hpel_hrow_neon_10
 #define y264_hpel_outrow_neon           y264_hpel_outrow_neon_10
 #define y264_hw_close                   y264_hw_close_10
@@ -307,7 +293,6 @@
 #define y264_me_set_method              y264_me_set_method_10
 #define y264_me_set_mvlim               y264_me_set_mvlim_10
 #define y264_me_set_noqpel              y264_me_set_noqpel_10
-#define y264_me_set_oracle              y264_me_set_oracle_10
 #define y264_me_set_qpel_only           y264_me_set_qpel_only_10
 #define y264_me_set_ref16               y264_me_set_ref16_10
 #define y264_me_set_stq                 y264_me_set_stq_10
@@ -362,7 +347,6 @@
 #define y264_quant_dc_chroma422         y264_quant_dc_chroma422_10
 #define y264_quant_dc_luma              y264_quant_dc_luma_10
 #define y264_rb_trace_on                y264_rb_trace_on_10
-#define y264_real_coefs                 y264_real_coefs_10
 #define y264_recs_cache_ref             y264_recs_cache_ref_10
 #define y264_sa8d_16x16_neon            y264_sa8d_16x16_neon_10
 #define y264_sa8d_8x8_neon              y264_sa8d_8x8_neon_10
@@ -439,10 +423,6 @@
 #define y264_tdir_mb                    y264_tdir_mb_10
 #define y264_texture_ac48_16x16_neon    y264_texture_ac48_16x16_neon_10
 #define y264_texture_ac4_16x16_neon     y264_texture_ac4_16x16_neon_10
-#define y264_tl_calls                   y264_tl_calls_10
-#define y264_tl_coef                    y264_tl_coef_10
-#define y264_tl_node                    y264_tl_node_10
-#define y264_tl_on                      y264_tl_on_10
 #define y264_transform_warm_statics     y264_transform_warm_statics_10
 #define y264_unquant4_mf                y264_unquant4_mf_10
 #define y264_unquant4_row               y264_unquant4_row_10

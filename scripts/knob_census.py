@@ -77,7 +77,6 @@ OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?
 # presence-only reader, a string enum, or a literal that is not the last
 # number on the line.
 DEFAULT_OVERRIDES = {
-    "Y264_TP_DBG": "presence",           # any value arms it
     "Y264_SKIP_ORACLE_AT": "pre",        # pre | post | postr
     "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
     "Y264_CRF_LEVEL": "2.3",             # rc_tunable of a #define
@@ -94,10 +93,6 @@ DEFAULT_OVERRIDES = {
 
 OVERRIDES = {
     "Y264_MBT_REC": "instrument", "Y264_MBT_PLAY": "instrument",
-    # both exist so a thread-count sweep never needs a rebuild (encoder.c
-    # ~3339): a pin and a ceiling over the resolved auto budget, not a
-    # default-off feature waiting to be re-priced
-    "Y264_AUTO_THREADS": "instrument", "Y264_AUTO_THREADS_MAX": "instrument",
     # rate-control record/replay (src/encoder/rcreplay.h, scripts/rc_replay.py)
     "Y264_RC_REC": "instrument", "Y264_RC_PLAY": "instrument", "Y264_RC_PLAY_K": "instrument",
     # names that match the instrument pattern or the instruments catalog but

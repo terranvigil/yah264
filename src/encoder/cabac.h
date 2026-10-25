@@ -133,7 +133,7 @@ void y264_cabac_warm(void);
 void y264_cabac_init_contexts(y264_cabac_t *c, int slice_type, int cabac_init_idc, int qp);
 
 /* Code one regular bin with context `ctxIdx`. The RD estimate's form (an
- * est_mode engine with the work census off) is inline: it is a table read and
+ * est_mode engine) is inline: it is a table read and
  * an add, and most bins the RD trials price outside the residual walks are
  * single calls from the macroblock writers, where the call cost as much as
  * the bin. Everything else takes the out-of-line form, which is the whole
@@ -142,10 +142,9 @@ void y264_cabac_encode_decision_ext(y264_cabac_t *c, int ctxIdx, int bin);
 /* (bits << 8) | next packed state, by [packed state][bin]; built by
  * y264_cabac_warm before any engine exists */
 extern uint32_t y264_cabac_est_tab_[128][2];
-extern int y264_tl_on;
 static inline void y264_cabac_encode_decision(y264_cabac_t *c, int ctxIdx, int bin)
 {
-    if (c->est_mode && !y264_tl_on) {
+    if (c->est_mode) {
         NLED(bin_est, 1);
         uint8_t *s = &c->ctx[ctxIdx];
         uint32_t e = y264_cabac_est_tab_[*s][bin];
