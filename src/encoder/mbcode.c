@@ -355,7 +355,7 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
  * macroblock that is both dark and smooth. Banding shows first in dark
  * gradients and faint dark grain, and the variance offset alone cannot reach
  * them where it matters most: in a frame with bright, busy areas beside the
- * dark ones the field's centre sits high, so at a low --aq-strength a dark
+ * dark ones the field's center sits high, so at a low --aq-strength a dark
  * block gets only a point or two below the frame and codes to a flat step.
  * The cut is strength x dark weight x smooth weight, with both weights linear
  * ramps: the dark weight is 1 at a luma mean of half the limit and 0 at the

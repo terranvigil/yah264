@@ -25,6 +25,10 @@ int main(void)
     unsetenv("Y264_AQ_DARK");
     unsetenv("Y264_AQ_DARK_M");
     unsetenv("Y264_AQ_DARK_V");
+    unsetenv("Y264_AQ_DARK_B0");
+    unsetenv("Y264_AQ_DARK_B1");
+    unsetenv("Y264_AQ_DARK_S0");
+    unsetenv("Y264_AQ_DARK_S1");
 
     /* a dark gradient with faint grain: luma mean 30, standard deviation 1.4 */
     CHECK(y264_psy_dark_gain(M(30.0), V(2.0)) >= 3.0);
@@ -41,6 +45,20 @@ int main(void)
     /* dark and textured: the variance offset already handles it */
     CHECK(y264_psy_dark_gain(M(30.0), V(100.0)) == 1.0);
     CHECK(y264_aq_dark(M(30.0), V(100.0)) == 0.0);
+
+    /* the frame gate: closed with neither bright areas nor much dark grain,
+     * open on either ramp, the larger of the two */
+    CHECK(y264_aq_dark_gate(0.0, 0.0) == 0.0);
+    CHECK(y264_aq_dark_gate(0.20, 0.0) == 1.0);
+    CHECK(y264_aq_dark_gate(0.0, 0.50) == 1.0);
+    CHECK(y264_aq_dark_gate(0.0, 0.35) == 0.0);
+    CHECK(y264_aq_dark_gate(0.14, 0.0) > 0.4 && y264_aq_dark_gate(0.14, 0.0) < 0.6);
+    CHECK(y264_aq_dark_gate(0.14, 0.50) == 1.0);
+    /* grain counts dark, smooth blocks that aren't flat */
+    CHECK(y264_aq_grain(M(30.0), V(2.0)) == 1);
+    CHECK(y264_aq_grain(M(30.0), V(0.1)) == 0);     /* a flat fill can't band */
+    CHECK(y264_aq_grain(M(120.0), V(2.0)) == 0);    /* not dark */
+    CHECK(y264_aq_grain(M(30.0), V(100.0)) == 0);   /* textured */
 
     if (fails) fprintf(stderr, "%d failure(s)\n", fails);
     else printf("darkaq: ok\n");

@@ -98,6 +98,9 @@ DEFAULT_OVERRIDES = {
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
     "Y264_TREL_SMOOTH": "on (0 = off)",
+    "Y264_AQ_DARK": "6.0",
+    "Y264_AQ_DARK_M": "64",
+    "Y264_AQ_DARK_V": "16",
     "Y264_AQ_DARK_B0": "0.08",
     "Y264_AQ_DARK_B1": "0.20",
     "Y264_AQ_DARK_S0": "0.35",

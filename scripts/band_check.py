@@ -83,6 +83,12 @@ def cut(src, start, n, out):
             o.write(line + f.read(fsz))
 
 
+def nframes(path):
+    """Frames in a y4m made by cut() (bare FRAME lines)."""
+    hdr, w, h = y4m_geom(path)
+    return (os.path.getsize(path) - len(hdr)) // (len(b"FRAME\n") + w * h * 3 // 2)
+
+
 def lumas(path):
     hdr, w, h = y4m_geom(path)
     fsz = w * h * 3 // 2
@@ -151,10 +157,20 @@ def full_cambi(src, bs, d):
 def solve(src, target, out):
     """Encode yah264 onto the reference's size: bisect the CRF and keep the
     closest encode. In a short dark window the size can step by more than the
-    tolerance between neighboring rate factors; then a two-pass encode at the
-    target bitrate gets closer, and the closer of the two is kept."""
+    tolerance between neighboring rate factors; then a multi-pass encode at
+    the target bitrate gets closer, and the closest encode is kept."""
     lo, hi, crf = 10.0, 40.0, 23.0
-    best, keep = None, out + ".best"
+    best, keep, stats = None, out + ".best", out + ".stats"
+    try:
+        return _solve(src, target, out, lo, hi, crf, keep, stats)
+    finally:
+        for p in (keep, stats, stats + ".mbtree"):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def _solve(src, target, out, lo, hi, crf, keep, stats):
+    best = None
     for _ in range(14):
         run([YAH264, "--input-y4m", src, "-o", out, "--crf", f"{crf:.3f}",
              "--threads", THREADS, "--quiet", "--no-progress"] + ARGS)
@@ -168,16 +184,21 @@ def solve(src, target, out):
         crf = round((lo + hi) / 2, 3)
     if abs(best[1] - 1) > SIZE_TOL:
         _, _, fps = bdcompare._y4m_geometry(src)
-        kbps = target * 8 / (FRAMES / fps) / 1000
-        stats = out + ".stats"
-        for p in (1, 2):
+        kbps = target * 8 / (nframes(src) / fps) / 1000
+        # pass 3 reads and rewrites the stats, so each one refines against a
+        # real encode; a short dark window can need it to land on the target
+        for p in (1, 2, 3, 3):
             run([YAH264, "--input-y4m", src, "-o", out, "--bitrate", str(max(1, round(kbps))),
                  "--pass", str(p), "--stats", stats, "--threads", THREADS,
                  "--quiet", "--no-progress"] + ARGS)
-        ratio = os.path.getsize(out) / target
-        if abs(ratio - 1) < abs(best[1] - 1):
-            best = (f"2-pass {kbps:.0f} kbit/s", ratio)
-            shutil.copyfile(out, keep)
+            if p == 1:
+                continue
+            ratio = os.path.getsize(out) / target
+            if abs(ratio - 1) < abs(best[1] - 1):
+                best = (f"multi-pass {kbps:.0f} kbit/s", ratio)
+                shutil.copyfile(out, keep)
+            if abs(ratio - 1) < 0.02:
+                break
     shutil.move(keep, out)
     return best
 
@@ -187,7 +208,7 @@ def main():
     os.makedirs(d, exist_ok=True)
     print(f"# scratch {d}; margins flat +{FLAT_MARGIN}, cambi +{CAMBI_MARGIN}; args {' '.join(ARGS) or '(default)'}")
     print(f"# {'window':26s} {'side':6s} {'bytes':>9s} {'flat':>6s} {'keep':>6s} {'dark':>6s} {'cambi':>6s} {'cambi1':>6s} {'v1':>6s}")
-    fails = 0
+    fails = unmatched = 0
     for spec in WINDOWS.split(","):
         title, frame = spec.rsplit(":", 1)
         name = f"{title}_{frame}"
@@ -198,21 +219,22 @@ def main():
         run([X264, "--preset", "medium", "--crf", "23", "--threads", THREADS, "--quiet",
              "-o", ref, src])
         mine = os.path.join(d, name + ".yah.264")
-        crf, ratio = solve(src, os.path.getsize(ref), mine)
+        how, ratio = solve(src, os.path.getsize(ref), mine)
         a, b = score(src, ref, name + ".ref", d), score(src, mine, name + ".yah", d)
         for side, r in (("ref", a), ("yah264", b)):
             print(f"  {name:26s} {side:6s} {r['bytes']:9d} {r['flat']:6.3f} {r['keep']:6.3f} "
                   f"{r['dark']:6.2f} {r['cambi']:6.3f} {r['cambi1']:6.3f} {r['v1']:6.2f}")
         if abs(ratio - 1) > SIZE_TOL:
-            verdict = f"UNMATCHED (size {ratio:.3f} at {crf})"
+            verdict = f"UNMATCHED (size {ratio:.3f} at {how})"; unmatched += 1
         elif b["flat"] > a["flat"] + FLAT_MARGIN or b["cambi"] > a["cambi"] + CAMBI_MARGIN:
             verdict = "FAIL"; fails += 1
         else:
             verdict = "pass"
         print(f"  {name:26s} {verdict}: flat {b['flat'] - a['flat']:+.3f}, cambi {b['cambi'] - a['cambi']:+.3f}, "
               f"size {ratio:.3f}")
-    print(f"# {fails} window(s) failed")
-    sys.exit(1 if fails else 0)
+    print(f"# {fails} window(s) failed, {unmatched} unmatched (not judged)")
+    # 1: a window failed; 2: none failed but one couldn't be judged
+    sys.exit(1 if fails else (2 if unmatched else 0))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ These are read only in a build configured with `-Ddev_knobs=true`; a default bui
 
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (49)
+## default (52)
 
 | knob | default | reader |
 |---|---|---|
@@ -14,10 +14,13 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_ABR_QCOMP` | 0.6 | src/encoder/rate.c:2497 |
 | `Y264_ABR_TOL` | = param | src/encoder/encoder.c:4837 |
 | `Y264_ABR_VBVOV` | 0.25 | src/encoder/rate.c:2518 |
+| `Y264_AQ_DARK` | 6.0 | src/encoder/mbcode.c:386 |
 | `Y264_AQ_DARK_B0` | 0.08 | src/encoder/mbcode.c:387 |
 | `Y264_AQ_DARK_B1` | 0.20 | src/encoder/mbcode.c:388 |
+| `Y264_AQ_DARK_M` | 64 | src/encoder/mbcode.c:386 |
 | `Y264_AQ_DARK_S0` | 0.35 | src/encoder/mbcode.c:388 |
 | `Y264_AQ_DARK_S1` | 0.50 | src/encoder/mbcode.c:389 |
+| `Y264_AQ_DARK_V` | 16 | src/encoder/mbcode.c:387 |
 | `Y264_AQ_DC` | = rate mode: 1.3 uncapped CRF, 1.04 capped CRF or bitrate target | src/encoder/encoder.c:5454 |
 | `Y264_AQ_MODE` | 2 | src/encoder/mbcode.c:279 |
 | `Y264_B8_DIRECT` | 1 | src/encoder/mbcode.c:7020 |
@@ -122,13 +125,10 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_VBV_ROWBRAKE_TRACE` | 0 | src/encoder/mbcode.c:5249 |
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:881 |
 
-## arm (17)
+## arm (14)
 
 | knob | default | reader |
 |---|---|---|
-| `Y264_AQ_DARK` | ? | src/encoder/mbcode.c:386 |
-| `Y264_AQ_DARK_M` | ? | src/encoder/mbcode.c:386 |
-| `Y264_AQ_DARK_V` | ? | src/encoder/mbcode.c:387 |
 | `Y264_BAND_PRECOMP` | 0 | src/encoder/mbcode.c:5492 |
 | `Y264_B_RECT` | 0 | src/encoder/mbcode.c:7167 |
 | `Y264_HW` | off | src/encoder/encoder.c:16768 |
