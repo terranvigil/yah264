@@ -1086,8 +1086,8 @@ An unknown preset name is an error, not a warning.
 | `grain` | psy-trellis 1.0, psy-rd 1.5. The 1.5 was a measured VMAF-NEG win on heavy grain against a 1.0 default. The default has since moved to 2.0, so the tune now lowers psy-rd and has not been re-measured against it. |
 | `film` | psy-trellis 0.5. psy-rd left at the 2.0 default. The film value has not been BD-measured for want of a film clip. |
 | `animation` | 4 more B frames, only when `--bframes` isn't given and the preset's count is under 8. psy-trellis and AQ stay at the preset's values: raising one and lowering the other measured as a coin flip across two cartoon clips. |
-| `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. |
-| `ssim` | psy-rd 0, psy-trellis 0, AQ kept. |
+| `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. With psy off, the size-based chroma QP and deblocking offsets stay at 0. |
+| `ssim` | psy-rd 0, psy-trellis 0, AQ kept. With psy off, the size-based chroma QP and deblocking offsets stay at 0. |
 | `zerolatency` | bframes 0, rc-lookahead 0, sync-lookahead off. |
 | `stillimage` | psy-trellis 0.7, aq-strength 1.2, deblock -3:-3. The reference tune's constants, **borrowed and not measured here**: there is no still-image clip in the corpus, and inventing one to fit a tune would measure the clip. |
 | `fastdecode` | No deblocking filter, CAVLC, no weighted biprediction, no explicit P weighted prediction. Everything that costs the decoder is off. That is a real quality loss, on purpose. With `--bframes 0 --no-transform-8x8` it is the one arrangement that declares Baseline without naming a profile. |

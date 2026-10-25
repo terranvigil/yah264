@@ -7512,6 +7512,14 @@ static void b8_stat_register(void)
  * It is half of why the quadrant gate is affordable: the gate alone costs half
  * a BD point, with the rate charge three hundredths. */
 
+/* Y264_B_RECT=1: the seeded 16x8/8x16 search for B macroblocks (off). */
+static int b_rect_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_B_RECT"); v = e ? atoi(e) != 0 : 0; }
+    return v;
+}
+
 /* Y264_B8_QGATE=<n>: run the quadrant search only where the best 16x16-level
  * prediction's residual is UNEVENLY distributed across the four quadrants.
  *
@@ -7526,13 +7534,6 @@ static void b8_stat_register(void)
  * n = 0 is inert (any imbalance at all admits, which is almost every MB); the
  * knob is the slack in sixteenths. Not byte-identical -- it is a quality/wall
  * trade and is priced on the CRF band like every other one. */
-static int b_rect_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B_RECT"); v = e ? atoi(e) != 0 : 0; }
-    return v;
-}
-
 static int b8_qgate(void)
 {
     static int v = -1;

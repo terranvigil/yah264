@@ -707,19 +707,24 @@ sys.exit(1 if bad or not seen else 0)
     echo "SUMMARY $t $f"
 }
 
-check_ratetol() {   # check_ratetol <label> <src> <bitrate>  -- the tolerance ORDERS
+check_ratetol() {   # check_ratetol <label> <src> <bitrate> <frames> <order>  -- the tolerance ORDERS
     # --ratetol is a tolerance, so what it promises is an ORDER and not a
-    # number: a tighter tolerance tracks the target at least as closely as the
-    # default or none at all. The cell asserts that on the coded size, which
-    # is the only thing a caller can see,
-    # and it asserts the default arm byte-for-byte against no flag at all --
-    # the identity claim the whole option rests on.
-    local label="$1" src="$2" rate="$3" t=0 f=0
-    local p="$work/rt_$label"
-    "$enc" --input-y4m "$src" --bitrate "$rate" --threads 1 -o "$p.def.264" 2>/dev/null || true
-    "$enc" --input-y4m "$src" --bitrate "$rate" --ratetol 1.0 --threads 1 -o "$p.one.264" 2>/dev/null || true
-    "$enc" --input-y4m "$src" --bitrate "$rate" --ratetol 0.1 --threads 1 -o "$p.tight.264" 2>/dev/null || true
-    "$enc" --input-y4m "$src" --bitrate "$rate" --ratetol inf --threads 1 -o "$p.inf.264" 2>/dev/null || true
+    # number: a tighter tolerance tracks the target more closely than the
+    # default, and none at all tracks it no better. The cell asserts that on
+    # the coded size, which is the only thing a caller can see, and it asserts
+    # the default arm byte-for-byte against no flag at all -- the identity
+    # claim the whole option rests on. <order> 1 also asserts default against
+    # inf, which only a real clip separates beyond noise.
+    local label="$1" src="$2" rate="$3" nf="$4" order="$5" t=0 f=0
+    local p="$work/rt_$label" fl="--frames $4 --bitrate $3 --threads 1"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $fl -o "$p.def.264" 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $fl --ratetol 1.0 -o "$p.one.264" 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $fl --ratetol 0.1 -o "$p.tight.264" 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $fl --ratetol inf -o "$p.inf.264" 2>/dev/null || true
     t=$((t + 1))
     if [ -s "$p.def.264" ] && cmp -s "$p.def.264" "$p.one.264"; then
         echo "  ok   --ratetol 1.0 is byte-identical to no --ratetol"
@@ -727,23 +732,31 @@ check_ratetol() {   # check_ratetol <label> <src> <bitrate>  -- the tolerance OR
         echo "  FAIL --ratetol at its default moved the stream"; f=$((f + 1))
     fi
     t=$((t + 1))
+    if [ -s "$p.tight.264" ] && ! cmp -s "$p.def.264" "$p.tight.264"; then
+        echo "  ok   --ratetol 0.1 changes the stream"
+    else
+        echo "  FAIL --ratetol 0.1 left the stream as it was"; f=$((f + 1))
+    fi
+    t=$((t + 1))
     if python3 -c "
 import os,sys
-tgt = $rate * 1000.0 / 30.0 * 48 / 8.0     # bytes the target asks for over the clip
+fps = 30.0
+hdr = open('$src', 'rb').readline().split()
+for tok in hdr:
+    if tok.startswith(b'F'):
+        n, d = tok[1:].split(b':'); fps = int(n) / int(d)
+tgt = $rate * 1000.0 / fps * $nf / 8.0     # bytes the target asks for over the clip
 d = {k: abs(os.path.getsize('$p.%s.264' % k) - tgt) for k in ('def','tight','inf')}
 print('  ratetol deviation from target, bytes: default %.0f, tight %.0f, inf %.0f' %
       (d['def'], d['tight'], d['inf']))
-# the tight arm must track closest; default against inf is within noise on
-# this 48-frame synthetic clip (real clips separate by 5-9%), so that half
-# only warns
-if d['tight'] > min(d['def'], d['inf']):
-    sys.exit(1)
-if d['def'] > d['inf'] + 0.01 * tgt:
-    print('  WARN default tracked further than inf (informational on this short clip)')
+ok = d['tight'] < d['def'] and d['tight'] <= d['inf']
+if $order:
+    ok = ok and d['def'] <= d['inf']
+sys.exit(0 if ok else 1)
 "; then
-        echo "  ok   the tight tolerance tracks closest"
+        echo "  ok   the arms order: tight closest$( [ "$order" = 1 ] && echo ', inf furthest')"
     else
-        echo "  FAIL the tight --ratetol arm did not track closest"; f=$((f + 1))
+        echo "  FAIL the --ratetol arms did not order"; f=$((f + 1))
     fi
     echo "SUMMARY $t $f"
 }
@@ -1589,7 +1602,11 @@ add "rate-control bounds" check_rc crf_max "$S/syn_rc.y4m" \
     "--crf 20 --vbv-maxrate 200 --vbv-bufsize 100 --crf-max 32"
 add "rate-control bounds" check_rc ratetol_tight "$S/syn_rc.y4m" "--bitrate 400 --ratetol 0.1"
 add "rate-control bounds" check_rc ratetol_inf   "$S/syn_rc.y4m" "--bitrate 400 --ratetol inf"
-add "rate-control bounds" check_ratetol ratetol "$S/syn_rc.y4m" 400
+add "rate-control bounds" check_ratetol ratetol "$S/syn_rc.y4m" 400 48 0
+# on a real clip the default and unlimited arms separate well beyond noise
+if [ -f "$root/tests/corpus/bus_cif.y4m" ]; then
+    add "rate-control bounds" check_ratetol ratetol_bus "$root/tests/corpus/bus_cif.y4m" 600 96 1
+fi
 add "rate-control bounds" check_rc qpfile_types "$S/syn_rc.y4m" \
     "--crf 26 --bframes 3 --qpfile $S/qpfile_types.txt"
 add "rate-control bounds" check_rc qpfile_qp "$S/syn_rc.y4m" \
