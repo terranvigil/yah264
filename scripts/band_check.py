@@ -162,8 +162,7 @@ def solve(src, target, out):
 
 
 def main():
-    bdcompare.require_dev_knobs(YAH264, " ".join(k for k in os.environ if k.startswith("Y264_")),
-                                " ".join(ARGS))
+    bdcompare.require_dev_knobs(YAH264, " ".join(ARGS))
     d = os.environ.get("OUT") or tempfile.mkdtemp(prefix="y264bandchk.")
     os.makedirs(d, exist_ok=True)
     print(f"# scratch {d}; margins flat +{FLAT_MARGIN}, cambi +{CAMBI_MARGIN}; args {' '.join(ARGS) or '(default)'}")
