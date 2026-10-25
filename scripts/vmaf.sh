@@ -55,9 +55,8 @@ case "$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt -of cs
 esac
 # v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080
 # in both dimensions is fitted to it, both sides, and CAMBI told the coded size
-read -r scaled cw ch svf <<GEO
-$(python3 "$(dirname "$0")/bdcompare.py" --v1-display "$clip")
-GEO
+geo=$(python3 "$(dirname "$0")/bdcompare.py" --v1-display "$clip") && [ -n "$geo" ] || { echo "$0: cannot read the v1 display geometry" >&2; exit 2; }
+read -r scaled cw ch svf <<< "$geo"
 copts="name=vmaf_v1:cambi.enc_bitdepth=$ebd"
 if [ "$scaled" = 1 ]; then
     for f in ref dec; do

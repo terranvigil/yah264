@@ -225,7 +225,7 @@ _ladders = {} if NO_CACHE else _load(LADDER_PATH)
 # The stored null for this preset, frame count and ladder (scripts/hd_null.py).
 NULL_KEY = f"{PKEY}:{FRAMES}:{','.join(f'{q:g}' for q in RUNGS)}"
 NULL_FIT = (_load(os.environ.get("NULL_FIT", os.path.join(
-    CACHE, "null.json" if bd.GATE == "VMAF-NEG" else f"null-{bd.GATE}.json")))
+    CACHE, "null.json" if bd.GATE == "VMAF-NEG" else f"null-{bd.GATE}-{bd.V1_RULE}.json")))
             .get(NULL_KEY) if AUTO else None)
 if AUTO and not NULL_FIT:
     print(f"no stored null for {NULL_KEY}: every clip runs one live control "
@@ -294,7 +294,7 @@ def enc(env, q, src, out):
 def _key(clip, env, q):
     _, lib, env = split_bin(env)
     # a v1 point is its own cell; NEG keys stay as they were so the old cache serves them
-    gate = "" if bd.GATE == "VMAF-NEG" else f":{bd.GATE}"
+    gate = "" if bd.GATE == "VMAF-NEG" else f":{bd.GATE}-{bd.V1_RULE}"
     return f"{lib}:{PKEY}:{FRAMES}:{clip}:{env}:{q:.4f}{gate}"
 
 

@@ -434,7 +434,8 @@ def identity_lines():
             f"{os.path.basename(y['dylib'])} {y['sha']} v{y['version']}  "
             f"{os.path.basename(x['dylib'])} {x['sha']} v{x['version']}",
             f"  {'':<11}  yah264 {y['prefix']}",
-            f"  {'':<11}  x264   {x['prefix']}"]
+            f"  {'':<11}  x264   {x['prefix']}",
+            f"  {'':<11}  v1 scoring: {bdcompare.V1_RULE}"]
 
 # Our encoder answers to both names: a library installed before the yah264
 # rename still reads the NEXT264_ spelling. Match either and set both, because
