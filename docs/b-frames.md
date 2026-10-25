@@ -125,8 +125,9 @@ pay for it.
 
 Medium searches no rectangular split by default. With `Y264_B_RECT=1`, each B
 macroblock that reaches the RD stage tries the one orientation along which the
-16x16 winner's error splits most unevenly, seeded from the 16x16 vectors.
-`--subme 9` and up search both orientations and RD every combination.
+16x16 winner's error splits most unevenly, seeded from the 16x16 vectors. It
+needs the b8x8 partitions, which medium's automatic set leaves out from 1080p
+up. `--subme 9` and up search both orientations and RD every combination.
 
 ## What we chose and why
 

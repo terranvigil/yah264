@@ -526,9 +526,9 @@ and the prediction worse, and the residual pays for it. `none` is the extreme:
 every macroblock is coded whole. That makes a useful floor to measure against
 but not a setting to ship.
 
-Medium and faster search no B 16x8 or 8x16, so there `--partitions b8x8` gets
-the quadrant split; `--subme 9` and up (slower, veryslow, placebo) search both
-orientations too.
+Slow and faster (subme 8 and below) search no B 16x8 or 8x16, so there
+`--partitions b8x8` gets the quadrant split; `--subme 9` and up (slower,
+veryslow, placebo) search both orientations too.
 
 ### The three low-rate decision gates
 

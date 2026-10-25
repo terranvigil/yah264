@@ -9393,7 +9393,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             j = eval_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1, lam, &tmp, &bpc);
             if (j < best) { best = j; mode = 2; IRES_TAKE_TMP(); save_mb_rec(f, mbx, mby, snap_best); }
         }
-        for (int bp = 1; bp <= 2; bp++) {
+        for (int bp = 1; bp <= 2 && (f->partitions & YAH264_PART_B8X8); bp++) {
             struct bpart_mo mo;
             /* subme >= 9 keeps the cold, exhaustive form: this tier's whole
  * contract is the byte-identical max-quality tournament. */
