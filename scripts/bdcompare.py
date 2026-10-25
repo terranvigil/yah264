@@ -312,23 +312,38 @@ def require_dev_knobs(binary, *texts):
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
+# launchers a template may put in front of the encoder, with the options of
+# each that take a value
+_WRAPPERS = {
+    "env": ("-u", "-C", "-P", "-S"), "nice": ("-n",), "time": (),
+    "taskpolicy": ("-c", "-d", "-g", "-t", "-l", "-p"), "caffeinate": ("-w", "-t"),
+    "timeout": ("-s", "-k"),
+}
+
+
 def template_binary(tmpl):
     """The program an encode template runs: the first word that is neither an
-    env assignment nor `env` (or its options), as the shell would find it."""
+    env assignment nor a launcher (env, nice, time, taskpolicy, caffeinate,
+    timeout, or `sh -c`) or one of its options, as the shell would find it."""
     try:
         words = shlex.split(tmpl)
     except ValueError:
         return ""
-    in_env = skip = False
-    for w in words:
+    wrap, skip, need_arg = None, False, False
+    for n, w in enumerate(words):
         if skip:
             skip = False
         elif _ASSIGN.match(w):
             pass
-        elif w == "env":
-            in_env = True
-        elif in_env and w.startswith("-"):
-            skip = w in ("-u", "-C", "-P", "-S")
+        elif os.path.basename(w) in ("sh", "bash", "zsh") and "-c" in words[n + 1:n + 2]:
+            return template_binary(words[n + 2]) if n + 2 < len(words) else ""
+        elif os.path.basename(w) in _WRAPPERS:
+            wrap = os.path.basename(w)
+            need_arg = wrap == "timeout"
+        elif wrap and w.startswith("-"):
+            skip = w in _WRAPPERS[wrap]
+        elif need_arg:
+            need_arg = False            # timeout's duration
         elif os.path.isabs(w) or os.path.exists(w):
             return os.path.abspath(w)
         elif os.sep in w:
@@ -657,6 +672,10 @@ def main():
         b = template_binary(t)
         if b and os.path.isfile(b) and devknobs.is_yah264(b):
             require_dev_knobs(b, t)
+        elif "yah264" in t and devknobs.ignored(t, environ=False):
+            # a yah264 template whose binary can't be found can't be checked
+            sys.exit(f"bdcompare: can't find the yah264 binary in {t!r} to check "
+                     "the dev knobs it sets; name it plainly")
 
     points = [int(q) for q in args.points.split(",")]
     if args.klass:
@@ -698,7 +717,10 @@ def main():
     def _ckey(tmpl, clip, q):
         binp = template_binary(tmpl)
         mt = os.path.getmtime(binp) if binp and os.path.exists(binp) else 0
-        h = hashlib.sha1(f"{tmpl}|{clip}|{q}|{args.frames}|{mt}".encode()).hexdigest()[:20]
+        # the encoder inherits the environment's knobs, so they're part of the key
+        envk = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
+                        if k.startswith(("Y264_", "YAH264_")))
+        h = hashlib.sha1(f"{tmpl}|{clip}|{q}|{args.frames}|{mt}|{envk}".encode()).hexdigest()[:20]
         return os.path.join(cache_dir, h + ".264")
 
     def encode(tag, tmpl, clip, q):
