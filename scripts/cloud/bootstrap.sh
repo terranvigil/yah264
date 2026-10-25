@@ -70,7 +70,7 @@ FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/terranvigil/FFmpeg.git}"
 FFMPEG_BRANCH="${FFMPEG_BRANCH:-yah264}"
 FFMPEG_FORK="${FFMPEG_FORK:-$CLOUD}"
 VMAF_REPO="${VMAF_REPO:-https://github.com/Netflix/vmaf.git}"
-VMAF_TAG="${VMAF_TAG:-v3.0.0}"
+VMAF_TAG="${VMAF_TAG:-v3.2.1}"
 CORPUS_TARBALL="${CORPUS_TARBALL:-corpus.tar}"
 SDE_TARBALL="${SDE_TARBALL:-sde-external.tar.xz}"
 
@@ -306,19 +306,24 @@ st_build_y264_10() {
 # The image's own header says a cloud image that wants the library builds it
 # from source the way this script builds the other tools. So it does.
 #
-# Static, so the CLI carries its models and needs no LD_LIBRARY_PATH: libvmaf
-# 2.x and later compile vmaf_v0.6.1 and vmaf_v0.6.1neg in, and NEG is the model
-# every quality read in this tree uses.
+# Static and float-enabled. The tree scores VMAF v1 from the v1.0.16 model
+# files (VMAF_V1_MODELS), which come from the same checkout.
 st_build_vmaf() {
-    if command -v vmaf >/dev/null 2>&1; then
-        echo "vmaf: already on PATH at $(command -v vmaf); not building one"
-        command -v vmaf > "$CLOUD_WORK/vmaf.path"
-        return 0
-    fi
     command -v meson >/dev/null 2>&1 || { c_skip "no meson; the quality legs will skip"; return; }
+    # a work volume bootstrapped at another tag is re-cloned, so a tag bump
+    # takes effect rather than reusing the old build
+    if [ -d "$CLOUD_WORK/vmaf/.git" ] &&
+       [ "$(git -C "$CLOUD_WORK/vmaf" describe --tags --exact-match 2>/dev/null)" != "$VMAF_TAG" ]; then
+        rm -rf "$CLOUD_WORK/vmaf"
+    fi
     if [ ! -d "$CLOUD_WORK/vmaf/.git" ]; then
         git clone --branch "$VMAF_TAG" --depth 1 "$VMAF_REPO" "$CLOUD_WORK/vmaf" || return 1
     fi
+    local models="$CLOUD_WORK/vmaf-models"
+    mkdir -p "$models"
+    cp -R "$CLOUD_WORK/vmaf/model/"vmaf_v1.0.16* "$models/" \
+        || { c_skip "libvmaf $VMAF_TAG has no v1.0.16 models"; return; }
+    echo "$models" > "$CLOUD_WORK/vmaf.models"
     echo "libvmaf $VMAF_TAG at $(git -C "$CLOUD_WORK/vmaf" rev-parse --short HEAD)"
     ( cd "$CLOUD_WORK/vmaf/libvmaf" || exit 1
       [ -f build/build.ninja ] || meson setup build --buildtype=release \
@@ -338,26 +343,25 @@ st_build_vmaf() {
     # of this kit hit exactly that: build-vmaf PASSed, and four board legs then
     # failed with a Python traceback three layers down, because vmaf_of() sends
     # the CLI's stderr to /dev/null and all the caller sees is a missing JSON.
-    # So the stage scores one synthetic pair with the model the tree actually
-    # uses, and reports what it found.
+    # So the stage scores one synthetic pair with the v1 model file the tree
+    # uses, at CIF (v1's extractors refuse much smaller pictures).
     local probe="$CLOUD_WORK/vmaf-probe"
     mkdir -p "$probe"
     if ! command -v ffmpeg >/dev/null 2>&1; then
         echo "note: no ffmpeg here to build a probe clip; the model was NOT verified"
     else
-        ffmpeg -v error -y -f lavfi -i testsrc=size=64x64:rate=5:duration=1 \
-            -pix_fmt yuv420p "$probe/p.y4m" || return 1
+        ffmpeg -v error -y -f lavfi -i testsrc=size=352x288:rate=5:duration=1 \
+            -pix_fmt yuv420p10le -strict -1 "$probe/p.y4m" || return 1
+        local m="$models/vmaf_v1.0.16/vmaf_v1.0.16_3d0h.json"
         if ! "$bin" -r "$probe/p.y4m" -d "$probe/p.y4m" --subsample 1 \
-                --feature psnr --model version=vmaf_v0.6.1neg:name=vmaf \
+                --model "path=$m:name=vmaf_v1:cambi.enc_bitdepth=8" \
                 --json -o "$probe/p.json" 2>"$probe/err.txt" \
            || [ ! -s "$probe/p.json" ]; then
-            echo "vmaf: the CLI built but cannot score with vmaf_v0.6.1neg:"
+            echo "vmaf: the CLI built but cannot score with $m:"
             sed 's/^/    /' "$probe/err.txt"
-            echo "  This is what a libvmaf built without xxd looks like -- the"
-            echo "  models are not compiled in. Install xxd and rebuild."
             return 1
         fi
-        echo "vmaf: scored a probe pair with vmaf_v0.6.1neg -- models are compiled in"
+        echo "vmaf: scored a probe pair with the v1.0.16 3d0h model"
     fi
     echo "$bin" > "$CLOUD_WORK/vmaf.path"
     return 0
@@ -539,6 +543,7 @@ st_ok() {
     okv X264LIB_ASM "$C_FFB/prefix-x264-asm"
     okv X264LIB_C "$C_FFB/prefix-x264-c"
     okv VMAF_BIN "$( [ -f "$CLOUD_WORK/vmaf.path" ] && cat "$CLOUD_WORK/vmaf.path" )"
+    okv VMAF_MODELS_DIR "$( [ -f "$CLOUD_WORK/vmaf.models" ] && cat "$CLOUD_WORK/vmaf.models" )"
     okv SDE64 "$( [ -f "$CLOUD_WORK/sde64.path" ] && cat "$CLOUD_WORK/sde64.path" )"
     okv CLOUD_WORK "$CLOUD_WORK"
     cat "$C_OK"

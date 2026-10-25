@@ -4205,22 +4205,28 @@ static void size_trades(yah264_param_t *p)
     if (p->lr_settle == 0) p->lr_settle = 2;
 }
 
-/* The default deblocking offsets, by picture size: -1:-1 (slice header div2
- * units) at 1280x720 and above, the spec-neutral 0:0 below. At HD sizes our
- * RD and psy keep edge and texture energy that the neutral filter smooths
- * back out. Measured 2026-10-04/05 at matched achieved rate, BD-VMAF-NEG of
- * -1:-1 against 0:0: HD band median -0.31%, worst sunflower +0.05%; sintel
- * -1.74, riverbed -0.96, pedestrian -0.94; Sol Levante 720p -0.59, 1080p
- * -0.70; 2160p chimera -0.65, meridian -0.48; multi-shot 720p -0.21, 1080p
- * -0.78. It costs PSNR (about +3% BD-PSNR-Y at 2160p) and nothing in
- * instructions. Below 720p the CIF clips read up to +0.72 (mobile), over
- * the per-clip bar, so small pictures keep 0:0. An explicit --deblock A:B
- * always wins. */
+/* Defaults that follow the picture size (y264_size_class: the longer side
+ * below 1280, below 1920, or larger). An explicit value always wins.
+ *
+ * Deblocking: -1:-1 from the 720p class up, where our RD and psy keep edge
+ * and texture energy the neutral filter smooths back out, and 0:0 below.
+ *
+ * Chroma QP offset: -4 below the 720p class, -2 in it and 0 above. Scored
+ * at display resolution, the smaller the picture the more VMAF v1 reads
+ * chroma loss; past these values a few clips (shields at 720p, sunflower
+ * at 1080p) lose more than the bar allows.
+ *
+ * With psy off (--tune psnr or ssim) both stay neutral, since they were
+ * chosen for VMAF v1 and cost PSNR. */
 static void deblock_auto_resolve(yah264_param_t *p)
 {
-    int off = y264_size_class(p->width, p->height) >= 1 ? -1 : 0;
+    int sc = y264_size_class(p->width, p->height);
+    int psy = p->psy_rd > 0.0f;
+    int off = psy && sc >= 1 ? -1 : 0;
     if (p->deblock_alpha == YAH264_DEBLOCK_AUTO) p->deblock_alpha = off;
     if (p->deblock_beta == YAH264_DEBLOCK_AUTO) p->deblock_beta = off;
+    if (p->chroma_qp_index_offset == YAH264_CQP_AUTO)
+        p->chroma_qp_index_offset = !psy ? 0 : sc == 0 ? -4 : sc == 1 ? -2 : 0;
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
@@ -4293,7 +4299,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         (param->deblock_beta != YAH264_DEBLOCK_AUTO &&
          (param->deblock_beta  < -6 || param->deblock_beta  > 6)))
         return NULL;
-    if (param->chroma_qp_index_offset < -12 || param->chroma_qp_index_offset > 12)
+    if (param->chroma_qp_index_offset != YAH264_CQP_AUTO &&
+        (param->chroma_qp_index_offset < -12 || param->chroma_qp_index_offset > 12))
         return NULL;
     if (param->sps_id < 0 || param->sps_id > 31)
         return NULL;

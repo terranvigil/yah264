@@ -97,6 +97,9 @@ for entry in $CLIPS; do
     # the clip, not of the box's load, so unlike a timing cache it cannot go
     # stale in a way that poisons a number.
     if [ "$POINT" = vmaf ]; then
+        # the targets below are VMAF-NEG scores and crf-solve scores VMAF v1
+        echo "perf-comp-crf-set: POINT=vmaf has no VMAF v1 targets yet; use POINT=kbps" >&2
+        exit 2
         tgt_flag="--target-vmaf $(python3 - "$root" "$clip" <<'PY'
 import sys
 # VMAF operating points measured at the calibrated ABR rates (parity-clips.sh).

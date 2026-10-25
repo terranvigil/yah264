@@ -70,7 +70,7 @@ def bd_for_preset(preset, clips, args):
     out = subprocess.run(cmd, capture_output=True, text=True).stdout
     res = {}
     for line in out.splitlines():
-        m = re.match(r"(\S+)\s+BD-rate\((VMAF(?:-NEG)?)\) A vs B:\s+([-+]?[\d.]+)%", line)
+        m = re.match(r"(\S+)\s+BD-rate\((VMAF(?:-NEG|-v1)?)\) A vs B:\s+([-+]?[\d.]+)%", line)
         if m:
             clip, metric, val = m.group(1), m.group(2), float(m.group(3))
             res.setdefault(clip, {})[metric] = val
@@ -140,7 +140,7 @@ def main():
         ns, rs = speed_for_preset(p, args.speed_clip, args)
         cells, vals = [], []
         for c in clips:
-            v = bd.get(c, {}).get("VMAF-NEG")
+            v = bd.get(c, {}).get(os.environ.get("VMAF_GATE", "VMAF-v1"))
             if v is None:
                 cells.append("n/a")
             else:

@@ -234,8 +234,9 @@ void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intr
                           int w0, int lev_max);
 void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0);
 /* 4:2:0 only: Hadamard + quant + inverse in one call; lev is raster (and
- * transmit order), rdc the reconstructed per-block DC. Returns whether any
- * level is nonzero. */
+ * transmit order), rdc the reconstructed per-block DC. `intra` picks the
+ * rounding: 0 the inter deadzone (1/6), 1 intra (1/3), 2 round to nearest
+ * (the RD choice's starting levels). Returns whether any level is nonzero. */
 int y264_chroma_dc420_rt(const dctcoef dc[4], dctcoef lev[4], dctcoef rdc[4], int qp,
                          int intra, int w0, int lev_max);
 

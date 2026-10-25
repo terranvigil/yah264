@@ -109,6 +109,10 @@ iterated to convergence at `--subme 9` and up.
 RDOQ seeds each coefficient from round-to-nearest, so a marginal coefficient
 always enters the candidate set as {q-1, q} and RD decides keep or drop.
 
+On very smooth intra blocks the RDOQ lambda falls from full at a source
+variance of 8 to zero at 2, so the small levels that carry a gentle gradient
+survive. `Y264_TREL_SMOOTH=0` turns it off.
+
 ### Coefficient decimation
 
 After quantization, a 4x4 inter block whose levels are all +-1 gets a score:
@@ -132,6 +136,7 @@ of magnitude 2 or more forces keep. `--no-dct-decimate` turns it off.
 | Intra admission at 1.5x (P) and 0.75x (B) | 1.5x is BD-neutral for 1.06x CIF and 1.11x 720p in pure C. B intra wins a few dozen macroblocks in 300,000, so its margin is tighter |
 | RDOQ on the winner only at medium (`--trellis 1`) | 1.18x faster at CIF and 1.29x at 720p in pure C, for +1.42% VMAF-NEG |
 | Viterbi RDOQ under CABAC at medium | -0.24% VMAF-NEG on seven clips and 1.1-1.3x faster than the greedy search |
+| Intra RDOQ lambda ramped to zero below a source variance of 8 | without it, RDOQ drops the small levels that carry smooth gradients and the I frame bands |
 | Round-to-nearest RDOQ seed | a deadzone seed drops would-be level-1 coefficients with no RD look. Round-to-nearest measured -2.8% corpus mean, park_joy -6.7%, no clip worse |
 | Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable, which is a different tool. Above 3 the surface is flat (all eight shapes within 0.13%) |
 | 4x4 tail `3,2,2,1,1,1,1,1` | at or slightly ahead of every alternative on both bands (CRF -0.07%, deep +0.01%), no speed or size cost, 254/254 conformance |

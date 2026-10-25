@@ -7,7 +7,7 @@ The ten-clip board is single-shot by construction and cannot see how bits
 move between shots; this encodes the S0 multi-shot sequences
 (local/corpus/<seq>.y4m with a <seq>.cuts file: "<first frame> <name>" per
 shot) at several CRF points for every arm and reports, per sequence,
-BD-VMAF-NEG for every arm pair, the per-shot VMAF-NEG at each point and the
+BD-VMAF-v1 for every arm pair, the per-shot VMAF v1 at each point and the
 per-shot bit share. Arms are "name=<command template>" with {src} {q} {out};
 "name=env:VAR=val ..." runs our binary (YAH264, default build/cli/yah264)
 at --threads 0 under that environment, "x264" runs the reference at medium.
@@ -17,12 +17,17 @@ at --threads 0 under that environment, "x264" runs the reference at medium.
 
 Encodes and VMAF json files are cached under --work by (seq, arm, q); use a
 fresh --work after a rebuild. BD sign: negative = the first arm of the pair
-spends fewer bits at equal VMAF-NEG.
+spends fewer bits at equal VMAF v1. Scoring is scripts/bdcompare.py's v1 path
+(10-bit 4:2:0 both sides, model by the source's height and frame rate, CAMBI at
+the stream's bit depth); VMAF_V1_BIN and VMAF_V1_MODELS override the binary and
+the model directory, VMAF_THREADS (default 8) the libvmaf threads.
 """
-import argparse, json, math, os, shlex, subprocess, sys
+import argparse, tempfile, json, math, os, shlex, subprocess, sys
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bdcompare                                                # noqa: E402
 
 
 def bd_rate(r_ref, m_ref, r_test, m_test):
@@ -40,6 +45,23 @@ def sizes(path):
     p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "frame=pkt_size",
                         "-of", "csv=p=0", path], capture_output=True, text=True)
     return [int(x.strip().rstrip(",")) for x in p.stdout.split() if x.strip().rstrip(",").isdigit()]
+
+
+def vmaf_v1(src, bitstream, js):
+    """Score every frame with VMAF v1 into js, through bdcompare's pass."""
+    model = bdcompare.v1_model(src)
+    if not os.path.exists(model) or not os.access(bdcompare.V1_BIN, os.X_OK):
+        sys.exit(f"multishot_bd: needs {bdcompare.V1_BIN} and {model}")
+    w, h, _ = bdcompare._y4m_geometry(src)
+    vf = ["-vf", bdcompare.V1_SCALE_VF] if bdcompare.v1_scaled(w, h) else []
+    opts = bdcompare.v1_model_opts(w, h, bdcompare._enc_bitdepth(bitstream))
+    with tempfile.TemporaryDirectory() as work:
+        jj = bdcompare.v1_pass(bitstream, src, work, js, ["--model", f"path={model}:{opts}"], vf,
+                               ["--threads", os.environ.get("VMAF_THREADS", "8")])
+    if jj is None:
+        if os.path.exists(js):
+            os.unlink(js)
+        sys.exit(f"vmaf failed on {bitstream}")
 
 
 def main():
@@ -73,27 +95,20 @@ def main():
         for arm, tmpl in arms.items():
             for q in pts:
                 out = os.path.join(a.work, f"{seq}_{arm}_{q}.264")
-                js = os.path.join(a.work, f"{seq}_{arm}_{q}.json")
+                js = os.path.join(a.work, f"{seq}_{arm}_{q}.v1-{bdcompare.V1_RULE}.json")
                 if not os.path.exists(js):
                     cmd = tmpl.format(src=shlex.quote(src), q=q, out=shlex.quote(out))
                     r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                     if r.returncode:
                         sys.exit(f"encode failed: {cmd}\n{r.stderr[-400:]}")
-                    dec = os.path.join(a.work, f"dec_{seq}_{arm}_{q}.y4m")
-                    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", out, "-pix_fmt", "yuv420p", dec], check=True)
-                    r = subprocess.run(["vmaf", "-r", src, "-d", dec, "--json", "-o", js,
-                                        "--model", "version=vmaf_v0.6.1neg:name=vmaf_neg", "--threads", "8"],
-                                       capture_output=True, text=True)
-                    os.unlink(dec)
-                    if r.returncode:
-                        sys.exit(f"vmaf failed on {out}: {r.stderr[-400:]}")
-                per = [f["metrics"]["vmaf_neg"] for f in json.load(open(js))["frames"]]
+                    vmaf_v1(src, out, js)
+                per = [f["metrics"]["vmaf_v1"] for f in json.load(open(js))["frames"]]
                 sz = sizes(out)
                 n = len(per); b = cuts + [n]
                 shots = [float(np.mean(per[b[i]:b[i + 1]])) for i in range(len(cuts))]
                 share = [sum(sz[b[i]:b[i + 1]]) / max(1, sum(sz)) * 100 for i in range(len(cuts))]
                 res[(arm, q)] = (os.path.getsize(out) * 8, float(np.mean(per)), shots, share)
-                print(f"{seq:12s} {arm:8s} crf{q}: {res[(arm, q)][0] / 1000:9.0f} kbit  NEG {res[(arm, q)][1]:6.2f}"
+                print(f"{seq:12s} {arm:8s} crf{q}: {res[(arm, q)][0] / 1000:9.0f} kbit  v1 {res[(arm, q)][1]:6.2f}"
                       f"  shots " + " ".join(f"{s:5.1f}" for s in shots)
                       + "  share% " + " ".join(f"{s:4.1f}" for s in share), flush=True)
         print(f"{seq}: shots = " + ", ".join(names))
@@ -103,7 +118,7 @@ def main():
                 rr = [res[(r, q)][0] for q in pts]; mr = [res[(r, q)][1] for q in pts]
                 rt = [res[(t, q)][0] for q in pts]; mt = [res[(t, q)][1] for q in pts]
                 bd = bd_rate(rr, mr, rt, mt)
-                print(f"BD-VMAF-NEG {seq} {t} vs {r}: " + (f"{bd:+.2f}%" if bd is not None else "no overlap"), flush=True)
+                print(f"BD-VMAF-v1 {seq} {t} vs {r}: " + (f"{bd:+.2f}%" if bd is not None else "no overlap"), flush=True)
 
 
 if __name__ == "__main__":

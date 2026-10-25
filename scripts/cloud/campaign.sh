@@ -299,8 +299,8 @@ board() {   # board <mode: asm|pure> <threads> <pin: 0|1> <outfile>
     # perf-comp.sh exits 2 before it encodes anything when the libvmaf CLI is
     # not on the PATH, so this is a skip and not a failure. bootstrap.sh builds
     # one; no distribution packages it.
-    [ -x "${VMAF_BIN:-}" ] || command -v vmaf >/dev/null 2>&1 \
-        || { c_skip "no libvmaf CLI (the build-vmaf stage skipped or failed)"; return; }
+    [ -x "${VMAF_BIN:-}" ] && [ -d "${VMAF_MODELS_DIR:-}" ] \
+        || { c_skip "no libvmaf CLI or v1 models (the build-vmaf stage skipped or failed)"; return; }
     local runner=()
     [ "$pin" = 1 ] && runner=(${PIN[@]+"${PIN[@]}"})
     {
@@ -312,7 +312,7 @@ board() {   # board <mode: asm|pure> <threads> <pin: 0|1> <outfile>
     } > "$out"
     SET_THREADS="$thr" SET_SECONDS="$SET_SECONDS" \
     YAH264="$Y264" X264_ASM="$X264_ASM" X264_C="$X264_C" \
-    VMAF="${VMAF_BIN:-vmaf}" \
+    VMAF_V1_BIN="${VMAF_BIN:-}" VMAF_V1_MODELS="${VMAF_MODELS_DIR:-}" \
         "${runner[@]}" "$C_SRC/scripts/perf-comp-set.sh" "$mode" >> "$out" 2>&1 \
         || return 1
     c_can_time || c_rehearsal_note "plumbing only: $(basename "$out")"
@@ -333,6 +333,8 @@ st_board_tN_purec() { board pure "$TN" 0 "$RES/board-tN-purec.txt"; }
 st_ffboard() {
     [ -x "${FFBOARD_FFMPEG:-}" ] || { c_skip "no ffmpeg fork (build-ffmpeg skipped or failed)"; return; }
     [ -d "${Y264LIB:-}" ] || { c_skip "no installed libyah264"; return; }
+    [ -x "${VMAF_BIN:-}" ] && [ -d "${VMAF_MODELS_DIR:-}" ] \
+        || { c_skip "no libvmaf CLI or v1 models (the build-vmaf stage skipped or failed)"; return; }
     local out="$RES/ffboard.txt" thr
     for thr in 1 "$TN"; do
         {
@@ -345,7 +347,7 @@ st_ffboard() {
         ( cd "$C_SRC" && env FF="$FFBOARD_FFMPEG" Y264LIB="$Y264LIB" \
             X264LIB="${X264LIB_ASM:-}" THREADS="$thr" RC=crf \
             SECONDS="$SET_SECONDS" CORP="$C_SRC/tests/corpus" \
-            VMAF="${VMAF_BIN:-vmaf}" \
+            VMAF_V1_BIN="${VMAF_BIN:-}" VMAF_V1_MODELS="${VMAF_MODELS_DIR:-}" \
             python3 scripts/ffboard.py ) >> "$out" 2>&1 || return 1
     done
     c_can_time || c_rehearsal_note "plumbing only: ffboard.txt"
@@ -365,8 +367,8 @@ st_bd_at_rate() {
     [ -x "$Y264" ] || { c_skip "no yah264 binary"; return; }
     [ -x "${X264_ASM:-}" ] || { c_skip "no x264 arm"; return; }
     command -v ffmpeg >/dev/null 2>&1 || { c_skip "no ffmpeg to decode with"; return; }
-    [ -x "${VMAF_BIN:-}" ] || command -v vmaf >/dev/null 2>&1 \
-        || { c_skip "no libvmaf CLI (the build-vmaf stage skipped or failed)"; return; }
+    [ -x "${VMAF_BIN:-}" ] && [ -d "${VMAF_MODELS_DIR:-}" ] \
+        || { c_skip "no libvmaf CLI or v1 models (the build-vmaf stage skipped or failed)"; return; }
     local out="$RES/bd-at-rate.txt" clip="${BD_CLIP:-foreman_cif}"
     local src="$C_SRC/tests/corpus/$clip.y4m"
     [ -f "$src" ] || { c_skip "no $clip.y4m in the corpus"; return; }
@@ -379,7 +381,7 @@ st_bd_at_rate() {
         echo "# $SKU $DATE, yah264 $Y264_COMMIT vs x264 $X264_COMMIT"
         [ "$frames" -ge 120 ] || echo "# NOTE $frames frames is below the project's 120-frame floor for a BD sweep."
     } > "$out"
-    ( cd "$C_SRC" && VMAF="${VMAF_BIN:-vmaf}" python3 scripts/bd_at_rate.py \
+    ( cd "$C_SRC" && VMAF_V1_BIN="${VMAF_BIN:-}" VMAF_V1_MODELS="${VMAF_MODELS_DIR:-}" python3 scripts/bd_at_rate.py \
         --clip "$clip" --src "$src" --frames "$frames" --targets "$targets" \
         --label-a yah264 --label-b x264 \
         --a "$Y264 --input-y4m {src} --frames $frames --preset medium --crf {q} --threads 1 -o {out}" \

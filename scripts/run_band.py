@@ -28,26 +28,21 @@ if _sel:
         sys.exit(f"no ladder for {_miss}; have {list(ladders)}")
     ladders = {c: ladders[c] for c in _want}
 
-# x264's own curve, from the calibration pass, used to judge measurability:
-# (kbps, vmaf-neg) at crf 40..16
-CURVE = {
- "foreman_cif":   [(53,48.42),(80,63.93),(122,77.01),(192,85.91),(315,91.90),(558,95.40),(1045,97.43)],
- "bus_cif":       [(92,54.39),(145,70.93),(239,84.31),(401,94.62),(681,99.58),(1176,99.94),(2026,99.95)],
- "stefan_cif":    [(65,49.52),(103,68.26),(165,81.55),(276,90.81),(485,95.93),(858,97.83),(1538,98.92)],
- "akiyo_cif":     [(18,59.39),(25,73.44),(36,81.43),(58,87.51),(96,91.06),(170,93.34),(309,94.72)],
- "mobile_cif":    [(94,54.04),(143,68.68),(235,80.00),(432,88.15),(818,93.59),(1502,97.23),(2637,99.41)],
- "ducks_720p":    [(1090,22.20),(1891,37.12),(3380,53.98),(6155,69.57),(11211,81.81),(20294,90.28),(38141,95.77)],
- "park_joy_720p": [(822,27.12),(1653,46.47),(3404,65.01),(6693,80.05),(12751,90.92),(23447,97.67),(41681,99.85)],
- "samsung_720p":  [(285,59.23),(406,71.86),(597,81.36),(903,88.04),(1419,92.46),(2297,95.15),(3844,96.56)],
- "sintel_720p":   [(112,53.07),(170,66.44),(265,78.20),(430,86.15),(720,90.99),(1218,93.98),(2125,95.76)],
- "touchdown_420": [(486,43.77),(793,59.00),(1246,72.84),(2147,82.59),(5420,88.57),(18609,92.21),(50772,95.71)],
-}
+# the band's gate-score targets; calibrate_band.py solves the ladders onto them
+TARGETS = (88.0, 90.0, 92.0, 94.0)
 
-# calibrate_band.py now writes the curve it measured; prefer it over the pasted
-# copy above, which only covers the original ten clips.
+# x264's own curve on the gate score, from calibrate_band.py (curves.json):
+# it judges measurability and turns the targets into a CRF ladder
+CURVE = {}
 _cj = os.path.join(HERE, "curves.json")
+# Each point is [kbps, score, crf]; an older file has no crf, and then the
+# points are read as calibrate_band's old fixed steps, 40 down by 4.
+CURVE_CRF = {}
 if os.path.exists(_cj):
-    CURVE.update({c: [tuple(p) for p in pts] for c, pts in json.load(open(_cj)).items()})
+    for c, pts in json.load(open(_cj)).items():
+        CURVE[c] = [(p[0], p[1]) for p in pts]
+        if all(len(p) >= 3 for p in pts):
+            CURVE_CRF[c] = [p[2] for p in pts]
 
 # A ladder without a reference curve cannot be judged for measurability, and
 # indexing CURVE for it was the crash on the default clip list (coastguard and
@@ -71,6 +66,8 @@ ARM_ARGS = os.environ.get("ARM_ARGS", "")
 # gates on, for a little over half the scoring cost of both models; the per-rung
 # dVMAF columns are then NEG deltas. VMAF_MODELS=both restores the plain model.
 MODELS = os.environ.get("VMAF_MODELS", "neg")
+# the BD the band gates on, VMAF-NEG or VMAF-v1 (bdcompare reads the same variable)
+GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
 # EARLY STOP on the CRF band of a self-A/B, as in hd_band.py: once one clip
 # reads worse than EARLY_ONE or EARLY_N clips worse than EARLY_SOME (percent),
 # the remaining clips are not run. Never on the ABR band, whose per-clip noise
@@ -84,7 +81,7 @@ EARLY_N = int(os.environ.get("EARLY_N", "3"))
 
 
 def band_slope(clip):
-    """VMAF-NEG points gained per doubling of rate, inside the ladder span.
+    """Gate-score points gained per doubling of rate, inside the ladder span.
     A BD number needs a reference curve that actually moves here."""
     lad = ladders[clip]
     lo, hi = lad[0], lad[-1]
@@ -103,11 +100,11 @@ def band_slope(clip):
 
 
 def crf_ladder(clip):
-    """CRFs whose x264 VMAF-NEG lands on the same four band targets."""
-    crfs = [40, 36, 32, 28, 24, 20, 16]
+    """CRFs whose x264 gate score lands on the same four band targets."""
     c = CURVE[clip]
+    crfs = CURVE_CRF.get(clip) or [40 - 4 * i for i in range(len(c))]
     out = []
-    for t in (88.0, 90.0, 92.0, 94.0):
+    for t in TARGETS:
         got = None
         for i in range(len(c) - 1):
             if c[i][1] <= t <= c[i + 1][1]:
@@ -219,8 +216,8 @@ for mode in [m for m in ("abr", "crf") if m in _bands]:
         s = band_slope(c)
         flag = "  <-- reference curve too flat here, BD not meaningful" if (s is not None and s < 2.0) else ""
         for line in run(c, pts, mode):
-            print(line + (flag if "BD-rate(VMAF-NEG)" in line else ""), flush=True)
-            m = re.search(r"BD-rate\(VMAF-NEG\) A vs B: ([-+][\d.]+)%", line)
+            print(line + (flag if f"BD-rate({GATE})" in line else ""), flush=True)
+            m = re.search(rf"BD-rate\({re.escape(GATE)}\) A vs B: ([-+][\d.]+)%", line)
             if m and mode == "crf" and EARLY_STOP:
                 v = reads[c] = float(m.group(1))
                 some = [k for k, x in reads.items() if x > EARLY_SOME]

@@ -77,9 +77,9 @@ def probe(clip, crf, work, frames):
     kbps = bits / (frames / fps) / 1000.0
     v = bd.vmaf_of(out, src, work)
     os.unlink(out)
-    if not v or "VMAF-NEG" not in v:
+    if not v or bd.GATE not in v:
         return None
-    return (crf, kbps, v["VMAF-NEG"])
+    return (crf, kbps, v[bd.GATE])
 
 
 def interp(pts, target):

@@ -60,7 +60,17 @@ def rung_overlap(rr, rt):
 def fit(points, pkey, frames, rungs, envs, min_rungs):
     """{clip: [(lib, env, bd), ...]} over every binary that has both curves."""
     curves = {}
+    # a VMAF-NEG cell has no gate suffix; a v1 cell ends in the gate and the
+    # scoring rule (hd_band._key), and a v1 cell from before the rule is skipped
+    gate = os.environ.get("VMAF_GATE", "VMAF-v1")
+    tag = gate if gate == "VMAF-NEG" else f"{gate}-{bd.V1_RULE}"
     for k, v in points.items():
+        if gate != "VMAF-NEG":
+            if not k.endswith(":" + tag):
+                continue
+            k = k[:-len(tag) - 1]
+        elif k.endswith(":VMAF-v1") or ":VMAF-v1-" in k:
+            continue
         head, _, q = k.rpartition(":")
         parts = head.split(":", 4)
         if len(parts) != 5:
@@ -134,7 +144,9 @@ def main():
     args = ap.parse_args()
 
     cache = scratch.cache_dir("hdband")
-    out_path = os.path.join(cache, "null.json")
+    # a v1 null is its own file: the NEG fit stays what the NEG band reads
+    gate = os.environ.get("VMAF_GATE", "VMAF-v1")
+    out_path = os.path.join(cache, "null.json" if gate == "VMAF-NEG" else f"null-{gate}-{bd.V1_RULE}.json")
     try:
         stored = json.load(open(out_path))
     except (OSError, ValueError):
