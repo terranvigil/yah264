@@ -37,7 +37,7 @@ CLIPS="${CLIPS:-foreman mobile bus stefan akiyo coastguard}"
 QPS="${QPS:-6 18 26 37 51}"
 FRAMES="${FRAMES:-0}"
 . "$ROOT/scripts/devknobs.sh"
-y264_require_dev_knobs "$ENC" "$ARM"
+y264_require_dev_knobs "$ENC" "$ARM" Y264_AQ_BAR    # the letterbox cells set it
 
 # A caller-named WORK is the caller's to keep; an unnamed one is per-run
 # scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).

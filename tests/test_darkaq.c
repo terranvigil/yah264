@@ -73,12 +73,21 @@ int main(void)
                 v[y * W + x] = bar ? V(0.5) : V(40.0);
             }
         CHECK(y264_aq_grain_share(m, v, W, H) == 0.0);
-        /* the same bars around a dark grain picture: share over the picture */
-        for (int y = 3; y < H - 3; y++)
-            for (int x = 0; x < W; x++) { m[y * W + x] = M(30.0); v[y * W + x] = V(6.0); }
+        /* flat bars (not grain) around a dark grain picture: share over the picture */
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                int bar = y < 3 || y >= H - 3;
+                m[y * W + x] = bar ? M(16.0) : M(30.0);
+                v[y * W + x] = bar ? V(0.1) : V(6.0);
+            }
         CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
         /* dark grain all over: no bars, every block counts */
         for (int i = 0; i < W * H; i++) { m[i] = M(16.0); v[i] = V(0.5); }
+        {
+            int e[4];
+            y264_aq_bars(m, v, W, H, e, 0);
+            CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        }
         CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
         /* one bright block in dark grain isn't the edge of a bar: the rows
          * and columns around it stay picture, so the share stays near 1 */
@@ -91,7 +100,7 @@ int main(void)
                 for (int x = 0; x < W; x++) {
                     int sub = y == H - 2 && x >= 5 && x < 11;
                     m[y * W + x] = sub ? M(180.0) : M(16.0);
-                    v[y * W + x] = sub ? V(300.0) : V(0.5);
+                    v[y * W + x] = sub ? V(300.0) : V(0.1);
                 }
         CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
         /* near-black with one grainy band: bars that deep aren't bars, so the
@@ -187,10 +196,31 @@ int main(void)
             for (int y = 0; y < GH; y++)
                 for (int x = 0; x < GW; x++) {
                     int bar = y < 6 || y >= GH - 6, sky = !bar && y < 6 + 16;
-                    gm[y * GW + x] = (float)M(bar ? 16.0 : (sky ? 22.0 + 0.75 * (y - 6) : 150.0));
+                    gm[y * GW + x] = (float)M(bar ? 16.0 : (sky ? 20.0 + 0.75 * (y - 6) : 150.0));
                     gv[y * GW + x] = (float)V(bar ? 0.0 : (sky ? 2.25 : 90.0));
                 }
             CHECK(fabs(y264_aq_grain_share(gm, gv, GW, GH) - 16.0 / 33.0) < 1e-9);
+            /* a 4-level step is no sharp edge: no floor there */
+            y264_aq_bars(gm, gv, GW, GH, e, 1);
+            CHECK(e[0] == 0 && e[1] == 0);
+            /* picture within the color tolerance of the bars, but grainy */
+            for (int y = 0; y < GH; y++)
+                for (int x = 0; x < GW; x++) {
+                    int bar = y < 6 || y >= GH - 6;
+                    gm[y * GW + x] = (float)M(bar ? 16.0 : 18.0);
+                    gv[y * GW + x] = (float)V(bar ? 0.3 : 6.0);
+                }
+            y264_aq_bars(gm, gv, GW, GH, e, 1);
+            CHECK(e[0] == 6 && e[1] == 6);
+            /* pillars deeper than a sixth of the width aren't bars */
+            for (int y = 0; y < GH; y++)
+                for (int x = 0; x < GW; x++) {
+                    int bar = x < 14 || x >= GW - 14;
+                    gm[y * GW + x] = (float)M(bar ? 16.0 : 120.0);
+                    gv[y * GW + x] = (float)V(bar ? 0.0 : 60.0);
+                }
+            y264_aq_bars(gm, gv, GW, GH, e, 0);
+            CHECK(e[2] == 0 && e[3] == 0);
             /* 2.39:1 inside 4:3 (bars 22% a side) */
             for (int y = 0; y < GH; y++)
                 for (int x = 0; x < GW; x++) {
@@ -203,8 +233,8 @@ int main(void)
         }
         /* a bar on one edge only isn't a letterbox */
         for (int i = 0; i < W * H; i++) { m[i] = M(30.0); v[i] = V(6.0); }
-        for (int x = 0; x < W; x++) { m[x] = M(16.0); v[x] = V(0.5); m[W + x] = M(16.0); v[W + x] = V(0.5); }
-        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        for (int x = 0; x < W; x++) { m[x] = M(16.0); v[x] = V(0.1); m[W + x] = M(16.0); v[W + x] = V(0.1); }
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (H - 2.0) / H) < 1e-9);
     }
 
     if (fails) fprintf(stderr, "%d failure(s)\n", fails);
