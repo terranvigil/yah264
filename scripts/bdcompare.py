@@ -30,7 +30,9 @@ import hashlib
 import json
 import math
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,6 +40,7 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch                                                  # noqa: E402
+import devknobs                                                 # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -299,16 +302,40 @@ def _packets(bitstream):
 
 
 def require_dev_knobs(binary, *texts):
-    """Exit when a Y264_* knob appears in `texts` (arm specs, env strings) and
-    `binary` was built without -Ddev_knobs=true, which would ignore it: two
-    arms would come out byte-identical and read as 'no effect'."""
-    if not any("Y264_" in (t or "") for t in texts):
-        return
-    r = subprocess.run([binary, "--version"], capture_output=True, text=True)
-    if "(dev knobs)" not in r.stdout:
-        sys.exit(f"{os.path.basename(sys.argv[0])}: {binary} was built without "
-                 "-Ddev_knobs=true, so it ignores the Y264_* knobs this run sets; "
-                 "run meson configure <dir> -Ddev_knobs=true")
+    """Exit when `texts` (arm specs, env strings) or the environment set a
+    Y264_* knob that `binary` ignores because it was built without
+    -Ddev_knobs=true: two arms would come out byte-identical and read as 'no
+    effect'. Harness variables and the CLI-carried knobs don't count."""
+    devknobs.require(binary, *texts)
+
+
+_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def template_binary(tmpl):
+    """The program an encode template runs: the first word that is neither an
+    env assignment nor `env` (or its options), as the shell would find it."""
+    try:
+        words = shlex.split(tmpl)
+    except ValueError:
+        return ""
+    in_env = skip = False
+    for w in words:
+        if skip:
+            skip = False
+        elif _ASSIGN.match(w):
+            pass
+        elif w == "env":
+            in_env = True
+        elif in_env and w.startswith("-"):
+            skip = w in ("-u", "-C", "-P", "-S")
+        elif os.path.isabs(w) or os.path.exists(w):
+            return os.path.abspath(w)
+        elif os.sep in w:
+            return os.path.normpath(os.path.join(ROOT, w))
+        else:
+            return shutil.which(w) or w
+    return ""
 
 
 def coded_size_is(bitstream, w, h):
@@ -626,6 +653,10 @@ def main():
         MODELS = args.models
     if args.vmaf:
         minigop_guard(SUBSAMPLE, [args.a, args.b])
+    for t in (args.a, args.b):
+        b = template_binary(t)
+        if b and os.path.isfile(b) and devknobs.is_yah264(b):
+            require_dev_knobs(b, t)
 
     points = [int(q) for q in args.points.split(",")]
     if args.klass:
@@ -665,8 +696,8 @@ def main():
         os.makedirs(cache_dir, exist_ok=True)
 
     def _ckey(tmpl, clip, q):
-        binp = (shlex.split(tmpl)[0] if tmpl.strip() else "")
-        mt = os.path.getmtime(binp) if os.path.exists(binp) else 0
+        binp = template_binary(tmpl)
+        mt = os.path.getmtime(binp) if binp and os.path.exists(binp) else 0
         h = hashlib.sha1(f"{tmpl}|{clip}|{q}|{args.frames}|{mt}".encode()).hexdigest()[:20]
         return os.path.join(cache_dir, h + ".264")
 

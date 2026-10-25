@@ -153,6 +153,10 @@ for w in $ARM_A $ARM_B; do
     esac
 done
 for v in $(env | sed -n 's/^\(Y264_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+# an arm a release binary ignores would read as identical for free
+. "$ROOT/scripts/devknobs.sh"
+y264_require_dev_knobs "$OLD" "$ARM_A"
+y264_require_dev_knobs "$NEW" "$ARM_B"
 export OLD NEW ARM_A ARM_B REPEAT
 
 . "$ROOT/scripts/scratch.sh"

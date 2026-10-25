@@ -34,6 +34,8 @@ KEEP (directory to keep recordings in).
 import os, re, shlex, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import devknobs                                                 # noqa: E402
 BIN = os.environ.get("BIN", os.path.join(ROOT, "build-rel/cli/yah264"))
 PLAY_BIN = os.environ.get("PLAY_BIN", BIN)
 PLAY_ENV = os.environ.get("PLAY_ENV", "")
@@ -92,6 +94,10 @@ def main():
             sys.exit(f"rc_replay: no binary {b}")
     if not os.path.exists(CLIP):
         sys.exit(f"rc_replay: no clip {CLIP}")
+    # the record and play hooks are knobs, and run() drops any Y264_RC_* the caller set
+    inherited = " ".join(k for k in os.environ if not k.startswith("Y264_RC_"))
+    devknobs.require(BIN, "Y264_RC_REC", inherited, environ=False)
+    devknobs.require(PLAY_BIN, "Y264_RC_PLAY", PLAY_ENV, inherited, environ=False)
     selftest = PLAY_BIN == BIN and not PLAY_ENV
     work = KEEP or tempfile.mkdtemp(prefix="yah264-rcreplay.")
     os.makedirs(work, exist_ok=True)

@@ -62,11 +62,16 @@ done
 # thread, and a split forced onto more workers than the window holds GOPs,
 # both wait for the split to be decidable before any worker exists; they
 # used to park the reader at the window and wait forever (2026-09-29).
+# The window is a memory bound every build reads; the forced split is a dev
+# knob, so a release binary skips that case, and a skip exits 2 rather than
+# reading as a pass.
 dev=0; "$Y" --version 2>/dev/null | grep -q "(dev knobs)" && dev=1
+skipped=0
 for spec in "1 30" "1 1" "4 30 Y264_GOP_FORCE_G=4"; do
     set -- $spec
     if [ -n "${3:-}" ] && [ "$dev" = 0 ]; then
         echo "SKIP the forced-split window case: it needs a -Ddev_knobs=true build"
+        skipped=$((skipped + 1))
         continue
     fi
     t=$1 w=$2 extra=${3:-}
@@ -106,5 +111,9 @@ else
         echo "FAIL 2160p piped at --threads 0: exited $rc"; fail=1
     fi
 fi
-[ $fail -eq 0 ] && echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides and $uhd_note"
-exit $fail
+[ $fail -eq 0 ] || exit 1
+if [ $skipped -gt 0 ]; then
+    echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides and $uhd_note; the forced-split case was SKIPPED (release build)"
+    exit 2
+fi
+echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides and $uhd_note"

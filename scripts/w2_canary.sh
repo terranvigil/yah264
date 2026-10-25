@@ -21,6 +21,9 @@ REF="${2:?reference binary}"
 CENV="${3:-}"                          # e.g. "Y264_W2=1" applied to the candidate only
 CORPUS="$root/tests/corpus"
 . "$root/scripts/scratch.sh"
+. "$root/scripts/devknobs.sh"
+y264_require_dev_knobs "$CAND" "$CENV"
+y264_require_dev_knobs "$REF"
 y264_scratch_dir w2canary work
 md5f() { md5 -q "$1" 2>/dev/null || md5sum "$1" | awk '{print $1}'; }
 

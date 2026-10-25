@@ -22,6 +22,8 @@ if [ ! -x "$BIN" ]; then
   echo "tsan_catch:   (or point BIN at one). Refusing: a missing binary reports clean." >&2
   exit 2
 fi
+. "$root/scripts/devknobs.sh"
+y264_require_dev_knobs "$BIN" Y264_STAIR_WIDE Y264_STAIR_BDEPTH
 export TSAN_OPTIONS="halt_on_error=0 symbolize=0"
 for r in $(seq 1 "${REPS:-12}"); do
   Y264_STAIR_WIDE=1 Y264_STAIR_BDEPTH="${BD:-1}" "$BIN" \
