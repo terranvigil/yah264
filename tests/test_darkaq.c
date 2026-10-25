@@ -72,18 +72,18 @@ int main(void)
                 m[y * W + x] = bar ? M(16.0) : M(120.0);
                 v[y * W + x] = bar ? V(0.5) : V(40.0);
             }
-        CHECK(y264_aq_grain_share(m, v, W, H, NULL) == 0.0);
+        CHECK(y264_aq_grain_share(m, v, W, H) == 0.0);
         /* the same bars around a dark grain picture: share over the picture */
         for (int y = 3; y < H - 3; y++)
             for (int x = 0; x < W; x++) { m[y * W + x] = M(30.0); v[y * W + x] = V(6.0); }
-        CHECK(y264_aq_grain_share(m, v, W, H, NULL) == 1.0);
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
         /* dark grain all over: no bars, every block counts */
-        for (int i = 0; i < W * H; i++) { m[i] = M(16.0); v[i] = V(1.0); }
-        CHECK(y264_aq_grain_share(m, v, W, H, NULL) == 1.0);
+        for (int i = 0; i < W * H; i++) { m[i] = M(16.0); v[i] = V(0.5); }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
         /* one bright block in dark grain isn't the edge of a bar: the rows
          * and columns around it stay picture, so the share stays near 1 */
         m[8 * W + 7] = M(200.0); v[8 * W + 7] = V(40.0);
-        CHECK(y264_aq_grain_share(m, v, W, H, NULL) > 0.99);
+        CHECK(y264_aq_grain_share(m, v, W, H) > 0.99);
         /* a subtitle in the bottom bar doesn't end it */
         for (int i = 0; i < W * H; i++) { m[i] = M(30.0); v[i] = V(6.0); }
         for (int y = 0; y < H; y++)
@@ -93,12 +93,12 @@ int main(void)
                     m[y * W + x] = sub ? M(180.0) : M(16.0);
                     v[y * W + x] = sub ? V(300.0) : V(0.5);
                 }
-        CHECK(y264_aq_grain_share(m, v, W, H, NULL) == 1.0);
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
         /* near-black with one grainy band: bars that deep aren't bars, so the
          * band counts against the whole frame */
         for (int i = 0; i < W * H; i++) { m[i] = M(10.0); v[i] = V(0.1); }
         for (int x = 0; x < W; x++) { m[8 * W + x] = M(30.0); v[8 * W + x] = V(6.0); }
-        CHECK(y264_aq_grain_share(m, v, W, H, NULL) < 0.1);
+        CHECK(y264_aq_grain_share(m, v, W, H) < 0.1);
         /* mattes of any color are bars, both letterbox and pillarbox; edges of
          * two different colors aren't a matte */
         {
@@ -109,10 +109,10 @@ int main(void)
                     m[y * W + x] = bar ? M(200.0) : M(90.0);
                     v[y * W + x] = bar ? V(0.5) : V(60.0);
                 }
-            y264_aq_bars(m, v, W, H, e);
+            y264_aq_bars(m, v, W, H, e, 1);
             CHECK(e[0] == 3 && e[1] == 3 && e[2] == 0 && e[3] == 0);
             for (int x = 0; x < W; x++) m[(H - 1) * W + x] = M(100.0);
-            y264_aq_bars(m, v, W, H, e);
+            y264_aq_bars(m, v, W, H, e, 1);
             CHECK(e[0] == 0 && e[1] == 0);
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++) {
@@ -120,8 +120,20 @@ int main(void)
                     m[y * W + x] = bar ? M(128.0) : M(90.0);
                     v[y * W + x] = bar ? V(0.5) : V(60.0);
                 }
-            y264_aq_bars(m, v, W, H, e);
+            y264_aq_bars(m, v, W, H, e, 1);
             CHECK(e[0] == 0 && e[1] == 0 && e[2] == 2 && e[3] == 2);
+        }
+        /* black bars next to a dark grain picture still end at an edge */
+        {
+            int e[4];
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int bar = y < 3 || y >= H - 3;
+                    m[y * W + x] = bar ? M(16.0) : M(24.0);
+                    v[y * W + x] = bar ? V(0.3) : V(3.0);
+                }
+            y264_aq_bars(m, v, W, H, e, 1);
+            CHECK(e[0] == 3 && e[1] == 3);
         }
         /* a dark vertical gradient, darkest at both edges, drifts from the
          * edge color without a sharp step: not bars, and a vignette isn't
@@ -135,20 +147,64 @@ int main(void)
                     gm[y * GW + x] = (float)M(20.0 + 30.0 * (1.0 - fabs(y - 22.0) / 22.0));
                     gv[y * GW + x] = (float)V(0.5);
                 }
-            y264_aq_bars(gm, gv, GW, GH, e);
+            y264_aq_bars(gm, gv, GW, GH, e, 1);
             CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
             for (int y = 0; y < GH; y++)
                 for (int x = 0; x < GW; x++) {
                     double r = fabs(x - 39.5) / 39.5;
                     gm[y * GW + x] = (float)M(48.0 - 28.0 * r * r);
                 }
-            y264_aq_bars(gm, gv, GW, GH, e);
+            y264_aq_bars(gm, gv, GW, GH, e, 1);
             CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        }
+        /* the round of real-shaped frames, 80x45 macroblocks (1280x720) */
+        {
+            enum { GW = 80, GH = 45 };
+            static float gm[GW * GH], gv[GW * GH];
+            int e[4];
+            /* a graded night sky over a bright horizon, mirrored in water: the
+             * sky drifts, so it's no bar for the floor */
+            for (int y = 0; y < GH; y++)
+                for (int x = 0; x < GW; x++) {
+                    int d = y < 8 ? y : (y >= GH - 8 ? GH - 1 - y : -1);
+                    gm[y * GW + x] = (float)M(d >= 0 ? 16.0 + 0.33 * d : 185.0);
+                    gv[y * GW + x] = (float)V(d >= 0 ? 0.64 : 100.0);
+                }
+            y264_aq_bars(gm, gv, GW, GH, e, 1);
+            CHECK(e[0] < 4 && e[1] < 4);
+            /* grainy film-scan bars beside a bright picture: bars for both */
+            for (int y = 0; y < GH; y++)
+                for (int x = 0; x < GW; x++) {
+                    int bar = y < 6 || y >= GH - 6;
+                    gm[y * GW + x] = (float)M(bar ? 16.0 : 140.0);
+                    gv[y * GW + x] = (float)V(bar ? 1.44 : 80.0);
+                }
+            y264_aq_bars(gm, gv, GW, GH, e, 1);
+            CHECK(e[0] == 6 && e[1] == 6);
+            CHECK(y264_aq_grain_share(gm, gv, GW, GH) == 0.0);
+            /* black bars around a picture whose top half is a dark gradient:
+             * the share is the picture's, bars or no sharp edge */
+            for (int y = 0; y < GH; y++)
+                for (int x = 0; x < GW; x++) {
+                    int bar = y < 6 || y >= GH - 6, sky = !bar && y < 6 + 16;
+                    gm[y * GW + x] = (float)M(bar ? 16.0 : (sky ? 22.0 + 0.75 * (y - 6) : 150.0));
+                    gv[y * GW + x] = (float)V(bar ? 0.0 : (sky ? 2.25 : 90.0));
+                }
+            CHECK(fabs(y264_aq_grain_share(gm, gv, GW, GH) - 16.0 / 33.0) < 1e-9);
+            /* 2.39:1 inside 4:3 (bars 22% a side) */
+            for (int y = 0; y < GH; y++)
+                for (int x = 0; x < GW; x++) {
+                    int bar = y < 10 || y >= GH - 10;
+                    gm[y * GW + x] = (float)M(bar ? 16.0 : 120.0);
+                    gv[y * GW + x] = (float)V(bar ? 0.0 : 60.0);
+                }
+            y264_aq_bars(gm, gv, GW, GH, e, 1);
+            CHECK(e[0] == 10 && e[1] == 10);
         }
         /* a bar on one edge only isn't a letterbox */
         for (int i = 0; i < W * H; i++) { m[i] = M(30.0); v[i] = V(6.0); }
-        for (int x = 0; x < W; x++) { m[x] = M(16.0); v[x] = V(1.0); m[W + x] = M(16.0); v[W + x] = V(1.0); }
-        CHECK(y264_aq_grain_share(m, v, W, H, NULL) == 1.0);
+        for (int x = 0; x < W; x++) { m[x] = M(16.0); v[x] = V(0.5); m[W + x] = M(16.0); v[W + x] = V(0.5); }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
     }
 
     if (fails) fprintf(stderr, "%d failure(s)\n", fails);

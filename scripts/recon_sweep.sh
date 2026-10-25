@@ -89,7 +89,18 @@ for clip in $CLIPS; do
     src="$FIX/corpus_${clip}_cif_48f.y4m"
     [ -f "$src" ] || continue
     lb="$WORK/letterbox.y4m"
-    ffmpeg -v error -y -i "$src" -vf "crop=352:192:0:48,pad=352:288:0:48:black" "$lb" || break
+    if ! ffmpeg -v error -y -i "$src" -vf "crop=352:192:0:48,pad=352:288:0:48:black" "$lb"; then
+        echo "  FAIL letterbox: couldn't make the clip"; total=$((total + 1)); fails=$((fails + 1)); break
+    fi
+    # the cells below only cover the floor if it fires on this clip
+    case "$ARM" in *Y264_AQ_BAR*) ;; *)
+        total=$((total + 1))
+        a="$(env $ARM "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
+        b="$(env $ARM Y264_AQ_BAR=-1 "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
+        if [ "$a" = "$b" ]; then
+            echo "  FAIL letterbox: the bar floor didn't engage"; fails=$((fails + 1))
+        fi ;;
+    esac
     for crf in 20 34; do
         for cfg in "" "--cavlc" "--bframes 0" "--aq-strength 0" "--slices 3"; do
             total=$((total + 1))
