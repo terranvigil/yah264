@@ -942,8 +942,6 @@ YAH264_EXPORT yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *par
 /* The name of the encoder behind a handle: "yah264" or the hardware's. */
 YAH264_EXPORT const char *yah264_encoder_backend(const yah264_encoder_t *enc);
 
-/* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
- * *count NAL units owned by the encoder. Returns 0 on success. */
 /* Video signal description for the VUI (colour primaries, transfer
  * characteristics, matrix coefficients: the H.273 codes, 2 = unspecified;
  * full_range 0/1; chroma_loc 0..5, -1 = not signalled). Set once after open
@@ -956,6 +954,9 @@ typedef struct {
 } yah264_video_signal_t;
 YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *enc, const yah264_video_signal_t *vs);
 
+/* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
+ * *count NAL units owned by the encoder. Returns 0 on success. encode never
+ * emits SPS or PPS, so a stream starts with these NAL units. */
 YAH264_EXPORT int yah264_encoder_headers(yah264_encoder_t *enc,
                             yah264_nal_t **nal, int *count);
 
@@ -968,7 +969,9 @@ YAH264_EXPORT int yah264_encoder_headers(yah264_encoder_t *enc,
  * reordered/buffered, and with threading the final entropy emit of a burst can
  * stay in flight across the API boundary so the next call's analysis hides it.
  * NAL units are always returned in coding order. pic == NULL flushes: call it
- * repeatedly at end of stream until it returns 0 bytes with *count == 0. */
+ * repeatedly at end of stream until it returns 0 bytes with *count == 0.
+ * encode emits slice data only; write yah264_encoder_headers' NAL units
+ * first. */
 YAH264_EXPORT int yah264_encoder_encode(yah264_encoder_t *enc,
                            yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic);
@@ -1104,7 +1107,9 @@ YAH264_EXPORT int yah264_threads_auto(void);
  * off) and clamped the way encoder_open clamps it. encode returns no NAL for
  * that many calls beyond the B-frame reorder delay, which this does not include
  * and does not change. The lead never changes a bit, so this number is the
- * whole cost of it and a latency-sensitive caller should be shown it. */
+ * whole cost of it and a latency-sensitive caller should be shown it. It is a
+ * property of the parameters, not a count of frames still buffered: to drain
+ * the encoder, flush with encode(pic == NULL) until it returns 0 bytes. */
 YAH264_EXPORT int yah264_lookahead_delay(const yah264_param_t *param);
 
 /* Scene-cut pre-scan, for callers that split an input into independent GOP
