@@ -53,19 +53,22 @@ def vmaf_v1(src, bitstream, js):
     model = bdcompare.v1_model(src)
     if not os.path.exists(model) or not os.access(bdcompare.V1_BIN, os.X_OK):
         sys.exit(f"multishot_bd: needs {bdcompare.V1_BIN} and {model}")
+    w, h, _ = bdcompare._y4m_geometry(src)
+    vf = ["-vf", bdcompare.V1_SCALE_VF] if bdcompare.v1_scaled(w, h) else []
     dec = js + ".dec10.y4m"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-fps_mode", "passthrough",
-                    "-pix_fmt", "yuv420p10le", "-strict", "-1", dec], check=True)
+                    *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1", dec], check=True)
     ref = js + ".ref10.y4m"
     if os.path.exists(ref):
         os.unlink(ref)
     os.mkfifo(ref)
-    conv = subprocess.Popen(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src, "-pix_fmt",
+    conv = subprocess.Popen(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src, *vf, "-pix_fmt",
                              "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     r = subprocess.run([bdcompare.V1_BIN, "-q", "-r", ref, "-d", dec, "--json", "-o", js,
-                        "--model", f"path={model}:name=vmaf_v1:cambi.enc_bitdepth="
-                        f"{bdcompare._enc_bitdepth(bitstream)}", "--threads", os.environ.get("VMAF_THREADS", "8")],
+                        "--model", f"path={model}:"
+                        + bdcompare.v1_model_opts(w, h, bdcompare._enc_bitdepth(bitstream)),
+                        "--threads", os.environ.get("VMAF_THREADS", "8")],
                        capture_output=True, text=True)
     conv.kill()
     conv.wait()

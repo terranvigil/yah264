@@ -8,7 +8,7 @@
 
 VMAF v1 scores banding through CAMBI, but CAMBI misses much of what shows in
 dark gradients, so an arm that flattens them can pass every BD band. This is the check that
-catches it. For each window (a title and a centre frame; 96 frames are cut
+catches it. For each window (a title and a center frame; 96 frames are cut
 around it) it encodes the reference at --preset medium --crf 23, solves
 yah264 onto the reference's size (within SIZE_TOL), decodes both and scores
 the 8x8 blocks the SOURCE makes dark and smooth (luma mean 17-50, standard
@@ -17,9 +17,10 @@ deviation 0.3-2.5), the blocks where banding shows:
   flat   share of those blocks the decode left perfectly flat (a band step)
   keep   mean decoded/source standard deviation over them, capped at 2
   dark   PSNR-Y over them
-  cambi  CAMBI from the VMAF v1 run, whole frame (10-bit, told the encode's
-         bit depth)
-  v1     VMAF v1
+  cambi  CAMBI at libvmaf's own settings, whole frame (10-bit, told the
+         encode's bit depth). v1's CAMBI ignores luminance below 0.06 cd/m2,
+         which is most of this window, so the gate reads this one
+  v1     VMAF v1, and its CAMBI beside it (cambi1)
 
 A window FAILS when yah264's flat share exceeds the reference's by more than
 FLAT_MARGIN or its CAMBI exceeds the reference's by more than CAMBI_MARGIN.
@@ -120,8 +121,31 @@ def score(src, bs, tag, d):
     v = bdcompare._v1_of(bs, src, d)
     if v is None:
         sys.exit(f"band_check: VMAF v1 failed on {bs}")
-    r["v1"], r["cambi"] = v["VMAF-v1"], v["CAMBI"]
+    r["v1"], r["cambi1"] = v["VMAF-v1"], v["CAMBI"]
+    r["cambi"] = full_cambi(src, bs, d)
     return r
+
+
+def full_cambi(src, bs, d):
+    """CAMBI with no visibility threshold, on the 10-bit pair at the coded size."""
+    ref = os.path.join(d, "fc.ref.y4m")
+    dec = os.path.join(d, "fc.dec.y4m")
+    js = os.path.join(d, "fc.json")
+    for a, b in ((src, ref), (bs, dec)):
+        run(["ffmpeg", "-v", "error", "-y", "-threads", "1", "-i", a, "-pix_fmt",
+             "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", b])
+    try:
+        run([bdcompare.V1_BIN, "-q", "-r", ref, "-d", dec, "--no_prediction",
+             "--feature", f"cambi=enc_bitdepth={bdcompare._enc_bitdepth(bs)}",
+             "--json", "-o", js])
+        import json
+        with open(js) as f:
+            pm = json.load(f)["pooled_metrics"]
+        return pm[next(k for k in pm if k.startswith("cambi"))]["mean"]
+    finally:
+        for p in (ref, dec, js):
+            if os.path.exists(p):
+                os.unlink(p)
 
 
 def solve(src, target, out):
@@ -141,7 +165,7 @@ def main():
     d = os.environ.get("OUT") or tempfile.mkdtemp(prefix="y264bandchk.")
     os.makedirs(d, exist_ok=True)
     print(f"# scratch {d}; margins flat +{FLAT_MARGIN}, cambi +{CAMBI_MARGIN}; args {' '.join(ARGS) or '(default)'}")
-    print(f"# {'window':26s} {'side':6s} {'bytes':>9s} {'flat':>6s} {'keep':>6s} {'dark':>6s} {'cambi':>6s} {'v1':>6s}")
+    print(f"# {'window':26s} {'side':6s} {'bytes':>9s} {'flat':>6s} {'keep':>6s} {'dark':>6s} {'cambi':>6s} {'cambi1':>6s} {'v1':>6s}")
     fails = 0
     for spec in WINDOWS.split(","):
         title, frame = spec.rsplit(":", 1)
@@ -157,7 +181,7 @@ def main():
         a, b = score(src, ref, name + ".ref", d), score(src, mine, name + ".yah", d)
         for side, r in (("ref", a), ("yah264", b)):
             print(f"  {name:26s} {side:6s} {r['bytes']:9d} {r['flat']:6.3f} {r['keep']:6.3f} "
-                  f"{r['dark']:6.2f} {r['cambi']:6.3f} {r['v1']:6.2f}")
+                  f"{r['dark']:6.2f} {r['cambi']:6.3f} {r['cambi1']:6.3f} {r['v1']:6.2f}")
         if abs(ratio - 1) > SIZE_TOL:
             verdict = f"UNMATCHED (size {ratio:.3f} at crf {crf})"
         elif b["flat"] > a["flat"] + FLAT_MARGIN or b["cambi"] > a["cambi"] + CAMBI_MARGIN:

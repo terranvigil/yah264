@@ -244,9 +244,51 @@ def _enc_bitdepth(bitstream):
     return 10 if "10" in pf else (12 if "12" in pf else 8)
 
 
+# VMAF v1 is scored at display resolution: the 1080p 3H model assumes a
+# 1920x1080 screen, so a picture smaller than that in both dimensions is
+# scaled up to fit it (bicubic, aspect kept), both sides, and CAMBI is told the
+# coded size. Scored at native size, a CIF picture's chroma planes shrink to a
+# few samples in v1's chroma feature and chroma loss goes unseen.
+V1_DISPLAY = (1920, 1080)
+V1_SCALE_VF = ("scale=w=1920:h=1080:force_original_aspect_ratio=decrease:"
+               "force_divisible_by=2:flags=bicubic")
+
+
+def v1_scaled(w, h):
+    """True when a w x h picture is scored scaled up to the display."""
+    return w < V1_DISPLAY[0] and h < V1_DISPLAY[1]
+
+
+def v1_model_opts(w, h, ebd):
+    """The --model suffix after the path: name, CAMBI's encode bit depth and,
+    for a scaled picture, its coded size."""
+    o = f"name=vmaf_v1:cambi.enc_bitdepth={ebd}"
+    if v1_scaled(w, h):
+        o += f":cambi.enc_width={w}:cambi.enc_height={h}"
+    return o
+
+
+_v1_ident_memo = {}
+
+
+def _v1_ident(model):
+    """The scorer's identity for the cache key: the libvmaf build and the model
+    file's contents, so a rebuilt binary or a same-named model never serves an
+    old score."""
+    if model not in _v1_ident_memo:
+        ver = subprocess.run([V1_BIN, "--version"], capture_output=True, text=True)
+        with open(model, "rb") as f:
+            msha = hashlib.sha1(f.read()).hexdigest()[:12]
+        _v1_ident_memo[model] = f"{(ver.stdout + ver.stderr).strip()}|{msha}"
+    return _v1_ident_memo[model]
+
+
 def _v1_of(bitstream, src_path, work, src_id=None):
     model = v1_model(src_path)
     ebd = _enc_bitdepth(bitstream)
+    w, h, _ = _y4m_geometry(src_path)
+    scaled = v1_scaled(w, h)
+    vf = ["-vf", V1_SCALE_VF] if scaled else []
     if not os.path.exists(model) or not os.access(V1_BIN, os.X_OK):
         sys.exit(f"bdcompare: VMAF_V1=1 needs {V1_BIN} and {model}")
     want = ["VMAF-v1", "CAMBI"]
@@ -254,7 +296,8 @@ def _v1_of(bitstream, src_path, work, src_id=None):
     if SCORE_CACHE:
         base = _score_path(bitstream, src_path, src_id)
         if base:
-            k = hashlib.sha1(f"{base}|v1|{os.path.basename(model)}|eb{ebd}".encode()).hexdigest()
+            k = hashlib.sha1(f"{base}|v1|{os.path.basename(model)}|eb{ebd}|{_v1_ident(model)}"
+                             f"{'|disp' if scaled else ''}".encode()).hexdigest()
             cpath = os.path.join(os.path.dirname(os.path.dirname(base)), k[:2], k + ".json")
             hit = _score_get(cpath, want)
             if hit is not None:
@@ -264,17 +307,17 @@ def _v1_of(bitstream, src_path, work, src_id=None):
     fd, dec = tempfile.mkstemp(suffix=".dec10.y4m", dir=work); os.close(fd)
     fd, js = tempfile.mkstemp(suffix=".v1.json", dir=work); os.close(fd)
     sh(f'ffmpeg -v error -y {_FF_T} -i "{bitstream}" -fps_mode passthrough '
-       f'-pix_fmt yuv420p10le -strict -1 "{dec}"')
+       f'{" ".join(vf)} -pix_fmt yuv420p10le -strict -1 "{dec}"')
     # the reference reaches 10-bit 4:2:0 on a FIFO, so no full-size copy lands on disk
     ref = dec + ".ref.y4m"
     os.mkfifo(ref)
     conv = subprocess.Popen(
-        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path,
+        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path, *vf,
          "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
     r = sh(f'{shlex.quote(V1_BIN)} -q -r "{ref}" -d "{dec}" --json -o "{js}" '
-           f'--model path={shlex.quote(model)}:name=vmaf_v1:cambi.enc_bitdepth={ebd} {sub} {_VMAF_T}')
+           f'--model path={shlex.quote(model)}:{v1_model_opts(w, h, ebd)} {sub} {_VMAF_T}')
     conv.kill()
     conv.wait()
     for p in (ref, dec):
@@ -282,10 +325,16 @@ def _v1_of(bitstream, src_path, work, src_id=None):
             os.unlink(p)
         except OSError:
             pass
-    if r.returncode != 0:
-        return None
-    pm = json.load(open(js))["pooled_metrics"]
-    os.unlink(js)
+    try:
+        if r.returncode != 0:
+            return None
+        with open(js) as f:
+            pm = json.load(f)["pooled_metrics"]
+    finally:
+        try:
+            os.unlink(js)
+        except OSError:
+            pass
     cambi = next((k for k in pm if k.startswith("cambi")), None)
     if "vmaf_v1" not in pm or cambi is None:
         return None
@@ -592,4 +641,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # for the shell scorers: "<scaled 0|1> <w> <h> <scale filter>" of a y4m
+    if len(sys.argv) == 3 and sys.argv[1] == "--v1-display":
+        w, h, _ = _y4m_geometry(sys.argv[2])
+        print(int(v1_scaled(w, h)), w, h, V1_SCALE_VF)
+        sys.exit(0)
     main()

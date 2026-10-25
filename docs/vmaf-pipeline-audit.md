@@ -9,7 +9,9 @@ and samsung_720p (60 frames). Each pair goes through the exact harness
 pipeline: `perf-comp.sh`'s trim, encode, `ffmpeg -pix_fmt yuv420p` decode,
 then the `vmaf` CLI. Every metadata axis is compared with ffprobe and the y4m
 headers, and signal-level checks cover what the metadata can't show. Every
-axis is either identical between the two encoders or measurably score-neutral:
+axis is either identical between the two encoders or measurably score-neutral.
+The audit was run on VMAF v0.6.1. VMAF v1 also reads chroma, so chroma siting
+now reaches the score; it is identical on both encoders:
 
 | axis | finding |
 |---|---|
@@ -17,8 +19,8 @@ axis is either identical between the two encoders or measurably score-neutral:
 | frame count / dup-drop | decoded y4m is 300/300 frames, file sizes byte-identical apart from the SAR header tag; no ffmpeg dup/drop warnings |
 | frame rate / timing | both decoded y4m headers read F30000:1001; the vmaf CLI pairs frames by ORDER, not timestamps, so timing metadata can't resample either side |
 | color range / space / primaries / transfer | both streams unsignaled ("unknown"), so ffmpeg treats them identically with no range conversion on either side. A full-range mismatch would be catastrophic, not -0.5 |
-| chroma siting | `left` on both |
-| pix_fmt / depth | yuv420p 8-bit on both, scored at 10-bit ([vmaf.md](vmaf.md)) |
+| chroma siting | `left` on both; irrelevant anyway, since vmaf_v0.6.1 is luma-only |
+| pix_fmt / depth | yuv420p 8-bit on both; `-pix_fmt yuv420p` is a no-op |
 | reference | ONE trimmed ref.y4m feeds both encoders AND the scorer |
 | subsample | 0, every frame (the ~5 fps aliasing trap is closed) |
 | decode fidelity | conformance recon-match: ffmpeg's decode of our stream IS our encoder's recon |

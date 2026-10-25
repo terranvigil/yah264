@@ -28,6 +28,8 @@ FRAMES = int(os.environ.get("FRAMES", "120"))
 # behind a build option rather than an env knob (the -Dgpu builds live outside
 # build/, so the default binary cannot exercise them).
 N = os.environ.get("YAH264", "build/cli/yah264")
+# the score bdcompare gates on (and names in its BD line); same default as bdcompare
+GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
 
 ladders = json.load(open(os.path.join(HERE, "ladders.json")))
 # BANDS=band (default, the standing 88-94 gate -- numbers comparable to every
@@ -113,7 +115,7 @@ EARLY_N = int(os.environ.get("EARLY_N", "3"))
 
 print(f"arm:     {arm}")
 print(f"default: {BASE}")
-print(f"vmaf models {os.environ.get('VMAF_MODELS', 'neg')}; early stop "
+print(f"gate {GATE}; early stop "
       + (f"on (one clip > {EARLY_ONE:+.2f}% or {EARLY_N} > {EARLY_SOME:+.2f}%)\n"
          if EARLY_STOP else "off\n"))
 results, refused = {}, None
@@ -127,7 +129,7 @@ with ThreadPoolExecutor(max_workers=JOBS) as ex:
             continue
         clip, out = fut.result()
         print(out.rstrip())
-        m = re.search(r"BD-rate\(VMAF-NEG\).*?:\s*([-+][\d.]+)%", out)
+        m = re.search(r"BD-rate\(" + re.escape(GATE) + r"\).*?:\s*([-+][\d.]+)%", out)
         if m:
             results[clip] = float(m.group(1))
         sys.stdout.flush()
