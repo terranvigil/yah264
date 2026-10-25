@@ -71,6 +71,9 @@ FRAMES2  ?= 70
 ENCCFG   ?= --crf 28 --cabac --bframes 2 --threads 1
 
 # VMAF target defaults
+# the libvmaf CLI and the VMAF v1 model files every quality target scores with
+VMAF_V1_BIN    ?= $(HOME)/.local/opt/vmaf-v1/bin/vmaf
+VMAF_V1_MODELS ?= $(HOME)/.local/share/vmaf/model
 VMAF_CLIP   ?= $(CORPUS)/foreman_cif.y4m
 VMAF_CRF    ?= 28
 VMAF_FRAMES ?= 120
@@ -184,7 +187,7 @@ repro: build
 	  else echo ">> repro FAILED -- output changed; run 'make golden' if intended"; exit 1; fi
 
 vmaf: build
-	@VMAF="$(VMAF)" YAH264_VMAF_MODEL="$(YAH264_VMAF_MODEL)" YAH264="$(CLI)" \
+	@VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" YAH264="$(CLI)" \
 	  scripts/vmaf.sh $(VMAF_CLIP) $(VMAF_CRF) $(VMAF_FRAMES)
 
 # Wall-clock the in-frame wavefront: serial vs threaded on the same clip.
@@ -195,7 +198,7 @@ bench: build
 	@/usr/bin/time -p $(CLI) --input-y4m $(BENCH_CLIP) --frames $(BENCH_FRAMES) --crf 30 --cabac --bframes 2 --threads $$(getconf _NPROCESSORS_ONLN) -o /dev/null 2>&1 | awk '/real/{print "   "$$2"s"}'
 
 parity-status: build
-	@VMAF="$(VMAF)" YAH264="$(CLI)" scripts/parity-status.sh $(if $(QUICK),quick,)
+	@VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" YAH264="$(CLI)" scripts/parity-status.sh $(if $(QUICK),quick,)
 
 # The same three goals in CRF, at a MATCHED OPERATING POINT rather than a
 # matched CRF number: each encoder is swept over CRF and solved onto a common
@@ -213,7 +216,7 @@ parity-status: build
 #   make parity-status-crf POINT=vmaf   matched achieved VMAF instead
 #   make parity-status-crf QUICK=1      2-clip read
 parity-status-crf: build
-	@VMAF="$(VMAF)" YAH264="$(CLI)" PARITY_RC=crf POINT="$(if $(POINT),$(POINT),kbps)" \
+	@VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" YAH264="$(CLI)" PARITY_RC=crf POINT="$(if $(POINT),$(POINT),kbps)" \
 	  scripts/parity-status.sh $(if $(QUICK),quick,)
 
 # The rate-control mode matrix: CRF / CQP / ABR / CBR / capped VBR / 2-pass,
@@ -226,7 +229,7 @@ parity-status-crf: build
 #   make parity-modes MODE=asm THREADS=1    as-shipped SIMD, single thread
 #   make parity-modes MODES="cbr 2pass"     just those rows
 parity-modes: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" \
+	@YAH264="$(CLI)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" \
 	  SET_THREADS="$(if $(THREADS),$(THREADS),$(shell getconf _NPROCESSORS_ONLN))" \
 	  $(if $(MODES),MODES="$(MODES)",) \
 	  scripts/perf-comp-modes.sh $(if $(MODE),$(MODE),pure)
@@ -246,14 +249,14 @@ conformance: build
 
 # Head-to-head vs x264: speed (fps), quality (VMAF @ ~5fps sampling), size.
 perf-comp: build
-	@OUTDIR="$(OUTDIR)" VMAF="$(VMAF)" YAH264="$(CLI)" scripts/perf-comp.sh $(PERF_CLIP) $(PERF_CRF) $(PERF_SECONDS)
+	@OUTDIR="$(OUTDIR)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" YAH264="$(CLI)" scripts/perf-comp.sh $(PERF_CLIP) $(PERF_CRF) $(PERF_SECONDS)
 
 # Single-CPU, pure-C (both scalar), matched --preset + bitrate: the honest
 # algorithmic speed gap vs x264 (no SIMD, no threads, matched analysis tier).
 # The plain `perf-comp` default leaves yah264 at subme-10 vs x264-medium AND
 # uses SIMD+threads -- this target fixes all three. Prints "x264 is N.Nx faster".
 perf-comp-purec: build
-	@THREADS=1 OUTDIR="$(OUTDIR)" VMAF="$(VMAF)" YAH264="$(CLI)" \
+	@THREADS=1 OUTDIR="$(OUTDIR)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" YAH264="$(CLI)" \
 	  YAH264_ARGS="--preset $(PUREC_PRESET) --cabac --transform-8x8 --bitrate $(PUREC_BITRATE)" \
 	  X264_ARGS="--preset $(PUREC_PRESET) --bitrate $(PUREC_BITRATE)" \
 	  scripts/perf-comp-purec.sh $(PUREC_CLIP) 30 $(PUREC_SECONDS)
@@ -263,7 +266,7 @@ perf-comp-purec: build
 # algorithmic gap WITH each encoder's threading efficiency stacked on top -- a
 # distinct benchmark from the 1-thread perf-comp-purec, not a substitute for it.
 perf-comp-purec-threaded: build
-	@THREADS=$(PUREC_THREADS) OUTDIR="$(OUTDIR)" VMAF="$(VMAF)" YAH264="$(CLI)" \
+	@THREADS=$(PUREC_THREADS) OUTDIR="$(OUTDIR)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" YAH264="$(CLI)" \
 	  YAH264_ARGS="--preset $(PUREC_PRESET) --cabac --transform-8x8 --bitrate $(PUREC_BITRATE)" \
 	  X264_ARGS="--preset $(PUREC_PRESET) --bitrate $(PUREC_BITRATE)" \
 	  scripts/perf-comp-purec.sh $(PUREC_CLIP) 30 $(PUREC_SECONDS)
@@ -276,13 +279,13 @@ perf-comp-purec-threaded: build
 #   make review-720                the 720p pair only
 #   make review-1080               the 1080p pair only
 review: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS)" 	  scripts/perf-comp-set.sh asm
+	@YAH264="$(CLI)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS)" 	  scripts/perf-comp-set.sh asm
 
 review-720: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_720)" 	  scripts/perf-comp-set.sh asm
+	@YAH264="$(CLI)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_720)" 	  scripts/perf-comp-set.sh asm
 
 review-1080: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_1080)" 	  scripts/perf-comp-set.sh asm
+	@YAH264="$(CLI)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_1080)" 	  scripts/perf-comp-set.sh asm
 
 # The pure-C gap over a CLIP SET, as one table. There is no single "the" gap --
 # it is ~2.5x on CIF and 2.7-3.6x on 720p at the same matched config -- so a
@@ -290,7 +293,7 @@ review-1080: build
 #   make perf-comp-set            pure-C (default)
 #   make perf-comp-set MODE=asm   as-shipped SIMD
 perf-comp-set: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" scripts/perf-comp-set.sh $(MODE)
+	@YAH264="$(CLI)" VMAF_V1_BIN="$(VMAF_V1_BIN)" VMAF_V1_MODELS="$(VMAF_V1_MODELS)" scripts/perf-comp-set.sh $(MODE)
 
 clean:
 	@rm -rf $(BUILD)

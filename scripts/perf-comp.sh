@@ -181,7 +181,7 @@ ffmpeg -v error -y -i "$ref" -pix_fmt yuv420p10le -strict -1 "$wd/ref10.y4m"
 # v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080 in
 # both dimensions is fitted to it, both sides, and CAMBI is told the coded size
 geo=$(python3 "$root/scripts/bdcompare.py" --v1-display "$ref") && [ -n "$geo" ] || { echo "$0: cannot read the v1 display geometry" >&2; exit 2; }
-read -r v1scaled v1w v1h v1vf <<< "$geo"
+read -r v1scaled v1w v1h v1vf v1rule <<< "$geo"
 v1disp() {  # <10-bit y4m> -> the file v1 scores: itself, or a display-fitted copy
     if [ "$v1scaled" = 1 ]; then
         ffmpeg -v error -y -i "$1" -vf "$v1vf" -pix_fmt yuv420p10le -strict -1 "$1.disp.y4m"
@@ -271,7 +271,7 @@ xkey=""
 if [ "${Y264_REFENC_CACHE:-1}" = 1 ] && [ -z "${OUTDIR:-}" ]; then
     # rc_mode is in the key because it changes which rate flag x264 is handed;
     # without it a pre-2026-08-11 CRF entry can answer an ABR question.
-    xkey=$(python3 - "$X264" "$(basename "$clip")" "$N" "$crf" "$X264_ARGS" "$THREADS" "${RUNS:-1}" "$subsample" "$rc_mode" "$x_rc" "vmaf_v1:$(basename "$v1model"):disp$v1scaled:$("$VMAF" --version 2>&1)" <<'KEY'
+    xkey=$(python3 - "$X264" "$(basename "$clip")" "$N" "$crf" "$X264_ARGS" "$THREADS" "${RUNS:-1}" "$subsample" "$rc_mode" "$x_rc" "vmaf_v1:$(basename "$v1model"):$v1rule$v1scaled:$("$VMAF" --version 2>&1)" <<'KEY'
 import hashlib, sys
 h = hashlib.md5()
 h.update(open(sys.argv[1], 'rb').read())
@@ -546,7 +546,8 @@ if [ "$x_cached" = 0 ]; then
     read -r x_vmaf x_psnr <<EOF
 $(vmaf_of "$wd/x264.y4m" "$wd/x264.264")
 EOF
-    if [ -n "$xkey" ]; then
+    # a failed scoring pass reads nan; caching it would serve nan until a refresh
+    if [ -n "$xkey" ] && [ "$x_vmaf" != nan ] && [ "$x_psnr" != nan ]; then
         mkdir -p "$cachedir"
         printf '%s %s %s\n' "$x_sec" "$x_vmaf" "$x_bytes" > "$cachedir/$xkey"
         printf '%s\n' "$x_psnr" > "$cachedir/$xkey.psnr"

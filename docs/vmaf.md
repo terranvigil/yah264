@@ -17,7 +17,7 @@ separate NEG score adds nothing.
 | bit depth | both sides converted to 10-bit, with `cambi.enc_bitdepth` set to the stream's coded depth |
 | resolution | at display resolution: a picture smaller than 1920x1080 in both dimensions is scaled up to fit it (bicubic, aspect kept), both sides, with CAMBI told the coded size. PSNR is read at the coded size |
 | frames | every frame, mean pooled |
-| cache | every v1 cache and record key names the scoring rule; bdcompare's also names the model, the encode bit depth and the libvmaf build |
+| cache | v1 cache keys name the scoring rule (long-form records only for the pictures it scales, since it leaves larger ones as they were); bdcompare's also name the model, the encode bit depth and the libvmaf build |
 | comparison | BD-rate against the reference encoder, on the same clip and resolution |
 
 ## Limits
