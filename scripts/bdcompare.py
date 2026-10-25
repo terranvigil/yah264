@@ -287,6 +287,96 @@ def _v1_ident(model):
     return _v1_ident_memo[model]
 
 
+def _packets(bitstream):
+    """Coded frames in a stream, by packet count, or None."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
+                        "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", bitstream],
+                       capture_output=True, text=True)
+    try:
+        return int(r.stdout.strip().split(",")[0])
+    except ValueError:
+        return None
+
+
+def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
+    """One libvmaf pass of a bitstream against its source, both at 10-bit and
+    fitted to the display by `vf`, writing js. Returns the parsed JSON, or None
+    when any part of the pass failed or scored fewer frames than the stream
+    holds. Nothing lands on disk but the JSON: the reference reaches libvmaf
+    on its stdin and the decode on a FIFO.
+
+    Every failure ends the pass. A dead reference is an EOF on stdin. A decode
+    that dies before opening its FIFO would leave libvmaf blocked in open(), so
+    the FIFO is opened and closed from here until libvmaf sees EOF. A libvmaf
+    that dies first leaves the decode blocked in open(), so it is killed, not
+    waited on. When the encode is shorter than the source, the reference
+    ffmpeg fails on the pipe libvmaf stopped reading, which is expected."""
+    d = tempfile.mkdtemp(prefix="v1.", dir=work)
+    dec = os.path.join(d, "dec.y4m")
+    os.mkfifo(dec)
+    rerr = tempfile.TemporaryFile()
+    procs = []
+    try:
+        conv = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-i", src_path, *vf,
+             "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", "pipe:1"],
+            stdout=subprocess.PIPE, stderr=rerr)
+        procs.append(conv)
+        dproc = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-y", *shlex.split(_FF_T), "-i", bitstream,
+             "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
+             "-f", "yuv4mpegpipe", dec],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        procs.append(dproc)
+        sub = ["--subsample", str(SUBSAMPLE)] if SUBSAMPLE > 1 else []
+        v = subprocess.Popen(
+            [V1_BIN, "-q", "-r", "/dev/stdin", "-d", dec, "--json", "-o", js,
+             *model_args, *sub, *shlex.split(_VMAF_T), *extra],
+            stdin=conv.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        procs.append(v)
+        conv.stdout.close()
+        while True:
+            try:
+                v.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if dproc.poll() not in (None, 0):
+                    try:
+                        os.close(os.open(dec, os.O_WRONLY | os.O_NONBLOCK))
+                    except OSError:
+                        pass            # libvmaf has not opened it yet; next tick
+        if v.returncode != 0:
+            return None
+        try:
+            if dproc.wait(timeout=60) != 0:
+                return None
+            rc = conv.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            return None
+        rerr.seek(0)
+        if rc != 0 and b"Broken pipe" not in rerr.read():
+            return None
+        with open(js) as f:
+            jj = json.load(f)
+        n = _packets(bitstream)
+        if n is None or len(jj.get("frames", ())) < -(-n // max(1, SUBSAMPLE)):
+            return None                 # libvmaf scored fewer frames than were coded
+        return jj
+    except (OSError, ValueError, KeyError):
+        return None
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+        rerr.close()
+        try:
+            os.unlink(dec)
+            os.rmdir(d)
+        except OSError:
+            pass
+
+
 def _v1_of(bitstream, src_path, work, src_id=None):
     try:
         model = v1_model(src_path)
@@ -311,78 +401,18 @@ def _v1_of(bitstream, src_path, work, src_id=None):
                 with _stats_lock:
                     SCORE_STATS["hit"] += 1
                 return hit
-    # both sides reach libvmaf at 10-bit on FIFOs, so no full-size (and, for a
-    # scaled picture, display-size) copy lands on disk
-    d = tempfile.mkdtemp(prefix="v1.", dir=work)
-    dec, ref = os.path.join(d, "dec.y4m"), os.path.join(d, "ref.y4m")
-    os.mkfifo(dec)
-    os.mkfifo(ref)
     fd, js = tempfile.mkstemp(suffix=".v1.json", dir=work); os.close(fd)
-    procs, ok = [], False
     try:
-        procs.append(subprocess.Popen(
-            ["ffmpeg", "-v", "error", "-nostdin", "-y", *shlex.split(_FF_T), "-i", bitstream,
-             "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
-             "-f", "yuv4mpegpipe", dec],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        rerr = tempfile.TemporaryFile()
-        procs.append(subprocess.Popen(
-            ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path, *vf,
-             "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
-            stdout=subprocess.DEVNULL, stderr=rerr))
-        sub = ["--subsample", str(SUBSAMPLE)] if SUBSAMPLE > 1 else []
-        v = subprocess.Popen(
-            [V1_BIN, "-q", "-r", ref, "-d", dec, "--json", "-o", js,
-             "--model", f"path={model}:{v1_model_opts(w, h, ebd)}", *sub, *shlex.split(_VMAF_T)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        procs.append(v)
-        # A producer that fails before it opens its FIFO leaves libvmaf blocked
-        # in open() for ever. A failed decode ends the pass. A reference that
-        # exits while libvmaf runs gets its FIFO opened and closed here, so a
-        # libvmaf stuck opening it reads EOF and finishes.
-        released = False
-        while True:
-            try:
-                v.wait(timeout=0.5)
-                break
-            except subprocess.TimeoutExpired:
-                if procs[0].poll() not in (None, 0):
-                    break
-                if procs[1].poll() is not None and not released:
-                    released = True
-                    try:
-                        os.close(os.open(ref, os.O_WRONLY | os.O_NONBLOCK))
-                    except OSError:
-                        pass
-        # When the encode is shorter than the source, libvmaf stops reading the
-        # reference once the decode ends, and that ffmpeg fails on the closed
-        # pipe: that exit is expected. Any other reference failure means the
-        # pass scored a partial sequence.
-        rc_ref = procs[1].wait() if v.poll() is not None else None
-        rerr.seek(0)
-        ref_ok = rc_ref == 0 or b"Broken pipe" in rerr.read()
-        ok = v.poll() == 0 and procs[0].wait() == 0 and ref_ok
-        if ok:
-            with open(js) as f:
-                pm = json.load(f)["pooled_metrics"]
-    except (OSError, ValueError, KeyError):
-        ok = False
+        jj = v1_pass(bitstream, src_path, work, js,
+                     ["--model", f"path={model}:{v1_model_opts(w, h, ebd)}"], vf)
     finally:
-        for p in procs:
-            if p.poll() is None:
-                p.kill()
-            p.wait()
-        for p in (ref, dec, js):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
         try:
-            os.rmdir(d)
+            os.unlink(js)
         except OSError:
             pass
-    if not ok:
+    if jj is None:
         return None
+    pm = jj["pooled_metrics"]
     cambi = next((k for k in pm if k.startswith("cambi")), None)
     if "vmaf_v1" not in pm or cambi is None:
         return None

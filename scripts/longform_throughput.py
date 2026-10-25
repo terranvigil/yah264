@@ -1172,18 +1172,34 @@ def _vmaf_pass(cell, bitstream, wd, start, count, j, args, scaled):
          "-f", "yuv4mpegpipe", "pipe:1"],
         stdin=fp.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     fp.stdout.close()
-    v = subprocess.run(
+    verr = tempfile.TemporaryFile()
+    v = subprocess.Popen(
         [VMAF, "--threads", VMAF_THREADS, "--subsample", SUBSAMPLE,
          "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, *args],
-        stdin=conv.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        stdin=conv.stdout, stdout=subprocess.DEVNULL, stderr=verr)
     conv.stdout.close()
+    # a decode that dies before opening its FIFO would leave libvmaf blocked
+    # in open(); opening and closing it from here gives libvmaf an EOF
+    while True:
+        try:
+            v.wait(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if dec.poll() not in (None, 0):
+                try:
+                    os.close(os.open(dfifo, os.O_WRONLY | os.O_NONBLOCK))
+                except OSError:
+                    pass
+    if v.returncode != 0 and dec.poll() is None:
+        dec.kill()                      # blocked opening a FIFO nobody reads
     conv.wait()
     frc = fp.wait()
     dec.wait()
     os.remove(dfifo)
     if v.returncode != 0:
+        verr.seek(0)
         sys.exit(f"longform: vmaf failed on {bitstream}\n"
-                 f"  {v.stderr.decode(errors='replace')[-600:]}")
+                 f"  {verr.read().decode(errors='replace')[-600:]}")
     if frc != 0:
         ferr.seek(0)
         sys.exit(f"longform: the reference feeder failed ({frc}):\n  "

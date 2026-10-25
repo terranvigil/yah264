@@ -22,7 +22,7 @@ spends fewer bits at equal VMAF v1. Scoring is scripts/bdcompare.py's v1 path
 the stream's bit depth); VMAF_V1_BIN and VMAF_V1_MODELS override the binary and
 the model directory, VMAF_THREADS (default 8) the libvmaf threads.
 """
-import argparse, json, math, os, shlex, subprocess, sys
+import argparse, tempfile, json, math, os, shlex, subprocess, sys
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,48 +48,20 @@ def sizes(path):
 
 
 def vmaf_v1(src, bitstream, js):
-    """Score every frame with VMAF v1 into js. The reference reaches 10-bit on
-    a FIFO, so no full-size 10-bit copy of a multi-shot source lands on disk."""
+    """Score every frame with VMAF v1 into js, through bdcompare's pass."""
     model = bdcompare.v1_model(src)
     if not os.path.exists(model) or not os.access(bdcompare.V1_BIN, os.X_OK):
         sys.exit(f"multishot_bd: needs {bdcompare.V1_BIN} and {model}")
     w, h, _ = bdcompare._y4m_geometry(src)
     vf = ["-vf", bdcompare.V1_SCALE_VF] if bdcompare.v1_scaled(w, h) else []
-    dec = js + ".dec10.y4m"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-fps_mode", "passthrough",
-                    *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1", dec], check=True)
-    ref = js + ".ref10.y4m"
-    if os.path.exists(ref):
-        os.unlink(ref)
-    os.mkfifo(ref)
-    conv = subprocess.Popen(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src, *vf, "-pix_fmt",
-                             "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    r = subprocess.Popen([bdcompare.V1_BIN, "-q", "-r", ref, "-d", dec, "--json", "-o", js,
-                          "--model", f"path={model}:"
-                          + bdcompare.v1_model_opts(w, h, bdcompare._enc_bitdepth(bitstream)),
-                          "--threads", os.environ.get("VMAF_THREADS", "8")],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # a reference ffmpeg that fails before it opens the FIFO leaves libvmaf
-    # blocked in open() for ever; the whole sequence is encoded, so the two
-    # sides end together and a failed reference is a real failure
-    while True:
-        try:
-            r.wait(timeout=0.5)
-            break
-        except subprocess.TimeoutExpired:
-            if conv.poll() not in (None, 0):
-                r.kill()
-                r.wait()
-                break
-    crc = conv.poll()
-    conv.kill()
-    conv.wait()
-    os.unlink(ref); os.unlink(dec)
-    if r.returncode or crc not in (None, 0):
+    opts = bdcompare.v1_model_opts(w, h, bdcompare._enc_bitdepth(bitstream))
+    with tempfile.TemporaryDirectory() as work:
+        jj = bdcompare.v1_pass(bitstream, src, work, js, ["--model", f"path={model}:{opts}"], vf,
+                               ["--threads", os.environ.get("VMAF_THREADS", "8")])
+    if jj is None:
         if os.path.exists(js):
             os.unlink(js)
-        sys.exit(f"vmaf failed on {bitstream} (vmaf exit {r.returncode}, reference exit {crc})")
+        sys.exit(f"vmaf failed on {bitstream}")
 
 
 def main():
