@@ -136,6 +136,8 @@ help:
 
 configure:
 	@test -f $(BUILD)/build.ninja || meson setup $(BUILD) -Ddev_knobs=true
+	@python3 -c "import json,sys; sys.exit(0 if any(o['name'] == 'dev_knobs' and o['value'] for o in json.load(open('$(BUILD)/meson-info/intro-buildoptions.json'))) else 1)" 2>/dev/null || \
+	    meson configure $(BUILD) -Ddev_knobs=true
 
 build: configure
 	@$(NINJA)

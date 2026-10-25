@@ -298,6 +298,19 @@ def _packets(bitstream):
         return None
 
 
+def require_dev_knobs(binary, *texts):
+    """Exit when a Y264_* knob appears in `texts` (arm specs, env strings) and
+    `binary` was built without -Ddev_knobs=true, which would ignore it: two
+    arms would come out byte-identical and read as 'no effect'."""
+    if not any("Y264_" in (t or "") for t in texts):
+        return
+    r = subprocess.run([binary, "--version"], capture_output=True, text=True)
+    if "(dev knobs)" not in r.stdout:
+        sys.exit(f"{os.path.basename(sys.argv[0])}: {binary} was built without "
+                 "-Ddev_knobs=true, so it ignores the Y264_* knobs this run sets; "
+                 "run meson configure <dir> -Ddev_knobs=true")
+
+
 def coded_size_is(bitstream, w, h):
     """True when the stream's coded size is w x h. Fitting both sides to the
     display would otherwise score an encode at another size with the same

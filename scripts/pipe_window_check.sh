@@ -62,8 +62,13 @@ done
 # thread, and a split forced onto more workers than the window holds GOPs,
 # both wait for the split to be decidable before any worker exists; they
 # used to park the reader at the window and wait forever (2026-09-29).
+dev=0; "$Y" --version 2>/dev/null | grep -q "(dev knobs)" && dev=1
 for spec in "1 30" "1 1" "4 30 Y264_GOP_FORCE_G=4"; do
     set -- $spec
+    if [ -n "${3:-}" ] && [ "$dev" = 0 ]; then
+        echo "SKIP the forced-split window case: it needs a -Ddev_knobs=true build"
+        continue
+    fi
     t=$1 w=$2 extra=${3:-}
     perl -e 'alarm 60; exec @ARGV' env Y264_STREAM_WINDOW="$w" $extra "$Y" --input-y4m - \
         --threads "$t" --keyint 100 -o "$work/pipe.264" --quiet --no-progress \
