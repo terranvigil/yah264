@@ -311,6 +311,17 @@ def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
     that dies first leaves the decode blocked in open(), so it is killed, not
     waited on. When the encode is shorter than the source, the reference
     ffmpeg fails on the pipe libvmaf stopped reading, which is expected."""
+    # fitting both sides to the display would hide an encode at another size
+    # with the same aspect, so the coded size must match the source's
+    try:
+        sw, sh_, _ = _y4m_geometry(src_path)
+    except (OSError, StopIteration, ValueError):
+        return None
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "csv=p=0", bitstream],
+                       capture_output=True, text=True)
+    if r.stdout.strip().split("\n")[0] != f"{sw},{sh_}":
+        return None
     d = tempfile.mkdtemp(prefix="v1.", dir=work)
     dec = os.path.join(d, "dec.y4m")
     os.mkfifo(dec)
@@ -347,10 +358,12 @@ def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
                         pass            # libvmaf has not opened it yet; next tick
         if v.returncode != 0:
             return None
+        # libvmaf is done, so nothing reads either side any more: a producer
+        # still running now is blocked, and is killed below
         try:
-            if dproc.wait(timeout=60) != 0:
+            if dproc.wait(timeout=5) != 0:
                 return None
-            rc = conv.wait(timeout=60)
+            rc = conv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             return None
         rerr.seek(0)

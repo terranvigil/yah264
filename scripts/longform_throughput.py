@@ -1162,7 +1162,7 @@ def _vmaf_pass(cell, bitstream, wd, start, count, j, args, scaled):
         [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
          "-i", bitstream, "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le",
          "-strict", "-1", "-f", "yuv4mpegpipe", dfifo],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     ferr = tempfile.TemporaryFile()
     fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
                           stderr=ferr)
