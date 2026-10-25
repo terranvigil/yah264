@@ -61,8 +61,7 @@ static void test_mcstf(void)
     y264_mcstf_cfg cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.range = 2; cfg.period = 1; cfg.sigma_q8 = 6 * 256; cfg.clean_q8 = 0;
-    cfg.adapt = 1; cfg.adapt_k = 5; cfg.subpel = 1; cfg.cut = 1;
-    y264_mcstf *m = y264_mcstf_open(&cfg, W, H, 1, 1, 26.0);
+    y264_mcstf *m = y264_mcstf_open(&cfg, W, H, 1, 1);
     CHECK(m != NULL, "mcstf_open");
     if (!m)
         return;

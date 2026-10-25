@@ -10,7 +10,6 @@
 #include <math.h>
 #include "../common/env.h"
 #include <stddef.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,11 +40,11 @@ int y264_mcstf_cfg_env(y264_mcstf_cfg *c)
     c->range = (int)env_f(y264_env("Y264_MCSTF_RANGE"), 1, 1, Y264_MCSTF_MAX_RANGE);
     /* 4 = the anchor spacing at the default --bframes 3: the pictures a
      * mini-GOP predicts from are the ones whose noise propagates */
-    c->period = (int)env_f(y264_env("Y264_MCSTF_PERIOD"), 4, 1, 64);
+    c->period = 4;
     /* 6 levels: the grain the corpus carries sits at 1-4.5 levels of
      * standard deviation, so six covers it with margin, and at three widths
      * a disagreement the search got wrong is worth a hundredth of a weight */
-    c->sigma_q8 = (int)(env_f(y264_env("Y264_MCSTF_SIGMA"), 6.0, 0.25, 64.0) * 256.0 + 0.5);
+    c->sigma_q8 = 6 * 256;
     /* The bar on the TEMPORAL noise reading (mc_tnoise), in 8-bit levels of
      * match error. The rendered animations read 0.00-0.25 and are left
      * alone; every natural clip in the corpus reads above 0.75. The sibling
@@ -53,16 +52,7 @@ int y264_mcstf_cfg_env(y264_mcstf_cfg *c)
      * separate the film-grain titles (1.38-1.44 at 720p, and a pillarboxed
      * 1924 scan at 0.50) from foreman_cif (1.19-1.44), which is why the
      * reading here is temporal. */
-    c->clean_q8 = (int)(env_f(y264_env("Y264_MCSTF_CLEAN"), 0.5, 0.0, 64.0) * 256.0 + 0.5);
-    c->adapt = (int)env_f(y264_env("Y264_MCSTF_ADAPT"), 0, 0, 1);
-    /* the error, in quarters of the noise's own match error, up to which a
-     * block keeps its full weight under Y264_MCSTF_ADAPT */
-    c->adapt_k = (int)env_f(y264_env("Y264_MCSTF_ADAPT_K"), 5, 4, 64);
-    c->subpel = (int)env_f(y264_env("Y264_MCSTF_SUBPEL"), 0, 0, 1);
-    c->cut = (int)env_f(y264_env("Y264_MCSTF_CUT"), 0, 0, 1);
-    c->qadapt = (int)env_f(y264_env("Y264_MCSTF_QADAPT"), 0, 0, 1);
-    c->qp_off = (int)env_f(y264_env("Y264_MCSTF_QP"), 0, -6, 6);
-    c->trace = (int)env_f(y264_env("Y264_MCSTF_TRACE"), 0, 0, 1);
+    c->clean_q8 = 128;
     return (int)env_f(y264_env("Y264_MCSTF"), 0, 0, 1);
 }
 
@@ -90,13 +80,11 @@ struct y264_mcstf {
     int out_stride[3];
     int bw, bh;
     /* per (neighbour slot, block): motion in quarter samples, the match
-     * error (mean absolute, Q4), the combined weight (Q8) and the inverse of
-     * the block's relative photometric width (Q8, 256 = the full width) */
+     * error (mean absolute, Q4) and the combined weight (Q8) */
     int16_t *mv;
-    uint16_t *berr, *bwt, *binv;
+    uint16_t *berr, *bwt;
     int sigma_eff;      /* coded-depth units, Q8 */
     uint16_t gauss[GTAB];
-    int last_noise_q8;
 };
 
 /* temporal strength by distance, Q8; the original counts 256 */
@@ -138,12 +126,11 @@ void y264_mcstf_close(y264_mcstf *m)
     free(m->mv);
     free(m->berr);
     free(m->bwt);
-    free(m->binv);
     free(m);
 }
 
 y264_mcstf *y264_mcstf_open(const y264_mcstf_cfg *cfg, int w, int h, int sx,
-                            int sy, double rf)
+                            int sy)
 {
     y264_dsp_init();
     y264_mcstf *m = calloc(1, sizeof(*m));
@@ -161,8 +148,7 @@ y264_mcstf *y264_mcstf_open(const y264_mcstf_cfg *cfg, int w, int h, int sx,
     m->mv = calloc(nb * 2, sizeof(*m->mv));
     m->berr = calloc(nb, sizeof(*m->berr));
     m->bwt = calloc(nb, sizeof(*m->bwt));
-    m->binv = calloc(nb, sizeof(*m->binv));
-    if (!m->p || !m->mv || !m->berr || !m->bwt || !m->binv)
+    if (!m->p || !m->mv || !m->berr || !m->bwt)
         goto fail;
     for (int i = 0; i < m->cap; i++) {
         for (int c = 0; c < 3; c++) {
@@ -185,17 +171,7 @@ y264_mcstf *y264_mcstf_open(const y264_mcstf_cfg *cfg, int w, int h, int sx,
             goto fail;
         m->out[c] = m->out_buf[c] + (size_t)PAD * m->out_stride[c] + PAD;
     }
-    /* Y264_MCSTF_QADAPT: the width follows the rate factor, doubling every
-     * twelve QP. A fine quantiser keeps most of the noise anyway and the
-     * filter should keep its hands off detail there; a coarse one throws the
-     * noise away at a cost, and averaging it out first is cheaper. */
-    double qs = 1.0;
-    if (cfg->qadapt) {
-        qs = pow(2.0, (rf - 26.0) / 12.0);
-        if (qs < 0.6) qs = 0.6;
-        if (qs > 1.8) qs = 1.8;
-    }
-    m->sigma_eff = (int)(cfg->sigma_q8 * qs * (1 << (Y264_BIT_DEPTH - 8)) + 0.5);
+    m->sigma_eff = cfg->sigma_q8 << (Y264_BIT_DEPTH - 8);
     /* 256 * exp(-d^2 / 2 sigma^2), tabulated once over |d| in coded units */
     double sg = m->sigma_eff / 256.0, k = -1.0 / (2.0 * sg * sg);
     for (int d = 0; d < GTAB; d++)
@@ -292,25 +268,6 @@ static inline int bilin(const pixel *p, int st, int fx, int fy, int den)
     return (v + dd / 2) / dd;
 }
 
-/* SAD of the block against the reference at a quarter-sample vector */
-static unsigned sad_q(const mc_pic *cur, const mc_pic *ref, int x0, int y0,
-                      int w, int h, int mvx, int mvy)
-{
-    int st = ref->stride[0], cs = cur->stride[0];
-    const pixel *co = cur->org[0] + (size_t)y0 * cs + x0;
-    const pixel *ro = ref->org[0] + (ptrdiff_t)(y0 + (mvy >> 2)) * st + x0 + (mvx >> 2);
-    int fx = mvx & 3, fy = mvy & 3;
-    if (!(fx | fy))
-        return sad_wh(co, cs, ro, st, w, h);
-    unsigned s = 0;
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) {
-            int d = (int)co[(size_t)y * cs + x] - bilin(ro + (ptrdiff_t)y * st + x, st, fx, fy, 4);
-            s += (unsigned)(d < 0 ? -d : d);
-        }
-    return s;
-}
-
 #define SHORTER(dx, dy, bx, by) ((dx) * (dx) + (dy) * (dy) < (bx) * (bx) + (by) * (by))
 
 /* One block against one neighbour: coarse search on the subsampled luma,
@@ -360,34 +317,6 @@ static void mc_search(const y264_mcstf *m, const mc_pic *cur, const mc_pic *ref,
     unsigned area = (unsigned)(w * h);
     *mvx = fdx * 4;
     *mvy = fdy * 4;
-    *err = (best * 16u + area / 2) / area;
-}
-
-/* Y264_MCSTF_SUBPEL: a half- then a quarter-sample step around the integer
- * winner, taken only where the caller found the integer match poor. */
-static void mc_subpel(const y264_mcstf *m, const mc_pic *cur, const mc_pic *ref,
-                      int bx, int by, int *mvx, int *mvy, unsigned *err)
-{
-    int x0 = bx * BLK, y0 = by * BLK;
-    int w = BLK < m->w - x0 ? BLK : m->w - x0;
-    int h = BLK < m->h - y0 ? BLK : m->h - y0;
-    unsigned area = (unsigned)(w * h);
-    int qx = *mvx, qy = *mvy;
-    unsigned best = sad_q(cur, ref, x0, y0, w, h, qx, qy);
-    for (int step = 2; step >= 1; step >>= 1) {
-        int cx0 = qx, cy0 = qy;
-        for (int dy = -step; dy <= step; dy += step)
-            for (int dx = -step; dx <= step; dx += step) {
-                if (!(dx | dy))
-                    continue;
-                unsigned s = sad_q(cur, ref, x0, y0, w, h, cx0 + dx, cy0 + dy);
-                if (s < best) {
-                    best = s; qx = cx0 + dx; qy = cy0 + dy;
-                }
-            }
-    }
-    *mvx = qx;
-    *mvy = qy;
     *err = (best * 16u + area / 2) / area;
 }
 
@@ -453,36 +382,28 @@ static int mc_filter(y264_mcstf *m, int ci)
     int nbs[2 * Y264_MCSTF_MAX_RANGE];
     /* search slot of (side, distance): past 0..R-1, future R..2R-1 */
 #define SLOT(side, d) ((side) < 0 ? (d) - 1 : R + (d) - 1)
-    uint64_t emean[2 * Y264_MCSTF_MAX_RANGE];
     int searched[2 * Y264_MCSTF_MAX_RANGE] = { 0 };
 
-    /* Every neighbour's integer search. The farther ones are needed unless a
-     * cut stops a side, and that needs the noise reading first, so the two
-     * nearest go first. */
-    for (int pass = 0; pass < 2; pass++)
-        for (int side = -1; side <= 1; side += 2)
-            for (int d = pass ? 2 : 1; d <= (pass ? R : 1); d++) {
-                int j = ci + side * d;
-                if (j < 0 || j >= m->n)
-                    continue;
-                int sl = SLOT(side, d);
-                int16_t *mv = m->mv + (size_t)sl * nblk * 2;
-                uint16_t *be = m->berr + (size_t)sl * nblk;
-                uint64_t esum = 0;
-                for (int by = 0; by < m->bh; by++)
-                    for (int bx = 0; bx < m->bw; bx++) {
-                        int vx, vy;
-                        unsigned e;
-                        mc_search(m, cur, &m->p[j], bx, by, &vx, &vy, &e);
-                        size_t bi = (size_t)by * m->bw + bx;
-                        mv[bi * 2] = (int16_t)vx;
-                        mv[bi * 2 + 1] = (int16_t)vy;
-                        be[bi] = (uint16_t)(e > 65535u ? 65535u : e);
-                        esum += e;
-                    }
-                emean[sl] = esum / nblk;
-                searched[sl] = 1;
-            }
+    for (int side = -1; side <= 1; side += 2)
+        for (int d = 1; d <= R; d++) {
+            int j = ci + side * d;
+            if (j < 0 || j >= m->n)
+                continue;
+            int sl = SLOT(side, d);
+            int16_t *mv = m->mv + (size_t)sl * nblk * 2;
+            uint16_t *be = m->berr + (size_t)sl * nblk;
+            for (int by = 0; by < m->bh; by++)
+                for (int bx = 0; bx < m->bw; bx++) {
+                    int vx, vy;
+                    unsigned e;
+                    mc_search(m, cur, &m->p[j], bx, by, &vx, &vy, &e);
+                    size_t bi = (size_t)by * m->bw + bx;
+                    mv[bi * 2] = (int16_t)vx;
+                    mv[bi * 2 + 1] = (int16_t)vy;
+                    be[bi] = (uint16_t)(e > 65535u ? 65535u : e);
+                }
+            searched[sl] = 1;
+        }
 
     /* The noise: the quieter of the two nearest neighbours' readings, since
      * a cut sits on at most one side of a picture. */
@@ -496,53 +417,15 @@ static int mc_filter(y264_mcstf *m, int ci)
     }
     if (tn == ~0u)
         tn = 0;
-    m->last_noise_q8 = (int)((tn << 4) >> (Y264_BIT_DEPTH - 8));   /* Q8 levels */
-    /* the gate reads the same levels the knob is written in */
-    if ((int)((tn * 16u) >> (Y264_BIT_DEPTH - 8)) < m->c.clean_q8) {
-        if (m->c.trace)
-            fprintf(stderr, "mcstf   disp=%d tnoise=%.2f gated\n", cur->display_idx,
-                    ((tn * 16u) >> (Y264_BIT_DEPTH - 8)) / 256.0);
+    /* the gate reads the same levels clean_q8 is written in */
+    if ((int)((tn * 16u) >> (Y264_BIT_DEPTH - 8)) < m->c.clean_q8)
         return 0;
-    }
-    /* e0: the error a right match shows at this noise, never under a level */
-    unsigned lvl = 16u << (Y264_BIT_DEPTH - 8);
-    unsigned e0 = tn > lvl ? tn : lvl;
-    unsigned subpel_q4 = 0;
-    if (m->c.subpel)
-        subpel_q4 = m->c.adapt ? 2 * e0 : (6u * 16u) << (Y264_BIT_DEPTH - 8);
-    /* a neighbour across a cut matches nowhere: its mean error sits far past
-     * the noise's and past any ordinary motion miss */
-    unsigned cut_q4 = 3 * e0 + ((12u * 16u) << (Y264_BIT_DEPTH - 8));
 
     for (int side = -1; side <= 1; side += 2)
         for (int d = 1; d <= R; d++) {
             int sl = SLOT(side, d);
             if (!searched[sl])
                 break;
-            int iscut = m->c.cut && emean[sl] > cut_q4;
-            if (m->c.trace)
-                fprintf(stderr, "mcstf   nb disp=%d d=%+d emean=%.2f e0=%.2f%s\n",
-                        cur->display_idx, side * d, emean[sl] / 16.0, e0 / 16.0,
-                        iscut ? " CUT" : "");
-            if (iscut)
-                break;          /* this one and everything past it on this side */
-            if (subpel_q4) {
-                int16_t *mv = m->mv + (size_t)sl * nblk * 2;
-                uint16_t *be = m->berr + (size_t)sl * nblk;
-                const mc_pic *ref = &m->p[ci + side * d];
-                for (int by = 0; by < m->bh; by++)
-                    for (int bx = 0; bx < m->bw; bx++) {
-                        size_t bi = (size_t)by * m->bw + bx;
-                        if (be[bi] <= subpel_q4)
-                            continue;
-                        int vx = mv[bi * 2], vy = mv[bi * 2 + 1];
-                        unsigned e;
-                        mc_subpel(m, cur, ref, bx, by, &vx, &vy, &e);
-                        mv[bi * 2] = (int16_t)vx;
-                        mv[bi * 2 + 1] = (int16_t)vy;
-                        be[bi] = (uint16_t)(e > 65535u ? 65535u : e);
-                    }
-            }
             nbi[nb] = ci + side * d;
             nbd[nb] = d;
             nbs[nb] = sl;
@@ -552,35 +435,12 @@ static int mc_filter(y264_mcstf *m, int ci)
     if (!nb)
         return 0;
 
-    /* per (neighbour, block): the combined weight and the width */
+    /* per (neighbour, block): the combined weight */
     for (int k = 0; k < nb; k++) {
         const uint16_t *be = m->berr + (size_t)nbs[k] * nblk;
-        uint16_t *bw = m->bwt + (size_t)k * nblk, *bv = m->binv + (size_t)k * nblk;
-        for (size_t bi = 0; bi < nblk; bi++) {
-            unsigned e = be[bi];
-            int wb, inv = 256;
-            if (m->c.adapt) {
-                /* Y264_MCSTF_ADAPT: a block that matches to within what the
-                 * noise explains keeps its full weight; past that the weight
-                 * falls with the square of the excess and the filter narrows
-                 * in proportion, so a moving edge the search missed is
-                 * averaged less AND over a smaller photometric window. */
-                unsigned ok = e0 * (unsigned)m->c.adapt_k / 4;
-                if (e <= ok) {
-                    wb = 256;
-                } else {
-                    double r = (double)ok / e;
-                    wb = (int)(256.0 * r * r + 0.5);
-                    inv = (int)(256.0 / r + 0.5);
-                    if (inv > 4096) inv = 4096;
-                }
-            } else {
-                wb = berr_w_fixed(e);
-            }
-            int w = (mc_tstr[nbd[k]] * wb) >> 8;
-            bw[bi] = (uint16_t)w;
-            bv[bi] = (uint16_t)inv;
-        }
+        uint16_t *bw = m->bwt + (size_t)k * nblk;
+        for (size_t bi = 0; bi < nblk; bi++)
+            bw[bi] = (uint16_t)((mc_tstr[nbd[k]] * berr_w_fixed(be[bi])) >> 8);
     }
 
     /* Block by block, so each neighbour's vector, weight and width are
@@ -597,7 +457,7 @@ static int mc_filter(y264_mcstf *m, int ci)
                 int x0 = bx * bszx, x1 = x0 + bszx < pw ? x0 + bszx : pw;
                 size_t bi = (size_t)by * m->bw + bx;
                 int kn = 0;
-                int kw[2 * Y264_MCSTF_MAX_RANGE], kinv[2 * Y264_MCSTF_MAX_RANGE];
+                int kw[2 * Y264_MCSTF_MAX_RANGE];
                 int kfx[2 * Y264_MCSTF_MAX_RANGE], kfy[2 * Y264_MCSTF_MAX_RANGE];
                 int kst[2 * Y264_MCSTF_MAX_RANGE];
                 const pixel *kp[2 * Y264_MCSTF_MAX_RANGE];
@@ -609,7 +469,6 @@ static int mc_filter(y264_mcstf *m, int ci)
                     const mc_pic *r = &m->p[nbi[k]];
                     int mx = mv[0], my = mv[1];
                     kw[kn] = w0;
-                    kinv[kn] = m->binv[(size_t)k * nblk + bi];
                     /* unequal shifts (4:2:2) put both fractions on the finer
                      * denominator */
                     kfx[kn] = (mx & (denx - 1)) * (den / denx);
@@ -629,10 +488,9 @@ static int mc_filter(y264_mcstf *m, int ci)
                             int rv = (kfx[k] | kfy[k]) ? bilin(rp, kst[k], kfx[k], kfy[k], den) : rp[0];
                             int diff = rv - org;
                             if (diff < 0) diff = -diff;
-                            int gi = kinv[k] == 256 ? diff : (diff * kinv[k]) >> 8;
-                            if (gi >= GTAB)
+                            if (diff >= GTAB)
                                 continue;
-                            int wq = (kw[k] * m->gauss[gi]) >> 8;
+                            int wq = (kw[k] * m->gauss[diff]) >> 8;
                             acc += wq * rv;
                             wsum += wq;
                         }
@@ -651,16 +509,12 @@ void y264_mcstf_pop(y264_mcstf *m, const pixel *plane[3], int stride[3],
     int ci = m->out_pos;
     const mc_pic *cur = &m->p[ci];
     int filt = (cur->display_idx % m->c.period) == 0 && m->n > 1;
-    m->last_noise_q8 = -1;
     if (filt)
         filt = mc_filter(m, ci);
     for (int c = 0; c < 3; c++) {
         plane[c] = filt ? m->out[c] : cur->org[c];
         stride[c] = filt ? m->out_stride[c] : cur->stride[c];
     }
-    if (m->c.trace)
-        fprintf(stderr, "mcstf %5d filt=%d tnoise=%.2f\n", cur->display_idx, filt,
-                m->last_noise_q8 < 0 ? -1.0 : m->last_noise_q8 / 256.0);
     *pts = cur->pts;
     *filtered = filt;
     m->out_pos++;

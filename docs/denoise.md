@@ -42,8 +42,8 @@ Pictures under the bar get zero offsets. The code lives in
 
 ### `--mcstf`: motion-compensated temporal filter
 
-A queue in front of the lookahead. Every fourth picture (`Y264_MCSTF_PERIOD`,
-the anchor spacing at the default `--bframes 3`) is replaced by a weighted
+A queue in front of the lookahead. Every fourth picture (the anchor
+spacing at the default `--bframes 3`) is replaced by a weighted
 average of itself and its motion-compensated neighbors, `--mcstf-range` per
 side (1 to 4, default 1). Three weights combine: temporal distance, block match
 error, and a per-sample photometric weight (width 6 levels). Everything
@@ -52,7 +52,7 @@ downstream, the lookahead included, sees the filtered picture.
 The gate reads **temporal** noise: the 25th percentile of the nearest
 neighbors' block match errors, skipping near-black and near-white blocks,
 taken from the quieter side so a cut doesn't trip it. Pictures under 0.5
-levels (`Y264_MCSTF_CLEAN`) pass through untouched. Animation reads 0.00-0.25
+levels pass through untouched. Animation reads 0.00-0.25
 and every natural clip in the corpus reads above 0.75. The code lives in
 `src/encoder/mcstf.c`.
 
@@ -91,12 +91,12 @@ Cost in instructions retired, one thread, medium: `--nr` +1.2% to +2.3%,
 |---|---|
 | `--nr` with intra on | costs the added-in-post grain on Nocturne |
 | `--nr` unweighted by basis gain | lost on park_joy and sunflower |
-| `--mcstf` subpel refinement on poor matches (`Y264_MCSTF_SUBPEL`) | worse on 9 of 12; it finds better matches on the noise itself and averages less |
-| `-1` QP on filtered pictures (`Y264_MCSTF_QP`) | median -0.85 shrinks to -0.04 |
+| `--mcstf` subpel refinement on poor matches | worse on 9 of 12; it finds better matches on the noise itself and averages less |
+| `-1` QP on filtered pictures | median -0.85 shrinks to -0.04 |
 | `--mcstf` every picture (period 1) | lash_b +5.0 |
-| per-block adaptive weights (`Y264_MCSTF_ADAPT`) | fixes foreman on the HD band but not the standard band, moves the loss to riverbed (+1.17) and gives back most of lash_a's win. Knob, off |
-| QP-adaptive photometric width (`Y264_MCSTF_QADAPT`) | mixed: lash_a better, noct_a worse. Knob, off |
-| cut-side neighbor selection (`Y264_MCSTF_CUT`) | inert: no cut on the measured set gets past the gate. Knob, off |
+| per-block adaptive weights | fixes foreman on the HD band but not the standard band, moves the loss to riverbed (+1.17) and gives back most of lash_a's win |
+| QP-adaptive photometric width | mixed: lash_a better, noct_a worse |
+| cut-side neighbor selection | inert: no cut on the measured set gets past the gate |
 
 ## Open questions
 
@@ -127,4 +127,3 @@ The grain clips are 120-frame excerpts the scripts don't fetch:
 Read `scripts/hd_band.py` with a near-null control arm (`Y264_MBT_DEPFLOOR=16`)
 beside the tool: on the grain clips the control's own spread reaches +0.5,
 which is as large as several of the tool's per-clip readings.
-`Y264_NR_TRACE=1` and `Y264_MCSTF_TRACE=1` print the gate readings.

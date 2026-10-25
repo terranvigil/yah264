@@ -1252,11 +1252,6 @@ int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
         const yah264_zone_t *z = zone_at(e, e->cur_disp);
         if (z) q = zone_base_qp(z, q);
     }
-    /* Y264_MCSTF_QP: a filtered picture has less noise to pay for, so the
-     * same bits buy a finer quantiser there; and it is the pictures others
-     * predict from that the filter picks */
-    if (e->mcstf && e->mcstf_qp && e->mcstf_filt[e->cur_disp & 1023])
-        q += e->mcstf_qp;
     if (e->tp_pass >= 2)                            /* 2-pass sets the coded QP directly */
         return qp_bound(e, q);
     if (type == 0) q -= 3;
@@ -5359,11 +5354,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
          * thread, like every other knob this encoder resolves at open */
         y264_mcstf_cfg mc;
         if (y264_mcstf_cfg_env(&mc)) {
-            double rf = param->rc.method == YAH264_RC_CQP ? param->rc.qp
-                      : param->rc.rf > 0 ? param->rc.rf : 23.0;
             int sx = e->sub_w == 2 ? 1 : 0, sy = e->sub_h == 2 ? 1 : 0;
-            e->mcstf = y264_mcstf_open(&mc, e->width, e->height, sx, sy, rf);
-            e->mcstf_qp = mc.qp_off;
+            e->mcstf = y264_mcstf_open(&mc, e->width, e->height, sx, sy);
             if (!e->mcstf)
                 fprintf(stderr, "yah264: --mcstf: out of memory; off\n");
         }
@@ -16252,7 +16244,6 @@ static int mcstf_pop_push(yah264_encoder_t *e, size_t *offp)
     yah264_picture_t fp;
     memset(&fp, 0, sizeof fp);
     y264_mcstf_pop(e->mcstf, pl, st, &fp.pts, &filt);
-    e->mcstf_filt[e->mcstf_pushed++ & 1023] = (uint8_t)filt;
     fp.csp = e->param.csp;
     fp.width = e->width;
     fp.height = e->height;

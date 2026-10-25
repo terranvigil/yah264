@@ -25,18 +25,6 @@
  * samples -- sees one picture, the filtered one. Driver-serial, integer and
  * in display order, so the filtered picture is a pure function of the source
  * at every thread count.
- *
- * The refinements over the port, each behind its own knob so each can be
- * read alone (mcstf.c has the detail):
- *   Y264_MCSTF_ADAPT   per-block weight and filter width from the block's
- *                      match error against the picture's own noise reading
- *   Y264_MCSTF_SUBPEL  quarter-pel refinement, only where the integer match
- *                      is poor
- *   Y264_MCSTF_CUT     a neighbour across a scene cut, and everything past
- *                      it on that side, is dropped, so a cut picture filters
- *                      from its own shot only
- *   Y264_MCSTF_QADAPT  the photometric width follows the rate factor
- *   Y264_MCSTF_QP      a QP offset for filtered pictures (encoder.c)
  */
 
 #ifndef YAH264_MCSTF_H
@@ -50,27 +38,24 @@
 
 typedef struct y264_mcstf y264_mcstf;
 
-/* The configuration, resolved from the environment on the opening thread. */
+/* The configuration, resolved from the environment on the opening thread.
+ * period, sigma_q8 and clean_q8 are fixed there; tests set their own. */
 typedef struct y264_mcstf_cfg {
     int range;          /* neighbours per side, 1..4 */
     int period;         /* filter pictures whose display index % period == 0 */
     int sigma_q8;       /* photometric width, 8-bit levels, Q8 */
     int clean_q8;       /* noise reading below which a picture is left alone */
-    int adapt, subpel, cut, qadapt;
-    int adapt_k;        /* ADAPT full-weight bound, quarters of the noise match error */
-    int qp_off;         /* QP offset for filtered pictures (applied by the caller) */
-    int trace;
 } y264_mcstf_cfg;
 
-/* Fill `c` from the Y264_MCSTF* environment. Returns nonzero when the filter
- * is armed (Y264_MCSTF nonzero, which the CLI's --mcstf sets). */
+/* Fill `c` from the Y264_MCSTF and Y264_MCSTF_RANGE environment, which the
+ * CLI's --mcstf and --mcstf-range set. Returns nonzero when the filter is
+ * armed. */
 int y264_mcstf_cfg_env(y264_mcstf_cfg *c);
 
-/* `sx`/`sy` are the chroma shifts (1/1 at 4:2:0), `rf` the rate factor or
- * constant QP the encode runs at, which the QP-adaptive width reads. NULL on
- * allocation failure. */
+/* `sx`/`sy` are the chroma shifts (1/1 at 4:2:0). NULL on allocation
+ * failure. */
 y264_mcstf *y264_mcstf_open(const y264_mcstf_cfg *c, int w, int h, int sx,
-                            int sy, double rf);
+                            int sy);
 void y264_mcstf_close(y264_mcstf *m);
 
 /* Copy one source picture in; the caller's buffer is free on return. */
