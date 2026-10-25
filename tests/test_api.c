@@ -161,6 +161,7 @@ static int same_bytes(const struct run *x, const struct run *y)
 
 int main(void)
 {
+    unsetenv("Y264_LA_BUF");            /* an A/B session's lead override would skew the delay check */
     yah264_param_t p;
     memset(&p, 0, sizeof p);
     yah264_param_default(&p);
@@ -362,6 +363,63 @@ int main(void)
         if (e2) {
             CHECK(yah264_encoder_rc_import(e2, &full, 0) == 0);
             yah264_encoder_close(e2);
+        }
+    }
+
+    /* The stream contract the header documents for the software encoder: SPS
+     * and PPS come only from yah264_encoder_headers, never from encode, and a
+     * NULL-picture flush ends with 0 bytes and no NAL units, with every frame
+     * coded by then, even with a nonzero lookahead delay. */
+    {
+        yah264_param_t q;
+        yah264_param_default(&q);
+        q.width = 64; q.height = 48; q.csp = YAH264_CSP_I420;
+        q.timebase.fps_num = 25; q.timebase.fps_den = 1;
+        q.threads = 1;
+        q.sync_lookahead = 3;           /* a nonzero lead, the case a binding misread */
+        int delay = yah264_lookahead_delay(&q);
+        CHECK(delay > 0);
+        yah264_encoder_t *e = yah264_encoder_open(&q);
+        CHECK(e != NULL);
+        if (e) {
+            yah264_nal_t *nal = NULL; int cnt = 0, sps = 0, pps = 0, inband = 0, slices = 0;
+            CHECK(yah264_encoder_headers(e, &nal, &cnt) == 0);
+            for (int k = 0; k < cnt; k++) {
+                sps += nal[k].type == YAH264_NAL_SPS;
+                pps += nal[k].type == YAH264_NAL_PPS;
+            }
+            CHECK(sps == 1 && pps == 1);
+            sample_t *y = malloc(64 * 48 * sizeof(sample_t));
+            sample_t *u = malloc(32 * 24 * sizeof(sample_t));
+            sample_t *v = malloc(32 * 24 * sizeof(sample_t));
+            const int nframes = 12;
+            for (int n = 0; n < nframes; n++) {
+                fill(y, 64, 48, n); fill(u, 32, 24, n + 1); fill(v, 32, 24, n + 2);
+                yah264_picture_t pic; memset(&pic, 0, sizeof pic);
+                pic.csp = q.csp; pic.width = 64; pic.height = 48; pic.pts = n;
+                pic.plane[0] = y; pic.plane[1] = u; pic.plane[2] = v;
+                pic.stride[0] = 64; pic.stride[1] = 32; pic.stride[2] = 32;
+                CHECK(yah264_encoder_encode(e, &nal, &cnt, &pic) >= 0);
+                for (int k = 0; k < cnt; k++) {
+                    inband += nal[k].type == YAH264_NAL_SPS || nal[k].type == YAH264_NAL_PPS;
+                    slices += nal[k].type == 1 || nal[k].type == 5;
+                }
+            }
+            int ended = 0;
+            for (int guard = 0; guard < 4 * nframes + 64; guard++) {
+                int r = yah264_encoder_encode(e, &nal, &cnt, NULL);
+                CHECK(r >= 0);
+                if (r == 0 && cnt == 0) { ended = 1; break; }
+                for (int k = 0; k < cnt; k++) {
+                    inband += nal[k].type == YAH264_NAL_SPS || nal[k].type == YAH264_NAL_PPS;
+                    slices += nal[k].type == 1 || nal[k].type == 5;
+                }
+            }
+            CHECK(ended);
+            CHECK(inband == 0);
+            CHECK(slices == nframes);
+            free(y); free(u); free(v);
+            yah264_encoder_close(e);
         }
     }
 
