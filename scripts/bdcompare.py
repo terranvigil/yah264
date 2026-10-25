@@ -325,22 +325,22 @@ def _v1_of(bitstream, src_path, work, src_id=None):
              "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
              "-f", "yuv4mpegpipe", dec],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        rerr = tempfile.TemporaryFile()
         procs.append(subprocess.Popen(
             ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path, *vf,
              "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            stdout=subprocess.DEVNULL, stderr=rerr))
         sub = ["--subsample", str(SUBSAMPLE)] if SUBSAMPLE > 1 else []
         v = subprocess.Popen(
             [V1_BIN, "-q", "-r", ref, "-d", dec, "--json", "-o", js,
              "--model", f"path={model}:{v1_model_opts(w, h, ebd)}", *sub, *shlex.split(_VMAF_T)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         procs.append(v)
-        # a decode that fails before it opens its FIFO leaves libvmaf blocked
-        # in open() for ever, so watch it and give up on a failure. The
-        # reference is not watched: when the encode is shorter than the source,
-        # libvmaf scores what it has and stops reading, and the reference
-        # ffmpeg then fails on a closed pipe, which is not an error here. A bad
-        # source is refused before anything starts.
+        # A producer that fails before it opens its FIFO leaves libvmaf blocked
+        # in open() for ever. A failed decode ends the pass. A reference that
+        # exits while libvmaf runs gets its FIFO opened and closed here, so a
+        # libvmaf stuck opening it reads EOF and finishes.
+        released = False
         while True:
             try:
                 v.wait(timeout=0.5)
@@ -348,7 +348,20 @@ def _v1_of(bitstream, src_path, work, src_id=None):
             except subprocess.TimeoutExpired:
                 if procs[0].poll() not in (None, 0):
                     break
-        ok = v.poll() == 0 and procs[0].wait() == 0
+                if procs[1].poll() is not None and not released:
+                    released = True
+                    try:
+                        os.close(os.open(ref, os.O_WRONLY | os.O_NONBLOCK))
+                    except OSError:
+                        pass
+        # When the encode is shorter than the source, libvmaf stops reading the
+        # reference once the decode ends, and that ffmpeg fails on the closed
+        # pipe: that exit is expected. Any other reference failure means the
+        # pass scored a partial sequence.
+        rc_ref = procs[1].wait() if v.poll() is not None else None
+        rerr.seek(0)
+        ref_ok = rc_ref == 0 or b"Broken pipe" in rerr.read()
+        ok = v.poll() == 0 and procs[0].wait() == 0 and ref_ok
         if ok:
             with open(js) as f:
                 pm = json.load(f)["pooled_metrics"]
