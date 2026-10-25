@@ -526,8 +526,9 @@ and the prediction worse, and the residual pays for it. `none` is the extreme:
 every macroblock is coded whole. That makes a useful floor to measure against
 but not a setting to ship.
 
-The B 16x8 and 8x16 searches are off at every preset. So `--partitions b8x8`
-asks for the B split family and gets the quadrant split.
+Medium and faster search no B 16x8 or 8x16, so there `--partitions b8x8` gets
+the quadrant split; `--subme 9` and up (slower, veryslow, placebo) search both
+orientations too.
 
 ### The three low-rate decision gates
 

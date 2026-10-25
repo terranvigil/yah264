@@ -9318,7 +9318,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * (L0, L1, Bi) is ranked by SATD plus mv, ref and mb_type rate, and the
  * best one joins the RD screen. It helps quality but costs 13-21% more
  * instructions, so it is off by default (Y264_B_RECT=1 arms it). */
-        if (b_rect_on()) {
+        if (b_rect_on() && (f->partitions & YAH264_PART_B8X8)) {
             const pixel *wp = p16[bw16];
             long q[4];
             for (int b = 0; b < 4; b++) {
