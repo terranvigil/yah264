@@ -87,7 +87,7 @@ jobs:
           grep -q "Y264_AQ_DC is ignored" warn.txt
           build/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o c.264
           Y264_AQ_DC=0.4 build/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o d.264
-          ! cmp -s c.264 d.264
+          if cmp -s c.264 d.264; then echo "dev build ignored Y264_AQ_DC"; exit 1; fi
 
       # `make test` runs this and `meson test` does not, so for as long as this
       # job ran the latter the check never saw an x86 build directory -- and
