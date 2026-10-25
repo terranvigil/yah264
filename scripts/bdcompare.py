@@ -339,9 +339,12 @@ def _yah264_word(tmpl):
     except ValueError:
         return None
     for w in words:
+        w = w.split("=", 1)[1] if _ASSIGN.match(w) else w     # YAH264=/path/yah264
         if os.path.basename(w) == "yah264":
-            return _resolve(w)
-        if " " in w and "yah264" in w:      # a quoted command string
+            p = _resolve(w)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+        elif " " in w and "yah264" in w:    # a quoted command string
             b = _yah264_word(w)
             if b:
                 return b
@@ -742,8 +745,9 @@ def main():
 
     def _ckey(tmpl, clip, q):
         binp = template_binary(tmpl)
-        if not (binp and os.path.exists(binp)):
-            return None                 # no binary to key a rebuild on: don't cache
+        # no binary to key a rebuild on, or one a `cd` makes ambiguous: don't cache
+        if not (binp and os.path.isfile(binp)) or re.search(r"(^|[;&|(]\s*)cd\s", tmpl):
+            return None
         mt = os.path.getmtime(binp)
         # the encoder inherits the environment's knobs, so they're part of the key
         envk = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
