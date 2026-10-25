@@ -58,6 +58,9 @@ ARM_ARGS = os.environ.get("ARM_ARGS", "")
 JOBS = int(os.environ.get("JOBS", "4"))
 if not ARM and not ARM_ARGS:
     sys.exit("set ARM= and/or ARM_ARGS= : this is a self-A/B gate")
+sys.path.insert(0, HERE)
+import devknobs                                                 # noqa: E402
+devknobs.require(N if os.path.isabs(N) else os.path.join(ROOT, N), ARM, ARM_ARGS)
 
 
 def fps_of(clip):

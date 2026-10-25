@@ -308,6 +308,7 @@ def main():
     for b in (yah264, x264):
         if not os.path.exists(b):
             sys.exit(f"crf-solve: binary not found: {b}")
+    bdcompare.require_dev_knobs(yah264, args.y264_args or "")
 
     clip = args.clip if os.path.isabs(args.clip) else os.path.join(ROOT, args.clip)
     if not os.path.exists(clip):

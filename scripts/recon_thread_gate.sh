@@ -27,6 +27,10 @@ BITRATE="${BITRATE:-400}"
 . "$root/scripts/scratch.sh"
 y264_scratch_dir reconthread WORK
 [ -x "$BIN" ] || { echo "recon_thread_gate: build tools/reconcmp first" >&2; exit 2; }
+# reconcmp links the library of its build directory, whose CLI says whether
+# that library reads the knobs an armed run exports
+. "$root/scripts/devknobs.sh"
+y264_require_dev_knobs "$(dirname "$BIN")/../../cli/yah264"
 
 fail=0
 for clip in $CLIPS; do

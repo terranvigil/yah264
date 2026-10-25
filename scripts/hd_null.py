@@ -170,6 +170,10 @@ def main():
     ref = args.ref or os.environ.get("YAH264", "build/cli/yah264")
     ref = ref if os.path.isabs(ref) else os.path.join(ROOT, ref)
     ref_lib = sha12(ref)
+    # the null envs are only read back from the cache; what can reach an encode
+    # here is a knob the anchor inherits
+    if not args.no_encode:
+        bd.require_dev_knobs(ref)
     points = json.load(open(os.path.join(cache, "points.json")))
     reads = fit(points, pkey, args.frames, rungs, NULL_ENVS, args.min_rungs)
 

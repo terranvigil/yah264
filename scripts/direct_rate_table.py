@@ -105,6 +105,7 @@ def main():
                     help="draws per clip; >1 prints the spread, which is what a "
                          "large headline number has to survive")
     args = ap.parse_args()
+    bd.require_dev_knobs(bd.template_binary(Y), *(t for _, t in ARMS))
 
     rows = {}
     for clip in args.clips.split(","):
