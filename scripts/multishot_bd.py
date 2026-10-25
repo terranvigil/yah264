@@ -65,18 +65,30 @@ def vmaf_v1(src, bitstream, js):
     conv = subprocess.Popen(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src, *vf, "-pix_fmt",
                              "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    r = subprocess.run([bdcompare.V1_BIN, "-q", "-r", ref, "-d", dec, "--json", "-o", js,
-                        "--model", f"path={model}:"
-                        + bdcompare.v1_model_opts(w, h, bdcompare._enc_bitdepth(bitstream)),
-                        "--threads", os.environ.get("VMAF_THREADS", "8")],
-                       capture_output=True, text=True)
+    r = subprocess.Popen([bdcompare.V1_BIN, "-q", "-r", ref, "-d", dec, "--json", "-o", js,
+                          "--model", f"path={model}:"
+                          + bdcompare.v1_model_opts(w, h, bdcompare._enc_bitdepth(bitstream)),
+                          "--threads", os.environ.get("VMAF_THREADS", "8")],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # a reference ffmpeg that fails before it opens the FIFO leaves libvmaf
+    # blocked in open() for ever; the whole sequence is encoded, so the two
+    # sides end together and a failed reference is a real failure
+    while True:
+        try:
+            r.wait(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if conv.poll() not in (None, 0):
+                r.kill()
+                r.wait()
+                break
     conv.kill()
     conv.wait()
     os.unlink(ref); os.unlink(dec)
     if r.returncode:
         if os.path.exists(js):
             os.unlink(js)
-        sys.exit(f"vmaf failed on {bitstream}: {r.stderr[-400:]}")
+        sys.exit(f"vmaf failed on {bitstream} (exit {r.returncode})")
 
 
 def main():
