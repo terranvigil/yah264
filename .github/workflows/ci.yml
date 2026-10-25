@@ -73,6 +73,12 @@ jobs:
       - name: Unit tests + checkasm
         run: meson test -C build --print-errorlogs
 
+      - name: Default build (no dev knobs) builds and tests
+        run: |
+          meson setup build-default
+          ninja -C build-default
+          meson test -C build-default --print-errorlogs
+
       # `make test` runs this and `meson test` does not, so for as long as this
       # job ran the latter the check never saw an x86 build directory -- and
       # the x86 build is the only one that HAS the per-tier archives the check

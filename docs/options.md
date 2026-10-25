@@ -1576,9 +1576,10 @@ traps but will still surprise:
 
 The encoder has about 115 `Y264_*` environment variables, listed in
 [knobs.md](knobs.md), which is generated from the source. They are read only in
-a build configured with `-Ddev_knobs=true`. A default build reads just the few
-the CLI uses to carry its own options, so its output can't be changed from the
-environment. Almost none of them are features. They are how this project tries
+a build configured with `-Ddev_knobs=true`. A default build reads only the 16
+the CLI uses to carry its own options (`src/common/env.h`) and the two memory
+bounds below; no other variable changes its output, and the CLI warns when one
+is set. Almost none of them are features. They are how this project tries
 an experiment without a rebuild, and most are measurement scaffolding.
 
 They are tiered below by whether you have any business setting them. A rule of
@@ -1596,7 +1597,9 @@ Shared semantics worth knowing before you set any of them:
 
 ### Tier 1: worth knowing about
 
-Escape hatches, and knobs with no CLI equivalent.
+Escape hatches, and knobs with no CLI equivalent. The rows promoted to a CLI
+flag and the two memory bounds are read in every build; the rest need
+`-Ddev_knobs=true`.
 
 | Variable | Default | What it is for |
 | --- | --- | --- |

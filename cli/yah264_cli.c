@@ -4015,8 +4015,34 @@ static const char *rc_arg_mode_name(int m)
     }
 }
 
+#if !Y264_DEV_KNOBS
+extern char **environ;
+/* A release build ignores most Y264_* knobs; say so, so an A/B run against
+ * one can't read two identical arms as "no effect". */
+static void warn_ignored_knobs(void)
+{
+    for (char **e = environ; *e; e++) {
+        const char *eq = strchr(*e, '=');
+        size_t n = eq ? (size_t)(eq - *e) : strlen(*e);
+        char name[128];
+        if (n >= sizeof name || (strncmp(*e, "Y264_", 5) && strncmp(*e, "YAH264_", 7)))
+            continue;
+        memcpy(name, *e, n);
+        name[n] = 0;
+        if (!strcmp(name, "Y264_MAX_INPUT_MB") || !strcmp(name, "Y264_STREAM_WINDOW") ||
+            y264_env(name))
+            continue;
+        fprintf(stderr, "yah264: warning: %s is ignored: this build was configured "
+                "without -Ddev_knobs=true\n", name);
+    }
+}
+#endif
+
 int main(int argc, char **argv)
 {
+#if !Y264_DEV_KNOBS
+    warn_ignored_knobs();
+#endif
     const char *in_path = NULL;
     const char *out_path = "-";
     const char *preset = NULL;
