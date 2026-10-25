@@ -154,7 +154,8 @@ def parse_arms(spec):
 
 
 arms = parse_arms(os.environ.get("ARMS", ""))
-bd.require_dev_knobs(N if os.path.isabs(N) else os.path.join(ROOT, N), os.environ.get("ARMS", ""))
+bd.require_dev_knobs(N if os.path.isabs(N) else os.path.join(ROOT, N),
+                     os.environ.get("ARMS", ""), CONTROLS, LIVE_CONTROL)
 if not arms:
     sys.exit("set ARMS='name=ENV=VAL[ ENV2=VAL2][ --flag v];name2=...' : this is a self-A/B gate")
 AUTO = CONTROLS.lower() == "auto" and not SOLVE
