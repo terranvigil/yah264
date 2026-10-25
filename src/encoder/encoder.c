@@ -6396,7 +6396,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
     double sum = 0, sum2 = 0;
     /* the dark-block cuts (y264_aq_dark), NULL when the term is off */
     float *dk = y264_aq_dark(0.0, 0.0) < 0.0 ? malloc((size_t)n * sizeof(float)) : NULL;
-    int nbright = 0;
+    int nbright = 0, ngrain = 0;
     for (int mby = 0; mby < hmb; mby++)
         for (int mbx = 0; mbx < wmb; mbx++) {
             const pixel *s = pl[0] + (mby * 16) * stride + mbx * 16;
@@ -6409,9 +6409,10 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             invq[mby * wmb + mbx] = l;
             if (dk) dk[mby * wmb + mbx] = (float)y264_aq_dark(mean, var);
             nbright += y264_aq_bright(mean);
+            ngrain += y264_aq_grain(mean, var);
             sum += l; sum2 += l * l;
         }
-    double dg = y264_aq_dark_gate((double)nbright / n);
+    double dg = y264_aq_dark_gate((double)nbright / n, (double)ngrain / n);
     /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
  * constant instead of the frame mean, so its DC is a frame-level complexity
  * term. The propagation weights are renormalised to mean 1 below, so a DC

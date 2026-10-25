@@ -360,34 +360,39 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
  * The cut is strength x dark weight x smooth weight, with both weights linear
  * ramps: the dark weight is 1 at a luma mean of half the limit and 0 at the
  * limit (8-bit scale), the smooth weight 1 at a quarter of the variance limit
- * and 0 at the limit. The cut is for frames that hold bright areas as well:
- * it is scaled by a frame gate on the share of macroblocks with a luma mean
- * of AQ_BRIGHT or more, 0 at a share of B0 and 1 at B1. A dark frame with
- * nothing bright in it already centres the field low, and there the cut only
- * spent bits VMAF-NEG reads as waste (sunflower_1080p +1.1% ungated at
- * strength 4). Swept 1.5 / 2.5 / 4 / 6 with the psy boost below, at matched
- * size: on a frame with a third of it bright, 6 takes the share of flat dark
- * blocks from 19% to 4% and CAMBI from 3.6 to 0.76, level with the reference
- * encoder. Y264_AQ_DARK sets the strength (0 turns it off),
- * Y264_AQ_DARK_M the mean limit, Y264_AQ_DARK_V the variance limit and
- * Y264_AQ_DARK_B0 / _B1 the gate (B1 0 turns the gate off). */
+ * and 0 at the limit. A frame gate scales the cut: it applies in frames that
+ * hold bright areas beside the dark ones (a ramp on the share of macroblocks
+ * with a luma mean of AQ_BRIGHT or more, B0 to B1), and in frames where much
+ * of the picture is dark grain or gradient (a ramp on the share of dark,
+ * smooth, not flat macroblocks, S0 to S1). A dark frame with neither is left
+ * to the variance offset: there the cut only spends bits on areas that can't
+ * band. Y264_AQ_DARK sets the strength (0 turns it off), Y264_AQ_DARK_M the
+ * mean limit, Y264_AQ_DARK_V the variance limit, Y264_AQ_DARK_B0 / _B1 the
+ * bright ramp (B1 0 turns the gate off) and Y264_AQ_DARK_S0 / _S1 the grain
+ * ramp (S1 0 turns it off). */
 #define AQ_DARK_STR 6.0
 #define AQ_DARK_M  64.0
 #define AQ_DARK_V  16.0
 #define AQ_DARK_B0  0.08
 #define AQ_DARK_B1  0.20
 #define AQ_BRIGHT 170.0
+#define AQ_GRAIN_VMIN 0.25
+#define AQ_DARK_S0  0.35
+#define AQ_DARK_S1  0.50
 static double aq_dark_env(int which)
 {
-    static double v[5] = { -1.0, -1.0, -1.0, -1.0, -1.0 };
+    static double v[7] = { -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0 };
     if (v[0] < 0) {
         const char *s = y264_env("Y264_AQ_DARK"), *m = y264_env("Y264_AQ_DARK_M"),
                    *q = y264_env("Y264_AQ_DARK_V"), *b0 = y264_env("Y264_AQ_DARK_B0"),
-                   *b1 = y264_env("Y264_AQ_DARK_B1");
+                   *b1 = y264_env("Y264_AQ_DARK_B1"), *s0 = y264_env("Y264_AQ_DARK_S0"),
+                   *s1 = y264_env("Y264_AQ_DARK_S1");
         v[1] = m ? atof(m) : AQ_DARK_M;
         v[2] = q ? atof(q) : AQ_DARK_V;
         v[3] = b0 ? atof(b0) : AQ_DARK_B0;
         v[4] = b1 ? atof(b1) : AQ_DARK_B1;
+        v[5] = s0 ? atof(s0) : AQ_DARK_S0;
+        v[6] = s1 ? atof(s1) : AQ_DARK_S1;
         double d = s ? atof(s) : AQ_DARK_STR;
         v[0] = d > 0 ? d : 0.0;
     }
@@ -400,13 +405,33 @@ int y264_aq_bright(double mean)
     return mean >= AQ_BRIGHT * (double)(1 << (Y264_BIT_DEPTH - 8));
 }
 
-/* the frame gate on the dark cut, from the share of bright macroblocks */
-double y264_aq_dark_gate(double bright_share)
+/* 1 for a macroblock the gate counts as dark grain or gradient: inside the
+ * cut's region but not flat, since a flat block has nothing to band */
+int y264_aq_grain(double mean, double var)
 {
-    double b0 = aq_dark_env(3), b1 = aq_dark_env(4);
-    if (b1 <= 0.0) return 1.0;
-    double g = (bright_share - b0) / (b1 - b0);
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    return mean < aq_dark_env(1) * sc && var >= AQ_GRAIN_VMIN * sc * sc &&
+           var < aq_dark_env(2) * sc * sc;
+}
+
+static double ramp(double x, double a, double b)
+{
+    double g = (x - a) / (b - a);
     return g < 0.0 ? 0.0 : (g > 1.0 ? 1.0 : g);
+}
+
+/* the frame gate on the dark cut: the larger of a ramp on the share of bright
+ * macroblocks and one on the share of dark grain and gradient */
+double y264_aq_dark_gate(double bright_share, double grain_share)
+{
+    double b0 = aq_dark_env(3), b1 = aq_dark_env(4), s0 = aq_dark_env(5), s1 = aq_dark_env(6);
+    if (b1 <= 0.0) return 1.0;
+    double g = ramp(bright_share, b0, b1);
+    if (s1 > 0.0) {
+        double gs = ramp(grain_share, s0, s1);
+        if (gs > g) g = gs;
+    }
+    return g;
 }
 
 /* Y264_PSY_DARK: a multiplier on the psy-rd weight for the same dark, smooth
@@ -476,7 +501,7 @@ static void aq_analyze(y264_frame_t *f)
     float *dk = lv + n;
     const uint32_t *mbv = f->mbvar && *f->mbvar_src == f->src[0] ? f->mbvar : NULL;
     double sum = 0, sum2 = 0;
-    int nbright = 0;
+    int nbright = 0, ngrain = 0;
     for (int mby = 0; mby < f->hmb; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
             const pixel *s = f->src[0] + (mby * 16) * ss + mbx * 16;
@@ -495,13 +520,14 @@ static void aq_analyze(y264_frame_t *f)
             lv[mby * f->wmb + mbx] = l;
             dk[mby * f->wmb + mbx] = (float)y264_aq_dark(mean, var);
             nbright += y264_aq_bright(mean);
+            ngrain += y264_aq_grain(mean, var);
             sum += l; sum2 += (double)l * l;
         }
     double avg = sum / n, sd2 = sum2 / n - avg * avg;
     double sd = sd2 > 0 ? sqrt(sd2) : 0;
     float strength = (float)(f->aq_strength * y264_aq_gain(avg, sd, 1, f->aq_abr));
     float center = (float)(avg - f->aq_pull * (avg - f->aq_anchor));
-    float dg = (float)y264_aq_dark_gate((double)nbright / n);
+    float dg = (float)y264_aq_dark_gate((double)nbright / n, (double)ngrain / n);
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center) + dg * dk[i]);
         if (off < -8) off = -8;

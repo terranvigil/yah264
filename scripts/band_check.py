@@ -34,7 +34,7 @@ arguments), FLAT_MARGIN (0.05), CAMBI_MARGIN (1.0), SIZE_TOL (0.03),
 THREADS (2), OUT (scratch directory, kept). The v1 binary and models are
 bdcompare's (VMAF_V1_BIN, VMAF_V1_MODELS).
 """
-import os, re, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -149,16 +149,37 @@ def full_cambi(src, bs, d):
 
 
 def solve(src, target, out):
-    lo, hi, crf, ratio = 10.0, 40.0, 23.0, 0.0
+    """Encode yah264 onto the reference's size: bisect the CRF and keep the
+    closest encode. In a short dark window the size can step by more than the
+    tolerance between neighboring rate factors; then a two-pass encode at the
+    target bitrate gets closer, and the closer of the two is kept."""
+    lo, hi, crf = 10.0, 40.0, 23.0
+    best, keep = None, out + ".best"
     for _ in range(14):
         run([YAH264, "--input-y4m", src, "-o", out, "--crf", f"{crf:.3f}",
              "--threads", THREADS, "--quiet", "--no-progress"] + ARGS)
         ratio = os.path.getsize(out) / target
+        if best is None or abs(ratio - 1) < abs(best[1] - 1):
+            best = (f"crf {crf:.3f}", ratio)
+            shutil.copyfile(out, keep)
         if abs(ratio - 1) < 0.02:
             break
         lo, hi = (crf, hi) if ratio > 1 else (lo, crf)
         crf = round((lo + hi) / 2, 3)
-    return crf, ratio
+    if abs(best[1] - 1) > SIZE_TOL:
+        _, _, fps = bdcompare._y4m_geometry(src)
+        kbps = target * 8 / (FRAMES / fps) / 1000
+        stats = out + ".stats"
+        for p in (1, 2):
+            run([YAH264, "--input-y4m", src, "-o", out, "--bitrate", str(max(1, round(kbps))),
+                 "--pass", str(p), "--stats", stats, "--threads", THREADS,
+                 "--quiet", "--no-progress"] + ARGS)
+        ratio = os.path.getsize(out) / target
+        if abs(ratio - 1) < abs(best[1] - 1):
+            best = (f"2-pass {kbps:.0f} kbit/s", ratio)
+            shutil.copyfile(out, keep)
+    shutil.move(keep, out)
+    return best
 
 
 def main():
@@ -183,7 +204,7 @@ def main():
             print(f"  {name:26s} {side:6s} {r['bytes']:9d} {r['flat']:6.3f} {r['keep']:6.3f} "
                   f"{r['dark']:6.2f} {r['cambi']:6.3f} {r['cambi1']:6.3f} {r['v1']:6.2f}")
         if abs(ratio - 1) > SIZE_TOL:
-            verdict = f"UNMATCHED (size {ratio:.3f} at crf {crf})"
+            verdict = f"UNMATCHED (size {ratio:.3f} at {crf})"
         elif b["flat"] > a["flat"] + FLAT_MARGIN or b["cambi"] > a["cambi"] + CAMBI_MARGIN:
             verdict = "FAIL"; fails += 1
         else:
