@@ -136,8 +136,13 @@ typedef enum {
 } yah264_nal_priority_t;
 
 /* deblock_alpha / deblock_beta: the encoder picks the offset from the picture
- * size, -1 at 1280x720 and above, 0 below. */
+ * size, -1 when the longer side is 1280 or more, 0 below, and 0 with psy off. */
 #define YAH264_DEBLOCK_AUTO 100
+
+/* chroma_qp_index_offset: the encoder picks it from the picture size: -4 when
+ * the longer side is below 1280, -2 below 1920, 0 from there up, and 0 with
+ * psy off. */
+#define YAH264_CQP_AUTO 100
 
 /* One output NAL unit. The payload lives in an encoder-owned buffer that stays
  * valid until the next call to the encoder. It is a complete Annex-B unit: a
@@ -621,7 +626,8 @@ typedef struct {
  * reference. Costs bits; buys error resilience. */
     int chroma_qp_index_offset;  /* PPS chroma_qp_index_offset, -12..12. Reaches
  * the quantiser AND the deblock chroma edge QP,
- * as the spec requires. 0 = the default. */
+ * as the spec requires. YAH264_CQP_AUTO (the
+ * default) picks it from the picture size. */
     int mvrange;            /* vertical motion-vector range in LUMA SAMPLES.
  * 0 = the level's own Table A-1 bound, which is
  * what the encoder always used. A value tighter

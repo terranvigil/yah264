@@ -870,8 +870,8 @@ static void usage(const char *argv0)
     /* Fifth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  -f, --deblock A:B  in-loop deblocking filter offsets, each -6..6, in the\n"
-        "                     slice header's own div2 units (default -1:-1 from\n"
-        "                     1280x720 up, 0:0 below)\n"
+        "                     slice header's own div2 units (default -1:-1 when the\n"
+        "                     longer side is 1280 or more, 0:0 below or with psy off)\n"
         "  --no-deblock       no in-loop deblocking at all\n"
         "  --b-pyramid MODE   none | normal (default). none codes a flat B run.\n"
         "                     strict is not implemented and is refused.\n"
@@ -886,7 +886,9 @@ static void usage(const char *argv0)
         "                     inter-coded neighbour, so an intra macroblock decodes\n"
         "                     from intra data alone. Error resilience; costs bits.\n"
         "                     Off by default.\n"
-        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default 0).\n"
+        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default by the\n"
+        "                     longer side: -4 below 1280, -2 below 1920, 0 from\n"
+        "                     1920 up; 0 with psy off).\n"
         "                     Reaches the quantiser and the deblock chroma edge QP.\n"
         "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
         "                     (defaults 0 and 51)\n"
@@ -4075,7 +4077,7 @@ int main(int argc, char **argv)
     int deblock_on = -1, deblock_a = 0, deblock_b = 0, deblock_set = 0;
     int b_pyramid = -1, weightb = -1, weightp = -2;   /* -2 = unset, -1 = off */
     int constrained_intra = 0;
-    int chroma_qp_offset = 0;
+    int chroma_qp_offset = YAH264_CQP_AUTO;
     int qp_min = 0, qp_max = 0, qp_step = 0;
     double vbv_init = 0.0;
     double crf_max = 0.0, ratetol = 0.0;        /* both zero-as-unset (see yah264_param_t) */
@@ -5253,7 +5255,7 @@ int main(int argc, char **argv)
     param.rc.qp_max = qp_max;
     param.rc.qp_step = qp_step;
     if (deblock_on >= 0) param.deblock = deblock_on;
-    if (deblock_set) {          /* else the library default (-1:-1) stands */
+    if (deblock_set) {          /* else the library's size-based default stands */
         param.deblock_alpha = deblock_a;
         param.deblock_beta  = deblock_b;
     }

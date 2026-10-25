@@ -1640,6 +1640,40 @@ static int lambda_trellis(int qp, int intra)
     return sc == 256 ? l : (int)(((long)l * sc + 128) >> 8);
 }
 
+/* The intra trellis lambda on a smooth block. A gentle gradient in a flat
+ * area is carried by AC levels of one or two, which the trellis would zero
+ * as bits that buy little SSD, leaving a flat step: banding, and in an I
+ * frame over a static background it lasts the whole GOP. The lambda falls
+ * linearly from full at a source variance of Y264_TREL_SMOOTH_V (8-bit
+ * scale, default 8) to zero at a quarter of it. Y264_TREL_SMOOTH=0 turns it
+ * off. Only called when the trellis runs. */
+static int trel_smooth_v(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *on = getenv("Y264_TREL_SMOOTH"), *lim = getenv("Y264_TREL_SMOOTH_V");
+        v = on && atoi(on) == 0 ? 0 : (lim ? atoi(lim) : 8);
+        if (v < 0) v = 0;
+    }
+    return v;
+}
+
+static int lambda_trellis_smooth(int trel, int qp, const pixel *s, int ss, int n)
+{
+    int l = lambda_trellis(qp, 1);
+    int vl = trel_smooth_v();
+    if (!trel || vl <= 0) return l;
+    int64_t sum = 0, sum2 = 0;
+    for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++) { int p = s[y * ss + x]; sum += p; sum2 += p * p; }
+    /* n^4 x variance, on the 8-bit scale */
+    int64_t vq = ((int64_t)n * n * sum2 - sum * sum) >> (2 * (Y264_BIT_DEPTH - 8));
+    int64_t n4 = (int64_t)n * n * n * n, hi = vl * n4, lo = hi / 4;
+    if (vq >= hi) return l;
+    if (vq <= lo) return 0;
+    return (int)((l * (vq - lo) + (hi - lo) / 2) / (hi - lo));
+}
+
 /* Motion-search lambda: the standard exponential rate-distortion weight,
  * lambda(qp) = 2^((qp-12)/6), clamped at 1. Doubling every 6 QP is the same
  * relation the quantiser itself follows -- qstep doubles per 6 QP by
@@ -2203,7 +2237,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
             const pixel *bpred = best_pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
             nr_apply(f, coef, 16, 1, 0, 1);
-            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
+            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(trel, f->cur_qp, bsrc, stride_s, 4), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
             loc16[by][bx] = (int8_t)(nz > 0);
@@ -2404,7 +2438,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, 0, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, 0, ax, ay - 1, 1);
         nr_apply(f, coef, 16, 1, 0, 0);
-        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
+        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(trel, f->cur_qp, src, ss, 4), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
 
         int nz = 0;
         for (int k = 0; k < 16; k++) {
@@ -2552,7 +2586,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
         uint64_t msk;
         int big;
         nr_apply(f, coef, 64, 1, 0, 0);
-        rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
+        rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(trel, f->cur_qp, src, ss, 8), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
 
         int nz = __builtin_popcountll(msk);     /* raster nonzeros == scan nonzeros */
         memcpy(r->lev[blk], lev, 64 * sizeof(dctcoef));
@@ -3700,18 +3734,17 @@ static int dc_nb(y264_frame_t *f, int mbx, int mby, int bit, int intra);
  * RD instead of the inter deadzone, which the trellis never revisits and
  * which drops the small DC shifts VMAF v1's chroma feature reads as lost
  * texture. 0 = the deadzone. Y264_CDC_LAM scales the trellis lambda for the
- * choice, x256 (default 128: the band and the long-form cells read best
- * there). */
+ * choice, x256 (default 64). */
+static int cdc_lam_x256(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? (atoi(e) > 0 ? atoi(e) : 0) : 64; }
+    return v;
+}
 static int cdc_rd_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_CDC_RD"); v = e ? atoi(e) != 0 : 1; }
-    return v;
-}
-static int cdc_lam_x256(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? atoi(e) : 128; if (v < 0) v = 0; }
     return v;
 }
 
@@ -7479,6 +7512,14 @@ static void b8_stat_register(void)
  * It is half of why the quadrant gate is affordable: the gate alone costs half
  * a BD point, with the rate charge three hundredths. */
 
+/* Y264_B_RECT=1: the seeded 16x8/8x16 search for B macroblocks (off). */
+static int b_rect_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_B_RECT"); v = e ? atoi(e) != 0 : 0; }
+    return v;
+}
+
 /* Y264_B8_QGATE=<n>: run the quadrant search only where the best 16x16-level
  * prediction's residual is UNEVENLY distributed across the four quadrants.
  *
@@ -9124,10 +9165,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         struct bpart_mo mo_s[3];
         pixel ppt[3][256], cpt[3][2][256];
         int ptsatd[3] = { 0, 0x7fffffff, 0x7fffffff }, ptcombo[3] = { 0, 0, 0 };
-        /* B_8x8 first, so 16x8/8x16 can be ESTIMATED from its quadrants rather
- * than searched cold: four cold searches per macroblock is what
- * makes them cost 26-38% wall
- * for -0.79% BD, which is why they are off. */
+        /* B_8x8 first; the optional 16x8/8x16 below is seeded from the 16x16
+ * winners rather than searched cold. */
         /* --- direct's SATD, the screen the 16x16 modes ride, and their RD, all
  * BEFORE any subpartition analysis. The reason the order
  * matters is the skip return: a macroblock that leaves here has cost us
@@ -9270,13 +9309,45 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                 mvL0, r0, mvL1, &i8, &b8p);
             b8_have = 1;
         }
-        /* B 16x8/8x16 OFF at the medium tier: the rect searches are ~2/3 of
- * all subpel probe pixels (4 full hex+subpel searches per B MB before
- * gating), and the A/B measures 1.14-1.18x
- * pure-C wall for BD -0.26% VMAF-NEG (BETTER, 6/7 clips improve) -- the
- * modes' mv/mb-type overhead outweighed their prediction gain at this
- * operating point. The opt-in that restored them was removed on 2026-10-04 (it was kept off
- * on 2026-08-17). */
+        /* 16x8 or 8x16, searched from the 16x16 winners. The orientation is
+ * the one along which the 16x16 winner's error splits most unevenly
+ * (four satd8x8 of its prediction, top/bottom against left/right), and
+ * the partition's two halves are searched seeded with the winners' list-0
+ * reference and vectors, so one orientation costs two seeded searches
+ * per list instead of the cold multi-reference pair. Each uniform combo
+ * (L0, L1, Bi) is ranked by SATD plus mv, ref and mb_type rate, and the
+ * best one joins the RD screen. It helps quality but costs 13-21% more
+ * instructions, so it is off by default (Y264_B_RECT=1 arms it). */
+        if (b_rect_on() && (f->partitions & YAH264_PART_B8X8)) {
+            const pixel *wp = p16[bw16];
+            long q[4];
+            for (int b = 0; b < 4; b++) {
+                int ox = (b & 1) * 8, oy = (b >> 1) * 8;
+                q[b] = y264_dsp.satd8x8(src + oy * ss + ox, ss, wp + oy * 16 + ox, 16);
+            }
+            long dr = labs(q[0] + q[1] - q[2] - q[3]), dc = labs(q[0] + q[2] - q[1] - q[3]);
+            int bp = dr >= dc ? 1 : 2;
+            const struct bpart_mo *m = &mo_s[bp];
+            search_b_part(f, mbx, mby, bp, mlam, &mo_s[bp], mvL0, r0, mvL1);
+            int r0b = 0, r1b = 0;
+            for (int p = 0; p < 2; p++) {
+                r0b += mvd_bits(m->l0mv[p][0] - m->l0pmv[p][0]) + mvd_bits(m->l0mv[p][1] - m->l0pmv[p][1])
+                     + ref_bits(m->l0ref[p], f->nref);
+                r1b += mvd_bits(m->l1mv[p][0] - m->l1pmv[p][0]) + mvd_bits(m->l1mv[p][1] - m->l1pmv[p][1]);
+            }
+            struct bpart_cache bc;
+            pixel tp[256], tc[2][256];
+            for (int combo = 0; combo < 3; combo++) {
+                build_bpart_pred(f, mbx, mby, bp, combo, m, tp, tc, &bc);
+                /* about 6 bits more mb_type than a 16x16 B mode */
+                int bits = 6 + (combo == 0 ? r0b : combo == 1 ? r1b : r0b + r1b);
+                int c = satd_block(src, ss, tp, 16, 16, 16) + mlam * bits;
+                if (c < ptsatd[bp]) {
+                    ptsatd[bp] = c; ptcombo[bp] = combo;
+                    memcpy(ppt[bp], tp, sizeof tp); memcpy(cpt[bp], tc, sizeof tc);
+                }
+            }
+        }
         for (int bp = 1; bp <= 2; bp++) if (ptsatd[bp] < isi) isi = ptsatd[bp];
         /* sum8 deliberately does NOT join isi. It is the right running best for
  * the rectangular ESTIMATE gate (b8_best), but folding it
@@ -9322,7 +9393,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             j = eval_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1, lam, &tmp, &bpc);
             if (j < best) { best = j; mode = 2; IRES_TAKE_TMP(); save_mb_rec(f, mbx, mby, snap_best); }
         }
-        for (int bp = 1; bp <= 2; bp++) {
+        for (int bp = 1; bp <= 2 && (f->partitions & YAH264_PART_B8X8); bp++) {
             struct bpart_mo mo;
             /* subme >= 9 keeps the cold, exhaustive form: this tier's whole
  * contract is the byte-identical max-quality tournament. */
@@ -13592,6 +13663,7 @@ void y264_mb_warm_statics(void)
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env();
     (void)cdc_rd_on(); (void)cdc_lam_x256();
+    (void)trel_smooth_v();
     (void)aq_dark_env(0);
     (void)psy_dark_env();
         (void)probe_deadzone_env();
@@ -13604,7 +13676,7 @@ void y264_mb_warm_statics(void)
  * class; run it after adding a gate.) */
     (void)b_8x8_on(); (void)b8_direct_on();
     (void)b8_stat_on();
-    (void)b8_qgate();
+    (void)b8_qgate(); (void)b_rect_on();
     (void)flatskip_stat_on(); (void)bdir_stat_on();
     (void)pprune_on(); (void)pcen_on(); (void)tdir_why_on();
     y264_me_warm_statics();     /* + the motion-search env statics */
