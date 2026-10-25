@@ -288,9 +288,12 @@ def _v1_ident(model):
 
 
 def _v1_of(bitstream, src_path, work, src_id=None):
-    model = v1_model(src_path)
-    ebd = _enc_bitdepth(bitstream)
-    w, h, _ = _y4m_geometry(src_path)
+    try:
+        model = v1_model(src_path)
+        ebd = _enc_bitdepth(bitstream)
+        w, h, _ = _y4m_geometry(src_path)
+    except (OSError, StopIteration, ValueError):
+        return None                     # an unreadable source: no score
     scaled = v1_scaled(w, h)
     vf = ["-vf", V1_SCALE_VF] if scaled else []
     if not os.path.exists(model) or not os.access(V1_BIN, os.X_OK):
@@ -332,16 +335,20 @@ def _v1_of(bitstream, src_path, work, src_id=None):
              "--model", f"path={model}:{v1_model_opts(w, h, ebd)}", *sub, *shlex.split(_VMAF_T)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         procs.append(v)
-        # a producer that fails before it opens its FIFO leaves libvmaf blocked
-        # in open() for ever, so watch the producers and give up on a failure
+        # a decode that fails before it opens its FIFO leaves libvmaf blocked
+        # in open() for ever, so watch it and give up on a failure. The
+        # reference is not watched: when the encode is shorter than the source,
+        # libvmaf scores what it has and stops reading, and the reference
+        # ffmpeg then fails on a closed pipe, which is not an error here. A bad
+        # source is refused before anything starts.
         while True:
             try:
                 v.wait(timeout=0.5)
                 break
             except subprocess.TimeoutExpired:
-                if any(p.poll() not in (None, 0) for p in procs[:2]):
+                if procs[0].poll() not in (None, 0):
                     break
-        ok = v.poll() == 0 and all(p.wait() == 0 for p in procs[:2])
+        ok = v.poll() == 0 and procs[0].wait() == 0
         if ok:
             with open(js) as f:
                 pm = json.load(f)["pooled_metrics"]
