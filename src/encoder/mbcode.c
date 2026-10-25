@@ -3709,7 +3709,7 @@ static int cdc_rd_on(void)
 static int cdc_lam_x256(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? atoi(e) : 128; }
+    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? atoi(e) : 128; if (v < 0) v = 0; }
     return v;
 }
 
@@ -3718,7 +3718,8 @@ static int cdc_lam_x256(void)
  * priced as SSD + lambda * CABAC bits. A DC-only change moves every pixel
  * of a 4x4 by rdc/64 and the source block's mean is dc/16, so the DC part
  * of the SSD x256 (the trellis's own scale) is (4*dc - rdc)^2 per block.
- * Same lev/rdc contract as y264_chroma_dc420_rt. */
+ * Same lev/rdc contract as y264_chroma_dc420_rt. The coded_block_flag is
+ * priced with zero neighbour context, as the other trellis pricing does. */
 static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
                            dctcoef lev[4], dctcoef rdc[4])
 {
@@ -3726,15 +3727,19 @@ static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
     dctcoef near[4], tr[4];
     y264_chroma_dc420_rt(dc, near, tr, qp, 2, w0, f->lev_max);
     long lam = ((long)lambda_trellis(f->cur_chroma_qp, 0) * cdc_lam_x256() + 128) >> 8;
-    long bestJ = -1;
+    long bestJ = LONG_MAX;
     int nvar = 0, vi[4];
     for (int i = 0; i < 4; i++)
         if (near[i]) vi[nvar++] = i;
+    if (!nvar) {                    /* nothing to choose: the all-zero set */
+        memset(lev, 0, 4 * sizeof(*lev));
+        memset(rdc, 0, 4 * sizeof(*rdc));
+        return 0;
+    }
     for (int m = 0; m <= (1 << nvar); m++) {
         dctcoef l[4], h[4], r[4];
         for (int i = 0; i < 4; i++) l[i] = near[i];
         if (m == (1 << nvar)) {                     /* the all-zero set */
-            if (!nvar) break;
             l[0] = l[1] = l[2] = l[3] = 0;
         } else {
             for (int k = 0; k < nvar; k++)
@@ -3755,7 +3760,7 @@ static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
             d += e * e;
         }
         long J = d + lam * y264_cabac_residual_bits(f->cabac, 3, l, 0, 0);
-        if (bestJ < 0 || J < bestJ) {
+        if (J < bestJ) {
             bestJ = J;
             memcpy(lev, l, sizeof(l));
             memcpy(rdc, r, sizeof(r));
