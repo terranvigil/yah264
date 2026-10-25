@@ -961,8 +961,11 @@ typedef struct {
 YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *enc, const yah264_video_signal_t *vs);
 
 /* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
- * *count NAL units owned by the encoder. Returns 0 on success. encode never
- * emits SPS or PPS, so a stream starts with these NAL units. */
+ * *count NAL units owned by the encoder. Returns 0 on success. The software
+ * encoder never emits SPS or PPS from encode, so a stream starts with these
+ * NAL units. The hardware backend can't know them before its first frame is
+ * coded: there this may return no NAL units, and encode then puts SPS and PPS
+ * ahead of the first slice it returns. */
 YAH264_EXPORT int yah264_encoder_headers(yah264_encoder_t *enc,
                             yah264_nal_t **nal, int *count);
 
@@ -976,8 +979,9 @@ YAH264_EXPORT int yah264_encoder_headers(yah264_encoder_t *enc,
  * stay in flight across the API boundary so the next call's analysis hides it.
  * NAL units are always returned in coding order. pic == NULL flushes: call it
  * repeatedly at end of stream until it returns 0 bytes with *count == 0.
- * encode emits slice data only; write yah264_encoder_headers' NAL units
- * first. */
+ * Apart from the hardware backend's first output (see
+ * yah264_encoder_headers), encode never emits SPS or PPS: write the headers'
+ * NAL units first. */
 YAH264_EXPORT int yah264_encoder_encode(yah264_encoder_t *enc,
                            yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic);
@@ -1113,9 +1117,10 @@ YAH264_EXPORT int yah264_threads_auto(void);
  * off) and clamped the way encoder_open clamps it. encode returns no NAL for
  * that many calls beyond the B-frame reorder delay, which this does not include
  * and does not change. The lead never changes a bit, so this number is the
- * whole cost of it and a latency-sensitive caller should be shown it. It is a
- * property of the parameters, not a count of frames still buffered: to drain
- * the encoder, flush with encode(pic == NULL) until it returns 0 bytes. */
+ * whole cost of it and a latency-sensitive caller should be shown it. It is
+ * fixed for a given parameter struct on a given machine, not a count of
+ * frames still buffered: to drain the encoder, flush with encode(pic == NULL)
+ * until it returns 0 bytes. */
 YAH264_EXPORT int yah264_lookahead_delay(const yah264_param_t *param);
 
 /* Scene-cut pre-scan, for callers that split an input into independent GOP

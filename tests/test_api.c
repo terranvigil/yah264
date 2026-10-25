@@ -365,17 +365,20 @@ int main(void)
         }
     }
 
-    /* The stream contract the header documents: SPS and PPS come only from
-     * yah264_encoder_headers, encode writes slice data only, and a NULL-picture
-     * flush ends with 0 bytes and no NAL units, with every frame coded by then.
-     * The lookahead delay is a property of the params and does not count down. */
+    /* The stream contract the header documents for the software encoder: SPS
+     * and PPS come only from yah264_encoder_headers, never from encode, and a
+     * NULL-picture flush ends with 0 bytes and no NAL units, with every frame
+     * coded by then. The lookahead delay is fixed for the params and does not
+     * count down as the encoder drains. */
     {
         yah264_param_t q;
         yah264_param_default(&q);
         q.width = 64; q.height = 48; q.csp = YAH264_CSP_I420;
         q.timebase.fps_num = 25; q.timebase.fps_den = 1;
         q.threads = 1;
+        q.sync_lookahead = 3;           /* a nonzero lead, so the check below can fail */
         int delay = yah264_lookahead_delay(&q);
+        CHECK(delay > 0);
         yah264_encoder_t *e = yah264_encoder_open(&q);
         CHECK(e != NULL);
         if (e) {
