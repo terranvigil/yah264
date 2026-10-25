@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "motion.h"
+#include "../common/env.h"
 #include "../common/iprof.h"
 #include "yah264.h"            /* YAH264_ME_* -- the --me values we gate on */
 #include "../dsp/interp.h"
@@ -203,7 +204,7 @@ static long long s_hpc_builds, s_hpc_marks;
 int y264_hpel_census_on(void)
 {
     if (s_hpc_band < 0) {
-        const char *e = getenv("Y264_HPEL_CENSUS");
+        const char *e = y264_env("Y264_HPEL_CENSUS");
         s_hpc_band = e ? atoi(e) : 0;
         if (s_hpc_band < 0) s_hpc_band = 0;
     }
@@ -373,7 +374,7 @@ void y264_me_set_ref16(int valid, int mvx, int mvy)
  *                    D qpel (L1) from the 16x16 winner skips quarter-pel */
 static int env_int(const char *name, int dflt)
 {
-    const char *e = getenv(name);
+    const char *e = y264_env(name);
     return e ? atoi(e) : dflt;
 }
 static int me_minw(void)  { static int v = -1; if (v < 0) v = env_int("Y264_ME_MINW", 1920); return v; }
@@ -438,7 +439,7 @@ static int umhdist_bucket(int px)
 static int me_stats_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_STATS"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_ME_STATS"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -474,7 +475,7 @@ static struct me_et_stats {
 static int me_et_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ETSTAT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_ME_ETSTAT"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -524,7 +525,7 @@ static int dist_bucket(int d)
 static int diag_nohpel(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIAG_NOHPEL"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_DIAG_NOHPEL"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -940,7 +941,7 @@ static int no_umh(void)
 static int hex_oracle(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_HEX_ORACLE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_HEX_ORACLE"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -966,7 +967,7 @@ void y264_me_set_xmax(int xmax_qpel, int xmaxf_qpel)
 static int umh_range(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_UMH_RANGE"); v = e ? atoi(e) : 16; }
+    if (v < 0) { const char *e = y264_env("Y264_UMH_RANGE"); v = e ? atoi(e) : 16; }
     return v > 0 ? v : 16;
 }
 

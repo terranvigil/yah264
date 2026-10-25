@@ -116,7 +116,7 @@ if has_leg build; then
     for cc in gcc clang; do
         bd="scratch/sve-docker/build-$cc"
         if dk "set -e
-            [ -f $bd/build.ninja ] || CC=$cc meson setup $bd --buildtype=release -Doptimization=3
+            [ -f $bd/build.ninja ] || CC=$cc meson setup $bd -Ddev_knobs=true --buildtype=release -Doptimization=3
             ninja -C $bd -j$JOBS" > "$out/build-$cc.log" 2>&1; then
             if grep -q 'Y264_HAVE_SVE=1' "$root/$bd/build.ninja"; then
                 row "build $cc (release -O3)" PASS "SVE tier compiled in"

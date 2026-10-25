@@ -31,6 +31,7 @@
 #define Y264_RCREPLAY_H
 
 #include <stdint.h>
+#include "../common/env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,7 +154,7 @@ static inline y264_rcr *rcr_open_env(int threads, int width, int height)
         rcr_users++;
         return rcr_shared;
     }
-    const char *rec = getenv("Y264_RC_REC"), *play = getenv("Y264_RC_PLAY");
+    const char *rec = y264_env("Y264_RC_REC"), *play = y264_env("Y264_RC_PLAY");
     if (!rec && !play)
         return NULL;
     if (rec && play) {
@@ -173,7 +174,7 @@ static inline y264_rcr *rcr_open_env(int threads, int width, int height)
     r->width = width;
     r->height = height;
     if (r->play) {
-        const char *k = getenv("Y264_RC_PLAY_K");
+        const char *k = y264_env("Y264_RC_PLAY_K");
         r->kscale = k ? atof(k) : 1.0;
         if (!(r->kscale > 0.0)) r->kscale = 1.0;
     }

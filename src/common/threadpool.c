@@ -36,6 +36,7 @@
  * (worker identity never reaches the bitstream -- the determinism invariant).
  */
 #include "common/threadpool.h"
+#include "env.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -64,7 +65,7 @@ static int park_on(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("Y264_NTP_PARK");
+        const char *e = y264_env("Y264_NTP_PARK");
         x = e ? (atoi(e) ? 1 : 0) : 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
     }
@@ -79,7 +80,7 @@ static int ntp_stats_on(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("Y264_NTP_STATS");
+        const char *e = y264_env("Y264_NTP_STATS");
         x = e ? (atoi(e) ? 1 : 0) : 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
     }
@@ -108,7 +109,7 @@ static int ntp_prof_env(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("Y264_NTP_PROF");
+        const char *e = y264_env("Y264_NTP_PROF");
         x = e ? atoi(e) : 0;             /* 2 = also histogram every cell */
         if (x < 0) x = 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);

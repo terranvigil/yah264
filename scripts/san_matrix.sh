@@ -16,7 +16,7 @@
 cd "$(dirname "$0")/.." || exit 1
 S=${SAN_WORK:-build-san/work}; mkdir -p "$S/a6wd"
 B=build-san
-[ -f $B/build.ninja ] || meson setup $B -Db_sanitize=address,undefined -Dbuildtype=debugoptimized -Db_lundef=false > $S/san-setup.log 2>&1 || { echo SETUP-FAIL; exit 1; }
+[ -f $B/build.ninja ] || meson setup $B -Ddev_knobs=true -Db_sanitize=address,undefined -Dbuildtype=debugoptimized -Db_lundef=false > $S/san-setup.log 2>&1 || { echo SETUP-FAIL; exit 1; }
 ninja -C $B > $S/san-build.log 2>&1 || { echo BUILD-FAIL; tail -5 $S/san-build.log; exit 1; }
 Y=$B/cli/yah264; C=tests/corpus; FF=${FF:-$(command -v ffmpeg)}
 BAD=0

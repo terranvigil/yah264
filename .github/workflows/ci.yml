@@ -65,7 +65,7 @@ jobs:
       # libraries (-Davx512=false leaves AVX-512 out). It is the default, and it is
       # named here so the log says which shape was built.
       - name: Configure (-Dsimd=auto)
-        run: meson setup build -Dsimd=auto
+        run: meson setup build -Ddev_knobs=true -Dsimd=auto
 
       - name: Build
         run: ninja -C build
@@ -135,7 +135,7 @@ jobs:
 
       - name: 10-bit build and unit tests
         run: |
-          meson setup build10 -Dbit_depth=10
+          meson setup build10 -Ddev_knobs=true -Dbit_depth=10
           ninja -C build10
           meson test -C build10 --print-errorlogs
 
@@ -144,7 +144,7 @@ jobs:
       # because a higher tier's flags were also on the command line.
       - name: SSE4.2-only build (-Dsimd=sse4) + checkasm
         run: |
-          meson setup build-sse4 -Dsimd=sse4
+          meson setup build-sse4 -Ddev_knobs=true -Dsimd=sse4
           ninja -C build-sse4
           ./build-sse4/tools/checkasm/checkasm --isa sse4
           meson test -C build-sse4 --print-errorlogs
@@ -170,7 +170,7 @@ jobs:
         run: ./scripts/hygiene_check.sh
 
       - name: Configure
-        run: meson setup build
+        run: meson setup build -Ddev_knobs=true
 
       - name: Build
         run: ninja -C build
@@ -194,7 +194,7 @@ jobs:
 
       - name: 10-bit build and unit tests
         run: |
-          meson setup build10 -Dbit_depth=10
+          meson setup build10 -Ddev_knobs=true -Dbit_depth=10
           ninja -C build10
           meson test -C build10 --print-errorlogs
 

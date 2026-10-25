@@ -135,7 +135,7 @@ help:
 	@sed -n '3,20p' Makefile | sed 's/^#\s\{0,1\}//'
 
 configure:
-	@test -f $(BUILD)/build.ninja || meson setup $(BUILD)
+	@test -f $(BUILD)/build.ninja || meson setup $(BUILD) -Ddev_knobs=true
 
 build: configure
 	@$(NINJA)

@@ -8,6 +8,7 @@
 // interface both files share.
 
 #include <limits.h>
+#include "../common/env.h"
 #include "../common/iprof.h"
 #include "rcreplay.h"
 #include "encoder.h"
@@ -418,7 +419,7 @@ static double abr_scale_for(yah264_encoder_t *e, int type)
 
 static double rc_tunable(const char *n, double def)
 {
-    const char *s = getenv(n);
+    const char *s = y264_env(n);
     return s ? atof(s) : def;
 }
 
@@ -559,8 +560,8 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->crf_cap        = CRF_QP_CAP;
     k->crf_level      = rc_tunable("Y264_CRF_LEVEL", CRF_MBT_LEVEL);
     k->crf_fps_slope  = CRF_MBT_FPS_SLOPE;
-    k->rc_trace       = getenv("Y264_RC_TRACE") != NULL;
-    k->dbg_cplx       = getenv("Y264_DBG_CPLX") != NULL;
+    k->rc_trace       = y264_env("Y264_RC_TRACE") != NULL;
+    k->dbg_cplx       = y264_env("Y264_DBG_CPLX") != NULL;
 }
 
 /* The AQ frame-mean (DC) term on the CRF base QP (2026-09-05, the across-shot
@@ -1239,7 +1240,7 @@ double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
 static int vbv_plan_on(const yah264_encoder_t *e)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_PLAN"); v = s ? atoi(s) : 1; }
+    if (v < 0) { const char *s = y264_env("Y264_VBV_PLAN"); v = s ? atoi(s) : 1; }
     return v && e->abr_on && e->vbv_on && !e->vbv_cbr && !e->tp_pass;
 }
 
@@ -2538,7 +2539,7 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
 int crf_cplx_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_CRF_CPLX"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    if (v < 0) { const char *s = y264_env("Y264_CRF_CPLX"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -2547,7 +2548,7 @@ int crf_cplx_env(void)
 double abr_qcomp_env(void)
 {
     static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_ABR_QCOMP"); v = s ? atof(s) : 0.6; }
+    if (v < 0) { const char *s = y264_env("Y264_ABR_QCOMP"); v = s ? atof(s) : 0.6; }
     return v;
 }
 
@@ -2556,7 +2557,7 @@ double abr_qcomp_env(void)
 int rcp_dbg_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RCP_DBG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_RCP_DBG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -2564,7 +2565,7 @@ int rcp_dbg_on(void)
 int vbv_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_STAT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_VBV_STAT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -2585,7 +2586,7 @@ int vbv_stat_on(void)
 double abr_vbvov_frac(void)
 {
     static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_ABR_VBVOV"); v = s ? atof(s) : 0.25; if (v < 0) v = 0; }
+    if (v < 0) { const char *s = y264_env("Y264_ABR_VBVOV"); v = s ? atof(s) : 0.25; if (v < 0) v = 0; }
     return v;
 }
 

@@ -19,6 +19,7 @@ m_dep = cc.find_library('m', required : false)
 threads_dep = dependency('threads')
 
 add_project_arguments('-D_GNU_SOURCE', language : 'c')
+add_project_arguments('-DY264_DEV_KNOBS=@0@'.format(get_option('dev_knobs') ? 1 : 0), language : 'c')
 
 # Item C3-10bit: the sample width is a compile-time type (src/common/
 # bitdepth.h), so there are two encoder libraries and there always will be;

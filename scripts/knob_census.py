@@ -166,7 +166,8 @@ def scan():
                     continue
                 path = os.path.join(base, f)
                 rel = os.path.relpath(path, ROOT)
-                lines = open(path, errors="replace").read().splitlines()
+                # the library reads its knobs through y264_env (src/common/env.h)
+                lines = open(path, errors="replace").read().replace("y264_env(", "getenv(").splitlines()
                 for i, ln in enumerate(lines):
                     for m in GETENV.finditer(ln):     # two reads on one line are two knobs
                         name = m.group(1)
@@ -265,7 +266,7 @@ def _script_lines():
                     continue
                 path = os.path.join(dirpath, fn)
                 try:
-                    lines = open(path, errors="replace").read().split("\n")
+                    lines = open(path, errors="replace").read().replace("y264_env(", "getenv(").split("\n")
                 except OSError:
                     continue
                 for i, ln in enumerate(lines, 1):

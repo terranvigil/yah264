@@ -315,7 +315,7 @@ for BACKEND in $BACKENDS; do
 
     # -- the build ----------------------------------------------------------
     if dk X=1 -- "set -e
-        [ -f $b8/build.ninja ] || meson setup $b8 -Dsimd=auto
+        [ -f $b8/build.ninja ] || meson setup $b8 -Ddev_knobs=true -Dsimd=auto
         ninja -C $b8 -j$JOBS" > "$out/$BACKEND-build8.log" 2>&1; then
         row "$BACKEND" - "build -Dsimd=auto" PASS "$BACKEND-build8.log"
     else
@@ -342,7 +342,7 @@ for BACKEND in $BACKENDS; do
     # mistake in the build files shows up.
     if has_leg test; then
         if dk X=1 -- "set -e
-            [ -f $b10/build.ninja ] || meson setup $b10 -Dbit_depth=10
+            [ -f $b10/build.ninja ] || meson setup $b10 -Ddev_knobs=true -Dbit_depth=10
             ninja -C $b10 -j$JOBS
             meson test -C $b10 --print-errorlogs" > "$out/$BACKEND-build10.log" 2>&1; then
             row "$BACKEND" 10bit "build + unit (C only)" PASS "$BACKEND-build10.log"

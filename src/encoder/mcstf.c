@@ -8,6 +8,7 @@
  */
 
 #include <math.h>
+#include "../common/env.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,14 +38,14 @@ int y264_mcstf_cfg_env(y264_mcstf_cfg *c)
     /* 1: at two neighbours a side the 120-frame band read median -0.85 with
      * foreman_cif +1.25; at one, -0.37 with nothing worse than +0.00 at 60
      * frames, for half the search (docs/denoise.md) */
-    c->range = (int)env_f(getenv("Y264_MCSTF_RANGE"), 1, 1, Y264_MCSTF_MAX_RANGE);
+    c->range = (int)env_f(y264_env("Y264_MCSTF_RANGE"), 1, 1, Y264_MCSTF_MAX_RANGE);
     /* 4 = the anchor spacing at the default --bframes 3: the pictures a
      * mini-GOP predicts from are the ones whose noise propagates */
-    c->period = (int)env_f(getenv("Y264_MCSTF_PERIOD"), 4, 1, 64);
+    c->period = (int)env_f(y264_env("Y264_MCSTF_PERIOD"), 4, 1, 64);
     /* 6 levels: the grain the corpus carries sits at 1-4.5 levels of
      * standard deviation, so six covers it with margin, and at three widths
      * a disagreement the search got wrong is worth a hundredth of a weight */
-    c->sigma_q8 = (int)(env_f(getenv("Y264_MCSTF_SIGMA"), 6.0, 0.25, 64.0) * 256.0 + 0.5);
+    c->sigma_q8 = (int)(env_f(y264_env("Y264_MCSTF_SIGMA"), 6.0, 0.25, 64.0) * 256.0 + 0.5);
     /* The bar on the TEMPORAL noise reading (mc_tnoise), in 8-bit levels of
      * match error. The rendered animations read 0.00-0.25 and are left
      * alone; every natural clip in the corpus reads above 0.75. The sibling
@@ -52,17 +53,17 @@ int y264_mcstf_cfg_env(y264_mcstf_cfg *c)
      * separate the film-grain titles (1.38-1.44 at 720p, and a pillarboxed
      * 1924 scan at 0.50) from foreman_cif (1.19-1.44), which is why the
      * reading here is temporal. */
-    c->clean_q8 = (int)(env_f(getenv("Y264_MCSTF_CLEAN"), 0.5, 0.0, 64.0) * 256.0 + 0.5);
-    c->adapt = (int)env_f(getenv("Y264_MCSTF_ADAPT"), 0, 0, 1);
+    c->clean_q8 = (int)(env_f(y264_env("Y264_MCSTF_CLEAN"), 0.5, 0.0, 64.0) * 256.0 + 0.5);
+    c->adapt = (int)env_f(y264_env("Y264_MCSTF_ADAPT"), 0, 0, 1);
     /* the error, in quarters of the noise's own match error, up to which a
      * block keeps its full weight under Y264_MCSTF_ADAPT */
-    c->adapt_k = (int)env_f(getenv("Y264_MCSTF_ADAPT_K"), 5, 4, 64);
-    c->subpel = (int)env_f(getenv("Y264_MCSTF_SUBPEL"), 0, 0, 1);
-    c->cut = (int)env_f(getenv("Y264_MCSTF_CUT"), 0, 0, 1);
-    c->qadapt = (int)env_f(getenv("Y264_MCSTF_QADAPT"), 0, 0, 1);
-    c->qp_off = (int)env_f(getenv("Y264_MCSTF_QP"), 0, -6, 6);
-    c->trace = (int)env_f(getenv("Y264_MCSTF_TRACE"), 0, 0, 1);
-    return (int)env_f(getenv("Y264_MCSTF"), 0, 0, 1);
+    c->adapt_k = (int)env_f(y264_env("Y264_MCSTF_ADAPT_K"), 5, 4, 64);
+    c->subpel = (int)env_f(y264_env("Y264_MCSTF_SUBPEL"), 0, 0, 1);
+    c->cut = (int)env_f(y264_env("Y264_MCSTF_CUT"), 0, 0, 1);
+    c->qadapt = (int)env_f(y264_env("Y264_MCSTF_QADAPT"), 0, 0, 1);
+    c->qp_off = (int)env_f(y264_env("Y264_MCSTF_QP"), 0, -6, 6);
+    c->trace = (int)env_f(y264_env("Y264_MCSTF_TRACE"), 0, 0, 1);
+    return (int)env_f(y264_env("Y264_MCSTF"), 0, 0, 1);
 }
 
 /* ---- the queue ------------------------------------------------------ */

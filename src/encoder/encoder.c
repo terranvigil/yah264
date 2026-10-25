@@ -9,6 +9,7 @@
  * replaces this in Phase 1.
  */
 #include <limits.h>
+#include "../common/env.h"
 #include "../common/iprof.h"
 #include "rcreplay.h"
 /* Under rate-control replay the pixel work is switched off (rcreplay.h). */
@@ -105,7 +106,7 @@ static pthread_mutex_t g_tprof_la_mx = PTHREAD_MUTEX_INITIALIZER;
 static int tprof_on(void)
 {
     if (g_tprof_on < 0) {
-        const char *s = getenv("Y264_THREAD_PROF");
+        const char *s = y264_env("Y264_THREAD_PROF");
         g_tprof_on = s && atoi(s) ? 1 : 0;
         if (g_tprof_on) g_tprof_wall0 = tprof_ms();
     }
@@ -245,7 +246,7 @@ static void la_th_wait_mbtree(yah264_encoder_t *e);
 static int mbt_bref_probe(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MBT_BREF"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_MBT_BREF"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -359,7 +360,7 @@ static void tprof_dump(void)
 static int stair_bdepth_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_STAIR_BDEPTH"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    if (v < 0) { const char *s = y264_env("Y264_STAIR_BDEPTH"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -396,7 +397,7 @@ static int stair_refb_poc(int nbuf, const int *bpoc)
 static int stair_wide_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_STAIR_WIDE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    if (v < 0) { const char *s = y264_env("Y264_STAIR_WIDE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -454,7 +455,7 @@ static int rcp_lag_env(void)
      * forces the serial path). */
     static int v = -1;
     if (v < 0) {
-        const char *s = getenv("Y264_RCP_LAG");
+        const char *s = y264_env("Y264_RCP_LAG");
         v = s ? atoi(s) : 1;
         if (v < 0) v = 0;
         if (v > Y264_STAIR_K - 1) v = Y264_STAIR_K - 1;
@@ -481,7 +482,7 @@ static int wf_narrow_frame(int width, int height);   /* defined with the cap */
 static int direct_permb_env(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_DIRECT_PERMB"); v = e ? atoi(e) : -1; }
+    if (v == -2) { const char *e = y264_env("Y264_DIRECT_PERMB"); v = e ? atoi(e) : -1; }
     return v;                       /* -1 = unset, take the default (on) */
 }
 
@@ -531,7 +532,7 @@ static int direct_permb_for(const yah264_encoder_t *e)
 static int y264_direct_auto_env(void)
 {
     static int v = -2;
-    if (v < -1) { const char *e = getenv("Y264_DIRECT_AUTO"); v = e ? (atoi(e) ? 1 : 0) : -1; }
+    if (v < -1) { const char *e = y264_env("Y264_DIRECT_AUTO"); v = e ? (atoi(e) ? 1 : 0) : -1; }
     return v;
 }
 static int direct_auto_wanted(const yah264_encoder_t *e)
@@ -586,7 +587,7 @@ static int direct_may_be_temporal(const yah264_encoder_t *e)
 static int stair_tdir_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_STAIR_TDIR"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_STAIR_TDIR"); v = e ? atoi(e) : 1; }
     return v;
 }
 
@@ -839,7 +840,7 @@ static int stair_wide_rc_ok(const yah264_encoder_t *e)
 static int stair_unsafe_no_refbwait(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_UNSAFE_NO_REFBWAIT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_UNSAFE_NO_REFBWAIT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -858,7 +859,7 @@ static int stair_unsafe_gate_arow(void);   /* stair_row_ready */
 static int stair_unsafe_no_prevpwait(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_UNSAFE_NO_PREVPWAIT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_UNSAFE_NO_PREVPWAIT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -873,7 +874,7 @@ static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
 static int stq_env(void)
 {
     static int v = -2;
-    if (v == -2) { const char *s = getenv("Y264_STQ"); v = s ? atoi(s) : -1; }
+    if (v == -2) { const char *s = y264_env("Y264_STQ"); v = s ? atoi(s) : -1; }
     return v;
 }
 
@@ -889,7 +890,7 @@ extern _Atomic long y264_wp_esc;    /* mbcode.c, the escape counter */
 static int wp_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_WEIGHTP_STAT"); v = s ? atoi(s) : 0;
+    if (v < 0) { const char *s = y264_env("Y264_WEIGHTP_STAT"); v = s ? atoi(s) : 0;
                  if (v < 0) v = 0; }
     return v;
 }
@@ -897,7 +898,7 @@ static int wp_stat_on(void)
 static int stair_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_STAIR_STAT"); v = s ? atoi(s) : 0;
+    if (v < 0) { const char *s = y264_env("Y264_STAIR_STAT"); v = s ? atoi(s) : 0;
                  if (v < 0) v = 0; }
     return v;
 }
@@ -924,7 +925,7 @@ static int la_buf_env(void)
 {
     static int v = Y264_LA_BUF_UNSET;
     if (v == Y264_LA_BUF_UNSET) {
-        const char *s = getenv("Y264_LA_BUF");
+        const char *s = y264_env("Y264_LA_BUF");
         if (s) v = atoi(s);
     }
     return v;
@@ -1167,7 +1168,7 @@ static int frame_b_casc(const yah264_encoder_t *e, int is_ref)
 static int fqp_trace_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_FQP_TRACE"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_FQP_TRACE"); v = s ? atoi(s) : 0; }
     return v;
 }
 
@@ -1698,7 +1699,7 @@ static void hpel_band_one(void *ctx, int tid, int k)
 static int hpel_probe_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_HPEL_PROBE"); v = s && atoi(s) ? 1 : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_HPEL_PROBE"); v = s && atoi(s) ? 1 : 0; }
     return v;
 }
 static double g_hpb_ms;
@@ -2047,14 +2048,14 @@ struct y264_nr_slot {
 static void nr_open(yah264_encoder_t *e)
 {
     const char *v;
-    e->nr_intra = (v = getenv("Y264_NR_INTRA")) ? atoi(v) : 0;
-    e->nr_inter = (v = getenv("Y264_NR_INTER")) ? atoi(v) : 0;
+    e->nr_intra = (v = y264_env("Y264_NR_INTRA")) ? atoi(v) : 0;
+    e->nr_inter = (v = y264_env("Y264_NR_INTER")) ? atoi(v) : 0;
     /* the spatial noise reading (nr.c), in 8-bit levels, below which a
      * picture is coded without the filter. 0.75 disarms the clean sources, where the band measured the filter taking
      * structure rather than noise (sintel_720p +7.58% ungated, akiyo_cif
      * +1.19%, samsung_720p +1.03%; all three read under 0.65). */
     e->nr_gate_q8 = (int)(0.75 * 256.0 + 0.5);
-    e->nr_trace = (v = getenv("Y264_NR_TRACE")) ? atoi(v) : 0;
+    e->nr_trace = (v = y264_env("Y264_NR_TRACE")) ? atoi(v) : 0;
     if (e->nr_intra < 0) e->nr_intra = 0;
     if (e->nr_inter < 0) e->nr_inter = 0;
     if (e->nr_intra > Y264_NR_MAX) e->nr_intra = Y264_NR_MAX;
@@ -2470,7 +2471,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             direct_temporal = e->direct_score[0] > e->direct_score[1];
         }
         temporal_legal = 1;
-        if (getenv("Y264_DIRECT_WHY"))
+        if (y264_env("Y264_DIRECT_WHY"))
             fprintf(stderr, "dauto: poc=%d score T=%ld S=%ld -> %s%s\n", e->poc,
                     e->direct_score[0], e->direct_score[1],
                     direct_temporal ? "temporal" : "spatial",
@@ -2488,7 +2489,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             temporal_legal = 0;
         direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL) && temporal_legal;
     } else if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
-                      getenv("Y264_DIRECT_SCORE"))) {
+                      y264_env("Y264_DIRECT_SCORE"))) {
         temporal_legal = 1;
         for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn && temporal_legal; i++) {
             int cp = fw->colpoc[i];     /* the slice's own col field (fw_default: e->) */
@@ -2504,7 +2505,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     /* Y264_DIRECT_WHY: measurement only. Print this slice's list0 and the
  * distinct co-located reference POCs, marking the ones that do not resolve.
  * Does not touch any decision. */
-    if (type == 2 && getenv("Y264_DIRECT_WHY")) {
+    if (type == 2 && y264_env("Y264_DIRECT_WHY")) {
         int seen[64], cnt[64], ok[64], ns = 0;
         long nintra = 0;
         for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn; i++) {
@@ -2894,7 +2895,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     /* Y264_DIRECT_SCORE: flush the PREVIOUS frame's direct-prediction error here,
  * because prep for the next frame runs after the last one's macroblock loop.
  * t1 only, like every counter of this shape. */
-    if (getenv("Y264_DIRECT_SCORE") && y264_dscore_n) {
+    if (y264_env("Y264_DIRECT_SCORE") && y264_dscore_n) {
         fprintf(stderr, "dscore: mbs=%ld ssd=%ld per_mb=%.0f skip_temporal=%ld skip_spatial=%ld\n",
                 y264_dscore_n, y264_dscore_ssd,
                 (double)y264_dscore_ssd / (double)y264_dscore_n,
@@ -3112,7 +3113,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
 static int ident_stat_env(void)
 {
     static int on = -1;
-    if (on < 0) { const char *ev = getenv("Y264_IDENT_STAT"); on = ev ? atoi(ev) : 0; }
+    if (on < 0) { const char *ev = y264_env("Y264_IDENT_STAT"); on = ev ? atoi(ev) : 0; }
     return on;
 }
 
@@ -3190,7 +3191,7 @@ static void ident_stat(const y264_frame_t *f, int type)
 static int qp_trace_on(void)          /* warmed in warm_lr_statics */
 {
     static int on = -1;
-    if (on < 0) { const char *s = getenv("Y264_QP_TRACE"); on = s ? atoi(s) : 0; }
+    if (on < 0) { const char *s = y264_env("Y264_QP_TRACE"); on = s ? atoi(s) : 0; }
     return on;
 }
 static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int type)
@@ -3382,7 +3383,7 @@ static size_t rcr_build_slice(yah264_encoder_t *e, int type, int is_idr, int is_
 static int unsafe_no_nal(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_UNSAFE_NO_NAL"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_UNSAFE_NO_NAL"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -3679,7 +3680,7 @@ static void slice_overflow_warn(void)
 static int czw_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_CZW_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_CZW_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 /* cabac_zero_words (7.4.2.10 / 9.3.4.6): a picture's BinCountsInNALunits may
@@ -3860,7 +3861,7 @@ static int wf_capk(int width, int height)
  * sweep). Same-value and benign, but it fogs every future TSan hunt. */
     static int resolved = 0;
     static int v;
-    if (!resolved) { const char *s = getenv("Y264_WF_CAPK");
+    if (!resolved) { const char *s = y264_env("Y264_WF_CAPK");
                      v = s ? atoi(s) : -2; resolved = 1; }
     if (v >= 1) return v;
     if (v == 0) return 1;
@@ -3952,13 +3953,13 @@ static int stair_lag_for(int height_in_mbs, int pool_threads)
 
 static int auto_threads(void)
 {
-    const char *pin = getenv("Y264_AUTO_THREADS");
+    const char *pin = y264_env("Y264_AUTO_THREADS");
     if (pin) {
         int v = atoi(pin);
         return v < 1 ? 1 : v;
     }
     {
-        const char *c = getenv("Y264_AUTO_THREADS_MAX");
+        const char *c = y264_env("Y264_AUTO_THREADS_MAX");
         int ceiling = c ? atoi(c) : Y264_AUTO_CEILING;
         int n = y264_machine_threads();
         if (ceiling < 1)
@@ -4580,14 +4581,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
          * replaces the B round-to-nearest test with the deadzone+trellis one
          * the coder actually runs and commits only where NOTHING survives, so
          * it spends no tolerance and owes no confirmation. */
-        const char *v = getenv("Y264_BSKIP_PROBE");
+        const char *v = y264_env("Y264_BSKIP_PROBE");
         e->bskip_probe = (v && *v) ? atoi(v) : 0;
         /* Y264_BSKIP_SCREEN: an exact screen in front of the strict B skip
  * probe. It proves the probe's answer from the skip candidate's SSD, which
  * the RD cost has already paid for, and runs the transforms only where the
  * proof fails, so the output cannot move. Default ON; 0 is the escape and
  * reproduces the unscreened path, 2 = cross-check mode. */
-        v = getenv("Y264_BSKIP_SCREEN");
+        v = y264_env("Y264_BSKIP_SCREEN");
         e->bskip_screen = (v && *v) ? atoi(v) : 1;
         /* The three HD-parity stage 2 gates, read from their params (the env
  * overrides were removed on 2026-10-04; the flags are the A/B route).
@@ -4624,7 +4625,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         if (e->lr_subgate < 0) e->lr_subgate = 0;
         /* Y264_MBT_DEPFLOOR=<n> -- refuse the propagation deposit under n/256
  * of propagation fraction. */
-        v = getenv("Y264_MBT_DEPFLOOR");
+        v = y264_env("Y264_MBT_DEPFLOOR");
         e->mbt_depfloor = (v && *v) ? atoi(v) : param->mbt_depfloor;
         if (e->mbt_depfloor < 0) e->mbt_depfloor = 0;
         /* --b-intra-band <m> -- skip the B intra screen and the intra trial
@@ -5027,7 +5028,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * (the --subpel convention), and it is resolved once here so a getenv does
  * not sit in the per-frame correction. */
     {
-        const char *tolenv = getenv("Y264_ABR_TOL");
+        const char *tolenv = y264_env("Y264_ABR_TOL");
         double tol = tolenv ? atof(tolenv) : param->ratetol;
         e->ratetol = tol > 0.0 ? tol : 1.0;
     }
@@ -5271,12 +5272,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->tp_corr     = 1;
             /* complexity blur, the --cplxblur default of 20; the planner maps
              * it to a gaussian sigma (tp_blur_cost in rate.c). */
-            e->tp_cplxblur = (ev = getenv("Y264_TP_CPLXBLUR")) ? atof(ev)
+            e->tp_cplxblur = (ev = y264_env("Y264_TP_CPLXBLUR")) ? atof(ev)
                            : (e->tp_plan_on ? 20.0 : 0.0);
             e->tp_resolve  = 1;
-            e->tp_dbg      = getenv("Y264_TP_DBG") != NULL;
-            e->tp_ipf      = (ev = getenv("Y264_TP_IPF"))      ? atof(ev) / 100.0 : 1.4;
-            e->tp_pbf      = (ev = getenv("Y264_TP_PBF"))      ? atof(ev) / 100.0 : 1.3;
+            e->tp_dbg      = y264_env("Y264_TP_DBG") != NULL;
+            e->tp_ipf      = (ev = y264_env("Y264_TP_IPF"))      ? atof(ev) / 100.0 : 1.4;
+            e->tp_pbf      = (ev = y264_env("Y264_TP_PBF"))      ? atof(ev) / 100.0 : 1.3;
             if (e->tp_ipf < 1.0) e->tp_ipf = 1.4;
             if (e->tp_pbf < 1.0) e->tp_pbf = 1.3;
             if (e->tp_plan_on)
@@ -5289,7 +5290,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
      * head. */
     /* Resolved here, not in the per-frame path: rcp_account runs on the stair
  * driver under the pipeline. */
-    e->tp_rctrace = getenv("Y264_RC_TRACE") != NULL;
+    e->tp_rctrace = y264_env("Y264_RC_TRACE") != NULL;
     rc_knobs_resolve(e);
     /* Opt-in ABR model: the public parameter. */
     e->abr_rf = param->rc.abr_model ? 1 : 0;
@@ -5442,7 +5443,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * lookahead ME reads lr_subpel whatever mbtree does. Changes bits
  * wherever mbtree ran; exists to price the driver-side mbtree wall
  * share. DEFAULT OFF. */
-        { const char *v = getenv("Y264_MBTREE_OFF");
+        { const char *v = y264_env("Y264_MBTREE_OFF");
           e->mbtree_skip = v && atoi(v); }
         /* CQP turns mb-tree off via mbtree_skip, NOT mbtree_on: clearing
          * mbtree_on frees lowres_tmp, which the lookahead ME dereferences
@@ -5515,7 +5516,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         e->bseed[b][k] = malloc(nmb * sizeof(int16_t));
                 }
                 for (int b = 0; b < 8; b++) e->bseed_valid[b] = 0;
-                if (getenv("Y264_BLATE_STAT"))  /* measurement-only cost bank */
+                if (y264_env("Y264_BLATE_STAT"))  /* measurement-only cost bank */
                     for (int k = 0; k < 3; k++) {
                         e->bseedc_pend[k] = malloc(nmb * sizeof(int32_t));
                         for (int b = 0; b < 8; b++)
@@ -5651,7 +5652,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * compliance gate (park_joy and ducks overflow at the loosest cap), 72/72 at
  * 1.04. Under a bitrate target only one-pass ABR and capped VBR read it
  * (abr_dc_on); CBR by default, two-pass and CQP never do. */
-    { const char *v = getenv("Y264_AQ_DC");
+    { const char *v = y264_env("Y264_AQ_DC");
       e->aq_dcstr = v ? atof(v) : (e->crf_on && !e->vbv_on ? 1.3 : 1.04); }
     e->aq_dcfloor = 0.00390625;
     /* Frames with no mb-tree field (non-reference B) inherit the anchor's
@@ -5794,7 +5795,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * should get one thread. Y264_W2=1 forces it on anyway, Y264_W2=0 off.
  * On OOM or thread-create failure, fall back to the serial path silently. */
     {
-        const char *w2 = getenv("Y264_W2");
+        const char *w2 = y264_env("Y264_W2");
         if (w2 ? atoi(w2) != 0 : e->pool != NULL) {
             size_t mvcount = (size_t)e->mv_stride * e->height_in_mbs * 4;
             size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
@@ -5890,7 +5891,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * GOP in the pull-queue case), so this is the only way to see that a
  * per-worker pool is too narrow for the la thread -- the CLI's single
  * lookahead-lead line reports the critical worker and nothing else. */
-    if (getenv("Y264_LA_STAT") && atoi(getenv("Y264_LA_STAT")))
+    if (y264_env("Y264_LA_STAT") && atoi(y264_env("Y264_LA_STAT")))
         fprintf(stderr, "yah264: la_stat %dx%d req_ft=%d pool=%d la_depth=%d "
                 "la_buf=%d la_th=%d la_inline=%d\n",
                 e->param.width, e->param.height, param->frame_threads,
@@ -6533,14 +6534,14 @@ static void lowres_analyse(yah264_encoder_t *e)
 static int psy_flat_log(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PSY_FLAT_LOG"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_PSY_FLAT_LOG"); v = e ? atoi(e) : 0; }
     return v;
 }
 
 static int adme_log(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ADME_LOG"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_ADME_LOG"); v = e ? atoi(e) : 0; }
     return v;
 }
 static int frame_motion_score(yah264_encoder_t *e)
@@ -6818,7 +6819,7 @@ static int g_lrs_lh, g_lrs_lw;
 static int lrsub_census(void)
 {
     if (g_lrs_census < 0) {
-        const char *s = getenv("Y264_LRSUB_CENSUS");
+        const char *s = y264_env("Y264_LRSUB_CENSUS");
         g_lrs_census = s && atoi(s) ? 1 : 0;
     }
     return g_lrs_census;
@@ -6877,7 +6878,7 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
 static int lrsub_probe(void)
 {
     if (g_lrs_probe < 0) {
-        const char *s = getenv("Y264_LRSUB_PROBE");
+        const char *s = y264_env("Y264_LRSUB_PROBE");
         g_lrs_probe = s && atoi(s) ? 1 : 0;
     }
     return g_lrs_probe;
@@ -7030,7 +7031,7 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
 static int lr_qpel_avg_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_LR_QPEL_AVG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_LR_QPEL_AVG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -7682,7 +7683,7 @@ static int mv_scale(int v, int num, int den)
 static int pair_scale_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_MBT_PAIR_SCALE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    if (v < 0) { const char *s = y264_env("Y264_MBT_PAIR_SCALE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -7817,7 +7818,7 @@ static int bleg_reuse_on(void);
 static int direct_lrvote_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_LRVOTE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_DIRECT_LRVOTE"); v = e ? atoi(e) : 0; }
     return v;
 }
 #define DIRECT_LRVOTE_CZ 1
@@ -8239,7 +8240,7 @@ static pthread_mutex_t g_mbt_split_mx = PTHREAD_MUTEX_INITIALIZER;
 static int bleg_reuse_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MBT_BLEG_REUSE"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_MBT_BLEG_REUSE"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -8254,7 +8255,7 @@ static int bleg_reuse_on(void)
 static int mbt_unsafe_nosettle(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MBT_UNSAFE_NOSETTLE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_MBT_UNSAFE_NOSETTLE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -8264,14 +8265,14 @@ static int mbt_unsafe_nosettle(void)
 static int gpq_consume_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *ev = getenv("Y264_GPQ_CONSUME");
+    if (v < 0) { const char *ev = y264_env("Y264_GPQ_CONSUME");
                  v = ev ? (atoi(ev) ? 1 : 0) : 1; }
     return v;
 }
 static int mbt_split_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_MBT_SPLIT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_MBT_SPLIT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -8282,7 +8283,7 @@ static int mbt_split_env(void)
 static int mbt_misswhy_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_MBT_MISSWHY"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_MBT_MISSWHY"); v = s ? atoi(s) : 0; }
     return v;
 }
 
@@ -8446,7 +8447,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * BD on 10 of 12 corpus clips (+7.04% ducks, +6.2% bus, +6.15% tempete),
  * so the scale match has to come from the pedestal instead. */
     double strength = 5.0 * (1.0 - qcomp) * 0.7;
-    { const char *v = getenv("Y264_MBTREE_STRENGTH"); if (v) strength = atof(v); }
+    { const char *v = y264_env("Y264_MBTREE_STRENGTH"); if (v) strength = atof(v); }
 
     /* --- source frames (deposit onto tracked anchors): window frames (poc>F) +
  * buffered B's (poc<F), processed newest-first so an anchor's incoming
@@ -8963,7 +8964,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     /* MEASUREMENT ONLY: dump the per-MB propagation ratio, the quantity
  * the offset carries as -strength*log2_ratio. */
     double *rq_dbg_ratio = NULL;
-    const char *rq_dbg_path = getenv("Y264_MBT_RATIO_DUMP");
+    const char *rq_dbg_path = y264_env("Y264_MBT_RATIO_DUMP");
     if (rq_dbg_path) rq_dbg_ratio = malloc((size_t)nmb * sizeof(double));
     for (int i = 0; i < nmb; i++) {
         long li = (long)e->lr_intra[i];
@@ -9004,7 +9005,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         }
     }
     *rq->out_mean = (double)osum / nmb;               /* <=0, drives the CRF reclaim */
-    if (getenv("Y264_MBTREE_DBG"))
+    if (y264_env("Y264_MBTREE_DBG"))
         fprintf(stderr, "[mbtree] poc=%d na=%d ns=%d maxratio=%.2f meanratio=%.2f off=[%d,%d]\n",
                 F_poc, na, ns, dbg_maxr, dbg_sumr / nmb, omin, omax);
     /* Task #73 part 3: the reference B's accumulator slice becomes ITS OWN field.
@@ -9244,7 +9245,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq)
     int centered = !(e->crf_on || e->abr_on) || e->bframes == 0;
     double mean = centered ? sum / nmb : 0.0;
     double strength = 2.0;                            /* 5*(1-qcomp), qcomp 0.6 */
-    { const char *v = getenv("Y264_MBTREE_STRENGTH"); if (v) strength = atof(v); }
+    { const char *v = y264_env("Y264_MBTREE_STRENGTH"); if (v) strength = atof(v); }
     /* (B) CONTENT-ADAPTIVE strength. A flat 2.0 is the unscaled value, but our fixed
  * allocation is already good on static content (akiyo at parity) and short
  * on high-motion/detail (stefan +21%). Modulate the mb-tree redistribution
@@ -9669,7 +9670,7 @@ static void mbt_oracle_init(int nmb)
         pthread_mutex_unlock(&g_mbt_oracle.mx);
         return;
     }
-    const char *rec = getenv("Y264_MBT_REC"), *play = getenv("Y264_MBT_PLAY");
+    const char *rec = y264_env("Y264_MBT_REC"), *play = y264_env("Y264_MBT_PLAY");
     g_mbt_oracle.nmb = nmb;
     if (play) {
         FILE *fp = fopen(play, "rb");
@@ -9867,7 +9868,7 @@ static void mbt_warm_join(yah264_encoder_t *e)
 static int mbt_unsafe_nombt(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_UNSAFE_NO_MBT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_UNSAFE_NO_MBT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -9912,7 +9913,7 @@ static void type_oracle_load(void)
 {
     if (type_oracle_n != -2) return;
     type_oracle_n = -1;
-    const char *p = getenv("Y264_TYPE_ORACLE");
+    const char *p = y264_env("Y264_TYPE_ORACLE");
     if (p) {
         FILE *fp = fopen(p, "rb");
         if (fp) {
@@ -10148,7 +10149,7 @@ static void warm_lr_statics(void)
     (void)stair_unsafe_no_rowgate(); (void)stair_unsafe_gate_arow();
     (void)stair_unsafe_no_prevpwait();
     (void)stq_env();
-    if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; }
+    if (s_lrrow_prof < 0) { const char *q = y264_env("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; }
     (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)mbt_bref_probe();
     (void)rcp_lag_env(); (void)hw_env();
@@ -13888,7 +13889,7 @@ static void stair_row_gate(void *ctx, int mby)
 static int stair_unsafe_no_rowgate(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_UNSAFE_NO_ROWGATE"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_UNSAFE_NO_ROWGATE"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -13907,7 +13908,7 @@ static int stair_unsafe_no_rowgate(void)
 static int stair_unsafe_gate_arow(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_UNSAFE_GATE_AROW"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = y264_env("Y264_UNSAFE_GATE_AROW"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -14102,7 +14103,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     if (B->async)
         TPROF(TP_STAIRJOIN, ntp_bg_sync(stair_ch(st, B)->driver));
     stair_tr(st, (int)(B - st->bur), STE_DRAIN_E, (int)atomic_load(&B->seq), st->nlive);
-    if (getenv("Y264_DIRECT_WHY"))
+    if (y264_env("Y264_DIRECT_WHY"))
         fprintf(stderr, "ddrain seq=%u counts=%ld,%ld\n", atomic_load(&B->seq), B->dauto[0], B->dauto[1]);
     if (--st->nlive == 0)
         st->fly = NULL;
@@ -15599,7 +15600,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         }
         B->dauto[0] = B->dauto[1] = 0;
         B->dauto_temporal = e->direct_score[0] > e->direct_score[1];
-        if (getenv("Y264_DIRECT_WHY"))
+        if (y264_env("Y264_DIRECT_WHY"))
             fprintf(stderr, "dfold n=%u folded=%u score=%ld,%ld\n", n, st->dauto_folded, e->direct_score[0], e->direct_score[1]);
         fw.dauto_acc = B->dauto;
         fw.dauto_valid = direct_auto_armed(e);
@@ -16863,7 +16864,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
         pthread_mutex_unlock(&mp->mx);
         ntp_bg_sync(mp->bg);
         ntp_bg_destroy(mp->bg);
-        if (getenv("Y264_MBT_PRE_DBG"))
+        if (y264_env("Y264_MBT_PRE_DBG"))
             fprintf(stderr, "[mbt_pre] warms %ld, compute %.1f ms\n",
                     mp->hits, mp->ms_compute);
         pthread_mutex_destroy(&mp->mx);
@@ -17776,7 +17777,7 @@ static int hw_env(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *e = getenv("Y264_HW");
+        const char *e = y264_env("Y264_HW");
         v = !e || !*e || !strcmp(e, "off") || !strcmp(e, "0") ? 0
           : !strcmp(e, "auto") ? YAH264_HW_AUTO
           : !strcmp(e, "videotoolbox") || !strcmp(e, "vt") || !strcmp(e, "1") ? YAH264_HW_VIDEOTOOLBOX : 0;

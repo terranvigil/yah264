@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "mbcode.h"
+#include "../common/env.h"
 #include "nr.h"
 #include "../common/iprof.h"
 #include <float.h>
@@ -41,15 +42,15 @@ static void *recs_alloc(size_t bytes);
 /* DIAG knobs read inside wavefront cell bodies: file-scope readers so the
  * main-thread warm resolves them (a function-local static first-touched on a
  * worker is a race by this tree's rule). All default off. */
-static int diag_tdirlim(void)  { static int v = -1; if (v < 0) { const char *e = getenv("Y264_DIAG_TDIRLIM");  v = e ? atoi(e) : 0; } return v; }
-static int diag_colwatch(void) { static int v = -1; if (v < 0) { const char *e = getenv("Y264_DIAG_COLWATCH"); v = e ? atoi(e) : 0; } return v; }
-static int diag_directok(void) { static int v = -1; if (v < 0) { const char *e = getenv("Y264_DIAG_DIRECTOK"); v = e ? atoi(e) : 0; } return v; }
+static int diag_tdirlim(void)  { static int v = -1; if (v < 0) { const char *e = y264_env("Y264_DIAG_TDIRLIM");  v = e ? atoi(e) : 0; } return v; }
+static int diag_colwatch(void) { static int v = -1; if (v < 0) { const char *e = y264_env("Y264_DIAG_COLWATCH"); v = e ? atoi(e) : 0; } return v; }
+static int diag_directok(void) { static int v = -1; if (v < 0) { const char *e = y264_env("Y264_DIAG_DIRECTOK"); v = e ? atoi(e) : 0; } return v; }
 static FILE *s_mb_log;
 static pthread_mutex_t s_mb_log_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t s_mb_log_once = PTHREAD_ONCE_INIT;
 static void mb_log_open(void)
 {
-    const char *p = getenv("Y264_MB_LOG");
+    const char *p = y264_env("Y264_MB_LOG");
     if (p && *p) s_mb_log = fopen(p, "w");
 }
 static void mb_log_line(int poc, int mbx, int mby, char slice, int mode,
@@ -65,7 +66,7 @@ static void mb_log_line(int poc, int mbx, int mby, char slice, int mode,
 static int mb_log_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MB_LOG"); v = (e && *e) ? 1 : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_MB_LOG"); v = (e && *e) ? 1 : 0; }
     return v;
 }
 
@@ -83,7 +84,7 @@ static FILE *s_blate_fp;
 static pthread_once_t s_blate_once = PTHREAD_ONCE_INIT;
 static void blate_open(void)
 {
-    const char *p = getenv("Y264_BLATE_STAT");
+    const char *p = y264_env("Y264_BLATE_STAT");
     if (p && *p) s_blate_fp = fopen(p, "w");
 }
 static FILE *blate_fp(void)
@@ -308,7 +309,7 @@ static void cabac_mb_qp_delta(y264_cabac_t *c, y264_frame_t *f, int cur_qp)
 static int aq_mode_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_AQ_MODE");
+    if (v < 0) { const char *e = y264_env("Y264_AQ_MODE");
                  v = e ? atoi(e) : 2; }
     return v;
 }
@@ -413,9 +414,9 @@ static double aq_dark_env(int which)
 {
     static double v[5] = { -1.0, -1.0, -1.0, -1.0, -1.0 };
     if (v[0] < 0) {
-        const char *s = getenv("Y264_AQ_DARK"), *m = getenv("Y264_AQ_DARK_M"),
-                   *q = getenv("Y264_AQ_DARK_V"), *b0 = getenv("Y264_AQ_DARK_B0"),
-                   *b1 = getenv("Y264_AQ_DARK_B1");
+        const char *s = y264_env("Y264_AQ_DARK"), *m = y264_env("Y264_AQ_DARK_M"),
+                   *q = y264_env("Y264_AQ_DARK_V"), *b0 = y264_env("Y264_AQ_DARK_B0"),
+                   *b1 = y264_env("Y264_AQ_DARK_B1");
         v[1] = m ? atof(m) : AQ_DARK_M;
         v[2] = q ? atof(q) : AQ_DARK_V;
         v[3] = b0 ? atof(b0) : AQ_DARK_B0;
@@ -453,7 +454,7 @@ double y264_aq_dark_gate(double bright_share)
 static double psy_dark_env(void)
 {
     static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_PSY_DARK"); v = s ? atof(s) : PSY_DARK;
+    if (v < 0) { const char *s = y264_env("Y264_PSY_DARK"); v = s ? atof(s) : PSY_DARK;
                  if (v < 1.0) v = 1.0; }
     return v;
 }
@@ -1093,7 +1094,7 @@ static int psy_trellis_qp(const y264_frame_t *f, int qp)
 static int probe_deadzone_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PROBE_DEADZONE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_PROBE_DEADZONE"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -1651,7 +1652,7 @@ static int trel_smooth_v(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *on = getenv("Y264_TREL_SMOOTH"), *lim = getenv("Y264_TREL_SMOOTH_V");
+        const char *on = y264_env("Y264_TREL_SMOOTH"), *lim = y264_env("Y264_TREL_SMOOTH_V");
         v = on && atoi(on) == 0 ? 0 : (lim ? atoi(lim) : 8);
         if (v < 0) v = 0;
     }
@@ -3429,7 +3430,7 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
 static int b_skip_exit_env(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_B_SKIP_EXIT"); v = e ? atoi(e) : 1; }
+    if (v == -2) { const char *e = y264_env("Y264_B_SKIP_EXIT"); v = e ? atoi(e) : 1; }
     return v;
 }
 static void analyze_intra_gb(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
@@ -3738,13 +3739,13 @@ static int dc_nb(y264_frame_t *f, int mbx, int mby, int bit, int intra);
 static int cdc_lam_x256(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? (atoi(e) > 0 ? atoi(e) : 0) : 64; }
+    if (v < 0) { const char *e = y264_env("Y264_CDC_LAM"); v = e ? (atoi(e) > 0 ? atoi(e) : 0) : 64; }
     return v;
 }
 static int cdc_rd_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_CDC_RD"); v = e ? atoi(e) != 0 : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_CDC_RD"); v = e ? atoi(e) != 0 : 1; }
     return v;
 }
 
@@ -4227,7 +4228,7 @@ static int dctdec_cfg(int *t4, int *t8)
  * BD win here (and a small speed win — fewer coeffs to entropy-code). */
     static int on = -1;
     if (on < 0) {
-        const char *v = getenv("Y264_DCTDEC");
+        const char *v = y264_env("Y264_DCTDEC");
         on = v ? atoi(v) : 1;
     }
     *t4 = 3; *t8 = 2; return on;
@@ -4468,7 +4469,7 @@ static _Thread_local int g_res_site = RES_SITE_OTHER;
 static int rescensus_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_RESCENSUS"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_RESCENSUS"); v = e ? atoi(e) : 0; }
     return v;
 }
 static void res_census_dump(void)
@@ -4537,13 +4538,13 @@ static int tr_pre_bias(void)
 static int trprof_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_TRPROF"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_TRPROF"); v = e ? atoi(e) : 0; }
     return v;
 }
 static int resprof_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_RESPROF"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_RESPROF"); v = e ? atoi(e) : 0; }
     return v;
 }
 /* Y264_EST_PROF: phase attribution of REAL P-inter rate-estimate calls by
@@ -4557,7 +4558,7 @@ static int resprof_on(void)
 static int est_prof_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_EST_PROF"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_EST_PROF"); v = e ? atoi(e) : 0; }
     return v;
 }
 /* Y264_EST_SCRTRACE: per-trial (site, frame, mb, dist, j) trace for the
@@ -4568,7 +4569,7 @@ static int est_prof_on(void)
 static int est_scrtrace_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_EST_SCRTRACE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_EST_SCRTRACE"); v = e ? atoi(e) : 0; }
     return v;
 }
 /* Y264_DIRECT_SCORE=1: MEASUREMENT ONLY, t1. Per B frame, the direct
@@ -4583,7 +4584,7 @@ static int est_scrtrace_on(void)
 static int direct_score_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_SCORE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_DIRECT_SCORE"); v = e ? atoi(e) : 0; }
     return v;
 }
 /* The direct-auto sampling stride (8; 1 would be every macroblock): the per-slice
@@ -4631,7 +4632,7 @@ long y264_tdir_mb[2];
 static int direct_why_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_WHY"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_DIRECT_WHY"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -5516,7 +5517,7 @@ static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *
 int y264_rb_trace_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_VBV_ROWBRAKE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_VBV_ROWBRAKE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -5532,7 +5533,7 @@ int y264_rb_trace_on(void)
 static int unsafe_no_emit(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_UNSAFE_NO_EMIT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_UNSAFE_NO_EMIT"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -5545,7 +5546,7 @@ static int unsafe_no_emit(void)
 static int est_twice_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_EST_TWICE"); v = e ? (atoi(e) != 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_EST_TWICE"); v = e ? (atoi(e) != 0) : 0; }
     return v;
 }
 
@@ -5577,7 +5578,7 @@ static int est_frozen_mode(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *e = getenv("Y264_EST_FROZEN");
+        const char *e = y264_env("Y264_EST_FROZEN");
         int x = e ? atoi(e) : 0;
         v = (x & 1) ? (x & 15) : 0;
     }
@@ -5586,7 +5587,7 @@ static int est_frozen_mode(void)
 static int est_frozen_env_set(void)
 {
     static int v = -1;
-    if (v < 0) v = getenv("Y264_EST_FROZEN") != NULL;
+    if (v < 0) v = y264_env("Y264_EST_FROZEN") != NULL;
     return v;
 }
 /* Frozen pricing below the 720p class only when asked for. */
@@ -5636,7 +5637,7 @@ static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
 static int pskip_exit_mode(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_P_SKIP_EXIT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_P_SKIP_EXIT"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -5650,7 +5651,7 @@ static int pskip_exit_mode(void)
 static int fast_pskip_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_FAST_PSKIP"); v = e ? atoi(e) != 0 : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_FAST_PSKIP"); v = e ? atoi(e) != 0 : 1; }
     return v;
 }
 
@@ -5689,7 +5690,7 @@ static int part_earlyterm(void)
  * banks -- a better exchange than the escape. Y264_PART_EARLYTERM=3
  * selects mode 3 alone, =0 the all-four partition order. */
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PART_EARLYTERM"); v = e ? atoi(e) : 4; }
+    if (v < 0) { const char *e = y264_env("Y264_PART_EARLYTERM"); v = e ? atoi(e) : 4; }
     return v;
 }
 
@@ -5753,7 +5754,7 @@ static int part_hetero(y264_frame_t *f, int mbx, int mby)
 static int band_rows_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_BAND_ROWS"); v = e ? atoi(e) : 2; if (v < 1) v = 1; }
+    if (v < 0) { const char *e = y264_env("Y264_BAND_ROWS"); v = e ? atoi(e) : 2; if (v < 1) v = 1; }
     return v;
 }
 int y264_band_rows(void) { return band_rows_env(); }
@@ -5774,7 +5775,7 @@ static int band_tab_on(const y264_frame_t *f)
 static int band_precomp_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_BAND_PRECOMP"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_BAND_PRECOMP"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -6160,7 +6161,7 @@ static FILE *me_dump_fp(void)
     static FILE *fp;
     static int on = -1;
     if (on < 0) {
-        const char *e = getenv("Y264_ME_DUMP");
+        const char *e = y264_env("Y264_ME_DUMP");
         fp = e && e[0] ? fopen(e, "w") : NULL;
         on = fp != NULL;
     }
@@ -6188,7 +6189,7 @@ static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
 static int mereuse_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MEREUSE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_MEREUSE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static long mru_n, mru_valid, mru_beat_pred, mru_beat_win;
@@ -6777,7 +6778,7 @@ static void tdir_why_dump(void);
 static int tdir_why_on(void)
 {
     static int v = -1;
-    if (v < 0) { v = getenv("Y264_DIRECT_WHY") ? 1 : 0; if (v) atexit(tdir_why_dump); }
+    if (v < 0) { v = y264_env("Y264_DIRECT_WHY") ? 1 : 0; if (v) atexit(tdir_why_dump); }
     return v;
 }
 static _Atomic long g_tdir_c_l0, g_tdir_c_l1, g_tdir_c_intra, g_tdir_refused;
@@ -6937,7 +6938,7 @@ static int b_seeds_on(void)
 static int b_ref_stat(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_B_REF_ET_STAT"); v = e ? atoi(e) : 0; }
+    if (v == -2) { const char *e = y264_env("Y264_B_REF_ET_STAT"); v = e ? atoi(e) : 0; }
     return v;
 }
 static long g_brs_n[65], g_brs_win[65];
@@ -7360,7 +7361,7 @@ static int b_8x8_on(void)
  * disproved by the ladder shift (+1.23/+1.86 at +/-13%), recon_sweep
  * 300/300, determ_repeat 2/2 under six spinners. It costs 1.1-1.3% of t1
  * wall (wall_ab, arm minus its control). Y264_B_8X8=0 is the escape. */
-    if (v < 0) { const char *e = getenv("Y264_B_8X8"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_B_8X8"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -7369,7 +7370,7 @@ static int b_8x8_on(void)
 static int b8_direct_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B8_DIRECT"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_B8_DIRECT"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -7433,7 +7434,7 @@ static int bx_ref_admit(const y264_frame_t *f, int mbx, int mby, long bdist_x)
 static int b8_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B8_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_B8_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static uint64_t b8s_mb, b8s_search, b8s_gated, b8s_rd, b8s_win, b8s_skipexit, b8s_rect;
@@ -7516,7 +7517,7 @@ static void b8_stat_register(void)
 static int b_rect_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B_RECT"); v = e ? atoi(e) != 0 : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_B_RECT"); v = e ? atoi(e) != 0 : 0; }
     return v;
 }
 
@@ -7543,7 +7544,7 @@ static int b8_qgate(void)
  * quality deficit. QGATE=6 OVERSHOOTS -- goal 1 needed 0.11 dVMAF and 6
  * delivers 0.15, all of it paid in the median-speed leg. 16 is past the
  * knee (foreman goes positive). 0 disables the gate. */
-    if (v < 0) { const char *e = getenv("Y264_B8_QGATE"); v = e ? atoi(e) : 10; }
+    if (v < 0) { const char *e = y264_env("Y264_B8_QGATE"); v = e ? atoi(e) : 10; }
     return v;
 }
 
@@ -7742,7 +7743,7 @@ static void build_bpart_pred(y264_frame_t *f, int mbx, int mby, int part, int co
 static int bprof2_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_BPROF2"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_BPROF2"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static uint64_t bp2_enc, bp2_dist, bp2_bits; static long bp2_n;
@@ -7782,7 +7783,7 @@ static inline long mvd_bypass_lb(int mvd)
 static int rd_abort_stat(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_RD_ABORT_STAT"); v = e ? atoi(e) : 0; }
+    if (v == -2) { const char *e = y264_env("Y264_RD_ABORT_STAT"); v = e ? atoi(e) : 0; }
     return v;
 }
 static long rd_abort_n[3];
@@ -8188,7 +8189,7 @@ static int flatskip_stat_on(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *e = getenv("Y264_FLATSKIP_STAT"); v = e ? atoi(e) : 0;
+        const char *e = y264_env("Y264_FLATSKIP_STAT"); v = e ? atoi(e) : 0;
         if (v) atexit(y264_flatskip_stat_dump);
     }
     return v;
@@ -8381,7 +8382,7 @@ static int mb_lambda_qp(const y264_frame_t *f, int mbx, int mby)
 static int bprof_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_BPROF"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_BPROF"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static inline uint64_t bp_now(void)
@@ -8406,7 +8407,7 @@ static uint64_t bdir_win[3], bdir_dist[3], bdir_rate[3], bdir_n;
 static int bdir_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_BDIR_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_BDIR_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 /* P side of the two-sided table: same cut style,
@@ -8446,7 +8447,7 @@ static uint64_t pp_mbs[3];
 static int pprune_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PPRUNE_PROBE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_PPRUNE_PROBE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 #define PPRUNE_NB 9
@@ -8543,7 +8544,7 @@ static int pcen_on(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *e = getenv("Y264_PSKIP_CENSUS");
+        const char *e = y264_env("Y264_PSKIP_CENSUS");
         v = e ? (atoi(e) ? 1 : 0) : 0;
         if (v) atexit(pcen_dump);       /* resolved on the main thread by the warm */
     }
@@ -10014,7 +10015,7 @@ static void author_mvd(y264_frame_t *f, int bx4, int by4, int w4, int h4,
 static int bitstat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_BITSTAT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_BITSTAT"); v = e ? atoi(e) : 0; }
     return v;
 }
 static _Atomic long g_bits_mode, g_bits_mv, g_bits_coef;   /* atomic: the emit is a wavefront */
@@ -11058,7 +11059,7 @@ static int coef_signif(const dctcoef coef[16], int qp, int strict,
 static int probe_trellis_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PROBE_TRELLIS"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_PROBE_TRELLIS"); v = e ? atoi(e) : 1; }
     return v;
 }
 /* PROBE_KEEP: a level the decimator can never drop (|level| >= 2), or a block the probe

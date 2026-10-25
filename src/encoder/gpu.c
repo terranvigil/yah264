@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "gpu.h"
+#include "../common/env.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -12,7 +13,7 @@ int y264_gpu_lowres_mode(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *s = getenv("Y264_GPU_LOWRES");
+        const char *s = y264_env("Y264_GPU_LOWRES");
         v = s ? (atoi(s) ? 1 : 0) : 0;
     }
     return v;
@@ -209,7 +210,7 @@ int y264_gpq_mode(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *s = getenv("Y264_GPU_PHASEA");
+        const char *s = y264_env("Y264_GPU_PHASEA");
         v = s ? (atoi(s) ? 1 : 0) : 0;
     }
     return v;
@@ -269,7 +270,7 @@ static void gpq_die(y264_gpq *g, const char *why)
 static int gpq_warmup_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_GPQ_WARMUP"); v = s ? atoi(s) : 24;
+    if (v < 0) { const char *s = y264_env("Y264_GPQ_WARMUP"); v = s ? atoi(s) : 24;
                  if (v < 0) v = 0; }
     return v;
 }

@@ -13,6 +13,7 @@
  * adds emulation-prevention afterwards.
  */
 #include "cabac.h"
+#include "../common/env.h"
 #include "nzmask.h"
 #include "../dsp/transform.h"
 #include <stdlib.h>
@@ -49,7 +50,7 @@ static void trf_open(void)
     static int tried;
     if (tried) return;
     tried = 1;
-    const char *path = getenv("Y264_CABAC_TRACE_FLAT");
+    const char *path = y264_env("Y264_CABAC_TRACE_FLAT");
     if (path && *path && (trf_f = fopen(path, "wb"))) atexit(trf_close);
 }
 static inline void trf_bin(const y264_cabac_t *c, int op, int ctx, int bin)
@@ -66,7 +67,7 @@ static void tr_select(const y264_cabac_t *c)
     static int tried;
     if (!tried) {
         tried = 1;
-        const char *path = getenv("Y264_CABAC_TRACE");
+        const char *path = y264_env("Y264_CABAC_TRACE");
         if (path && *path && (tr_f = fopen(path, "wb"))) atexit(tr_close);
     }
     if (tr_f || trf_f) tr_c = c;

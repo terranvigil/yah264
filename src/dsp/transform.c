@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <stdlib.h>
+#include "../common/env.h"
 #include <pthread.h>
 
 #include "transform.h"
@@ -842,8 +843,8 @@ static int dz64_of(int intra)
 {
     static int vi = -2, vp = -2;
     if (vi == -2) {
-        const char *e = getenv("Y264_DZ_INTRA"); int a = e ? atoi(e) : -1;
-        e = getenv("Y264_DZ_INTER");             vp = e ? atoi(e) : -1;
+        const char *e = y264_env("Y264_DZ_INTRA"); int a = e ? atoi(e) : -1;
+        e = y264_env("Y264_DZ_INTER");             vp = e ? atoi(e) : -1;
         vi = a;
     }
     return intra ? vi : vp;
