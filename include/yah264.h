@@ -960,8 +960,10 @@ typedef struct {
 } yah264_video_signal_t;
 YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *enc, const yah264_video_signal_t *vs);
 
-/* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
- * *count NAL units owned by the encoder. Returns 0 on success. The software
+/* Retrieve the NAL units that open the stream (SPS and PPS, plus the AUD and
+ * SEI those settings call for); write all of them, in order. On return *nal
+ * points at an array of *count NAL units owned by the encoder. Returns 0 on
+ * success. The software
  * encoder never emits SPS or PPS from encode, so a stream starts with these
  * NAL units. The hardware backend can't know them before its first frame is
  * coded: there this may return no NAL units, and encode then puts SPS and PPS
