@@ -250,6 +250,9 @@ def _enc_bitdepth(bitstream):
 # coded size. Scored at native size, a CIF picture's chroma planes shrink to a
 # few samples in v1's chroma feature and chroma loss goes unseen.
 V1_DISPLAY = (1920, 1080)
+# names this scoring rule in keys and files that hold v1 scores, so a score
+# taken before it (native size) is never read as one taken under it
+V1_RULE = "disp"
 V1_SCALE_VF = ("scale=w=1920:h=1080:force_original_aspect_ratio=decrease:"
                "force_divisible_by=2:flags=bicubic")
 

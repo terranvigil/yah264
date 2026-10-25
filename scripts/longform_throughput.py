@@ -1219,12 +1219,14 @@ def score(cell, bitstream, wd, start=0, count=None):
                     ["--model", f"path={model}:"
                      + bd.v1_model_opts(info["w"], info["h"], bd._enc_bitdepth(bitstream))]
                     + ([] if scaled else ["--feature", "psnr"]), scaled)
+    psnr_frames = None
     if scaled:
         pj = _vmaf_pass(cell, bitstream, wd, start, count, os.path.join(wd, "p.json"),
                         ["--no_prediction", "--feature", "psnr"], False)
         for k in ("psnr_y", "psnr_cb", "psnr_cr"):
             if k in pj["pooled_metrics"]:
                 jj["pooled_metrics"][k] = pj["pooled_metrics"][k]
+        psnr_frames = len(pj["frames"])
     want = (count + int(SUBSAMPLE) - 1) // int(SUBSAMPLE)
     pooled = jj["pooled_metrics"]
     frames = jj["frames"]
@@ -1243,7 +1245,7 @@ def score(cell, bitstream, wd, start=0, count=None):
                             pooled["psnr_cr"]["mean"])
         if "psnr_cb" in pooled else None,
         "frames_scored": len(frames), "frames_want": want}
-    ok = len(frames) == want
+    ok = len(frames) == want and psnr_frames in (None, want)
     if SSIM_PASS:
         extra["ssim_yuv611"], extra["frames_decoded"] = \
             ssim_611(cell, bitstream, wd, start, count)
@@ -2898,6 +2900,12 @@ def bd_of(cell):
 # log-rate gap of two cubic fits over the shared quality range, the ladder
 # lane's own formula, so a number here equals the one that lane prints.
 LAD_JSON = os.environ.get("LF_LAD_JSON", "")
+# that store and its report sections are scored on VMAF-NEG, and only VMAF
+# v1 is reported, so it is left out until the lane is rescored on v1
+if LAD_JSON:
+    print(f"longform: {LAD_JSON} is a VMAF-NEG ladder store; v1 alone is "
+          "reported, so it is left out", file=sys.stderr)
+    LAD_JSON = ""
 _LAD = None
 
 
@@ -3968,16 +3976,16 @@ def parse_board(goal):
     samples = int(m.group(1)) if m else 1
     win = (re.search(r"window=(\S+)", text) or [None, "?"])[1]
     bid = (re.search(r"binaries \[(\w+)\]", text) or [None, "?"])[1]
-    # a board scored on VMAF v1 says dVMAF-v1 in its header and keys its
-    # quality cache with ":v1"; an older board's quality columns are NEG and
-    # are left out
-    v1 = "dVMAF-v1" in text
+    # a board scored on VMAF v1 under the current rule says so in its header
+    # and keys a scaled clip's quality cache ":v1d", any other ":v1"; an
+    # older board's quality columns are left out
+    v1 = "dVMAF-v1" in text and f"v1 scoring: {bd.V1_RULE}" in text
     q = {}
     for ln in BOARD_QLINE.finditer(text) if v1 else ():
         b, codec, clip, pt, th = ln.groups()
         pre, suf = f"{b}:crf:lib{codec}:{clip}:", f":{pt}:{PRESET}:t{th}:v1"
         hit = next((v for k, v in qc.items() if k.startswith(pre)
-                    and k.endswith(suf)), None)
+                    and (k.endswith(suf) or k.endswith(suf + "d"))), None)
         if hit:
             q[(codec, clip)] = hit
     rows = {}
