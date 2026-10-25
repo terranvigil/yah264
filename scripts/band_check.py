@@ -160,7 +160,7 @@ def solve(src, target, out):
     tolerance between neighboring rate factors; then a multi-pass encode at
     the target bitrate gets closer, and the closest encode is kept."""
     lo, hi, crf = 10.0, 40.0, 23.0
-    best, keep, stats = None, out + ".best", out + ".stats"
+    keep, stats = out + ".best", out + ".stats"
     try:
         return _solve(src, target, out, lo, hi, crf, keep, stats)
     finally:
@@ -185,9 +185,10 @@ def _solve(src, target, out, lo, hi, crf, keep, stats):
     if abs(best[1] - 1) > SIZE_TOL:
         _, _, fps = bdcompare._y4m_geometry(src)
         kbps = target * 8 / (nframes(src) / fps) / 1000
-        # pass 3 reads and rewrites the stats, so each one refines against a
-        # real encode; a short dark window can need it to land on the target
-        for p in (1, 2, 3, 3):
+        # pass 3 encodes from the stats and rewrites them, so each one after
+        # the first refines against a real encode; a short dark window can
+        # need that to land on the target
+        for p in (1, 3, 3, 3):
             run([YAH264, "--input-y4m", src, "-o", out, "--bitrate", str(max(1, round(kbps))),
                  "--pass", str(p), "--stats", stats, "--threads", THREADS,
                  "--quiet", "--no-progress"] + ARGS)

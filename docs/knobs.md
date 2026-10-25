@@ -6,7 +6,7 @@ These are read only in a build configured with `-Ddev_knobs=true`; a default bui
 
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (52)
+## default (53)
 
 | knob | default | reader |
 |---|---|---|
@@ -45,6 +45,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_ME_AGREE` | 1 | src/encoder/motion.c:235 |
 | `Y264_ME_MINW` | 1920 | src/encoder/motion.c:233 |
 | `Y264_PART_EARLYTERM` | 4 | src/encoder/mbcode.c:5407 |
+| `Y264_PSY_DARK` | 5.0 | src/encoder/mbcode.c:449 |
 | `Y264_QPEL_SKIPQ` | 96 | src/encoder/motion.c:245 |
 | `Y264_RCP_LAG` | 1 | src/encoder/encoder.c:456 |
 | `Y264_RC_CARRY` | 1 | cli/yah264_cli.c:1314 |
@@ -125,7 +126,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_VBV_ROWBRAKE_TRACE` | 0 | src/encoder/mbcode.c:5249 |
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:881 |
 
-## arm (14)
+## arm (13)
 
 | knob | default | reader |
 |---|---|---|
@@ -138,7 +139,6 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_ME_HQ` | 0 | src/encoder/motion.c:234 |
 | `Y264_NR_INTER` | 0 | src/encoder/encoder.c:1990 |
 | `Y264_NR_INTRA` | 0 | src/encoder/encoder.c:1989 |
-| `Y264_PSY_DARK` | ? | src/encoder/mbcode.c:449 |
 | `Y264_QPSQ_MINW` | 0 | src/encoder/motion.c:241 |
 | `Y264_STREAM_WINDOW` | ? | cli/yah264_cli.c:2878 |
 | `Y264_SUB_FAR` | 0 | src/encoder/motion.c:236 |

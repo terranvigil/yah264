@@ -99,6 +99,7 @@ DEFAULT_OVERRIDES = {
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
     "Y264_TREL_SMOOTH": "on (0 = off)",
     "Y264_AQ_DARK": "6.0",
+    "Y264_PSY_DARK": "5.0",
     "Y264_AQ_DARK_M": "64",
     "Y264_AQ_DARK_V": "16",
     "Y264_AQ_DARK_B0": "0.08",
