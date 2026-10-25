@@ -5626,21 +5626,6 @@ static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
 }
 
 
-/* Y264_P_SKIP_EXIT: the P-side late-skip class. 35% of P_Skip verdicts fail
- * the zero-residual early probe, run the full tournament and end skip by RD
- * anyway. Two bracketing
- * exits: 1 = post-RD -- when skip already beats the inter candidate's RD,
- * commit without the intra trial (forgoes only an intra win over a winning
- * skip). 2 = post-16x16-SATD -- compare the skip candidate's own SATD (no
- * bits) against the searched 16x16 cost; bypasses partitions, RD and intra. Not the refuted
- * midskip: no extra RD trial, and the searched MV competes first. */
-static int pskip_exit_mode(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = y264_env("Y264_P_SKIP_EXIT"); v = e ? atoi(e) : 0; }
-    return v;
-}
-
 /* The cheap P_Skip pre-test that runs before any mode analysis at subme <= 8:
  * where the predicted skip motion and its residual pass the strict probe the
  * macroblock is committed as P_Skip, and neither the inter search nor the
@@ -12451,11 +12436,6 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         y264_me_set_ref16(1, ires0.mvx[0], ires0.mvy[0]);   /* Y264_SUB_FAR */
         pc_satd16 = best_satd;
         tl_ref16 = ires0.ref[0];                 /* the 8x8 stage's clamp key (P8_REFCLAMP) */
-        if (skip_ok && pskip_exit_mode() == 2) {
-            const pixel *src0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
-            long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
-            if (satd_skip < best_satd) { tl_ref16 = -1; mode = 0; j_win = j_skip; goto decided; }
-        }
         pires = pi0;
         tl_mixref_only = mixref_slot(f, ires0.ref[0]);
         if (tl_rx_hit) {                     /* the post-ref-0 exit: the 16x16 is the candidate */
@@ -12536,18 +12516,6 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     y264_bs_t sb;
     long j_intra = -1;
     PPCUT(4);
-    if (skip_ok && j_skip <= j_inter) {
-        int xm = pskip_exit_mode();
-        if (xm == 1 || xm == 2) {           /* post-RD bypass (band-refuted, kept for study) */
-            mode = 0; j_win = j_skip;
-            goto decided;
-        }
-        if (xm == 3 && best_satd >= 0) {    /* screen-bar fix: intra must beat the WINNER */
-            const pixel *src0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
-            long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
-            if (satd_skip < best_satd) best_satd = satd_skip;
-        }
-    }
     if (intra_admit(f, mbx, mby, best_satd)) {
         STG_BEG(STG_INTRA);
         NLED_SITE(Y264_LED_SITE_PINTRA);
@@ -12748,18 +12716,6 @@ static void p_wf_init(void *ctx, int idx)
                      w->base->hpel_n, w->base->hpel_stride);
     y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
-/* Multi-frame pool re-entry (a worker resuming a PARKED row of this job after
- * serving another frame): re-install the thread-local hpel registry only. The
- * per-worker frame/cabac copies are per-job arrays, untouched by the other
- * job, and hold row-in-progress state that thread_init would clobber. */
-static void p_wf_attach(void *ctx, int idx)
-{
-    struct p_wf *w = ctx;
-    (void)idx;
-    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
-                     w->base->hpel_n, w->base->hpel_stride);
-    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
-}
 static void p_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct p_wf *w = ctx;
@@ -12801,7 +12757,7 @@ static int p_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam, int 
     int ok = w.fc && w.snap_skip && w.snap_inter && w.nzbuf  && w.rowqc;
     if (ok) {
         ntp_prof_tag("analyze_P");
-        ntp_wavefront_gated(pool, f->hmb, f->wmb, p_wf_init, p_wf_attach,
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, p_wf_init,
                             p_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;   /* scratch persists in the pool (freed at pool destroy) */
@@ -12822,14 +12778,6 @@ static void b_wf_init(void *ctx, int idx)
 {
     struct b_wf *w = ctx;
     w->fc[idx] = *w->base;
-    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
-                     w->base->hpel_n, w->base->hpel_stride);
-    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
-}
-static void b_wf_attach(void *ctx, int idx)     /* see p_wf_attach */
-{
-    struct b_wf *w = ctx;
-    (void)idx;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
     y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
@@ -12868,7 +12816,7 @@ static int b_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam, int
     int ok = w.fc && w.nzbuf  && w.snap_best;
     if (ok) {
         ntp_prof_tag("analyze_B");
-        ntp_wavefront_gated(pool, f->hmb, f->wmb, b_wf_init, b_wf_attach,
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, b_wf_init,
                             b_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
@@ -12901,17 +12849,6 @@ static void pcb_wf_init(void *ctx, int idx)
     w->cb[idx] = *w->base->cabac;
     y264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
     w->fc[idx].cabac = &w->cb[idx];
-    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
-                     w->base->hpel_n, w->base->hpel_stride);
-    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
-}
-static void pcb_wf_attach(void *ctx, int idx)   /* see p_wf_attach: MUST not
- * touch cb[idx] -- its est_ctx
- * carries the parked row's WPP
- * state across the resume */
-{
-    struct pcb_wf *w = ctx;
-    (void)idx;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
     y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
@@ -12979,7 +12916,7 @@ static int pcb_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam,
              w.rowqc;
     if (ok) {
         ntp_prof_tag("analyze_Pcb");
-        ntp_wavefront_gated(pool, f->hmb, f->wmb, pcb_wf_init, pcb_wf_attach,
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, pcb_wf_init,
                             pcb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
@@ -13005,14 +12942,6 @@ static void bcb_wf_init(void *ctx, int idx)
     w->cb[idx] = *w->base->cabac;
     y264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
     w->fc[idx].cabac = &w->cb[idx];
-    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
-                     w->base->hpel_n, w->base->hpel_stride);
-    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
-}
-static void bcb_wf_attach(void *ctx, int idx)   /* see pcb_wf_attach */
-{
-    struct bcb_wf *w = ctx;
-    (void)idx;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
     y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
@@ -13064,7 +12993,7 @@ static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
     int ok = wpp && w.fc && w.cb && w.nzbuf  && w.snap_best;
     if (ok) {
         ntp_prof_tag("analyze_Bcb");
-        ntp_wavefront_gated(pool, f->hmb, f->wmb, bcb_wf_init, bcb_wf_attach,
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, bcb_wf_init,
                             bcb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
@@ -13099,10 +13028,6 @@ static void icb_wf_init(void *ctx, int idx)
     y264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
     w->fc[idx].cabac = &w->cb[idx];
 }
-/* Re-entry for a worker resuming a PARKED row: nothing to re-install (intra has
- * no hpel registry), and it must NOT re-init cb[idx] -- that est_ctx carries the
- * parked row's WPP state across the resume (see p_wf_attach). */
-static void icb_wf_attach(void *ctx, int idx) { (void)ctx; (void)idx; }
 static void icb_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct icb_wf *w = ctx;
@@ -13135,7 +13060,7 @@ static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
     int ok = wpp && w.fc && w.cb;
     if (ok) {
         ntp_prof_tag("analyze_Icb");
-        ntp_wavefront_gated(pool, f->hmb, f->wmb, icb_wf_init, icb_wf_attach,
+        ntp_wavefront_gated(pool, f->hmb, f->wmb, icb_wf_init,
                             icb_wf_cell, &w, f->row_ready, f->row_gate_ctx);
     }
     return ok;
@@ -13647,7 +13572,7 @@ void y264_mb_warm_statics(void)
     (void)unsafe_no_emit();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */
-    (void)pskip_exit_mode(); (void)fast_pskip_on();
+    (void)fast_pskip_on();
     (void)b_skip_exit_env();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();
     (void)resprof_on(); (void)trprof_on(); (void)est_prof_on(); (void)est_scrtrace_on();

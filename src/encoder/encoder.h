@@ -1219,17 +1219,6 @@ struct yah264_encoder {
  * cache (CPU detect, config, tables) on one thread before any parallel frame
  * touches them -- otherwise those idempotent first-writes trip TSan. */
     struct ntp_pool *pool;
-    /* Optional nextgpu backend for the lookahead's lowres integer search
- * (src/encoder/gpu.h). NULL whenever the library is not linked or
- * Y264_GPU_LOWRES is not armed; Metal availability is probed lazily at
- * the first batch begin (gpu.h), and the CPU search stays complete
- * and default. */
-    struct y264_gpu *gpu;
-    struct y264_gpu *gpu_warm;  /* the pre-thread's own handle: the warm and the
- * NEXT walk overlap by design (the warm joins at
- * the launch AFTER that walk), so sharing one
- * stateful handle would race. Two handles are
- * two independent Metal queues. */
     struct y264_gpq *gpq;       /* per-push Phase-A leg batching (Y264_GPU_PHASEA,
  * gpu.h): the chain submits SEARCHQ legs at push,
  * the walk/warm consume fields frames later. */

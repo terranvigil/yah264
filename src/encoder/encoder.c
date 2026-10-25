@@ -4075,11 +4075,8 @@ int yah264_lookahead_delay(const yah264_param_t *param)
  * with the gate removed), so they are built as before. The signal to every
  * reader is a NULL plane pointer; either way the SATDs are identical. */
 #define LR_ONFLY_MIN_PIXELS (1000 * 1000)
-static int lr_qpel_avg_on(void);
 static inline int lr_plane_built(const yah264_encoder_t *e, int phase)
 {
-    if (lr_qpel_avg_on())                   /* half-pel planes only: H, V, C */
-        return phase == 2 || phase == 8 || phase == 10;
     int diag = (phase & 3) && (phase >> 2);
     return !diag || (size_t)e->lr_w * e->lr_h < LR_ONFLY_MIN_PIXELS;
 }
@@ -5714,11 +5711,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * so this is byte-identical by construction. */
     {
         if (e->wf_width > 1) e->pool = ntp_pool_create(e->wf_width);
-        /* Opened once per encoder; NULL unless armed AND Metal is present. The
- * chunk size is the library's own, so the leg count passed here only
- * bounds the buffers it keeps. */
-        e->gpu = y264_gpu_open(e->lr_w, e->lr_h, 48, 96);
-        e->gpu_warm = e->gpu ? y264_gpu_open(e->lr_w, e->lr_h, 48, 96) : NULL;
         /* gpq (Y264_GPU_PHASEA): per-push Phase-A legs. Needs the lookahead
  * ring (the chain is the submitter and push order the key). */
         e->gpq = e->la_cap > 0 && e->la_depth > 0
@@ -6999,12 +6991,6 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
  * the matching precomputed phase-plane (build_lr_subpel), a cheap stand-in for
  * full interpolation; quarter precision keeps a subpel pan matching tightly so
  * the propagation fraction stays high and importance accumulates over the chain. */
-/* The GPU's exhaustive half-window in LOWRES whole pels. 16 is what our own
- * diamond covers (step 64 qpel = 16 whole pels), so it is the like-for-like
- * setting; 8 is the cheaper operating point (0.53 ms vs 1.52 ms per leg at
- * 720p) and is used because several legs run per frame. */
-#define GPU_RANGE 8
-
 /* The whole-pel SAD probes of the two lowres searches (the mb-tree coherent
  * diamond's integer levels, and the lookahead field ME's candidate list,
  * hexagon and square) are scored four at a time through sad_quad before the
@@ -7014,19 +7000,6 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
  * source loads (checkasm: 8x8 x4 5.8 ns against 4 x 2.9 ns singles). The
  * settle lead acts only above one thread, with a lookahead thread; see the
  * wait in compute_mbtree_wholebuf. */
-/* Y264_LR_QPEL_AVG=1 (default 0; changes bits): build only the three
- * half-pel lowres planes and form a quarter-pel block where it is read, as the
- * average of its two nearest half-pel samples, instead of building all
- * fifteen bilinear phase planes (nine of them already formed on the fly
- * above ~1080p). Plane building then costs 3/15 of the phases and the
- * per-read cost moves to a 64-pixel average. */
-static int lr_qpel_avg_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = y264_env("Y264_LR_QPEL_AVG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
-
 /* The lowres sub-pel diamonds score their four points through satd_quad_8x8
  * when all four are in bounds on built planes (byte-identical). Phase B skips
  * deposits onto an accumulator nobody reads afterwards (output unchanged). */
@@ -7092,50 +7065,15 @@ static inline void lr_qp_block8(pixel *restrict out, const pixel *restrict ref, 
         }
     }
 }
-/* Out of line so the plane path of the two readers below stays small
+/* Out of line so the plane path of the reader below stays small
  * enough to inline into the searches. */
-/* The two blocks whose rounded average is the quarter-pel block at integer
- * (x,y) + (fx,fy)/4, off the whole-pel plane and the three half-pel planes
- * (subpel[2] H, [8] V, [10] C) by the rule the full-res motion compensation
- * uses (y264_qpel_plane_a/b). Returns 0 when a half-pel plane is missing. */
-static inline int lr_qp_pair(const pixel *ref, pixel *const *subpel, int rs,
-                             int x, int y, int fx, int fy,
-                             const pixel **pa, const pixel **pb)
-{
-    if (!subpel || !subpel[2] || !subpel[8] || !subpel[10])
-        return 0;
-    const pixel *pl[4] = { ref, subpel[2], subpel[8], subpel[10] };
-    int qi = fy * 4 + fx;
-    const pixel *a = pl[y264_qpel_plane_a[qi]] + (size_t)y * rs + x + (fy == 3 ? rs : 0);
-    *pa = a;
-    *pb = (qi & 5) ? pl[y264_qpel_plane_b[qi]] + (size_t)y * rs + x + (fx == 3 ? 1 : 0) : a;
-    return 1;
-}
 static __attribute__((noinline)) long blk8_qp_onfly(const pixel *sb, int ss,
                                                     const pixel *ref, int rs,
-                                                    pixel *const *subpel, int x, int y,
-                                                    int fx, int fy, int sad)
+                                                    int x, int y, int fx, int fy)
 {
     pixel blk[64];
-    const pixel *qa, *qb;
-    if (lr_qpel_avg_on() && lr_qp_pair(ref, subpel, rs, x, y, fx, fy, &qa, &qb))
-        /* Y264_LR_QPEL_AVG: a quarter-pel block is the rounded average of
- * the two nearest of {whole, H, V, C} -- the same rule the full-res
- * motion compensation uses -- scored without materialising it. */
-        return sad ? y264_dsp.avg_sad8x8(sb, ss, qa, qb, rs)
-                   : y264_dsp.avg_satd8x8(sb, ss, qa, qb, rs);
     lr_qp_block8(blk, ref, rs, x, y, fx, fy);
-    return sad ? (long)y264_dsp.sad[Y264_PU_8x8](sb, ss, blk, 8) : blk8_satd(sb, ss, blk, 8);
-}
-static inline long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs,
-                               pixel *const subpel[16], int bx, int by, int qmx, int qmy)
-{
-    int ix = qmx >> 2, iy = qmy >> 2, fx = qmx & 3, fy = qmy & 3;
-    int phase = (fy << 2) | fx;
-    if (phase && !subpel[phase])
-        return blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, 1);
-    const pixel *base = phase ? subpel[phase] : ref;
-    return y264_dsp.sad[Y264_PU_8x8](sb, ss, base + (by + iy) * rs + bx + ix, rs);
+    return blk8_satd(sb, ss, blk, 8);
 }
 static inline long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int rs,
                                 pixel *const subpel[16], int bx, int by, int qmx, int qmy)
@@ -7150,196 +7088,8 @@ static inline long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int r
                 if (y >= 0) g_lrs_row[phase][y] = 1;
     }
     if (phase && !subpel[phase])
-        return blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, 0);
+        return blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy);
     return blk8_satd(sb, ss, base + (by + iy) * rs + bx + ix, rs);
-}
-
-/* Coherent + quarter-pel lowres ME for mb-tree. The SEARCH minimises
- * SATD + lambda*mvbits(mv - predictor) seeded from the predictor (coherent MV
- * field on pans), and refines to QUARTER-pel so a subpel
- * pan matches tightly -- else the residual inflates inter cost, cuts the
- * propagation fraction, and mb-tree importance decays over the chain instead of
- * accumulating (why mb-tree once gained little on motion clips). All MVs in
- * QUARTER-lowres-pel; returns the cost INCLUDING mvcost . */
-/* gseed: an integer-pel MV from the GPU's exhaustive window (gvalid != 0), in
- * LOWRES WHOLE pels. It is taken as one more seed alongside {predictor, above,
- * zero} and then the diamond starts at step 2 instead of 64 -- the GPU has
- * already searched the wide levels, exhaustively, so re-walking them can only
- * find the same minimum more slowly.
- *
- * The seeds are kept rather than replaced because the GPU searches at lambda 0:
- * it reports where the DISTORTION minimum is, and the rate-aware choice between
- * that and a cheaper-to-code neighbour MV stays here, with the encoder's own
- * rate model. Dropping the predictor seed would quietly change what the search
- * optimises. */
-static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
-                           pixel *const subpel[16], int lw, int lh, int bx, int by,
-                           int predx, int predy, int ax, int ay, double mvlambda,
-                           int gseedx, int gseedy, int gvalid,
-                           int *outmvx, int *outmvy)
-{
-    int xmin = -4 * bx, xmax = 4 * (lw - 8 - bx);        /* quarter-pel MV bounds */
-    int ymin = -4 * by, ymax = 4 * (lh - 8 - by);
-#define CLQ(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
-    const long *ctab = coh_tab(mvlambda);                /* TLS resolved once */
-    int sadint = !gvalid;                                 /* integer levels by SAD */
-    int sadnow = sadint;                                    /* the metric of the CURRENT level */
-#define COH_COST(mx, my) ((sadnow ? blk8_sad_qp(sb, ss, ref, rs, subpel, bx, by, (mx), (my)) \
-                                  : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (mx), (my))) \
-        + coh_rate(ctab, mvlambda, lowres_mvbits(((mx) - predx) >> 2) + lowres_mvbits(((my) - predy) >> 2)))
-    /* Seed the diamond from the best of {left, above, zero} -- a coherent field on
- * smooth motion but able to switch on divergent (zoom) motion where the left
- * neighbour is a poor predictor. mvcost still measures deviation from the left.
- * Duplicate seeds (post-clamp) are exact re-probes: identical cost, strict-<
- * acceptance -> skipping them changes nothing. */
-    int cx = CLQ(predx, xmin, xmax), cy = CLQ(predy, ymin, ymax);
-    int s0x = cx, s0y = cy;
-    long best = COH_COST(cx, cy);
-    int t1x = CLQ(ax, xmin, xmax), t1y = CLQ(ay, ymin, ymax);
-    if (t1x != s0x || t1y != s0y) {
-        long c = COH_COST(t1x, t1y);
-        if (c < best) { best = c; cx = t1x; cy = t1y; }
-    }
-    if (0 >= xmin && 0 <= xmax && 0 >= ymin && 0 <= ymax &&
-        (s0x || s0y) && (t1x || t1y)) {                  /* zero-MV candidate */
-        long z = COH_COST(0, 0);
-        if (z < best) { best = z; cx = 0; cy = 0; }
-    }
-    if (gvalid) {
-        int gx = CLQ(gseedx * 4, xmin, xmax), gy = CLQ(gseedy * 4, ymin, ymax);
-        long gc = COH_COST(gx, gy);
-        if (gc < best) { best = gc; cx = gx; cy = gy; }
-    }
-    /* The GPU already covered the wide levels exhaustively; start at the subpel
- * ones. Without a GPU seed this is the full 64..1 walk, unchanged. */
-    for (int step = gvalid ? 2 : 64; step >= 1; step >>= 1) {
-        if (sadnow && step < 4) {          /* subpel levels: back to SATD, re-score the centre */
-            sadnow = 0;
-            best = COH_COST(cx, cy);
-        }
-        /* Opposite-point skip: after a move along cand[k], the opposite
- * candidate (k^1: the pairs are +x/-x, +y/-y) IS the previous centre,
- * whose cost was already evaluated and is >= best (strict-<
- * acceptance) -- an exact re-probe, skipping it changes nothing.
- * Reset per step level (the halved ring is all-new positions). */
-        int skipk = -1;
-        for (int iter = 0; iter < 8; iter++) {
-            int cand[4][2] = { {cx + step, cy}, {cx - step, cy}, {cx, cy + step}, {cx, cy - step} };
-            int moved = 0, acc = -1;
-            /* Batched ring on the SAD levels: score every live candidate
- * through sad_quad BEFORE the ordered strict-< comparisons below. A
- * candidate's SAD does not depend on the running best, so the
- * comparisons see the identical numbers in the identical order. */
-            long ring[4];
-            int batch = sadnow;
-            /* A SAD level with the whole ring inside the bounds: the four
-             * candidates sit a whole-pel step from the centre, so they share
-             * its quarter-pel phase and read one plane at fixed offsets. If
-             * that plane is built, score them in one batched call and price
-             * them with the rate terms the centre's components share; the
-             * ordered comparisons are the ones below. */
-            if (sadnow && step >= 4 &&
-                cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
-                int phase = ((cy & 3) << 2) | (cx & 3);
-                const pixel *base = phase ? subpel[phase] : ref;
-                if (base) {
-                    const pixel *c0 = base + (by + (cy >> 2)) * rs + bx + (cx >> 2);
-                    int o = step >> 2, sc[4];
-                    y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, c0 + o, c0 - o, c0 + o * rs, c0 - o * rs, rs, sc);
-                    int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
-                    int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
-                                  lowres_mvbits((cx - step - predx) >> 2) + mby0,
-                                  mbx0 + lowres_mvbits((cy + step - predy) >> 2),
-                                  mbx0 + lowres_mvbits((cy - step - predy) >> 2) };
-                    for (int k = 0; k < 4; k++) {
-                        if (k == skipk) continue;
-                        long c = sc[k] + coh_rate(ctab, mvlambda, rb[k]);
-                        if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; acc = k; }
-                    }
-                    if (!moved) break;
-                    skipk = acc ^ 1;
-                    continue;
-                }
-            }
-            /* A SATD level with the whole ring inside the bounds and every
-             * candidate's plane built: the four reads at computed pointers,
-             * scored in one batched call (each the single kernel's value),
-             * priced with the shared rate terms, compared as below. */
-            if (!sadnow && g_lrs_census <= 0 && y264_dsp.satd_quad_8x8 &&
-                cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
-                const pixel *rp[4];
-                int ok = 1;
-                for (int k = 0; k < 4 && ok; k++) {
-                    int mx = cand[k][0], my = cand[k][1];
-                    int phase = ((my & 3) << 2) | (mx & 3);
-                    const pixel *base = phase ? subpel[phase] : ref;
-                    if (!base) ok = 0;
-                    else rp[k] = base + (by + (my >> 2)) * rs + bx + (mx >> 2);
-                }
-                if (ok) {
-                    int sc[4];
-                    y264_dsp.satd_quad_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
-                    int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
-                    int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
-                                  lowres_mvbits((cx - step - predx) >> 2) + mby0,
-                                  mbx0 + lowres_mvbits((cy + step - predy) >> 2),
-                                  mbx0 + lowres_mvbits((cy - step - predy) >> 2) };
-                    for (int k = 0; k < 4; k++) {
-                        if (k == skipk) continue;
-                        long c = sc[k] + coh_rate(ctab, mvlambda, rb[k]);
-                        if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; acc = k; }
-                    }
-                    if (!moved) break;
-                    skipk = acc ^ 1;
-                    continue;
-                }
-            }
-            if (batch) {
-                const pixel *rp[4]; int rk[4], nr = 0;
-                for (int k = 0; k < 4; k++) {
-                    ring[k] = LONG_MAX;
-                    if (k == skipk) continue;
-                    int mx = cand[k][0], my = cand[k][1];
-                    if (mx < xmin || mx > xmax || my < ymin || my > ymax) continue;
-                    int ix = mx >> 2, iy = my >> 2, fx = mx & 3, fy = my & 3;
-                    int phase = (fy << 2) | fx;
-                    const pixel *base = phase ? subpel[phase] : ref;
-                    if (phase && !subpel[phase]) {
-                        ring[k] = blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, 1);
-                        continue;
-                    }
-                    rp[nr] = base + (by + iy) * rs + bx + ix;
-                    rk[nr] = k; nr++;
-                }
-                int j = 0;
-                if (nr == 4) {
-                    int sc[4];
-                    y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
-                    for (; j < 4; j++) ring[rk[j]] = sc[j];
-                }
-                for (; j < nr; j++)
-                    ring[rk[j]] = (long)y264_dsp.sad[Y264_PU_8x8](sb, ss, rp[j], rs);
-                for (int k = 0; k < 4; k++)
-                    if (ring[k] != LONG_MAX)
-                        ring[k] += coh_rate(ctab, mvlambda,
-                                            lowres_mvbits((cand[k][0] - predx) >> 2) +
-                                            lowres_mvbits((cand[k][1] - predy) >> 2));
-            }
-            for (int k = 0; k < 4; k++) {
-                if (k == skipk) continue;
-                int mx = cand[k][0], my = cand[k][1];
-                if (mx < xmin || mx > xmax || my < ymin || my > ymax) continue;
-                long c = batch ? ring[k] : COH_COST(mx, my);
-                if (c < best) { best = c; cx = mx; cy = my; moved = 1; acc = k; }
-            }
-            if (!moved) break;
-            skipk = acc ^ 1;
-        }
-    }
-#undef COH_COST
-#undef CLQ
-    *outmvx = cx; *outmvy = cy;                          /* quarter-pel units */
-    return best;
 }
 
 /* mb-tree source/anchor descriptors, lifted to file scope so the parallel Phase-A
@@ -7363,10 +7113,6 @@ struct mbt_pa_ctx {
     const int *s_past, *s_fut;          /* per-source anchor slots (self via s_self) */
     const int *s_pastpoc, *s_futpoc;    /* past/fut anchor POCs (memo key; INT_MIN = none) */
     const pixel *const *s_pastlr, *const *s_futlr;
-    /* GPU integer-search fields, one per source per leg (NULL = CPU search).
- * Filled by ONE batch before the parallel_for, because an ngc_stream is
- * single-threaded by contract and mbt_pa_source runs on the pool. */
-    int16_t *const *gpu0, *const *gpu1;
     /* gpq (Y264_GPU_PHASEA): per-source past/future anchor PUSH indices, the
  * field-lookup key. NULL = gpq not in play this call. gpq_maxpush is the
  * caller's chain-wait bound (gpu.h): the highest push_idx among the
@@ -7937,8 +7683,6 @@ static void mbt_pa_source(void *ctx, int tid, int s)
 
     const pixel *pastlr = c->s_pastlr[s];
     const pixel *futlr  = c->s_futlr[s];
-    const int16_t *g0 = c->gpu0 ? c->gpu0[s] : NULL;
-    const int16_t *g1 = c->gpu1 ? c->gpu1[s] : NULL;
     /* gpq (Y264_GPU_PHASEA): per-leg quarter-pel fields computed at PUSH time.
  * A covered leg needs no CPU search and no subpel planes -- the per-block
  * eval below prices the GPU's two candidates (its qpel best and zero)
@@ -8104,15 +7848,10 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                                            lowres_mvbits((qy - pmvy0) >> 2));
                         if (ck < cost0) { cost0 = ck; mvx0 = qx; mvy0 = qy; }
                     }
-                } else if (!g0)
+                } else
                     cost0 = mbt_pa_hex_leg(e, sb, pastlr, subpel0, lw, lh, mx, my,
                                               pmvx0, pmvy0, rowmv[mx*4+0], rowmv[mx*4+1],
                                               mvlambda, &mvx0, &mvy0);
-                else
-                    cost0 = blk8_inter_coh(sb, lw, pastlr, lw, subpel0, lw, lh, mx * 8, my * 8, pmvx0, pmvy0,
-                                           rowmv[mx*4+0], rowmv[mx*4+1], mvlambda,
-                                           g0 ? g0[i * 2] : 0, g0 ? g0[i * 2 + 1] : 0, g0 != NULL,
-                                           &mvx0, &mvy0);
                 if (cost0 > intra) cost0 = intra;
                 pmvx0 = mvx0; pmvy0 = mvy0; rowmv[mx*4+0] = mvx0; rowmv[mx*4+1] = mvy0;
             }
@@ -8153,15 +7892,10 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                                            lowres_mvbits((qy - pmvy1) >> 2));
                         if (ck < cost1) { cost1 = ck; mvx1 = qx; mvy1 = qy; }
                     }
-                } else if (!g1)
+                } else
                     cost1 = mbt_pa_hex_leg(e, sb, futlr, subpel1, lw, lh, mx, my,
                                               pmvx1, pmvy1, rowmv[mx*4+2], rowmv[mx*4+3],
                                               mvlambda, &mvx1, &mvy1);
-                else
-                    cost1 = blk8_inter_coh(sb, lw, futlr, lw, subpel1, lw, lh, mx * 8, my * 8, pmvx1, pmvy1,
-                                           rowmv[mx*4+2], rowmv[mx*4+3], mvlambda,
-                                           g1 ? g1[i * 2] : 0, g1 ? g1[i * 2 + 1] : 0, g1 != NULL,
-                                           &mvx1, &mvy1);
                 if (cost1 > intra) cost1 = intra;
                 pmvx1 = mvx1; pmvy1 = mvy1; rowmv[mx*4+2] = mvx1; rowmv[mx*4+3] = mvy1;
             }
@@ -8277,73 +8011,6 @@ static int mbt_misswhy_env(void)
     static int v = -1;
     if (v < 0) { const char *s = y264_env("Y264_MBT_MISSWHY"); v = s ? atoi(s) : 0; }
     return v;
-}
-
-/* GPU leg batch, shared by the WALK (compute_mbtree_wholebuf) and the WARM
- * (mbt_warm_window). Submit registers each needed source's lowres plus its
- * bracket planes and queues one leg per bracket; collect waits and hands the
- * fields to mbt_pa_source as integer-search seeds. Failure at any point
- * leaves the pointers NULL and the CPU path runs -- the required degradation.
- * The two sites use SEPARATE handles (e->gpu / e->gpu_warm): the warm and the
- * next walk overlap by design, and the handle is stateful. */
-struct mbt_gpu_batch { int16_t **fields, **g0, **g1; int nfield, inflight; };
-
-static void mbt_gpu_submit(struct y264_gpu *g, struct mbt_gpu_batch *b, int ns,
-                           const struct mbt_source *src, const unsigned char *need,
-                           const pixel *const *pastlr, const pixel *const *futlr,
-                           int lw, int lh)
-{
-    memset(b, 0, sizeof *b);
-    if (!g || !y264_gpu_lowres_begin(g, lw, lh))
-        return;
-    int nblk2 = (lw / 8) * (lh / 8) * 2;
-    b->g0 = calloc((size_t)ns, sizeof *b->g0);
-    b->g1 = calloc((size_t)ns, sizeof *b->g1);
-    b->fields = calloc((size_t)ns * 2, sizeof *b->fields);
-    if (b->g0 && b->g1 && b->fields) {
-        for (int s = 0; s < ns; s++) {
-            if (!need[s] || !src[s].lr) continue;   /* memo hit / no lowres yet */
-            int cs = y264_gpu_lowres_plane(g, src[s].lr);
-            if (cs < 0) break;
-            const pixel *legref[2] = { pastlr[s], futlr[s] };
-            int16_t **legdst[2] = { &b->g0[s], &b->g1[s] };
-            for (int h = 0; h < 2; h++) {
-                if (!legref[h]) continue;
-                int rs2 = y264_gpu_lowres_plane(g, legref[h]);
-                if (rs2 < 0) break;
-                int16_t *f = malloc((size_t)nblk2 * sizeof(int16_t));
-                if (!f) break;
-                if (!y264_gpu_lowres_leg(g, cs, rs2, f)) { free(f); break; }
-                b->fields[b->nfield++] = f;
-                *legdst[h] = f;
-            }
-        }
-        b->inflight = y264_gpu_lowres_submit(g, GPU_RANGE);
-    }
-    if (!b->inflight) {
-        for (int i = 0; i < b->nfield; i++) free(b->fields[i]);
-        free(b->fields); free(b->g0); free(b->g1);
-        memset(b, 0, sizeof *b);
-    }
-}
-
-static int mbt_gpu_collect(struct y264_gpu *g, struct mbt_gpu_batch *b)
-{
-    if (!b->inflight)
-        return 0;
-    if (y264_gpu_lowres_wait(g))
-        return 1;
-    for (int i = 0; i < b->nfield; i++) free(b->fields[i]);
-    free(b->fields); free(b->g0); free(b->g1);
-    memset(b, 0, sizeof *b);
-    return 0;
-}
-
-static void mbt_gpu_free(struct mbt_gpu_batch *b)
-{
-    for (int i = 0; i < b->nfield; i++) free(b->fields[i]);
-    free(b->fields); free(b->g0); free(b->g1);
-    memset(b, 0, sizeof *b);
 }
 
 static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq,
@@ -8670,23 +8337,6 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         free(s_pastlr); free(s_futlr); free(s_pastpush); free(s_futpush);
         free(prop); free(Fw); return 0;
     }
-    /* GPU integer search (Y264_GPU_LOWRES). SUBMITTED HERE and collected AFTER
- * the subpel-plane build below, so the GPU runs concurrently with that
- * parallel_for instead of in front of it. The synchronous version of this
- * measured 1.86x SLOWER at t12 -- 1.33x even with the search range set so
- * low the GPU did no work -- because blocking the driver before Phase A
- * serializes what ran across twelve pool threads. The overlap IS the
- * feature.
- *
- * Only ring sources are offloaded: a buffered B's lowres is downscaled
- * inside the worker and does not exist yet here, so it keeps the CPU search.
- * Any failure leaves the field pointers NULL and every block takes the CPU
- * path, which is the required degradation. */
-    struct mbt_gpu_batch gb;
-    memset(&gb, 0, sizeof gb);
-    if (e->gpu)
-        mbt_gpu_submit(e->gpu, &gb, ns, src, need, s_pastlr, s_futlr, lw, lh);
-
     int sub0[MAXS], sub1[MAXS], subheld = 0;
     if ((subheld = mbt_sub_claim(e))) {
         { int nb = mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, s_pastpush, s_futpush, sub0, sub1);
@@ -8702,8 +8352,6 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     } else if (g_lrs_census > 0) {
         g_lrs_plan[1]++;
     }
-    /* Collect: the GPU has been running through the plane build above. */
-    if (mbt_gpu_collect(e->gpu, &gb)) { pac.gpu0 = gb.g0; pac.gpu1 = gb.g1; }
     if (use_pool)
     {
         ntp_prof_tag("mbtree_srcA"); ntp_prio_hint();
@@ -8712,7 +8360,6 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     else
         for (int s = 0; s < ns; s++) mbt_pa_source(&pac, 0, s);   /* serial fallback (tid 0) */
     if (subheld) mbt_sub_release(e);
-    mbt_gpu_free(&gb);
 
     if (split_on) { double t = tprof_ms(); g_mbt_split.pa += t - t_s; t_s = t; }
     /* Phase B: deposit the ME importance onto the shared prop accumulators, in the
@@ -9541,16 +9188,6 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
             pac.gpq_maxpush = mp;
         }
         int pool_nt = e->pool ? ntp_pool_nthreads(e->pool) : 0;
-        /* DO NOT PUT THE GPU IN THE WARM: built and measured 18-123% WORSE.
-         * The warm's GPU wait sits inside the launch handshake the DRIVER
-         * blocks on, so a warm slower than one mini-GOP serializes the whole
-         * pipeline -- the per-dispatch fixed cost moved rather than removed. A
-         * real per-frame batching needs submit-at-push (brackets unknown
-         * there) or a two-anchor pipelined warm (submit at warm n,
-         * collect+compute at n+1, which delays memo readiness past the
-         * consuming walk as the phases stand). The batch helpers, the shared
-         * Metal context and the second handle (e->gpu_warm) are the sound
-         * substrate for that rework. */
         int sub0[MAXS], sub1[MAXS], subheld = 0;
         if ((subheld = mbt_sub_claim(e))) {
             { int nb = mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, s_pastpush, s_futpush, sub0, sub1);
@@ -10166,7 +9803,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on();
     (void)hpel_probe_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_qpel_avg_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe();
     y264_gpu_warm_statics();
     type_oracle_load();
     y264_mb_warm_statics();     /* + the analyze-wavefront env statics */
@@ -16941,10 +16578,6 @@ void yah264_encoder_close(yah264_encoder_t *e)
         free(G->mvdx); free(G->mvdy); free(G->mvdx1); free(G->mvdy1);
         free(G->mb_tr8); free(G->aq_off); free(G->mbtree_off); free(G->rbsp);
     }
-    y264_gpu_close(e->gpu);
-    e->gpu = NULL;
-    y264_gpu_close(e->gpu_warm);
-    e->gpu_warm = NULL;
     y264_gpq_close(e->gpq);
     e->gpq = NULL;
     ntp_pool_destroy(e->pool);

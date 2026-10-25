@@ -208,14 +208,6 @@
 #define y264_gpq_mode                   y264_gpq_mode_10
 #define y264_gpq_open                   y264_gpq_open_10
 #define y264_gpq_push                   y264_gpq_push_10
-#define y264_gpu_close                  y264_gpu_close_10
-#define y264_gpu_lowres_begin           y264_gpu_lowres_begin_10
-#define y264_gpu_lowres_leg             y264_gpu_lowres_leg_10
-#define y264_gpu_lowres_mode            y264_gpu_lowres_mode_10
-#define y264_gpu_lowres_plane           y264_gpu_lowres_plane_10
-#define y264_gpu_lowres_submit          y264_gpu_lowres_submit_10
-#define y264_gpu_lowres_wait            y264_gpu_lowres_wait_10
-#define y264_gpu_open                   y264_gpu_open_10
 #define y264_gpu_warm_statics           y264_gpu_warm_statics_10
 #define y264_hadamard2x2                y264_hadamard2x2_10
 #define y264_hadamard4x4                y264_hadamard4x4_10

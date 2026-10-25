@@ -1,70 +1,24 @@
 /*
- * gpu.h - optional nextgpu backend for the lookahead's lowres motion search.
+ * gpu.h - optional nextgpu backend for the mb-tree's lowres Phase A legs.
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Every entry point here is a no-op that reports failure when the library is
  * not linked (-Dgpu=disabled), when Metal is unavailable, or when the runtime
  * knob is not armed -- so call sites need no #ifdef and the CPU path stays
- * complete and default. That is the contract in
- * docs/gpu.md, and the conformance gate rests on it.
+ * complete and default. That is the contract in docs/gpu.md, and the
+ * conformance gate rests on it.
  *
- * Scope, deliberately narrow: this replaces the WIDE INTEGER half of the lowres
- * search and nothing else. Our lowres is quarter-pel and the library's search is
- * integer-pel, and that precision is load-bearing (it is why blk8_inter_coh
- * exists), so the GPU supplies a starting MV from an exhaustive integer window
- * and the CPU keeps its subpel refinement around it.
- *
- * THE API IS SPLIT SUBMIT/WAIT, AND THAT IS THE WHOLE POINT. The first version
- * of this was synchronous and measured 1.86x SLOWER at t12 -- at a search range
- * where the GPU did essentially no work it was still 1.33x, because blocking the
- * driver before the Phase-A parallel_for converts work that ran across twelve
- * pool threads into serial waiting. A GPU offload that does not overlap the CPU
- * cannot pay however fast its kernels are. the local measurement records.
+ * A GPU offload has to overlap the CPU to pay: blocking the driver before
+ * the Phase-A parallel_for turns work that runs across the pool threads into
+ * serial waiting, however fast the kernels are. Hence submit at push and
+ * collect frames later, below.
  */
 #ifndef YAH264_GPU_H
 #define YAH264_GPU_H
 
 #include "../dsp/metrics.h"
 #include <stdint.h>
-
-typedef struct y264_gpu y264_gpu;
-
-/* NULL when the library is not linked or the mode is not armed. Metal itself
- * is probed LAZILY at the first begin (the device + pipeline build is tens
- * of ms once per process, which an armed encode that never submits must not
- * pay), so a non-NULL handle means "armed", and a Metal-less box is a begin
- * that returns 0 -- the CPU path, like every other failure here. */
-y264_gpu *y264_gpu_open(int max_lw, int max_lh, int max_planes, int max_legs);
-void      y264_gpu_close(y264_gpu *g);
-
-/* Y264_GPU_LOWRES: 0 = off (default), 1 = on.
- *
- * There was a mode 2 (two passes, the first field feeding the second as a
- * neighbour predictor, to recover the coherence a sequential CPU search gets
- * from its left neighbour). It is GONE, on measurement: its BD was
- * indistinguishable from mode 1 (median +0.03% against +0.04% on four clips),
- * and it costs a second round-trip that would force a wait between the passes --
- * which is exactly the serialization this file now exists to avoid. */
-int y264_gpu_lowres_mode(void);
-
-/* Batch building. begin resets; plane uploads a distinct lowres plane and
- * returns its slot, DEDUPED BY POINTER so a reference shared by many legs is
- * copied once (the walk's legs share anchors heavily, and the copies were real
- * overhead in the synchronous version); leg records one (cur, ref) search
- * writing 2*nblk int16 to `out`. All return <0 / 0 on overflow, and the caller
- * then simply runs the CPU search. */
-int y264_gpu_lowres_begin(y264_gpu *g, int lw, int lh);
-int y264_gpu_lowres_plane(y264_gpu *g, const pixel *p);
-int y264_gpu_lowres_leg(y264_gpu *g, int cur_slot, int ref_slot, int16_t *out);
-
-/* Submit every recorded leg as ONE batch and return WITHOUT waiting, so the
- * caller can do CPU work before wait collects. Returns 1 if a batch is in
- * flight. wait blocks, reads back, and returns 1 on success; on any failure
- * the caller must fall back to the CPU search, which it must always be able
- * to do. Calling wait without a submit in flight is a no-op returning 0. */
-int y264_gpu_lowres_submit(y264_gpu *g, int range);
-int y264_gpu_lowres_wait(y264_gpu *g);
 
 /* --- gpq: per-push quarter-pel leg batching for mb-tree Phase A ------------
  *
