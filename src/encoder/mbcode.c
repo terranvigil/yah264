@@ -1641,17 +1641,12 @@ static int lambda_trellis(int qp, int intra)
 }
 
 /* The intra trellis lambda on a smooth block. A gentle gradient in a flat
- * area (a studio wall, a sky) is carried by AC levels of one or two, and the
- * trellis prices those as bits that buy almost no SSD, so it zeroes them and
- * the block codes to a flat step: banding. In an I frame over a static
- * background that step then lasts the whole GOP. The lambda falls linearly
- * from full at a source variance of Y264_TREL_SMOOTH_V (8-bit scale, default
- * 8) to zero at a quarter of it, where the trellis keeps the nearest levels.
- * Against the reference at medium on the 12-clip band (VMAF v1), akiyo goes
- * from +7.9% to -3.6% and tempete from +2.8% to +1.7%; the HD band reads a
- * median of +0.02%. A limit of 16 cost sunflower and perseverance 0.55%, and
- * cutting it in I slices only (Y264_TREL_SMOOTH=2) did no better.
- * Y264_TREL_SMOOTH=0 turns it off. */
+ * area is carried by AC levels of one or two, which the trellis would zero
+ * as bits that buy little SSD, leaving a flat step: banding, and in an I
+ * frame over a static background it lasts the whole GOP. The lambda falls
+ * linearly from full at a source variance of Y264_TREL_SMOOTH_V (8-bit
+ * scale, default 8) to zero at a quarter of it. Y264_TREL_SMOOTH=0 turns it
+ * off. Only called when the trellis runs. */
 static int trel_smooth_v(void)
 {
     static int v = -1;
@@ -1663,18 +1658,11 @@ static int trel_smooth_v(void)
     return v;
 }
 
-static int trel_smooth_ionly(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *on = getenv("Y264_TREL_SMOOTH"); v = on && atoi(on) == 2; }
-    return v;
-}
-
-static int lambda_trellis_smooth(const y264_frame_t *f, int qp, const pixel *s, int ss, int n)
+static int lambda_trellis_smooth(int trel, int qp, const pixel *s, int ss, int n)
 {
     int l = lambda_trellis(qp, 1);
     int vl = trel_smooth_v();
-    if (vl <= 0 || (trel_smooth_ionly() && f->slice_type != 0)) return l;
+    if (!trel || vl <= 0) return l;
     int64_t sum = 0, sum2 = 0;
     for (int y = 0; y < n; y++)
         for (int x = 0; x < n; x++) { int p = s[y * ss + x]; sum += p; sum2 += p * p; }
@@ -2249,7 +2237,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
             const pixel *bpred = best_pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
             nr_apply(f, coef, 16, 1, 0, 1);
-            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(f, f->cur_qp, bsrc, stride_s, 4), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
+            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(trel, f->cur_qp, bsrc, stride_s, 4), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
             loc16[by][bx] = (int8_t)(nz > 0);
@@ -2450,7 +2438,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, 0, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, 0, ax, ay - 1, 1);
         nr_apply(f, coef, 16, 1, 0, 0);
-        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(f, f->cur_qp, src, ss, 4), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
+        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(trel, f->cur_qp, src, ss, 4), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
 
         int nz = 0;
         for (int k = 0; k < 16; k++) {
@@ -2598,7 +2586,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
         uint64_t msk;
         int big;
         nr_apply(f, coef, 64, 1, 0, 0);
-        rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(f, f->cur_qp, src, ss, 8), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
+        rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis_smooth(trel, f->cur_qp, src, ss, 8), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
 
         int nz = __builtin_popcountll(msk);     /* raster nonzeros == scan nonzeros */
         memcpy(r->lev[blk], lev, 64 * sizeof(dctcoef));
@@ -3744,21 +3732,12 @@ static inline void add_dc_4x4(pixel *rec, int rs, const pixel *pred, int ps, int
  * RD instead of the inter deadzone, which the trellis never revisits and
  * which drops the small DC shifts VMAF v1's chroma feature reads as lost
  * texture. 0 = the deadzone. Y264_CDC_LAM scales the trellis lambda for the
- * choice, x256. Unset, it follows the picture size: 64 from 720p up, where
- * the DC shifts pay most (ducks and park_joy read best there and worse at
- * every step above it), and 512 below, where the same levels cost CIF clips
- * more than they buy (stefan +3.7% against the reference at 64, +0.6% at
- * 512). */
-static int cdc_lam_env(void)
+ * choice, x256 (default 64). */
+static int cdc_lam_x256(void)
 {
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_CDC_LAM"); v = e ? (atoi(e) > 0 ? atoi(e) : 0) : -1; }
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? (atoi(e) > 0 ? atoi(e) : 0) : 64; }
     return v;
-}
-static int cdc_lam_x256(const y264_frame_t *f)
-{
-    int v = cdc_lam_env();
-    return v >= 0 ? v : f->size_class ? 64 : 512;
 }
 static int cdc_rd_on(void)
 {
@@ -3780,7 +3759,7 @@ static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
     int qp = f->cur_chroma_qp_scaled, w0 = cqm_dc4p(f, 0, 1 + c);
     dctcoef near[4], tr[4];
     y264_chroma_dc420_rt(dc, near, tr, qp, 2, w0, f->lev_max);
-    long lam = ((long)lambda_trellis(f->cur_chroma_qp, 0) * cdc_lam_x256(f) + 128) >> 8;
+    long lam = ((long)lambda_trellis(f->cur_chroma_qp, 0) * cdc_lam_x256() + 128) >> 8;
     long bestJ = LONG_MAX;
     int nvar = 0, vi[4];
     for (int i = 0; i < 4; i++)
@@ -9180,8 +9159,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         struct bpart_mo mo_s[3];
         pixel ppt[3][256], cpt[3][2][256];
         int ptsatd[3] = { 0, 0x7fffffff, 0x7fffffff }, ptcombo[3] = { 0, 0, 0 };
-        /* B_8x8 first, so 16x8/8x16 can be ESTIMATED from its quadrants rather
- * than searched cold: four cold searches per macroblock cost 26-38% wall. */
+        /* B_8x8 first; the optional 16x8/8x16 below is seeded from the 16x16
+ * winners rather than searched cold. */
         /* --- direct's SATD, the screen the 16x16 modes ride, and their RD, all
  * BEFORE any subpartition analysis. The reason the order
  * matters is the skip return: a macroblock that leaves here has cost us
@@ -9331,14 +9310,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * reference and vectors, so one orientation costs two seeded searches
  * per list instead of the cold multi-reference pair. Each uniform combo
  * (L0, L1, Bi) is ranked by SATD plus mv, ref and mb_type rate, and the
- * best one joins the RD screen. VMAF v1 reads the split's prediction gain
- * where VMAF-NEG did not: against the reference at medium, stefan +2.4%
- * to +0.8%, tempete +1.7% to +0.3%, bus -4.2% to -6.0%, every clip of the
- * band better, but for 13-21% more instructions, so it is off by default
- * (Y264_B_RECT=1 arms it). Both orientations kept a little more (stefan
- * +1.0%) for 31-33%; half-pel-only halves, an imbalance gate, a 16x16
- * cost gate and a single combo each gave the gain back about in
- * proportion to what they saved. */
+ * best one joins the RD screen. It helps quality but costs 13-21% more
+ * instructions, so it is off by default (Y264_B_RECT=1 arms it). */
         if (b_rect_on()) {
             const pixel *wp = p16[bw16];
             long q[4];
@@ -13683,8 +13656,8 @@ void y264_mb_warm_statics(void)
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env();
-    (void)cdc_rd_on(); (void)cdc_lam_env();
-    (void)trel_smooth_v(); (void)trel_smooth_ionly();
+    (void)cdc_rd_on(); (void)cdc_lam_x256();
+    (void)trel_smooth_v();
     (void)aq_dark_env(0);
     (void)psy_dark_env();
         (void)probe_deadzone_env();

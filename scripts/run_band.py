@@ -28,6 +28,9 @@ if _sel:
         sys.exit(f"no ladder for {_miss}; have {list(ladders)}")
     ladders = {c: ladders[c] for c in _want}
 
+# the band's gate-score targets; calibrate_band.py solves the ladders onto them
+TARGETS = (88.0, 90.0, 92.0, 94.0)
+
 # x264's own curve, from the calibration pass, used to judge measurability:
 # (kbps, vmaf-neg) at crf 40..16
 CURVE = {
@@ -46,8 +49,14 @@ CURVE = {
 # calibrate_band.py now writes the curve it measured; prefer it over the pasted
 # copy above, which only covers the original ten clips.
 _cj = os.path.join(HERE, "curves.json")
+# Each point is [kbps, score, crf]; an older file has no crf, and then the
+# points are read as calibrate_band's old fixed steps, 40 down by 4.
+CURVE_CRF = {}
 if os.path.exists(_cj):
-    CURVE.update({c: [tuple(p) for p in pts] for c, pts in json.load(open(_cj)).items()})
+    for c, pts in json.load(open(_cj)).items():
+        CURVE[c] = [(p[0], p[1]) for p in pts]
+        if all(len(p) >= 3 for p in pts):
+            CURVE_CRF[c] = [p[2] for p in pts]
 
 # A ladder without a reference curve cannot be judged for measurability, and
 # indexing CURVE for it was the crash on the default clip list (coastguard and
@@ -107,11 +116,9 @@ def band_slope(clip):
 def crf_ladder(clip):
     """CRFs whose x264 gate score lands on the same four band targets."""
     c = CURVE[clip]
-    # calibrate_band steps the CRF by 4 down from 40; a clip that needs the
-    # top of the band from below CRF 16 carries more points
-    crfs = [40 - 4 * i for i in range(len(c))]
+    crfs = CURVE_CRF.get(clip) or [40 - 4 * i for i in range(len(c))]
     out = []
-    for t in (88.0, 90.0, 92.0, 94.0):
+    for t in TARGETS:
         got = None
         for i in range(len(c) - 1):
             if c[i][1] <= t <= c[i + 1][1]:

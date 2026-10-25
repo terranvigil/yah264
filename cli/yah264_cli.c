@@ -886,8 +886,9 @@ static void usage(const char *argv0)
         "                     inter-coded neighbour, so an intra macroblock decodes\n"
         "                     from intra data alone. Error resilience; costs bits.\n"
         "                     Off by default.\n"
-        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default: +2\n"
-        "                     below 720p, -2 at 720p, 0 from 1080p up).\n"
+        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default by\n"
+        "                     size: -4 below 720p, -2 at 720p, 0 from 1080p up;\n"
+        "                     0 with psy off).\n"
         "                     Reaches the quantiser and the deblock chroma edge QP.\n"
         "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
         "                     (defaults 0 and 51)\n"
@@ -5254,7 +5255,7 @@ int main(int argc, char **argv)
     param.rc.qp_max = qp_max;
     param.rc.qp_step = qp_step;
     if (deblock_on >= 0) param.deblock = deblock_on;
-    if (deblock_set) {          /* else the library default (-1:-1) stands */
+    if (deblock_set) {          /* else the library's size-based default stands */
         param.deblock_alpha = deblock_a;
         param.deblock_beta  = deblock_b;
     }

@@ -36,7 +36,7 @@ CLIPS = ["foreman_cif", "bus_cif", "stefan_cif", "akiyo_cif", "mobile_cif",
          "ducks_720p", "park_joy_720p", "fourpeople_720p", "samsung_720p", "sintel_720p",
          "touchdown_420"]
 
-CRFS = [16, 20, 24, 28, 32, 36, 40]
+CRFS = [8, 12, 16, 20, 24, 28, 32, 36, 40]
 
 
 def probe(clip, crf, work, frames):
@@ -222,7 +222,7 @@ def main(argv=None):
         json.dump(ladders, f, indent=1)
     # the reference curve itself, so run_band.py stops carrying a hand-pasted
     # copy that goes stale the moment the clip set changes
-    curves = {c: [[k, v] for _, k, v in sorted(results.get(c, []), key=lambda x: x[1])]
+    curves = {c: [[k, v, crf] for crf, k, v in sorted(results.get(c, []), key=lambda x: x[1])]
               for c in args.clip_list if results.get(c)}
     cur_path = os.path.join(out, CURVES_NAME)
     with open(cur_path, "w") as f:

@@ -136,11 +136,12 @@ typedef enum {
 } yah264_nal_priority_t;
 
 /* deblock_alpha / deblock_beta: the encoder picks the offset from the picture
- * size, -1 at 1280x720 and above, 0 below. */
+ * size, -1 when the longer side is 1280 or more, 0 below, and 0 with psy off. */
 #define YAH264_DEBLOCK_AUTO 100
 
-/* chroma_qp_index_offset: the encoder picks it from the picture size, +2
- * below 1280x720, -2 at 720p and 0 from 1080p up. */
+/* chroma_qp_index_offset: the encoder picks it from the picture size: -4 when
+ * the longer side is below 1280, -2 below 1920, 0 from there up, and 0 with
+ * psy off. */
 #define YAH264_CQP_AUTO 100
 
 /* One output NAL unit. The payload lives in an encoder-owned buffer that stays

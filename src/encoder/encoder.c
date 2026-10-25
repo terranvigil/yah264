@@ -4205,34 +4205,28 @@ static void size_trades(yah264_param_t *p)
     if (p->lr_settle == 0) p->lr_settle = 2;
 }
 
-/* The default deblocking offsets, by picture size: -1:-1 (slice header div2
- * units) at 1280x720 and above, the spec-neutral 0:0 below. At HD sizes our
- * RD and psy keep edge and texture energy that the neutral filter smooths
- * back out. Measured 2026-10-04/05 at matched achieved rate, BD-VMAF-NEG of
- * -1:-1 against 0:0: HD band median -0.31%, worst sunflower +0.05%; sintel
- * -1.74, riverbed -0.96, pedestrian -0.94; Sol Levante 720p -0.59, 1080p
- * -0.70; 2160p chimera -0.65, meridian -0.48; multi-shot 720p -0.21, 1080p
- * -0.78. It costs PSNR (about +3% BD-PSNR-Y at 2160p) and nothing in
- * instructions. Below 720p the CIF clips read up to +0.72 (mobile), over
- * the per-clip bar, so small pictures keep 0:0. An explicit --deblock A:B
- * always wins. */
+/* Defaults that follow the picture size (y264_size_class: the longer side
+ * below 1280, below 1920, or larger). An explicit value always wins.
+ *
+ * Deblocking: -1:-1 from the 720p class up, where our RD and psy keep edge
+ * and texture energy the neutral filter smooths back out, and 0:0 below.
+ *
+ * Chroma QP offset: -4 below the 720p class, -2 in it and 0 above. Scored
+ * at display resolution, the smaller the picture the more VMAF v1 reads
+ * chroma loss; past these values a few clips (shields at 720p, sunflower
+ * at 1080p) lose more than the bar allows.
+ *
+ * With psy off (--tune psnr or ssim) both stay neutral, since they were
+ * chosen for VMAF v1 and cost PSNR. */
 static void deblock_auto_resolve(yah264_param_t *p)
 {
-    int off = y264_size_class(p->width, p->height) >= 1 ? -1 : 0;
+    int sc = y264_size_class(p->width, p->height);
+    int psy = p->psy_rd > 0.0f;
+    int off = psy && sc >= 1 ? -1 : 0;
     if (p->deblock_alpha == YAH264_DEBLOCK_AUTO) p->deblock_alpha = off;
     if (p->deblock_beta == YAH264_DEBLOCK_AUTO) p->deblock_beta = off;
-    /* The chroma offset, by picture size, as VMAF v1 reads it. Below 720p +2
-     * moves bits from chroma to luma and every CIF band clip gains against the
-     * reference (stefan +0.4% to -0.9%, tempete +0.4% to -2.6%) for about
-     * 0.7 dB of chroma PSNR. At 720p the chroma planes weigh more and -2 wins
-     * on every band clip (park_joy -5.9% to -7.8%, ducks -7.0% to -9.0%). At
-     * 1080p -2 still helps most clips but costs sunflower +3.5% against our
-     * own 0, and -1 costs it +2.4%, so 1080p and up keep 0. An explicit
-     * --chroma-qp-offset always wins. */
-    if (p->chroma_qp_index_offset == YAH264_CQP_AUTO) {
-        int sc = y264_size_class(p->width, p->height);
-        p->chroma_qp_index_offset = sc == 0 ? 2 : sc == 1 ? -2 : 0;
-    }
+    if (p->chroma_qp_index_offset == YAH264_CQP_AUTO)
+        p->chroma_qp_index_offset = !psy ? 0 : sc == 0 ? -4 : sc == 1 ? -2 : 0;
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
