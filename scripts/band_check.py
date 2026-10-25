@@ -24,8 +24,11 @@ deviation 0.3-2.5), the blocks where banding shows:
 
 A window FAILS when yah264's flat share exceeds the reference's by more than
 FLAT_MARGIN or its CAMBI exceeds the reference's by more than CAMBI_MARGIN.
-A window whose size solve misses by more than SIZE_TOL is reported UNMATCHED
-and not judged. The default windows are the ones the dark-banding report was
+yah264 is solved onto the reference's size by CRF; when a step in the CRF
+curve overshoots SIZE_TOL it falls back to a multi-pass encode at the target
+bitrate, and each verdict line says which was judged. A window still off by
+more than SIZE_TOL is reported UNMATCHED and not judged. Exit status: 1 when a
+window failed, 2 when none failed but one was unmatched, 0 otherwise. The default windows are the ones the dark-banding report was
 reproduced on: frames with both very bright and very dark areas, and mostly
 dark frames with faint grain.
 
@@ -34,7 +37,7 @@ arguments), FLAT_MARGIN (0.05), CAMBI_MARGIN (1.0), SIZE_TOL (0.03),
 THREADS (2), OUT (scratch directory, kept). The v1 binary and models are
 bdcompare's (VMAF_V1_BIN, VMAF_V1_MODELS).
 """
-import os, re, shutil, subprocess, sys, tempfile
+import glob, os, re, shutil, subprocess, sys, tempfile
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -164,7 +167,7 @@ def solve(src, target, out):
     try:
         return _solve(src, target, out, lo, hi, crf, keep, stats)
     finally:
-        for p in (keep, stats, stats + ".mbtree"):
+        for p in [keep, stats] + glob.glob(stats + ".*"):
             if os.path.exists(p):
                 os.unlink(p)
 
@@ -234,7 +237,7 @@ def main():
         else:
             verdict = "pass"
         print(f"  {name:26s} {verdict}: flat {b['flat'] - a['flat']:+.3f}, cambi {b['cambi'] - a['cambi']:+.3f}, "
-              f"size {ratio:.3f}")
+              f"size {ratio:.3f} ({how})")
     print(f"# {fails} window(s) failed, {unmatched} unmatched (not judged)")
     # 1: a window failed; 2: none failed but one couldn't be judged
     sys.exit(1 if fails else (2 if unmatched else 0))

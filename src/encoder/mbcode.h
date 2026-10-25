@@ -498,6 +498,7 @@ double           y264_aq_dark(double mean, double var);
 double           y264_psy_dark_gain(double mean, double var);
 int              y264_aq_bright(double mean);
 int              y264_aq_grain(double mean, double var);
+double           y264_aq_grain_share(const double *mean, const double *var, int wmb, int hmb);
 double           y264_aq_dark_gate(double bright_share, double grain_share);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);

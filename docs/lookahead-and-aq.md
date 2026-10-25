@@ -92,7 +92,7 @@ field's center sits high and a low `--aq-strength` leaves the dark side coarse;
 there the cut is scaled by the share of macroblocks with a luma mean of 170 or
 more, none at 8% and full at 20%. In frames where much of the picture is dark
 grain or gradient, it is scaled by the share of dark, smooth macroblocks that
-aren't flat, none at 35% and full at 50%. A dark frame with neither is left to
+aren't flat, counted inside any letterbox bars, none at 35% and full at 50%. A dark frame with neither is left to
 the variance offset.
 
 **Psy-trellis and the flat-content lattice.** `--psy-trellis` defaults to 0.

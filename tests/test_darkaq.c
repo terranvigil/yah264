@@ -60,6 +60,27 @@ int main(void)
     CHECK(y264_aq_grain(M(120.0), V(2.0)) == 0);    /* not dark */
     CHECK(y264_aq_grain(M(30.0), V(100.0)) == 0);   /* textured */
 
+    /* the grain share leaves letterbox bars out: a 16x12 frame whose top and
+     * bottom three rows are grainy black and whose middle is bright */
+    {
+        enum { W = 16, H = 12 };
+        double m[W * H], v[W * H];
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                int bar = y < 3 || y >= H - 3;
+                m[y * W + x] = bar ? M(16.0) : M(120.0);
+                v[y * W + x] = bar ? V(1.0) : V(40.0);
+            }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 0.0);
+        /* the same bars around a dark grain picture: share over the picture */
+        for (int y = 3; y < H - 3; y++)
+            for (int x = 0; x < W; x++) { m[y * W + x] = M(30.0); v[y * W + x] = V(6.0); }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        /* dark and flat all over: no bars, every block counts */
+        for (int i = 0; i < W * H; i++) { m[i] = M(16.0); v[i] = V(1.0); }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+    }
+
     if (fails) fprintf(stderr, "%d failure(s)\n", fails);
     else printf("darkaq: ok\n");
     return fails ? 1 : 0;
