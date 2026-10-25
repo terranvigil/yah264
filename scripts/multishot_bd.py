@@ -110,7 +110,7 @@ def main():
         for arm, tmpl in arms.items():
             for q in pts:
                 out = os.path.join(a.work, f"{seq}_{arm}_{q}.264")
-                js = os.path.join(a.work, f"{seq}_{arm}_{q}.v1.json")
+                js = os.path.join(a.work, f"{seq}_{arm}_{q}.v1-{bdcompare.V1_RULE}.json")
                 if not os.path.exists(js):
                     cmd = tmpl.format(src=shlex.quote(src), q=q, out=shlex.quote(out))
                     r = subprocess.run(cmd, shell=True, capture_output=True, text=True)

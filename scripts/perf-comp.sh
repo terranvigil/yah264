@@ -180,9 +180,8 @@ print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h >= 1440 else 
 ffmpeg -v error -y -i "$ref" -pix_fmt yuv420p10le -strict -1 "$wd/ref10.y4m"
 # v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080 in
 # both dimensions is fitted to it, both sides, and CAMBI is told the coded size
-read -r v1scaled v1w v1h v1vf <<GEO
-$(python3 "$root/scripts/bdcompare.py" --v1-display "$ref")
-GEO
+geo=$(python3 "$root/scripts/bdcompare.py" --v1-display "$ref") && [ -n "$geo" ] || { echo "$0: cannot read the v1 display geometry" >&2; exit 2; }
+read -r v1scaled v1w v1h v1vf <<< "$geo"
 v1disp() {  # <10-bit y4m> -> the file v1 scores: itself, or a display-fitted copy
     if [ "$v1scaled" = 1 ]; then
         ffmpeg -v error -y -i "$1" -vf "$v1vf" -pix_fmt yuv420p10le -strict -1 "$1.disp.y4m"
@@ -272,7 +271,7 @@ xkey=""
 if [ "${Y264_REFENC_CACHE:-1}" = 1 ] && [ -z "${OUTDIR:-}" ]; then
     # rc_mode is in the key because it changes which rate flag x264 is handed;
     # without it a pre-2026-08-11 CRF entry can answer an ABR question.
-    xkey=$(python3 - "$X264" "$(basename "$clip")" "$N" "$crf" "$X264_ARGS" "$THREADS" "${RUNS:-1}" "$subsample" "$rc_mode" "$x_rc" "vmaf_v1:$(basename "$v1model")" <<'KEY'
+    xkey=$(python3 - "$X264" "$(basename "$clip")" "$N" "$crf" "$X264_ARGS" "$THREADS" "${RUNS:-1}" "$subsample" "$rc_mode" "$x_rc" "vmaf_v1:$(basename "$v1model"):disp$v1scaled:$("$VMAF" --version 2>&1)" <<'KEY'
 import hashlib, sys
 h = hashlib.md5()
 h.update(open(sys.argv[1], 'rb').read())
@@ -525,14 +524,16 @@ vmaf_of() {  # <decoded.y4m> <bitstream> -> "mean VMAF v1  mean PSNR-Y (dB)"
     # v1, the one quality score in the tree (docs/vmaf.md); its detail feature
     # carries the enhancement-gain cap, so sharpening an encoder can do for
     # free does not score.
-    local d
+    local d ok=1
     d=$(v1disp "$1")
+    rm -f "$wd/v.json" "$wd/p.json"     # never read the other arm's scores
     "$VMAF" -r "$ref10d" -d "$d" --subsample "$subsample" \
         --model "path=$v1model:$(v1copts "$(enc_bitdepth "$2")")" \
-        --json -o "$wd/v.json" >/dev/null 2>&1
+        --json -o "$wd/v.json" >/dev/null 2>&1 || ok=0
     "$VMAF" -r "$wd/ref10.y4m" -d "$1" --subsample "$subsample" --no_prediction \
-        --feature psnr --json -o "$wd/p.json" >/dev/null 2>&1
+        --feature psnr --json -o "$wd/p.json" >/dev/null 2>&1 || ok=0
     [ "$d" = "$1" ] || rm -f "$d"
+    [ "$ok" = 1 ] || { echo "nan nan"; return; }
     python3 -c "import json,sys
 v = json.load(open(sys.argv[1]))['pooled_metrics']
 p = json.load(open(sys.argv[2]))['pooled_metrics']
