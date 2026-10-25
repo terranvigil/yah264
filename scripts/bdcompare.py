@@ -321,22 +321,52 @@ _WRAPPERS = {
 }
 
 
+def _resolve(w):
+    if os.path.isabs(w) or os.path.exists(w):
+        return os.path.abspath(w)
+    if os.sep in w:
+        return os.path.normpath(os.path.join(ROOT, w))
+    return shutil.which(w) or w
+
+
+def _yah264_word(tmpl):
+    """The yah264 word anywhere in a shell template: across pipes and command
+    lists and inside an `sh -c` body. None when there isn't one."""
+    try:
+        lex = shlex.shlex(tmpl, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        words = list(lex)
+    except ValueError:
+        return None
+    for w in words:
+        if os.path.basename(w) == "yah264":
+            return _resolve(w)
+        if " " in w and "yah264" in w:      # a quoted command string
+            b = _yah264_word(w)
+            if b:
+                return b
+    return None
+
+
 def template_binary(tmpl):
-    """The program an encode template runs: the first word that is neither an
-    env assignment nor a launcher (env, nice, time, taskpolicy, caffeinate,
-    timeout, or `sh -c`) or one of its options, as the shell would find it."""
+    """The program an encode template runs. A yah264 named anywhere in it (a
+    pipeline, a command list, an `sh -c` body) is that program; otherwise it's
+    the first word that is neither an env assignment nor a launcher (env,
+    nice, time, taskpolicy, caffeinate, timeout) or one of its options, as the
+    shell would find it."""
+    y = _yah264_word(tmpl)
+    if y:
+        return y
     try:
         words = shlex.split(tmpl)
     except ValueError:
         return ""
     wrap, skip, need_arg = None, False, False
-    for n, w in enumerate(words):
+    for w in words:
         if skip:
             skip = False
         elif _ASSIGN.match(w):
             pass
-        elif os.path.basename(w) in ("sh", "bash", "zsh") and "-c" in words[n + 1:n + 2]:
-            return template_binary(words[n + 2]) if n + 2 < len(words) else ""
         elif os.path.basename(w) in _WRAPPERS:
             wrap = os.path.basename(w)
             need_arg = wrap == "timeout"
@@ -344,12 +374,8 @@ def template_binary(tmpl):
             skip = w in _WRAPPERS[wrap]
         elif need_arg:
             need_arg = False            # timeout's duration
-        elif os.path.isabs(w) or os.path.exists(w):
-            return os.path.abspath(w)
-        elif os.sep in w:
-            return os.path.normpath(os.path.join(ROOT, w))
         else:
-            return shutil.which(w) or w
+            return _resolve(w)
     return ""
 
 
@@ -672,7 +698,7 @@ def main():
         b = template_binary(t)
         if b and os.path.isfile(b) and devknobs.is_yah264(b):
             require_dev_knobs(b, t)
-        elif "yah264" in t and devknobs.ignored(t, environ=False):
+        elif "yah264" in t and devknobs.ignored(t):
             # a yah264 template whose binary can't be found can't be checked
             sys.exit(f"bdcompare: can't find the yah264 binary in {t!r} to check "
                      "the dev knobs it sets; name it plainly")
@@ -716,7 +742,9 @@ def main():
 
     def _ckey(tmpl, clip, q):
         binp = template_binary(tmpl)
-        mt = os.path.getmtime(binp) if binp and os.path.exists(binp) else 0
+        if not (binp and os.path.exists(binp)):
+            return None                 # no binary to key a rebuild on: don't cache
+        mt = os.path.getmtime(binp)
         # the encoder inherits the environment's knobs, so they're part of the key
         envk = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
                         if k.startswith(("Y264_", "YAH264_")))
@@ -725,15 +753,15 @@ def main():
 
     def encode(tag, tmpl, clip, q):
         out = os.path.join(work, f"{clip}_{tag}_{q}.264")
-        if args.cache:
-            ck = _ckey(tmpl, clip, q)
+        ck = _ckey(tmpl, clip, q) if args.cache else None
+        if ck:
             if os.path.exists(ck):
                 return (tag, clip, q, ck)
         cmd = tmpl.format(src=shlex.quote(srcs[clip]), q=q, out=shlex.quote(out))
         r = sh(cmd)
         if r.returncode != 0 or not os.path.exists(out):
             return (tag, clip, q, None)
-        if args.cache:
+        if ck:
             try:
                 os.replace(out, ck); return (tag, clip, q, ck)
             except OSError:
