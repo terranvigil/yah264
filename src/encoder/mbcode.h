@@ -501,7 +501,8 @@ int              y264_aq_bright(double mean);
 int              y264_aq_grain(double mean, double var);
 void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int ext[4]);
 int              y264_aq_bar_floor(void);
-double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
+double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb,
+                                     int bars[4]);
 double           y264_aq_dark_gate(double bright_share, double grain_share);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);

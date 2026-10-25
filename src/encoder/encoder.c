@@ -3042,6 +3042,10 @@ static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int
     for (long i = 0; i < n; i++) {
         int q = f->qp + (f->mbtree_off ? f->mbtree_off[i]
                                        : (f->aq_off ? (int)f->aq_off[i] : 0));
+        int mbx = (int)(i % e->width_in_mbs), mby = (int)(i / e->width_in_mbs);
+        if ((mby < f->bar[0] || mby >= f->hmb - f->bar[1] ||   /* the bar floor */
+             mbx < f->bar[2] || mbx >= f->wmb - f->bar[3]) && q < f->qp + y264_aq_bar_floor())
+            q = f->qp + y264_aq_bar_floor();
         if (q < 0) q = 0; else if (q > 51) q = 51;
         sum += f->mbqp[i]; isum += q; nskip += f->mbqp[i] != q;
     }
@@ -6415,7 +6419,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             sum += l; sum2 += l * l;
         }
     double dg = y264_aq_dark_gate((double)nbright / n,
-                                  gm ? y264_aq_grain_share(gm, gv, wmb, hmb) : 0.0);
+                                  gm ? y264_aq_grain_share(gm, gv, wmb, hmb, NULL) : 0.0);
     /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
  * constant instead of the frame mean, so its DC is a frame-level complexity
  * term. The propagation weights are renormalised to mean 1 below, so a DC

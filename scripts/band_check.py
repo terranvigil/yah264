@@ -235,6 +235,9 @@ def main():
         src = os.path.join(d, name + ".y4m")
         if not os.path.exists(src):
             cut(os.path.join(SRC_DIR, title + ".y4m"), max(0, int(frame) - FRAMES // 2), FRAMES, src)
+        if nframes(src) != FRAMES:
+            die(f"band_check: window {name} holds {nframes(src)} frames, not {FRAMES} "
+                "(too near the end of the title?)")
         ref = os.path.join(d, name + ".ref.264")
         run([X264, "--preset", "medium", "--crf", "23", "--threads", THREADS, "--quiet",
              "-o", ref, src])
