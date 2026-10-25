@@ -364,13 +364,14 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
  * hold bright areas beside the dark ones (a ramp on the share of macroblocks
  * with a luma mean of AQ_BRIGHT or more, B0 to B1), and in frames where much
  * of the picture is dark grain or gradient (a ramp on the share of dark,
- * smooth, not flat macroblocks inside any letterbox bars, S0 to S1). A dark
+ * smooth, not flat macroblocks, leaving out any letterbox bars, S0 to S1). A dark
  * frame with neither is left to the variance offset: there the cut only
  * spends bits on areas that can't band. Y264_AQ_DARK sets the strength (0
  * turns it off), Y264_AQ_DARK_M the mean limit, Y264_AQ_DARK_V the variance
  * limit, Y264_AQ_DARK_B0 / _B1 the bright ramp and Y264_AQ_DARK_S0 / _S1 the
  * grain ramp. S1 0 drops the grain ramp; B1 0 drops the whole gate, so the
- * cut applies in every frame. */
+ * cut applies in every frame. Y264_AQ_BAR sets the bar blocks' QP floor over
+ * the frame QP (y264_aq_bars); negative turns the bar handling off. */
 #define AQ_DARK_STR 6.0
 #define AQ_DARK_M  64.0
 #define AQ_DARK_V  16.0
@@ -380,20 +381,22 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
 #define AQ_GRAIN_VMIN 0.25
 #define AQ_DARK_S0  0.35
 #define AQ_DARK_S1  0.50
+#define AQ_BAR_FLOOR 0
 static double aq_dark_env(int which)
 {
-    static double v[7] = { -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0 };
+    static double v[8] = { -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0 };
     if (v[0] < 0) {
         const char *s = y264_env("Y264_AQ_DARK"), *m = y264_env("Y264_AQ_DARK_M"),
                    *q = y264_env("Y264_AQ_DARK_V"), *b0 = y264_env("Y264_AQ_DARK_B0"),
                    *b1 = y264_env("Y264_AQ_DARK_B1"), *s0 = y264_env("Y264_AQ_DARK_S0"),
-                   *s1 = y264_env("Y264_AQ_DARK_S1");
+                   *s1 = y264_env("Y264_AQ_DARK_S1"), *br = y264_env("Y264_AQ_BAR");
         v[1] = m ? atof(m) : AQ_DARK_M;
         v[2] = q ? atof(q) : AQ_DARK_V;
         v[3] = b0 ? atof(b0) : AQ_DARK_B0;
         v[4] = b1 ? atof(b1) : AQ_DARK_B1;
         v[5] = s0 ? atof(s0) : AQ_DARK_S0;
         v[6] = s1 ? atof(s1) : AQ_DARK_S1;
+        v[7] = br ? atoi(br) : AQ_BAR_FLOOR;
         double d = s ? atof(s) : AQ_DARK_STR;
         v[0] = d > 0 ? d : 0.0;
     }
@@ -415,48 +418,92 @@ int y264_aq_grain(double mean, double var)
            var < aq_dark_env(2) * sc * sc;
 }
 
-/* the share of dark grain macroblocks inside the picture: letterbox or
- * pillarbox bars (whole edge rows or columns that are dark and nearly flat)
- * are left out of both counts, since a grainy bar can't band and would open
- * the gate on a letterboxed film. A frame dark and flat all over has no bars. */
-#define AQ_BAR_MEAN 24.0
-#define AQ_BAR_VAR   4.0
-double y264_aq_grain_share(const double *mean, const double *var, int wmb, int hmb)
+/* Letterbox and pillarbox bars, in macroblocks per side (top, bottom, left,
+ * right). A bar is a run of edge rows (or columns) whose blocks are
+ * low-variance and within a few levels of the edge's color: nine in ten of
+ * them on the outermost line, half on the lines inside it, so a subtitle in
+ * the bar doesn't end it. Any matte color counts.
+ * Bars count only in pairs on opposite edges, of the same color, within one
+ * block of each other's depth and no deeper than a fifth of the height (a
+ * sixth of the width) a side, and side bars only in a frame without top and
+ * bottom ones; anything else is picture, so a flat sky, a dark floor, a
+ * vignette or a dark grain frame is never taken for bars. */
+#define AQ_BAR_VAR  4.0
+#define AQ_BAR_TOL  3.0
+#define AQ_BAR_PAIR 6.0
+/* the edge color: the mean of the low-variance blocks of one edge line */
+static double bar_color(const float *mean, const float *var, int i0, int step,
+                        int n, double bv, int *ok)
+{
+    double s = 0; int k = 0;
+    for (int t = 0; t < n; t++)
+        if (var[i0 + t * step] < bv) { s += mean[i0 + t * step]; k++; }
+    *ok = 2 * k >= n;
+    return k ? s / k : 0.0;
+}
+/* how many lines from one edge inward are bar: line l starts at i0 + l * lstep
+ * and runs n blocks of step */
+static int bar_run(const float *mean, const float *var, int i0, int lstep, int step,
+                   int n, int maxl, double c, double bv, double tol)
+{
+    int l = 0;
+    for (; l < maxl; l++) {
+        int k = 0, b = i0 + l * lstep;
+        for (int t = 0; t < n; t++) {
+            int i = b + t * step;
+            k += var[i] < bv && fabs(mean[i] - c) < tol;
+        }
+        /* the outermost line must be nearly all matte, an inner one half */
+        if (l ? 2 * k < n : 10 * k < 9 * n) break;
+    }
+    return l;
+}
+void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int ext[4])
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
-    double bm = AQ_BAR_MEAN * sc, bv = AQ_BAR_VAR * sc * sc;
-#define BAR(i) (mean[i] < bm && var[i] < bv)
-    int top = 0, bot = 0, lft = 0, rgt = 0;
-    for (; top < hmb; top++) {
-        int all = 1;
-        for (int x = 0; x < wmb && all; x++) all = BAR(top * wmb + x);
-        if (!all) break;
+    double bv = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc, pair = AQ_BAR_PAIR * sc;
+    int top = 0, bot = 0, lft = 0, rgt = 0, ok0, ok1;
+    double c0 = bar_color(mean, var, 0, 1, wmb, bv, &ok0);
+    double c1 = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, bv, &ok1);
+    if (ok0 && ok1 && fabs(c0 - c1) < pair && hmb >= 5) {
+        top = bar_run(mean, var, 0, wmb, 1, wmb, hmb / 5 + 1, c0, bv, tol);
+        bot = bar_run(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, hmb / 5 + 1, c1, bv, tol);
+        if (!top || !bot || abs(top - bot) > 1 || top > hmb / 5 || bot > hmb / 5)
+            top = bot = 0;
     }
-    for (; bot < hmb - top; bot++) {
-        int all = 1, y = hmb - 1 - bot;
-        for (int x = 0; x < wmb && all; x++) all = BAR(y * wmb + x);
-        if (!all) break;
+    int h = hmb - top - bot, i0 = top * wmb;
+    c0 = bar_color(mean, var, i0, wmb, h, bv, &ok0);
+    c1 = bar_color(mean, var, i0 + wmb - 1, wmb, h, bv, &ok1);
+    if (!top && ok0 && ok1 && fabs(c0 - c1) < pair && wmb >= 6) {
+        lft = bar_run(mean, var, i0, 1, wmb, h, wmb / 6 + 1, c0, bv, tol);
+        rgt = bar_run(mean, var, i0 + wmb - 1, -1, wmb, h, wmb / 6 + 1, c1, bv, tol);
+        if (!lft || !rgt || abs(lft - rgt) > 1 || lft > wmb / 6 || rgt > wmb / 6)
+            lft = rgt = 0;
     }
-    if (top + bot >= hmb) top = bot = 0;
-    for (; lft < wmb; lft++) {
-        int all = 1;
-        for (int y = top; y < hmb - bot && all; y++) all = BAR(y * wmb + lft);
-        if (!all) break;
-    }
-    for (; rgt < wmb - lft; rgt++) {
-        int all = 1, x = wmb - 1 - rgt;
-        for (int y = top; y < hmb - bot && all; y++) all = BAR(y * wmb + x);
-        if (!all) break;
-    }
-    if (lft + rgt >= wmb) lft = rgt = 0;
-#undef BAR
+    ext[0] = top; ext[1] = bot; ext[2] = lft; ext[3] = rgt;
+}
+
+/* the share of dark grain macroblocks over the picture, leaving out the bars,
+ * since a grainy bar can't band and would open the gate on a letterboxed film */
+double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb)
+{
+    int b[4];
+    y264_aq_bars(mean, var, wmb, hmb, b);
     int n = 0, g = 0;
-    for (int y = top; y < hmb - bot; y++)
-        for (int x = lft; x < wmb - rgt; x++) {
+    for (int y = b[0]; y < hmb - b[1]; y++)
+        for (int x = b[2]; x < wmb - b[3]; x++) {
             n++;
             g += y264_aq_grain(mean[y * wmb + x], var[y * wmb + x]);
         }
     return n ? (double)g / n : 0.0;
+}
+
+/* the floor over the frame QP for blocks inside the bars, which hold no
+ * picture, so AQ and mb-tree can't spend bits there; negative turns it off.
+ * A floor, not a fixed raise: a coarser bar shows blotches in black */
+int y264_aq_bar_floor(void)
+{
+    return (int)aq_dark_env(7);
 }
 
 /* a ramp from 0 at a to 1 at b; a step at a when the two coincide */
@@ -535,22 +582,18 @@ double y264_psy_dark_gain(double mean, double var)
  * for frames that carry no mb-tree field of their own). */
 static void aq_analyze(y264_frame_t *f)
 {
+    f->bar[0] = f->bar[1] = f->bar[2] = f->bar[3] = 0;
     if (!f->aq_off) return;
     int n = f->wmb * f->hmb, ss = f->src_stride[0];
     if (f->aq_strength <= 0.f) {
         for (int i = 0; i < n; i++) f->aq_off[i] = 0;
         return;
     }
-    float *lv = malloc((size_t)n * 2 * sizeof(float));
+    float *lv = malloc((size_t)n * 4 * sizeof(float));
     if (!lv) {
         for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
     }
-    float *dk = lv + n;
-    double *gm = malloc((size_t)n * 2 * sizeof(double)), *gv = gm ? gm + n : NULL;
-    if (!gm) {
-        free(lv);
-        for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
-    }
+    float *dk = lv + n, *gm = lv + 2 * n, *gv = lv + 3 * n;
     const uint32_t *mbv = f->mbvar && *f->mbvar_src == f->src[0] ? f->mbvar : NULL;
     double sum = 0, sum2 = 0;
     int nbright = 0;
@@ -572,8 +615,8 @@ static void aq_analyze(y264_frame_t *f)
             lv[mby * f->wmb + mbx] = l;
             dk[mby * f->wmb + mbx] = (float)y264_aq_dark(mean, var);
             nbright += y264_aq_bright(mean);
-            gm[mby * f->wmb + mbx] = mean;
-            gv[mby * f->wmb + mbx] = var;
+            gm[mby * f->wmb + mbx] = (float)mean;
+            gv[mby * f->wmb + mbx] = (float)var;
             sum += l; sum2 += (double)l * l;
         }
     double avg = sum / n, sd2 = sum2 / n - avg * avg;
@@ -582,7 +625,7 @@ static void aq_analyze(y264_frame_t *f)
     float center = (float)(avg - f->aq_pull * (avg - f->aq_anchor));
     float dg = (float)y264_aq_dark_gate((double)nbright / n,
                                         y264_aq_grain_share(gm, gv, f->wmb, f->hmb));
-    free(gm);
+    if (y264_aq_bar_floor() >= 0) y264_aq_bars(gm, gv, f->wmb, f->hmb, f->bar);
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center) + dg * dk[i]);
         if (off < -8) off = -8;
@@ -618,6 +661,7 @@ static inline int mb_slice_top_row(const y264_frame_t *f, int mby)
     return mby == (f->slice_y0 ? f->slice_y0[mby] : 0);
 }
 
+static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby);
 static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
 {
     /* Publish the slice bound every neighbour test below reads, and, at the
@@ -632,15 +676,10 @@ static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
     }
     /* each row has its own tally line, so no two workers share one */
     f->nr_cur = f->nr_rows ? f->nr_rows + mby : NULL;
-    int i = mby * f->wmb + mbx;
     /* When mb-tree runs, its per-MB offset is the COMBINED offset
  * (qp_offset_aq folded in), so the standalone AQ offset must not be added
  * again. Standalone AQ applies only where mb-tree is off (e.g. bframes 0). */
-    int q = f->mbtree_off
-          ? f->qp + f->mbtree_off[i]
-          : f->qp + (f->aq_off ? f->aq_off[i] : 0);
-    if (q < 0) q = 0;
-    if (q > 51) q = 51;
+    int q = mb_cur_qp(f, mbx, mby);
     f->cur_qp = q;
     f->cur_chroma_qp = y264_chroma_qp(q, f->chroma_qp_off);
     f->cur_qp_scaled = q + Y264_QP_BD_OFFSET;
@@ -662,6 +701,13 @@ static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
     int q = f->mbtree_off
           ? f->qp + f->mbtree_off[i]
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
+    /* a block inside the letterbox or pillarbox bars holds no picture, so
+     * whatever AQ and mb-tree say it never goes below the floor */
+    if (mby < f->bar[0] || mby >= f->hmb - f->bar[1] ||
+        mbx < f->bar[2] || mbx >= f->wmb - f->bar[3]) {
+        int b = f->qp + y264_aq_bar_floor();
+        if (q < b) q = b;
+    }
     return q < 0 ? 0 : (q > 51 ? 51 : q);
 }
 

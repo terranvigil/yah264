@@ -6394,10 +6394,11 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
     IP_SCOPE_B(IP_MBT_INVQ);
     int n = wmb * hmb;
     double sum = 0, sum2 = 0;
-    /* the dark-block cuts (y264_aq_dark), NULL when the term is off */
-    float *dk = y264_aq_dark(0.0, 0.0) < 0.0 ? malloc((size_t)n * sizeof(float)) : NULL;
+    /* the dark-block cuts (y264_aq_dark) and the luma mean and variance the
+     * frame gate reads, NULL when the term is off */
+    float *dk = y264_aq_dark(0.0, 0.0) < 0.0 ? malloc((size_t)n * 3 * sizeof(float)) : NULL;
+    float *gm = dk ? dk + n : NULL, *gv = dk ? dk + 2 * n : NULL;
     int nbright = 0;
-    double *gm = malloc((size_t)n * 2 * sizeof(double)), *gv = gm ? gm + n : NULL;
     for (int mby = 0; mby < hmb; mby++)
         for (int mbx = 0; mbx < wmb; mbx++) {
             const pixel *s = pl[0] + (mby * 16) * stride + mbx * 16;
@@ -6410,12 +6411,11 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             invq[mby * wmb + mbx] = l;
             if (dk) dk[mby * wmb + mbx] = (float)y264_aq_dark(mean, var);
             nbright += y264_aq_bright(mean);
-            if (gm) { gm[mby * wmb + mbx] = mean; gv[mby * wmb + mbx] = var; }
+            if (gm) { gm[mby * wmb + mbx] = (float)mean; gv[mby * wmb + mbx] = (float)var; }
             sum += l; sum2 += l * l;
         }
     double dg = y264_aq_dark_gate((double)nbright / n,
                                   gm ? y264_aq_grain_share(gm, gv, wmb, hmb) : 0.0);
-    free(gm);
     /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
  * constant instead of the frame mean, so its DC is a frame-level complexity
  * term. The propagation weights are renormalised to mean 1 below, so a DC

@@ -276,6 +276,7 @@ typedef struct {
     const uint32_t *mbvar;
     const pixel *const *mbvar_src;
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
+    int bar[4];                 /* letterbox/pillarbox bars in MBs: top, bottom, left, right */
     /* Per-MB lookahead (lowres, vs this frame's ref0/anchor) MV, quarter-pel, as
  * an integer-search seed. NULL when no lookahead ran. Indexed mby*wmb+mbx.
  * P-frame ref0 only: the current-frame motion seeded from the lowres MVs. */
@@ -498,7 +499,9 @@ double           y264_aq_dark(double mean, double var);
 double           y264_psy_dark_gain(double mean, double var);
 int              y264_aq_bright(double mean);
 int              y264_aq_grain(double mean, double var);
-double           y264_aq_grain_share(const double *mean, const double *var, int wmb, int hmb);
+void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int ext[4]);
+int              y264_aq_bar_floor(void);
+double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
 double           y264_aq_dark_gate(double bright_share, double grain_share);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);

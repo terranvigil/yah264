@@ -61,10 +61,10 @@ int main(void)
     CHECK(y264_aq_grain(M(30.0), V(100.0)) == 0);   /* textured */
 
     /* the grain share leaves letterbox bars out: a 16x12 frame whose top and
-     * bottom three rows are grainy black and whose middle is bright */
+     * bottom three rows are near-black, low-variance and whose middle is bright */
     {
-        enum { W = 16, H = 12 };
-        double m[W * H], v[W * H];
+        enum { W = 16, H = 18 };
+        float m[W * H], v[W * H];
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++) {
                 int bar = y < 3 || y >= H - 3;
@@ -76,8 +76,55 @@ int main(void)
         for (int y = 3; y < H - 3; y++)
             for (int x = 0; x < W; x++) { m[y * W + x] = M(30.0); v[y * W + x] = V(6.0); }
         CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
-        /* dark and flat all over: no bars, every block counts */
+        /* dark grain all over: no bars, every block counts */
         for (int i = 0; i < W * H; i++) { m[i] = M(16.0); v[i] = V(1.0); }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        /* one bright block in dark grain isn't the edge of a bar: the rows
+         * and columns around it stay picture, so the share stays near 1 */
+        m[8 * W + 7] = M(200.0); v[8 * W + 7] = V(40.0);
+        CHECK(y264_aq_grain_share(m, v, W, H) > 0.99);
+        /* a subtitle in the bottom bar doesn't end it */
+        for (int i = 0; i < W * H; i++) { m[i] = M(30.0); v[i] = V(6.0); }
+        for (int y = 0; y < H; y++)
+            if (y < 3 || y >= H - 3)
+                for (int x = 0; x < W; x++) {
+                    int sub = y == H - 2 && x >= 5 && x < 11;
+                    m[y * W + x] = sub ? M(180.0) : M(16.0);
+                    v[y * W + x] = sub ? V(300.0) : V(1.0);
+                }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        /* near-black with one grainy band: bars that deep aren't bars, so the
+         * band counts against the whole frame */
+        for (int i = 0; i < W * H; i++) { m[i] = M(10.0); v[i] = V(0.1); }
+        for (int x = 0; x < W; x++) { m[8 * W + x] = M(30.0); v[8 * W + x] = V(6.0); }
+        CHECK(y264_aq_grain_share(m, v, W, H) < 0.1);
+        /* mattes of any color are bars, both letterbox and pillarbox; edges of
+         * two different colors aren't a matte */
+        {
+            int e[4];
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int bar = y < 3 || y >= H - 3;
+                    m[y * W + x] = bar ? M(200.0) : M(90.0);
+                    v[y * W + x] = bar ? V(0.5) : V(60.0);
+                }
+            y264_aq_bars(m, v, W, H, e);
+            CHECK(e[0] == 3 && e[1] == 3 && e[2] == 0 && e[3] == 0);
+            for (int x = 0; x < W; x++) m[(H - 1) * W + x] = M(100.0);
+            y264_aq_bars(m, v, W, H, e);
+            CHECK(e[0] == 0 && e[1] == 0);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int bar = x < 2 || x >= W - 2;
+                    m[y * W + x] = bar ? M(128.0) : M(90.0);
+                    v[y * W + x] = bar ? V(0.5) : V(60.0);
+                }
+            y264_aq_bars(m, v, W, H, e);
+            CHECK(e[0] == 0 && e[1] == 0 && e[2] == 2 && e[3] == 2);
+        }
+        /* a bar on one edge only isn't a letterbox */
+        for (int i = 0; i < W * H; i++) { m[i] = M(30.0); v[i] = V(6.0); }
+        for (int x = 0; x < W; x++) { m[x] = M(16.0); v[x] = V(1.0); m[W + x] = M(16.0); v[W + x] = V(1.0); }
         CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
     }
 

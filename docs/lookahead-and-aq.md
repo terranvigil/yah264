@@ -92,8 +92,15 @@ field's center sits high and a low `--aq-strength` leaves the dark side coarse;
 there the cut is scaled by the share of macroblocks with a luma mean of 170 or
 more, none at 8% and full at 20%. In frames where much of the picture is dark
 grain or gradient, it is scaled by the share of dark, smooth macroblocks that
-aren't flat, counted inside any letterbox bars, none at 35% and full at 50%. A dark frame with neither is left to
+aren't flat, counted over the picture leaving out any letterbox bars, none at
+35% and full at 50%. A dark frame with neither is left to
 the variance offset.
+
+**Letterbox and pillarbox bars.** Bars of any matte color are found per frame:
+matched pairs of uniform edge rows (or columns) of one color and depth, no
+deeper than a fifth of the height (a sixth of the width) a side. Blocks inside
+them never go below the frame QP, so AQ and mb-tree spend nothing there, and
+they're left out of the dark gate's grain share.
 
 **Psy-trellis and the flat-content lattice.** `--psy-trellis` defaults to 0.
 When on, the trellis rewards keeping the AC energy of the reconstructed

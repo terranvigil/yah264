@@ -106,6 +106,7 @@ DEFAULT_OVERRIDES = {
     "Y264_AQ_DARK_B1": "0.20",
     "Y264_AQ_DARK_S0": "0.35",
     "Y264_AQ_DARK_S1": "0.50",
+    "Y264_AQ_BAR": "0",
     # overrides of a public param or CLI flag: unset follows the param
     "Y264_MBT_DEPFLOOR": "= param", "Y264_ABR_TOL": "= param",
 }
