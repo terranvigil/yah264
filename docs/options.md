@@ -1574,7 +1574,7 @@ traps but will still surprise:
 
 ## Environment variables
 
-The encoder has about 115 `Y264_*` environment variables, listed in
+The encoder has about 120 `Y264_*` environment variables, listed in
 [knobs.md](knobs.md), which is generated from the source. They are read only in
 a build configured with `-Ddev_knobs=true`. A default build reads only the 16
 the CLI uses to carry its own options (`src/common/env.h`) and the two memory

@@ -6,7 +6,7 @@ These are read only in a build configured with `-Ddev_knobs=true`; a default bui
 
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (42)
+## default (45)
 
 | knob | default | reader |
 |---|---|---|
@@ -35,7 +35,10 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_MBT_BLEG_REUSE` | 1 | src/encoder/encoder.c:7778 |
 | `Y264_MBT_BREF` | 1 | src/encoder/encoder.c:247 |
 | `Y264_MBT_PAIR_SCALE` | 1 | src/encoder/encoder.c:7234 |
+| `Y264_ME_AGREE` | 1 | src/encoder/motion.c:235 |
+| `Y264_ME_MINW` | 1920 | src/encoder/motion.c:233 |
 | `Y264_PART_EARLYTERM` | 4 | src/encoder/mbcode.c:5381 |
+| `Y264_QPEL_SKIPQ` | 96 | src/encoder/motion.c:245 |
 | `Y264_RCP_LAG` | 1 | src/encoder/encoder.c:456 |
 | `Y264_RC_CARRY` | 1 | cli/yah264_cli.c:1314 |
 | `Y264_STAIR_BDEPTH` | 1 | src/encoder/encoder.c:361 |
@@ -115,7 +118,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_VBV_ROWBRAKE_TRACE` | 0 | src/encoder/mbcode.c:5223 |
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:881 |
 
-## arm (16)
+## arm (19)
 
 | knob | default | reader |
 |---|---|---|
@@ -130,8 +133,11 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_MAX_INPUT_MB` | ? | cli/yah264_cli.c:2165 |
 | `Y264_MCSTF` | ? | src/encoder/mcstf.c:56 |
 | `Y264_MCSTF_RANGE` | ? | src/encoder/mcstf.c:40 |
+| `Y264_ME_HQ` | 0 | src/encoder/motion.c:234 |
 | `Y264_NR_INTER` | 0 | src/encoder/encoder.c:1990 |
 | `Y264_NR_INTRA` | 0 | src/encoder/encoder.c:1989 |
 | `Y264_PSY_DARK` | ? | src/encoder/mbcode.c:424 |
+| `Y264_QPSQ_MINW` | 0 | src/encoder/motion.c:241 |
 | `Y264_STREAM_WINDOW` | ? | cli/yah264_cli.c:2878 |
+| `Y264_SUB_FAR` | 0 | src/encoder/motion.c:236 |
 | `Y264_TREL_SMOOTH` | on (0 = off) | src/encoder/mbcode.c:1580 |

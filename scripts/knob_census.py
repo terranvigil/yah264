@@ -61,9 +61,9 @@ INSTR_PAT = re.compile(
 # getenv("Y264_X"), the tunable helpers xxx_tunable("Y264_X", default) and
 # the thread pool's NTP_SPIN_SITE(fn, "Y264_X", default) macro are all knob
 # reads; a helper's default is the argument after the name.
-GETENV = re.compile(r'(?:(?:getenv|abr_tunable|crf_tunable|shot_tunable|rc_tunable)\(|'
+GETENV = re.compile(r'(?:(?:getenv|env_int|abr_tunable|crf_tunable|shot_tunable|rc_tunable)\(|'
                     r'NTP_SPIN_SITE\(\w+,\s*)"(Y264_[A-Z0-9_]+)"')
-HELPER = re.compile(r'(?:\w*_tunable\(|NTP_SPIN_SITE\(\w+,\s*)"Y264_[A-Z0-9_]+",')
+HELPER = re.compile(r'(?:\w*_tunable\(|env_int\(|NTP_SPIN_SITE\(\w+,\s*)"Y264_[A-Z0-9_]+",')
 # the looser form of DEFVAL for a ternary closed by a parenthesis:
 #   ((v = getenv("Y264_X")) ? atof(v) : 0.75) * 256.0
 DEFVAL_PAREN = re.compile(r':\s*(-?[0-9.]+)f?\s*\)')
