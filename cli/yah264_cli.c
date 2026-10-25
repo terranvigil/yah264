@@ -4016,33 +4016,31 @@ static const char *rc_arg_mode_name(int m)
 }
 
 #if !Y264_DEV_KNOBS
+#include "knob_names.h"
 extern char **environ;
-/* A release build ignores most Y264_* knobs; say so, so an A/B run against
- * one can't read two identical arms as "no effect". */
+/* A release build ignores most Y264_* knobs; name each one set, so an A/B run
+ * against it can't read two identical arms as "no effect". */
 static void warn_ignored_knobs(void)
 {
     for (char **e = environ; *e; e++) {
         const char *eq = strchr(*e, '=');
         size_t n = eq ? (size_t)(eq - *e) : strlen(*e);
-        char name[128];
-        if (n >= sizeof name || (strncmp(*e, "Y264_", 5) && strncmp(*e, "YAH264_", 7)))
-            continue;
-        memcpy(name, *e, n);
-        name[n] = 0;
-        if (!strcmp(name, "Y264_MAX_INPUT_MB") || !strcmp(name, "Y264_STREAM_WINDOW") ||
-            y264_env(name))
-            continue;
-        fprintf(stderr, "yah264: warning: %s is ignored: this build was configured "
-                "without -Ddev_knobs=true\n", name);
+        for (size_t k = 0; k < sizeof y264_knob_names / sizeof *y264_knob_names; k++) {
+            const char *name = y264_knob_names[k];
+            if (strlen(name) != n || strncmp(*e, name, n))
+                continue;
+            if (!y264_env(name) && strcmp(name, "Y264_MAX_INPUT_MB") &&
+                strcmp(name, "Y264_STREAM_WINDOW"))
+                LOGF(LOG_WARN, "yah264: warning: %s is ignored: this build was configured "
+                     "without -Ddev_knobs=true\n", name);
+            break;
+        }
     }
 }
 #endif
 
 int main(int argc, char **argv)
 {
-#if !Y264_DEV_KNOBS
-    warn_ignored_knobs();
-#endif
     const char *in_path = NULL;
     const char *out_path = "-";
     const char *preset = NULL;
@@ -4747,7 +4745,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--output-depth") && i + 1 < argc)
             out_depth = opt_int("--output-depth", argv[++i], 8, 10);
         else if (!strcmp(argv[i], "--version")) {
-            printf("yah264 %s\n", yah264_version());
+            printf("yah264 %s%s\n", yah264_version(), Y264_DEV_KNOBS ? " (dev knobs)" : "");
             return 0;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") ||
                    !strcmp(argv[i], "--longhelp") || !strcmp(argv[i], "--fullhelp")) {
@@ -4763,6 +4761,9 @@ int main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+#if !Y264_DEV_KNOBS
+    warn_ignored_knobs();
+#endif
     /* Both write the one zone list, and which of two overlapping sources should
      * win has no answer worth guessing. */
     if (g_zones_cli && g_plan_cli) {

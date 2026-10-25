@@ -10,7 +10,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 
 | knob | default | reader |
 |---|---|---|
-| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5479 |
+| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5506 |
 | `Y264_ABR_QCOMP` | 0.6 | src/encoder/rate.c:2497 |
 | `Y264_ABR_TOL` | = param | src/encoder/encoder.c:4837 |
 | `Y264_ABR_VBVOV` | 0.25 | src/encoder/rate.c:2518 |
