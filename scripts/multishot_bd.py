@@ -80,13 +80,20 @@ def main():
     arms = {}
     for spec in a.arms:
         name, _, tmpl = spec.partition("=")
+        binp = None
         if name == "x264" and not tmpl:
             tmpl = f"{shlex.quote(a.x264)} --preset medium --crf {{q}} --threads 12 --demuxer y4m -o {{out}} {{src}}"
         elif tmpl.startswith("env:"):
             env = tmpl[4:].strip()
             tmpl = (f"env {env} " if env else "") + f"{shlex.quote(ours)} --input-y4m {{src}} --crf {{q}} --threads {a.threads} -o {{out}}"
+            binp = ours
+        else:
+            b = bdcompare.template_binary(tmpl)
+            binp = b if os.path.isfile(b) and bdcompare.devknobs.is_yah264(b) else None
+        # each yah264 arm against the binary it runs, which also inherits this environment
+        if binp:
+            bdcompare.require_dev_knobs(binp, tmpl)
         arms[name] = tmpl
-    bdcompare.require_dev_knobs(ours, *a.arms)
     for seq in a.seqs.split(","):
         src = os.path.join(a.corpus, seq + ".y4m")
         cuts = [ln.split() for ln in open(os.path.join(a.corpus, seq + ".cuts")) if ln.strip()]
