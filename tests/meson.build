@@ -43,10 +43,14 @@ test_api = executable('test_api',
   dependencies : yah264_dep)
 test('api', test_api)
 
-test_aqdc = executable('test_aqdc',
-  'test_aqdc.c',
-  dependencies : yah264_dep)
-test('aqdc', test_aqdc)
+# these two drive the encoder through Y264_* knobs, which only a dev_knobs
+# build reads
+if get_option('dev_knobs')
+  test_aqdc = executable('test_aqdc',
+    'test_aqdc.c',
+    dependencies : yah264_dep)
+  test('aqdc', test_aqdc)
+endif
 
 test_denoise = executable('test_denoise',
   'test_denoise.c',
@@ -66,7 +70,7 @@ test('cutscan', test_cutscan)
 # The rate controller, every mode, through record/replay on a synthetic clip
 # (no corpus): each replay must reproduce its recording's slice QPs.
 rc_python = find_program('python3', required : false)
-if rc_python.found()
+if rc_python.found() and get_option('dev_knobs')
   test('rc_replay', rc_python,
     args : [files('rc_selftest.py'), yah264_cli_exe],
     timeout : 120)

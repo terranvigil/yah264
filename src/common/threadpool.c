@@ -438,8 +438,8 @@ static int job_claim_pfor(struct ntp_job *j, unsigned seq32, int nrows)
 
 /* INCARNATION TRAP: a NULL j->cell_fn call from the kind-0 path means a job
  * slot changed identity under a running worker, which every hold invariant
- * individually forbids. Every claim and park stamps the incarnation (seq);
- * run entry, every cell, and resume verify it
+ * individually forbids. Every claim stamps the incarnation (seq); run
+ * entry and every cell verify it
  * and abort with the full state, so the violated invariant names itself
  * instead of leaving a corpse. Integer compares against already-hot fields:
  * cheap enough to keep armed permanently. */

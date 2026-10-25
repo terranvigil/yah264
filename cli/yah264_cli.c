@@ -2160,7 +2160,9 @@ static uint64_t y264_phys_mem(void)
  * only when the platform will not say how much RAM it has. */
 static uint64_t y264_input_budget(int *from_env)
 {
-    const char *ev = y264_env("Y264_MAX_INPUT_MB");
+    /* a resource limit the user is told to raise, read in every build: it
+     * bounds memory and never changes the stream */
+    const char *ev = getenv("Y264_MAX_INPUT_MB");
     *from_env = 0;
     if (ev) {
         double mb = atof(ev);
@@ -2873,8 +2875,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     long need = (long)(nthreads + 1) * keyint;
     if (nknown > 0 && nknown < need) need = nknown;
     int win_forced = 0;
-    if (y264_env("Y264_STREAM_WINDOW")) {
-        long w = atol(y264_env("Y264_STREAM_WINDOW"));
+    if (getenv("Y264_STREAM_WINDOW")) {         /* a memory bound, read in every build */
+        long w = atol(getenv("Y264_STREAM_WINDOW"));
         if (w > 0) { need = w; win_forced = 1; }
                                         /* no 2*keyint floor: a worker consumes
  * one frame at a time, so a window

@@ -18,7 +18,7 @@ OUT="${OUT:-/tmp/tsan_catch.txt}"
 # whose race TSan went on to catch the moment the binary existed. Refuse instead.
 if [ ! -x "$BIN" ]; then
   echo "tsan_catch: no TSan binary at $BIN" >&2
-  echo "tsan_catch:   meson setup /tmp/y264tsan -Db_sanitize=thread && ninja -C /tmp/y264tsan" >&2
+  echo "tsan_catch:   meson setup /tmp/y264tsan -Ddev_knobs=true -Db_sanitize=thread && ninja -C /tmp/y264tsan" >&2
   echo "tsan_catch:   (or point BIN at one). Refusing: a missing binary reports clean." >&2
   exit 2
 fi

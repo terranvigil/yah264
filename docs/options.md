@@ -1574,11 +1574,12 @@ traps but will still surprise:
 
 ## Environment variables
 
-The encoder reads **about 160 distinct `Y264_*` environment variables** in C
-code. [knobs.md](knobs.md) is generated from the source and carries the count.
-Almost none of them are features. They are how this project ships an experiment
-without a rebuild. The great majority are measurement scaffolding that happens
-to be reachable from your shell.
+The encoder has about 115 `Y264_*` environment variables, listed in
+[knobs.md](knobs.md), which is generated from the source. They are read only in
+a build configured with `-Ddev_knobs=true`. A default build reads just the few
+the CLI uses to carry its own options, so its output can't be changed from the
+environment. Almost none of them are features. They are how this project tries
+an experiment without a rebuild, and most are measurement scaffolding.
 
 They are tiered below by whether you have any business setting them. A rule of
 thumb: if it is not in the first table, the answer is no.

@@ -178,6 +178,12 @@ jobs:
       - name: Unit tests + checkasm
         run: meson test -C build --print-errorlogs
 
+      - name: Default build (no dev knobs) builds and tests
+        run: |
+          meson setup build-default
+          ninja -C build-default
+          meson test -C build-default --print-errorlogs
+
       - name: checkasm --isa neon
         run: |
           ./build/tools/checkasm/checkasm --list
