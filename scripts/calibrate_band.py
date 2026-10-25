@@ -2,7 +2,7 @@
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Find, per clip, the ABR ladder whose x264-medium operating points land inside
-the 88-94 band of the gate score (bdcompare's VMAF_GATE, VMAF v1 by default).  Fixed multipliers off a 'calibrated centre' do NOT do
+the 88-94 band of the gate score (bdcompare's VMAF_GATE, VMAF v1 by default).  Fixed multipliers off a 'calibrated center' do NOT do
 this -- they put akiyo/touchdown at saturation and sintel below the band, which
 makes the BD fit degenerate (touchdown read +341269%).
 

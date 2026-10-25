@@ -15,19 +15,19 @@ separate NEG score adds nothing.
 |---|---|
 | model | `vmaf_v1.0.16_3d0h` below 1440 lines, `vmaf_v1.0.16_1d5h_2160` at 1440 and up, and the `_hfr` twin at 50 fps and up |
 | bit depth | both sides converted to 10-bit, with `cambi.enc_bitdepth` set to the stream's coded depth |
-| resolution | scored at the source's own size, never rescaled |
+| resolution | at display resolution: a picture smaller than 1920x1080 in both dimensions is scaled up to fit it (bicubic, aspect kept), both sides, with CAMBI told the coded size. PSNR is read at the coded size |
 | frames | every frame, mean pooled |
-| cache | keyed on the model file and the encode bit depth |
+| cache | keyed on the model, the encode bit depth, the libvmaf build and the display scaling |
 | comparison | BD-rate against the reference encoder, on the same clip and resolution |
 
 ## Limits
 
-- CAMBI misses much of the banding in very dark gradients. `band_check.py`
-  adds its own dark-area statistics and fails a window on either.
+- v1's CAMBI ignores very dark areas. `band_check.py` gates on CAMBI without
+  that threshold, plus its own dark-area statistics.
 - Near the top of the scale (above about 98) BD loses resolving power.
   bdcompare flags those clips.
-- v1 reads chroma on heavily decimated planes, so at CIF it sees very little
-  chroma.
+- Scores from different resolutions aren't comparable; every comparison is
+  on one clip at one size.
 
 ## Where it lives
 

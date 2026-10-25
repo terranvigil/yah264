@@ -1153,6 +1153,45 @@ def v1_model(info):
     return os.path.join(bd.V1_MODELS, f"vmaf_{bd.V1_VER}{hfr}", name)
 
 
+def _vmaf_pass(cell, bitstream, wd, start, count, j, args, scaled):
+    """One libvmaf pass of a bitstream against its feeder frames, both at
+    10-bit and, when `scaled`, both fitted to the v1 display. Returns the JSON."""
+    dfifo = _fifo(wd, "dec.fifo")
+    vf = ["-vf", bd.V1_SCALE_VF] if scaled else []
+    dec = subprocess.Popen(
+        [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
+         "-i", bitstream, "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le",
+         "-strict", "-1", "-f", "yuv4mpegpipe", dfifo],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    ferr = tempfile.TemporaryFile()
+    fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
+                          stderr=ferr)
+    conv = subprocess.Popen(
+        [FFMPEG, "-v", "error", "-nostdin", "-threads", "1", "-f", "yuv4mpegpipe",
+         "-i", "pipe:0", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
+         "-f", "yuv4mpegpipe", "pipe:1"],
+        stdin=fp.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    fp.stdout.close()
+    v = subprocess.run(
+        [VMAF, "--threads", VMAF_THREADS, "--subsample", SUBSAMPLE,
+         "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, *args],
+        stdin=conv.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    conv.stdout.close()
+    conv.wait()
+    frc = fp.wait()
+    dec.wait()
+    os.remove(dfifo)
+    if v.returncode != 0:
+        sys.exit(f"longform: vmaf failed on {bitstream}\n"
+                 f"  {v.stderr.decode(errors='replace')[-600:]}")
+    if frc != 0:
+        ferr.seek(0)
+        sys.exit(f"longform: the reference feeder failed ({frc}):\n  "
+                 f"{ferr.read().decode(errors='replace')[-600:]}")
+    with open(j) as f:
+        return json.load(f)
+
+
 def score(cell, bitstream, wd, start=0, count=None):
     """(VMAF v1, PSNR-Y, extra) of a bitstream against the frames it was
     made from; `extra` holds the 5.2a columns and the frame-count check.
@@ -1170,45 +1209,22 @@ def score(cell, bitstream, wd, start=0, count=None):
     the SSIM pass counts the decoded frames a second, independent way."""
     info = cell_info(cell)
     count = count or info["frames"] - start
-    dfifo = _fifo(wd, "dec.fifo")
-    j = os.path.join(wd, "v.json")
     model = v1_model(info)
     if not os.path.exists(model) or not os.access(VMAF, os.X_OK):
         sys.exit(f"longform: VMAF v1 needs {VMAF} and {model}")
-    dec = subprocess.Popen(
-        [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
-         "-i", bitstream, "-fps_mode", "passthrough", "-pix_fmt", "yuv420p10le",
-         "-strict", "-1", "-f", "yuv4mpegpipe", dfifo],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    ferr = tempfile.TemporaryFile()
-    fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
-                          stderr=ferr)
-    conv = subprocess.Popen(
-        [FFMPEG, "-v", "error", "-nostdin", "-threads", "1", "-f", "yuv4mpegpipe",
-         "-i", "pipe:0", "-pix_fmt", "yuv420p10le", "-strict", "-1",
-         "-f", "yuv4mpegpipe", "pipe:1"],
-        stdin=fp.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    fp.stdout.close()
-    v = subprocess.run(
-        [VMAF, "--threads", VMAF_THREADS, "--subsample", SUBSAMPLE,
-         "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, "--feature", "psnr",
-         "--model", f"path={model}:name=vmaf_v1:cambi.enc_bitdepth="
-                    f"{bd._enc_bitdepth(bitstream)}"],
-        stdin=conv.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    conv.stdout.close()
-    conv.wait()
-    frc = fp.wait()
-    dec.wait()
-    os.remove(dfifo)
-    if v.returncode != 0:
-        sys.exit(f"longform: vmaf failed on {bitstream}\n"
-                 f"  {v.stderr.decode(errors='replace')[-600:]}")
-    if frc != 0:
-        ferr.seek(0)
-        sys.exit(f"longform: the reference feeder failed ({frc}):\n  "
-                 f"{ferr.read().decode(errors='replace')[-600:]}")
-    with open(j) as f:
-        jj = json.load(f)
+    # v1 at display resolution (bdcompare.v1_scaled); PSNR always at the coded
+    # size, so a scaled cell takes a second, PSNR-only pass
+    scaled = bd.v1_scaled(info["w"], info["h"])
+    jj = _vmaf_pass(cell, bitstream, wd, start, count, os.path.join(wd, "v.json"),
+                    ["--model", f"path={model}:"
+                     + bd.v1_model_opts(info["w"], info["h"], bd._enc_bitdepth(bitstream))]
+                    + ([] if scaled else ["--feature", "psnr"]), scaled)
+    if scaled:
+        pj = _vmaf_pass(cell, bitstream, wd, start, count, os.path.join(wd, "p.json"),
+                        ["--no_prediction", "--feature", "psnr"], False)
+        for k in ("psnr_y", "psnr_cb", "psnr_cr"):
+            if k in pj["pooled_metrics"]:
+                jj["pooled_metrics"][k] = pj["pooled_metrics"][k]
     want = (count + int(SUBSAMPLE) - 1) // int(SUBSAMPLE)
     pooled = jj["pooled_metrics"]
     frames = jj["frames"]
@@ -1257,12 +1273,19 @@ def ttag(threads=None):
     return f"t{t}" if t else "tdefault"
 
 
+def dtag(cell):
+    """Key tag for a cell v1 scores scaled to the display, so its scores never
+    mix with ones taken at the coded size."""
+    i = cell_info(cell)
+    return ":disp" if bd.v1_scaled(i["w"], i["h"]) else ""
+
+
 def xkey_base(cell, tag=None):
-    return f"point:{cell}:x264:{X264_CRF:.1f}:{PRESET}:{tag or ttag()}"
+    return f"point:{cell}:x264:{X264_CRF:.1f}:{PRESET}:{tag or ttag()}{dtag(cell)}"
 
 
 def nkey_base(cell, target, tag=None):
-    return f"point:{cell}:ours:onto{target}:{PRESET}:{tag or ttag()}"
+    return f"point:{cell}:ours:onto{target}:{PRESET}:{tag or ttag()}{dtag(cell)}"
 
 
 def do_retag():
@@ -1302,7 +1325,7 @@ def do_ladder(cell):
         for arm in ("x264", "ours"):
             for crf in rungs_for(cell):
                 key = (f"ladder:{cell}:{arm}:{crf:.1f}:{PRESET}"
-                       + (f":f{lf}" if lim else "")) + ident()
+                       + (f":f{lf}" if lim else "")) + dtag(cell) + ident()
                 if key in results():
                     print(f"  {cell:<20}{arm:<6}crf {crf:>5.1f}  cached", flush=True)
                     continue
@@ -1442,9 +1465,9 @@ def prior_ours(cell):
     for k, v in results().items():
         if not k.startswith(f"point:{cell}:ours:onto") or not IDENT_RE.search(k):
             continue
-        if f":{PRESET}:{ttag()}:b" not in k:
+        if f":{PRESET}:{ttag()}{dtag(cell)}:b" not in k:
             continue
-        b, rest = k.split(f":{ttag()}:b", 1)[1].split(":r", 1)
+        b, rest = k.split(f":{ttag()}{dtag(cell)}:b", 1)[1].split(":r", 1)
         if b != me and rest == ref:
             cands.append((v.get("date", ""), k, v, b))
     if not cands:
@@ -1564,7 +1587,7 @@ def do_point(cell):
             par = uncropped(cell)
             pc = sorted((v.get("date", ""), v["crf"]) for k, v in results().items()
                         if par and k.startswith(f"point:{par}:ours:onto")
-                        and f":{PRESET}:{ttag()}:b" in k)
+                        and f":{PRESET}:{ttag()}{dtag(par)}:b" in k)
             if pc and not scaled:
                 start = pc[-1][1]
             print(f"  {cell:<20}ours  cold: no earlier solve for this cell"
@@ -1711,7 +1734,8 @@ def do_rescore(cell):
     try:
         for key in todo:
             v = r[key]
-            target = strip_ident(key) + ident()
+            base = strip_ident(key)
+            target = base + ("" if base.endswith(dtag(cell)) else dtag(cell)) + ident()
             if target in results():
                 print(f"  {key}: already on this build at subsample {SUBSAMPLE}",
                       flush=True)
@@ -2830,6 +2854,8 @@ def bd_of(cell):
     groups = {}
     for k, v in r.items():
         if not k.startswith(f"ladder:{cell}:") or v.get("vmaf_v1") is None:
+            continue
+        if (":disp:b" in k) != bool(dtag(cell)):   # scored at another size
             continue
         m = IDENT_RE.search(k)
         g = m.group(0) if m else ""

@@ -178,6 +178,27 @@ print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h >= 1440 else 
     "$height" "$fps" "$VMAF_MODELS")
 [ -f "$v1model" ] || { echo "perf-comp: VMAF v1 model not found: $v1model" >&2; exit 2; }
 ffmpeg -v error -y -i "$ref" -pix_fmt yuv420p10le -strict -1 "$wd/ref10.y4m"
+# v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080 in
+# both dimensions is fitted to it, both sides, and CAMBI is told the coded size
+read -r v1scaled v1w v1h v1vf <<GEO
+$(python3 "$root/scripts/bdcompare.py" --v1-display "$ref")
+GEO
+v1disp() {  # <10-bit y4m> -> the file v1 scores: itself, or a display-fitted copy
+    if [ "$v1scaled" = 1 ]; then
+        ffmpeg -v error -y -i "$1" -vf "$v1vf" -pix_fmt yuv420p10le -strict -1 "$1.disp.y4m"
+        echo "$1.disp.y4m"
+    else
+        echo "$1"
+    fi
+}
+v1copts() {  # <coded bit depth> -> the --model options after the path
+    if [ "$v1scaled" = 1 ]; then
+        echo "name=vmaf_v1:cambi.enc_bitdepth=$1:cambi.enc_width=$v1w:cambi.enc_height=$v1h"
+    else
+        echo "name=vmaf_v1:cambi.enc_bitdepth=$1"
+    fi
+}
+ref10d=$(v1disp "$wd/ref10.y4m")
 
 # WHICH RATE-CONTROL MODE ARE WE ACTUALLY MEASURING? This script used to append
 # `--crf $crf` to BOTH command lines unconditionally, and callers then added
@@ -504,12 +525,18 @@ vmaf_of() {  # <decoded.y4m> <bitstream> -> "mean VMAF v1  mean PSNR-Y (dB)"
     # v1, the one quality score in the tree (docs/vmaf.md); its detail feature
     # carries the enhancement-gain cap, so sharpening an encoder can do for
     # free does not score.
-    "$VMAF" -r "$wd/ref10.y4m" -d "$1" --subsample "$subsample" --feature psnr \
-        --model "path=$v1model:name=vmaf_v1:cambi.enc_bitdepth=$(enc_bitdepth "$2")" \
+    local d
+    d=$(v1disp "$1")
+    "$VMAF" -r "$ref10d" -d "$d" --subsample "$subsample" \
+        --model "path=$v1model:$(v1copts "$(enc_bitdepth "$2")")" \
         --json -o "$wd/v.json" >/dev/null 2>&1
+    "$VMAF" -r "$wd/ref10.y4m" -d "$1" --subsample "$subsample" --no_prediction \
+        --feature psnr --json -o "$wd/p.json" >/dev/null 2>&1
+    [ "$d" = "$1" ] || rm -f "$d"
     python3 -c "import json,sys
-p = json.load(open(sys.argv[1]))['pooled_metrics']
-print(f\"{p['vmaf_v1']['mean']:.3f} {p['psnr_y']['mean']:.3f}\")" "$wd/v.json"
+v = json.load(open(sys.argv[1]))['pooled_metrics']
+p = json.load(open(sys.argv[2]))['pooled_metrics']
+print(f\"{v['vmaf_v1']['mean']:.3f} {p['psnr_y']['mean']:.3f}\")" "$wd/v.json" "$wd/p.json"
 }
 read -r n_vmaf n_psnr <<EOF
 $(vmaf_of "$wd/next.y4m" "$wd/next.264")

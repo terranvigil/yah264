@@ -89,11 +89,11 @@ def curve(tmpl, src, targets, work, label, n):
         q = solve(tmpl, src, t, out, n)
         sz = enc(tmpl, q, src, out, n)
         v = bd.vmaf_of(out, src, work)
-        if not v or "VMAF-NEG" not in v:
+        if not v or bd.GATE not in v:
             return None
-        pts.append((sz, v["VMAF-NEG"]))
+        pts.append((sz, v[bd.GATE]))
         print(f"    {label:<10} target {t:>9} -> crf {q:5.2f}  {sz:>9} B  "
-              f"NEG {v['VMAF-NEG']:6.2f}", flush=True)
+              f"{bd.GATE_SHORT} {v[bd.GATE]:6.2f}", flush=True)
     return pts
 
 
@@ -128,7 +128,7 @@ def main():
                 r = bd.bd_rate(rb, mb_, [p[0] for p in c], [p[1] for p in c])
                 if isinstance(r, float):
                     rows.setdefault((clip, name), []).append(r)
-                    print(f"  {tag:<26} {name:<9} BD-rate(VMAF-NEG) vs x264: {r:+.2f}%",
+                    print(f"  {tag:<26} {name:<9} BD-rate({bd.GATE}) vs x264: {r:+.2f}%",
                           flush=True)
                 else:
                     print(f"  {tag} {name}: {r}")

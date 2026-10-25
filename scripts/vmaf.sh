@@ -53,8 +53,22 @@ PY
 case "$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt -of csv=p=0 "$wd/out.264")" in
     *12*) ebd=12 ;; *10*) ebd=10 ;; *) ebd=8 ;;
 esac
+# v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080
+# in both dimensions is fitted to it, both sides, and CAMBI told the coded size
+read -r scaled cw ch svf <<GEO
+$(python3 "$(dirname "$0")/bdcompare.py" --v1-display "$clip")
+GEO
+copts="name=vmaf_v1:cambi.enc_bitdepth=$ebd"
+if [ "$scaled" = 1 ]; then
+    for f in ref dec; do
+        ffmpeg -v error -y -i "$wd/$f.y4m" -vf "$svf" \
+            -pix_fmt yuv420p10le -strict -1 "$wd/$f.disp.y4m"
+        mv "$wd/$f.disp.y4m" "$wd/$f.y4m"
+    done
+    copts="$copts:cambi.enc_width=$cw:cambi.enc_height=$ch"
+fi
 "$vmaf" -q -r "$wd/ref.y4m" -d "$wd/dec.y4m" --json -o "$wd/v.json" \
-    --model "path=$model:name=vmaf_v1:cambi.enc_bitdepth=$ebd"
+    --model "path=$model:$copts"
 
 python3 - "$wd/v.json" "$bytes" "$crf" "$clip" "$frames" <<'PY'
 import json, sys

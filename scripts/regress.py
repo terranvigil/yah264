@@ -25,7 +25,7 @@ across commits. Fitted to this tree's rules:
     a dependency of coverage tests).
 
 Usage:
-  scripts/regress.py                     # smoke tier: 8 cells, synthetic clip
+  scripts/regress.py                     # smoke tier: 8 cells plus one at the defaults
   scripts/regress.py --tier full         # 50 cells
   scripts/regress.py --seed 7 --cell 3   # replay one cell of a seeded run
   scripts/regress.py --clip tests/corpus/foreman_cif.y4m --frames 120
@@ -319,8 +319,12 @@ def main():
         if formats and pick not in formats:
             pick = formats[0]                   # the 4:2:0 workhorse
         cells.append((args, pick))
+    # one fixed cell at the shipped defaults on 4:2:0, so the default inter
+    # path (CABAC with trellis) runs whatever the seed draws; appended last so
+    # seeded cell numbers stay put
+    cells.append(("--threads 1", "yuv420p"))
 
-    print(f"regress: rev {REV}  seed {SEED}  {nprod} cells  "
+    print(f"regress: rev {REV}  seed {SEED}  {len(cells)} cells  "
           f"{nframes} frames  clip "
           f"{os.path.basename(a.clip) if a.clip else 'synthetic per-format'}  "
           f"jm {'yes' if JM else 'no'}")
