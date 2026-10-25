@@ -650,7 +650,7 @@ def quality(codec, clip, frames, point, cmd_for, e, out):
     same minutes the second time."""
     w, h, _ = bdcompare._y4m_geometry(clip_path(clip))
     key = (f"{BOARD_ID}:{RC}:{codec}:{clip}:{frames}:{point:.3f}:{PRESET}"
-           f":t{THREADS}:v1{'d' if bdcompare.v1_scaled(w, h) else ''}")
+           f":t{THREADS}:v1-{bdcompare.V1_RULE}")
     what = f"{codec.replace('lib','')} {clip} @ {point:.3f} t{THREADS}"
     c = _qcache()
     if key in c:

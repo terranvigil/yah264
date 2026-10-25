@@ -21,8 +21,11 @@ aim at the same bitrate. Then it prints how long each took, how big each file
 came out and how good each looked. `make review-720` and
 `make review-1080` run half of it.
 
-You need `x264`, `ffmpeg` and `vmaf` on your path. [Getting started](start.md)
-covers the build.
+You need `x264` and `ffmpeg` on your path, and a float-enabled libvmaf 3.x
+`vmaf` CLI with Netflix's VMAF v1.0.16 model files. They're looked for at
+`~/.local/opt/vmaf-v1/bin/vmaf` and `~/.local/share/vmaf/model`, or wherever
+`VMAF_V1_BIN` and `VMAF_V1_MODELS` point. [Getting started](start.md) covers
+the build.
 
 ## What comes back
 
@@ -44,9 +47,9 @@ hundredths. Ignore the second decimal.
 **`time`** is our encode time over x264's. Below 1.00 we're faster: 0.82x
 means we took about four fifths of x264's time.
 
-**`VMAF`** is quality: our score minus x264's. It uses VMAF's NEG model, which
-doesn't reward free sharpening and is the one used everywhere on this site.
-Positive means ours looks better.
+**`VMAF`** is quality: our score minus x264's, on VMAF v1 scored at display
+resolution. v1 doesn't reward free sharpening, and it also sees banding and
+chroma. Positive means ours looks better.
 
 **`size`** is how much bigger our file is than x264's. Negative means ours is
 smaller.

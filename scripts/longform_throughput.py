@@ -1277,9 +1277,11 @@ def ttag(threads=None):
 
 def dtag(cell):
     """Key tag for a cell v1 scores scaled to the display, so its scores never
-    mix with ones taken at the coded size."""
+    mix with ones taken at the coded size. Cells at 1080p and up carry no tag:
+    the rule leaves them as they were, so their records stay valid. A rule
+    change that reaches them has to tag them too."""
     i = cell_info(cell)
-    return ":disp" if bd.v1_scaled(i["w"], i["h"]) else ""
+    return f":{bd.V1_RULE}" if bd.v1_scaled(i["w"], i["h"]) else ""
 
 
 def xkey_base(cell, tag=None):
@@ -2857,7 +2859,7 @@ def bd_of(cell):
     for k, v in r.items():
         if not k.startswith(f"ladder:{cell}:") or v.get("vmaf_v1") is None:
             continue
-        if (":disp:b" in k) != bool(dtag(cell)):   # scored at another size
+        if (f":{bd.V1_RULE}:b" in k) != bool(dtag(cell)):   # scored at another size
             continue
         m = IDENT_RE.search(k)
         g = m.group(0) if m else ""
@@ -3977,15 +3979,15 @@ def parse_board(goal):
     win = (re.search(r"window=(\S+)", text) or [None, "?"])[1]
     bid = (re.search(r"binaries \[(\w+)\]", text) or [None, "?"])[1]
     # a board scored on VMAF v1 under the current rule says so in its header
-    # and keys a scaled clip's quality cache ":v1d", any other ":v1"; an
-    # older board's quality columns are left out
+    # and keys its quality cache with the rule; an older board's quality
+    # columns are left out
     v1 = "dVMAF-v1" in text and f"v1 scoring: {bd.V1_RULE}" in text
     q = {}
     for ln in BOARD_QLINE.finditer(text) if v1 else ():
         b, codec, clip, pt, th = ln.groups()
-        pre, suf = f"{b}:crf:lib{codec}:{clip}:", f":{pt}:{PRESET}:t{th}:v1"
+        pre, suf = f"{b}:crf:lib{codec}:{clip}:", f":{pt}:{PRESET}:t{th}:v1-{bd.V1_RULE}"
         hit = next((v for k, v in qc.items() if k.startswith(pre)
-                    and (k.endswith(suf) or k.endswith(suf + "d"))), None)
+                    and k.endswith(suf)), None)
         if hit:
             q[(codec, clip)] = hit
     rows = {}

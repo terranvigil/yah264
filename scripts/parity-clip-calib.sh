@@ -104,7 +104,7 @@ ffmpeg -v error -y -i "$ref" -pix_fmt yuv420p10le -strict -1 "$ref10" || exit 2
 # v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080 in
 # both dimensions is fitted to it, both sides, and CAMBI is told the coded size
 geo=$(python3 "$root/scripts/bdcompare.py" --v1-display "$ref") && [ -n "$geo" ] || { echo "$0: cannot read the v1 display geometry" >&2; exit 2; }
-read -r v1scaled v1w v1h v1vf <<< "$geo"
+read -r v1scaled v1w v1h v1vf v1rule <<< "$geo"
 v1disp() {  # <10-bit y4m> -> the file v1 scores: itself, or a display-fitted copy
     if [ "$v1scaled" = 1 ]; then
         ffmpeg -v error -y -i "$1" -vf "$v1vf" -pix_fmt yuv420p10le -strict -1 "$1.disp.y4m"

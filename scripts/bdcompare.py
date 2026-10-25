@@ -300,20 +300,25 @@ def _v1_of(bitstream, src_path, work, src_id=None):
         base = _score_path(bitstream, src_path, src_id)
         if base:
             k = hashlib.sha1(f"{base}|v1|{os.path.basename(model)}|eb{ebd}|{_v1_ident(model)}"
-                             f"{'|disp' if scaled else ''}".encode()).hexdigest()
+                             f"|{V1_RULE}".encode()).hexdigest()
             cpath = os.path.join(os.path.dirname(os.path.dirname(base)), k[:2], k + ".json")
             hit = _score_get(cpath, want)
             if hit is not None:
                 with _stats_lock:
                     SCORE_STATS["hit"] += 1
                 return hit
-    fd, dec = tempfile.mkstemp(suffix=".dec10.y4m", dir=work); os.close(fd)
-    fd, js = tempfile.mkstemp(suffix=".v1.json", dir=work); os.close(fd)
-    sh(f'ffmpeg -v error -y {_FF_T} -i "{bitstream}" -fps_mode passthrough '
-       f'{" ".join(vf)} -pix_fmt yuv420p10le -strict -1 "{dec}"')
-    # the reference reaches 10-bit 4:2:0 on a FIFO, so no full-size copy lands on disk
-    ref = dec + ".ref.y4m"
+    # both sides reach libvmaf at 10-bit on FIFOs, so no full-size (and, for a
+    # scaled picture, display-size) copy lands on disk
+    d = tempfile.mkdtemp(prefix="v1.", dir=work)
+    dec, ref = os.path.join(d, "dec.y4m"), os.path.join(d, "ref.y4m")
+    os.mkfifo(dec)
     os.mkfifo(ref)
+    fd, js = tempfile.mkstemp(suffix=".v1.json", dir=work); os.close(fd)
+    dproc = subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-nostdin", "-y", *shlex.split(_FF_T), "-i", bitstream,
+         "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
+         "-f", "yuv4mpegpipe", dec],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     conv = subprocess.Popen(
         ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path, *vf,
          "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", ref],
@@ -321,11 +326,12 @@ def _v1_of(bitstream, src_path, work, src_id=None):
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
     r = sh(f'{shlex.quote(V1_BIN)} -q -r "{ref}" -d "{dec}" --json -o "{js}" '
            f'--model path={shlex.quote(model)}:{v1_model_opts(w, h, ebd)} {sub} {_VMAF_T}')
-    conv.kill()
-    conv.wait()
-    for p in (ref, dec):
+    for pr in (conv, dproc):
+        pr.kill()
+        pr.wait()
+    for p in (ref, dec, d):
         try:
-            os.unlink(p)
+            os.rmdir(p) if p == d else os.unlink(p)
         except OSError:
             pass
     try:
@@ -644,9 +650,9 @@ def main():
 
 
 if __name__ == "__main__":
-    # for the shell scorers: "<scaled 0|1> <w> <h> <scale filter>" of a y4m
+    # for the shell scorers: "<scaled 0|1> <w> <h> <scale filter> <rule>" of a y4m
     if len(sys.argv) == 3 and sys.argv[1] == "--v1-display":
         w, h, _ = _y4m_geometry(sys.argv[2])
-        print(int(v1_scaled(w, h)), w, h, V1_SCALE_VF)
+        print(int(v1_scaled(w, h)), w, h, V1_SCALE_VF, V1_RULE)
         sys.exit(0)
     main()

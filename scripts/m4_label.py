@@ -169,7 +169,7 @@ def main():
                 r = json.loads(ln)
             except Exception:
                 continue
-            if r.get("metric", "VMAF-NEG") != metric:
+            if "error" not in r and r.get("metric", "VMAF-NEG") != metric:
                 sys.exit(f"m4_label: {a.out} holds {r.get('metric', 'VMAF-NEG')} labels; "
                          f"this run scores {metric}. Use another --out.")
             if "seq" in r:

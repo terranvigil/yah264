@@ -56,7 +56,7 @@ esac
 # v1 at display resolution (docs/vmaf.md): a picture smaller than 1920x1080
 # in both dimensions is fitted to it, both sides, and CAMBI told the coded size
 geo=$(python3 "$(dirname "$0")/bdcompare.py" --v1-display "$clip") && [ -n "$geo" ] || { echo "$0: cannot read the v1 display geometry" >&2; exit 2; }
-read -r scaled cw ch svf <<< "$geo"
+read -r scaled cw ch svf _rule <<< "$geo"
 copts="name=vmaf_v1:cambi.enc_bitdepth=$ebd"
 if [ "$scaled" = 1 ]; then
     for f in ref dec; do
