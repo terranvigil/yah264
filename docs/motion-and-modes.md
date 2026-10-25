@@ -109,14 +109,9 @@ iterated to convergence at `--subme 9` and up.
 RDOQ seeds each coefficient from round-to-nearest, so a marginal coefficient
 always enters the candidate set as {q-1, q} and RD decides keep or drop.
 
-Intra blocks on very smooth source get a smaller RDOQ lambda. A gentle
-gradient on a flat wall or sky is carried by levels of one or two, and at the
-full lambda RDOQ drops them because they cost bits and buy little squared
-error. The block then codes to a flat step, which is banding, and in an I
-frame over a static background that step stays for the whole GOP. The lambda
-falls linearly from full at a source variance of 8 (on the 8-bit scale) to
-zero at 2, where RDOQ keeps the nearest levels. `Y264_TREL_SMOOTH=0` turns
-it off.
+On very smooth intra blocks the RDOQ lambda falls from full at a source
+variance of 8 to zero at 2, so the small levels that carry a gentle gradient
+survive. `Y264_TREL_SMOOTH=0` turns it off.
 
 ### Coefficient decimation
 
@@ -141,7 +136,7 @@ of magnitude 2 or more forces keep. `--no-dct-decimate` turns it off.
 | Intra admission at 1.5x (P) and 0.75x (B) | 1.5x is BD-neutral for 1.06x CIF and 1.11x 720p in pure C. B intra wins a few dozen macroblocks in 300,000, so its margin is tighter |
 | RDOQ on the winner only at medium (`--trellis 1`) | 1.18x faster at CIF and 1.29x at 720p in pure C, for +1.42% VMAF-NEG |
 | Viterbi RDOQ under CABAC at medium | -0.24% VMAF-NEG on seven clips and 1.1-1.3x faster than the greedy search |
-| Intra RDOQ lambda ramped to zero below a source variance of 8 | akiyo's I frame banded (CAMBI 3.1, the reference 0.2) and its static background kept the bands all clip. VMAF v1 BD against x264 medium: akiyo +7.9% to -3.6%, tempete +2.8% to +1.7%. HD band median +0.02%. A limit of 16 cost sunflower and perseverance 0.55%, and I frames only did no better |
+| Intra RDOQ lambda ramped to zero below a source variance of 8 | without it, RDOQ drops the small levels that carry smooth gradients and the I frame bands |
 | Round-to-nearest RDOQ seed | a deadzone seed drops would-be level-1 coefficients with no RD look. Round-to-nearest measured -2.8% corpus mean, park_joy -6.7%, no clip worse |
 | Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable, which is a different tool. Above 3 the surface is flat (all eight shapes within 0.13%) |
 | 4x4 tail `3,2,2,1,1,1,1,1` | at or slightly ahead of every alternative on both bands (CRF -0.07%, deep +0.01%), no speed or size cost, 254/254 conformance |
