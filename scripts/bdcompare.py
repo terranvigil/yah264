@@ -298,6 +298,16 @@ def _packets(bitstream):
         return None
 
 
+def coded_size_is(bitstream, w, h):
+    """True when the stream's coded size is w x h. Fitting both sides to the
+    display would otherwise score an encode at another size with the same
+    aspect."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "csv=p=0", bitstream],
+                       capture_output=True, text=True)
+    return r.stdout.strip().split("\n")[0] == f"{w},{h}"
+
+
 def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
     """One libvmaf pass of a bitstream against its source, both at 10-bit and
     fitted to the display by `vf`, writing js. Returns the parsed JSON, or None
@@ -311,16 +321,11 @@ def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
     that dies first leaves the decode blocked in open(), so it is killed, not
     waited on. When the encode is shorter than the source, the reference
     ffmpeg fails on the pipe libvmaf stopped reading, which is expected."""
-    # fitting both sides to the display would hide an encode at another size
-    # with the same aspect, so the coded size must match the source's
     try:
         sw, sh_, _ = _y4m_geometry(src_path)
     except (OSError, StopIteration, ValueError):
         return None
-    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                        "stream=width,height", "-of", "csv=p=0", bitstream],
-                       capture_output=True, text=True)
-    if r.stdout.strip().split("\n")[0] != f"{sw},{sh_}":
+    if not coded_size_is(bitstream, sw, sh_):
         return None
     d = tempfile.mkdtemp(prefix="v1.", dir=work)
     dec = os.path.join(d, "dec.y4m")
@@ -397,6 +402,8 @@ def _v1_of(bitstream, src_path, work, src_id=None):
         w, h, _ = _y4m_geometry(src_path)
     except (OSError, StopIteration, ValueError):
         return None                     # an unreadable source: no score
+    if not coded_size_is(bitstream, w, h):
+        return None                     # never served from the cache either
     scaled = v1_scaled(w, h)
     vf = ["-vf", V1_SCALE_VF] if scaled else []
     if not os.path.exists(model) or not os.access(V1_BIN, os.X_OK):
