@@ -3694,6 +3694,83 @@ static inline void add_dc_4x4(pixel *rec, int rs, const pixel *pred, int ps, int
     }
 }
 
+static int dc_nb(y264_frame_t *f, int mbx, int mby, int bit, int intra);
+
+/* Inter 4:2:0 chroma DC levels at commit (Y264_CDC_RD, default 1): chosen by
+ * RD instead of the inter deadzone, which the trellis never revisits and
+ * which drops the small DC shifts VMAF v1's chroma feature reads as lost
+ * texture. 0 = the deadzone. Y264_CDC_LAM scales the trellis lambda for the
+ * choice, x256 (default 128: the band and the long-form cells read best
+ * there). */
+static int cdc_rd_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_CDC_RD"); v = e ? atoi(e) != 0 : 1; }
+    return v;
+}
+static int cdc_lam_x256(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_CDC_LAM"); v = e ? atoi(e) : 128; if (v < 0) v = 0; }
+    return v;
+}
+
+/* RD choice of one 4:2:0 chroma plane's four DC levels: each coefficient
+ * tries its round-to-nearest level and one below, plus the all-zero set,
+ * priced as SSD + lambda * CABAC bits. A DC-only change moves every pixel
+ * of a 4x4 by rdc/64 and the source block's mean is dc/16, so the DC part
+ * of the SSD x256 (the trellis's own scale) is (4*dc - rdc)^2 per block.
+ * Same lev/rdc contract as y264_chroma_dc420_rt. nza/nzb are the left and
+ * top neighbours' chroma DC flags, the coded_block_flag context the writer
+ * uses. */
+static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
+                           dctcoef lev[4], dctcoef rdc[4], int nza, int nzb)
+{
+    int qp = f->cur_chroma_qp_scaled, w0 = cqm_dc4p(f, 0, 1 + c);
+    dctcoef near[4], tr[4];
+    y264_chroma_dc420_rt(dc, near, tr, qp, 2, w0, f->lev_max);
+    long lam = ((long)lambda_trellis(f->cur_chroma_qp, 0) * cdc_lam_x256() + 128) >> 8;
+    long bestJ = LONG_MAX;
+    int nvar = 0, vi[4];
+    for (int i = 0; i < 4; i++)
+        if (near[i]) vi[nvar++] = i;
+    if (!nvar) {                    /* nothing to choose: the all-zero set */
+        memset(lev, 0, 4 * sizeof(*lev));
+        memset(rdc, 0, 4 * sizeof(*rdc));
+        return 0;
+    }
+    for (int m = 0; m <= (1 << nvar); m++) {
+        dctcoef l[4], h[4], r[4];
+        for (int i = 0; i < 4; i++) l[i] = near[i];
+        if (m == (1 << nvar)) {                     /* the all-zero set */
+            l[0] = l[1] = l[2] = l[3] = 0;
+        } else {
+            for (int k = 0; k < nvar; k++)
+                if (m >> k & 1) {
+                    int i = vi[k];
+                    l[i] += l[i] > 0 ? -1 : 1;
+                }
+        }
+        if (l[0] | l[1] | l[2] | l[3]) {
+            y264_hadamard2x2(l, h);
+            y264_dequant_dc_chroma(h, r, qp, w0);
+        } else {
+            r[0] = r[1] = r[2] = r[3] = 0;
+        }
+        long d = 0;
+        for (int b = 0; b < 4; b++) {
+            long e = 4L * dc[b] - r[b];
+            d += e * e;
+        }
+        long J = d + lam * y264_cabac_residual_bits(f->cabac, 3, l, nza, nzb);
+        if (J < bestJ) {
+            bestJ = J;
+            memcpy(lev, l, sizeof(l));
+            memcpy(rdc, r, sizeof(r));
+        }
+    }
+    return (lev[0] | lev[1] | lev[2] | lev[3]) != 0;
+}
 static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
                                 pixel pred[2][256], struct chroma_result *cr)
 {
@@ -3768,8 +3845,13 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
         }
         dctcoef rdc[Y264_CHROMA_MAXBLK];
         if (f->cf_idc == 1) {
-            if (y264_chroma_dc420_rt(dc_raster, cr->dc_scan[c], rdc, f->cur_chroma_qp_scaled,
-                                     0, cqm_dc4p(f, 0, 1 + c), f->lev_max))
+            if (trel && f->cabac && cdc_rd_on()) {
+                if (chroma_dc420_rd(f, c, dc_raster, cr->dc_scan[c], rdc,
+                                    dc_nb(f, mbx - 1, mby, 9 + c, 0),
+                                    dc_nb(f, mbx, mby - 1, 9 + c, 0)))
+                    any_dc = 1;
+            } else if (y264_chroma_dc420_rt(dc_raster, cr->dc_scan[c], rdc, f->cur_chroma_qp_scaled,
+                                            0, cqm_dc4p(f, 0, 1 + c), f->lev_max))
                 any_dc = 1;
         } else {
             dctcoef dclev[Y264_CHROMA_MAXBLK];
@@ -13509,6 +13591,7 @@ void y264_mb_warm_statics(void)
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env();
+    (void)cdc_rd_on(); (void)cdc_lam_x256();
     (void)aq_dark_env(0);
     (void)psy_dark_env();
         (void)probe_deadzone_env();
