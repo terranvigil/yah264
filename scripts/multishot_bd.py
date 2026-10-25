@@ -82,13 +82,14 @@ def vmaf_v1(src, bitstream, js):
                 r.kill()
                 r.wait()
                 break
+    crc = conv.poll()
     conv.kill()
     conv.wait()
     os.unlink(ref); os.unlink(dec)
-    if r.returncode:
+    if r.returncode or crc not in (None, 0):
         if os.path.exists(js):
             os.unlink(js)
-        sys.exit(f"vmaf failed on {bitstream} (exit {r.returncode})")
+        sys.exit(f"vmaf failed on {bitstream} (vmaf exit {r.returncode}, reference exit {crc})")
 
 
 def main():
