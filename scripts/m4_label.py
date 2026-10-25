@@ -113,12 +113,13 @@ def one(srcfile, work, points, frames=None):
     for crf in points:                      # baseline curve IS the target set
         sz, _ = encode(y4m, float(crf), out)
         v = bd.vmaf_of(out, y4m, work)
-        if not sz or not v or "VMAF-NEG" not in v:
+        if not sz or not v or bd.GATE not in v:
             return {"seq": row["seq"], "error": f"baseline crf {crf} failed"}
-        base_pts.append((sz, v["VMAF-NEG"]))
+        base_pts.append((sz, v[bd.GATE]))
         targets.append(sz)
     row["base_bytes"] = targets
-    row["base_neg"] = [p[1] for p in base_pts]
+    row["base_score"] = [p[1] for p in base_pts]
+    row["metric"] = f"{bd.GATE}-{bd.V1_RULE}" if bd.GATE != "VMAF-NEG" else bd.GATE
 
     for name, env in ARMS.items():
         pts = []
@@ -126,10 +127,10 @@ def one(srcfile, work, points, frames=None):
             q = solve(y4m, t, out, env)
             sz, _ = encode(y4m, q, out, env)
             v = bd.vmaf_of(out, y4m, work)
-            if not sz or not v or "VMAF-NEG" not in v:
+            if not sz or not v or bd.GATE not in v:
                 pts = None
                 break
-            pts.append((sz, v["VMAF-NEG"]))
+            pts.append((sz, v[bd.GATE]))
         if pts is None:
             row[name] = None
             continue
@@ -162,11 +163,17 @@ def main():
 
     done = set()
     if os.path.exists(a.out):
+        metric = f"{bd.GATE}-{bd.V1_RULE}" if bd.GATE != "VMAF-NEG" else bd.GATE
         for ln in open(a.out):
             try:
-                done.add(json.loads(ln)["seq"])
+                r = json.loads(ln)
             except Exception:
-                pass
+                continue
+            if "error" not in r and r.get("metric", "VMAF-NEG") != metric:
+                sys.exit(f"m4_label: {a.out} holds {r.get('metric', 'VMAF-NEG')} labels; "
+                         f"this run scores {metric}. Use another --out.")
+            if "seq" in r:
+                done.add(r["seq"])
     files = sorted(f for f in os.listdir(a.src_dir)
                    if f.endswith((".mp4", ".mkv", ".y4m")))
     files = files[::a.stride]

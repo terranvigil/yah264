@@ -49,14 +49,14 @@ def curve(tmpl, src, targets, work, label):
         q = solve(tmpl, src, t, out)
         sz = enc(tmpl, q, src, out)
         v = bd.vmaf_of(out, src, work)
-        if not v or "VMAF-NEG" not in v:
+        if not v or bd.GATE not in v:
             return None
-        pts.append((sz, v["VMAF-NEG"]))
+        pts.append((sz, v[bd.GATE]))
         # qp~ is MODEL-derived (our CRF staircase codes qp = crf + 5.4, flat
         # term; AQ/mb-tree modulate per MB around it) -- an annotation for
         # reading regime knobs in QP space, not an achieved measurement.
         print(f"    {label:<22} target {t:>9} -> crf {q:5.2f} (qp~{q + 5.4:4.1f})  {sz:>9} B  "
-              f"NEG {v['VMAF-NEG']:6.2f}", flush=True)
+              f"{bd.GATE_SHORT} {v[bd.GATE]:6.2f}", flush=True)
     return pts
 
 
@@ -89,7 +89,7 @@ def main():
     ra, ma = [p[0] for p in a], [p[1] for p in a]
     rb, mb = [p[0] for p in b], [p[1] for p in b]
     r = bd.bd_rate(rb, mb, ra, ma)
-    print(f"  {args.clip:<15} BD-rate(VMAF-NEG) {args.label_a} vs {args.label_b}: "
+    print(f"  {args.clip:<15} BD-rate({bd.GATE}) {args.label_a} vs {args.label_b}: "
           f"{r:+.2f}%" if isinstance(r, float) else f"  {args.clip}: {r}")
 
 

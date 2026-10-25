@@ -224,7 +224,8 @@ _ladders = {} if NO_CACHE else _load(LADDER_PATH)
 
 # The stored null for this preset, frame count and ladder (scripts/hd_null.py).
 NULL_KEY = f"{PKEY}:{FRAMES}:{','.join(f'{q:g}' for q in RUNGS)}"
-NULL_FIT = (_load(os.environ.get("NULL_FIT", os.path.join(CACHE, "null.json")))
+NULL_FIT = (_load(os.environ.get("NULL_FIT", os.path.join(
+    CACHE, "null.json" if bd.GATE == "VMAF-NEG" else f"null-{bd.GATE}-{bd.V1_RULE}.json")))
             .get(NULL_KEY) if AUTO else None)
 if AUTO and not NULL_FIT:
     print(f"no stored null for {NULL_KEY}: every clip runs one live control "
@@ -292,7 +293,9 @@ def enc(env, q, src, out):
 
 def _key(clip, env, q):
     _, lib, env = split_bin(env)
-    return f"{lib}:{PKEY}:{FRAMES}:{clip}:{env}:{q:.4f}"
+    # a v1 point is its own cell; NEG keys stay as they were so the old cache serves them
+    gate = "" if bd.GATE == "VMAF-NEG" else f":{bd.GATE}-{bd.V1_RULE}"
+    return f"{lib}:{PKEY}:{FRAMES}:{clip}:{env}:{q:.4f}{gate}"
 
 
 def size_at(env, clip, src, q, work):
@@ -340,13 +343,13 @@ def point(env, clip, src, q, work, tag):
         os.unlink(out)
     except OSError:
         pass
-    if not sz or not v or "VMAF-NEG" not in v:
+    if not sz or not v or bd.GATE not in v:
         return None, None
     with _lock:
-        _points[k] = [sz, v["VMAF-NEG"]]
+        _points[k] = [sz, v[bd.GATE]]
         _save(POINTS_PATH, _points)
     _count(clip, "miss")
-    return sz, v["VMAF-NEG"]
+    return sz, v[bd.GATE]
 
 
 # ------------------------------------------------------------- the guard -----
@@ -452,10 +455,10 @@ def run_solve(clip):
     for q in RUNGS:
         sz = enc("", q, src, out)
         v = bd.vmaf_of(out, src, work)
-        if not sz or not v or "VMAF-NEG" not in v:
+        if not sz or not v or bd.GATE not in v:
             return clip, [f"{clip}: default rung {q} failed"], {}, {}
-        anchor.append((q, sz, v["VMAF-NEG"]))
-        lines.append(f"    {clip:<20} default crf {q:5.2f}  {sz:>9} B  NEG {v['VMAF-NEG']:6.2f}")
+        anchor.append((q, sz, v[bd.GATE]))
+        lines.append(f"    {clip:<20} default crf {q:5.2f}  {sz:>9} B  {bd.GATE_SHORT} {v[bd.GATE]:6.2f}")
     res = {}
     for name, env in allarms:
         pts, ok = [], True
@@ -463,12 +466,12 @@ def run_solve(clip):
             q, bracketed = solve(env, src, target, out, q0)
             sz = enc(env, q, src, out)
             v = bd.vmaf_of(out, src, work)
-            if not v or "VMAF-NEG" not in v:
+            if not v or bd.GATE not in v:
                 ok = False
                 break
-            pts.append((sz, v["VMAF-NEG"]))
+            pts.append((sz, v[bd.GATE]))
             lines.append(f"    {clip:<20} {name:<8} crf {q:5.2f}  {sz:>9} B  "
-                         f"NEG {v['VMAF-NEG']:6.2f}  ({100.0 * sz / target - 100:+.2f}% of target)"
+                         f"{bd.GATE_SHORT} {v[bd.GATE]:6.2f}  ({100.0 * sz / target - 100:+.2f}% of target)"
                          + ("" if bracketed else "  UNBRACKETED"))
             if not bracketed:
                 ok = False
@@ -479,7 +482,7 @@ def run_solve(clip):
                        [p[0] for p in pts], [p[1] for p in pts])
         if isinstance(r, float):
             res[name] = r
-            lines.append(f"  {clip:<20} {name:<8} BD-VMAF-NEG {r:+.2f}%")
+            lines.append(f"  {clip:<20} {name:<8} BD-{bd.GATE} {r:+.2f}%")
     scratch.release(work)
     return clip, lines, res, {"mode": "solve"}
 
@@ -562,7 +565,7 @@ def score(clip, pts, lines, tag):
         lines.append(f"  {clip:<20} anchor failed: nothing scored")
         return res, guard
     for q, sz, neg in anchor:
-        lines.append(f"    {clip:<20} default  crf {q:5.2f}  {sz:>9} B  NEG {neg:6.2f}")
+        lines.append(f"    {clip:<20} default  crf {q:5.2f}  {sz:>9} B  {bd.GATE_SHORT} {neg:6.2f}")
     rr = [a[1] for a in anchor]
     mr = [a[2] for a in anchor]
     for name, _ in allarms + [l for l in live if l[0] in pts]:
@@ -577,7 +580,7 @@ def score(clip, pts, lines, tag):
         mt = [x[2] for x in p]
         for (q, sz, neg), a in zip(p, anchor):
             lines.append(f"    {clip:<20} {name:<8} crf {q:5.2f}  {sz:>9} B  "
-                         f"NEG {neg:6.2f}  ({100.0 * sz / a[1] - 100:+.2f}% of anchor)")
+                         f"{bd.GATE_SHORT} {neg:6.2f}  ({100.0 * sz / a[1] - 100:+.2f}% of anchor)")
         n, frac = overlap(rr, rt)
         qf = q_overlap(mr, mt)
         guard[name] = (n, frac, qf)
@@ -590,7 +593,7 @@ def score(clip, pts, lines, tag):
         r = bd.bd_rate(rr, mr, rt, mt)
         if isinstance(r, float):
             res[name] = r
-            lines.append(f"  {clip:<20} {name:<8} BD-VMAF-NEG {r:+.2f}%{tail}")
+            lines.append(f"  {clip:<20} {name:<8} BD-{bd.GATE} {r:+.2f}%{tail}")
         else:
             lines.append(f"  {clip:<20} {name:<8} NOT SCORED: no quality overlap{tail}")
     return res, guard
@@ -749,7 +752,7 @@ def main():
             if fitc:
                 spread[c] = math.sqrt(2.0) * fitc["rsd"]
 
-    print("\n=== BD-VMAF-NEG" + (" at matched achieved bitrate" if SOLVE
+    print(f"\n=== BD-{bd.GATE}" + (" at matched achieved bitrate" if SOLVE
                                  else ", one CRF ladder, BD over the overlap")
           + " (negative = arm better) ===")
     for name, _ in allarms + live:

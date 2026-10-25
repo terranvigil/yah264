@@ -180,6 +180,271 @@ def _score_put(path, vals):
 
 
 def vmaf_of(bitstream, src_path, work, src_id=None):
+    """VMAF v1 and its CAMBI. Under VMAF_GATE=VMAF-NEG, the old VMAF-NEG (and
+    plain VMAF in "both") instead, plus v1 when VMAF_V1=1. None when a pass
+    that was asked for failed."""
+    if GATE == "VMAF-v1":
+        return _v1_of(bitstream, src_path, work, src_id)
+    out = _v0_of(bitstream, src_path, work, src_id)
+    if out is None or not V1:
+        return out
+    v1 = _v1_of(bitstream, src_path, work, src_id)
+    if v1 is None:
+        return None
+    out.update(v1)
+    return out
+
+
+# VMAF v1 (libvmaf 3.x, model v1.0.16) is the quality score (docs/vmaf.md). It
+# sees what v0 cannot: banding (CAMBI is one of its features), chroma,
+# blockiness and frame rate, and its detail feature carries VMAF-NEG's
+# enhancement-gain cap. It wants a float-enabled libvmaf and SDR scored at
+# 10-bit, so both sides go through a 10-bit conversion, and CAMBI is told the
+# encode's real bit depth. The model follows the source: the 1080p 3H model
+# below 1440 lines, the 4K 1.5H model at and above, and the high-frame-rate
+# twin of either at 50 fps and up.
+V1 = os.environ.get("VMAF_V1", "0") == "1"
+# The score a band or ladder gates on. VMAF-NEG remains only to reproduce
+# numbers measured on it; under it, VMAF_V1=1 adds the v1 pass.
+GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
+if GATE not in ("VMAF-NEG", "VMAF-v1"):
+    sys.exit(f"bdcompare: VMAF_GATE '{GATE}' is not VMAF-NEG or VMAF-v1")
+V1 = V1 or GATE == "VMAF-v1"
+GATE_SHORT = "NEG" if GATE == "VMAF-NEG" else "v1"
+# an empty value counts as unset, as a caller passing VAR="" means
+V1_BIN = os.environ.get("VMAF_V1_BIN") or os.path.expanduser("~/.local/opt/vmaf-v1/bin/vmaf")
+V1_MODELS = os.environ.get("VMAF_V1_MODELS") or os.path.expanduser("~/.local/share/vmaf/model")
+V1_VER = "v1.0.16"
+
+
+def _y4m_geometry(src_path):
+    """(width, height, fps) from a Y4M header."""
+    with open(src_path, "rb") as f:
+        head = f.readline(512).decode("ascii", "replace").split()
+    w = int(next(t[1:] for t in head if t.startswith("W")))
+    h = int(next(t[1:] for t in head if t.startswith("H")))
+    fr = next((t[1:] for t in head if t.startswith("F")), "30:1").split(":")
+    return w, h, int(fr[0]) / max(1, int(fr[1]))
+
+
+def v1_model(src_path):
+    """The v1 model file for a source, by its height and frame rate."""
+    _, h, fps = _y4m_geometry(src_path)
+    hfr = fps >= 50
+    name = f"vmaf_{V1_VER}{'_hfr' if hfr else ''}_{'1d5h_2160' if h >= 1440 else '3d0h'}.json"
+    return os.path.join(V1_MODELS, f"vmaf_{V1_VER}{'_hfr' if hfr else ''}", name)
+
+
+def _enc_bitdepth(bitstream):
+    """The stream's coded bit depth, for CAMBI: v1 is scored at 10-bit, and
+    CAMBI judges banding against the depth the encode really had."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=pix_fmt", "-of", "csv=p=0", bitstream],
+                       capture_output=True, text=True)
+    pf = r.stdout.strip()
+    return 10 if "10" in pf else (12 if "12" in pf else 8)
+
+
+# VMAF v1 is scored at display resolution: the 1080p 3H model assumes a
+# 1920x1080 screen, so a picture smaller than that in both dimensions is
+# scaled up to fit it (bicubic, aspect kept), both sides, and CAMBI is told the
+# coded size. Scored at native size, a CIF picture's chroma planes shrink to a
+# few samples in v1's chroma feature and chroma loss goes unseen.
+V1_DISPLAY = (1920, 1080)
+# names this scoring rule in keys and files that hold v1 scores, so a score
+# taken before it (native size) is never read as one taken under it
+V1_RULE = "disp"
+V1_SCALE_VF = ("scale=w=1920:h=1080:force_original_aspect_ratio=decrease:"
+               "force_divisible_by=2:flags=bicubic")
+
+
+def v1_scaled(w, h):
+    """True when a w x h picture is scored scaled up to the display."""
+    return w < V1_DISPLAY[0] and h < V1_DISPLAY[1]
+
+
+def v1_model_opts(w, h, ebd):
+    """The --model suffix after the path: name, CAMBI's encode bit depth and,
+    for a scaled picture, its coded size."""
+    o = f"name=vmaf_v1:cambi.enc_bitdepth={ebd}"
+    if v1_scaled(w, h):
+        o += f":cambi.enc_width={w}:cambi.enc_height={h}"
+    return o
+
+
+_v1_ident_memo = {}
+
+
+def _v1_ident(model):
+    """The scorer's identity for the cache key: the libvmaf build and the model
+    file's contents, so a rebuilt binary or a same-named model never serves an
+    old score."""
+    if model not in _v1_ident_memo:
+        ver = subprocess.run([V1_BIN, "--version"], capture_output=True, text=True)
+        with open(model, "rb") as f:
+            msha = hashlib.sha1(f.read()).hexdigest()[:12]
+        _v1_ident_memo[model] = f"{(ver.stdout + ver.stderr).strip()}|{msha}"
+    return _v1_ident_memo[model]
+
+
+def _packets(bitstream):
+    """Coded frames in a stream, by packet count, or None."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
+                        "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", bitstream],
+                       capture_output=True, text=True)
+    try:
+        return int(r.stdout.strip().split(",")[0])
+    except ValueError:
+        return None
+
+
+def coded_size_is(bitstream, w, h):
+    """True when the stream's coded size is w x h. Fitting both sides to the
+    display would otherwise score an encode at another size with the same
+    aspect."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                        "stream=width,height", "-of", "csv=p=0", bitstream],
+                       capture_output=True, text=True)
+    return r.stdout.strip().split("\n")[0] == f"{w},{h}"
+
+
+def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
+    """One libvmaf pass of a bitstream against its source, both at 10-bit and
+    fitted to the display by `vf`, writing js. Returns the parsed JSON, or None
+    when any part of the pass failed or scored fewer frames than the stream
+    holds. Nothing lands on disk but the JSON: the reference reaches libvmaf
+    on its stdin and the decode on a FIFO.
+
+    Every failure ends the pass. A dead reference is an EOF on stdin. A decode
+    that dies before opening its FIFO would leave libvmaf blocked in open(), so
+    the FIFO is opened and closed from here until libvmaf sees EOF. A libvmaf
+    that dies first leaves the decode blocked in open(), so it is killed, not
+    waited on. When the encode is shorter than the source, the reference
+    ffmpeg fails on the pipe libvmaf stopped reading, which is expected."""
+    try:
+        sw, sh_, _ = _y4m_geometry(src_path)
+    except (OSError, StopIteration, ValueError):
+        return None
+    if not coded_size_is(bitstream, sw, sh_):
+        return None
+    d = tempfile.mkdtemp(prefix="v1.", dir=work)
+    dec = os.path.join(d, "dec.y4m")
+    os.mkfifo(dec)
+    rerr = tempfile.TemporaryFile()
+    procs = []
+    try:
+        conv = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-i", src_path, *vf,
+             "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", "pipe:1"],
+            stdout=subprocess.PIPE, stderr=rerr)
+        procs.append(conv)
+        dproc = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-y", *shlex.split(_FF_T), "-i", bitstream,
+             "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le", "-strict", "-1",
+             "-f", "yuv4mpegpipe", dec],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        procs.append(dproc)
+        sub = ["--subsample", str(SUBSAMPLE)] if SUBSAMPLE > 1 else []
+        v = subprocess.Popen(
+            [V1_BIN, "-q", "-r", "/dev/stdin", "-d", dec, "--json", "-o", js,
+             *model_args, *sub, *shlex.split(_VMAF_T), *extra],
+            stdin=conv.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        procs.append(v)
+        conv.stdout.close()
+        while True:
+            try:
+                v.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if dproc.poll() not in (None, 0):
+                    try:
+                        os.close(os.open(dec, os.O_WRONLY | os.O_NONBLOCK))
+                    except OSError:
+                        pass            # libvmaf has not opened it yet; next tick
+        if v.returncode != 0:
+            return None
+        # libvmaf is done, so nothing reads either side any more: a producer
+        # still running now is blocked, and is killed below
+        try:
+            if dproc.wait(timeout=5) != 0:
+                return None
+            rc = conv.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            return None
+        rerr.seek(0)
+        if rc != 0 and b"Broken pipe" not in rerr.read():
+            return None
+        with open(js) as f:
+            jj = json.load(f)
+        n = _packets(bitstream)
+        if n is None or len(jj.get("frames", ())) < -(-n // max(1, SUBSAMPLE)):
+            return None                 # libvmaf scored fewer frames than were coded
+        return jj
+    except (OSError, ValueError, KeyError):
+        return None
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+        rerr.close()
+        try:
+            os.unlink(dec)
+            os.rmdir(d)
+        except OSError:
+            pass
+
+
+def _v1_of(bitstream, src_path, work, src_id=None):
+    try:
+        model = v1_model(src_path)
+        ebd = _enc_bitdepth(bitstream)
+        w, h, _ = _y4m_geometry(src_path)
+    except (OSError, StopIteration, ValueError):
+        return None                     # an unreadable source: no score
+    if not coded_size_is(bitstream, w, h):
+        return None                     # never served from the cache either
+    scaled = v1_scaled(w, h)
+    vf = ["-vf", V1_SCALE_VF] if scaled else []
+    if not os.path.exists(model) or not os.access(V1_BIN, os.X_OK):
+        sys.exit(f"bdcompare: VMAF_V1=1 needs {V1_BIN} and {model}")
+    want = ["VMAF-v1", "CAMBI"]
+    cpath = None
+    if SCORE_CACHE:
+        base = _score_path(bitstream, src_path, src_id)
+        if base:
+            k = hashlib.sha1(f"{base}|v1|{os.path.basename(model)}|eb{ebd}|{_v1_ident(model)}"
+                             f"|{V1_RULE}".encode()).hexdigest()
+            cpath = os.path.join(os.path.dirname(os.path.dirname(base)), k[:2], k + ".json")
+            hit = _score_get(cpath, want)
+            if hit is not None:
+                with _stats_lock:
+                    SCORE_STATS["hit"] += 1
+                return hit
+    fd, js = tempfile.mkstemp(suffix=".v1.json", dir=work); os.close(fd)
+    try:
+        jj = v1_pass(bitstream, src_path, work, js,
+                     ["--model", f"path={model}:{v1_model_opts(w, h, ebd)}"], vf)
+    finally:
+        try:
+            os.unlink(js)
+        except OSError:
+            pass
+    if jj is None:
+        return None
+    pm = jj["pooled_metrics"]
+    cambi = next((k for k in pm if k.startswith("cambi")), None)
+    if "vmaf_v1" not in pm or cambi is None:
+        return None
+    out = {"VMAF-v1": pm["vmaf_v1"]["mean"], "CAMBI": pm[cambi]["mean"]}
+    if cpath:
+        _score_put(cpath, out)
+    with _stats_lock:
+        SCORE_STATS["miss"] += 1
+    return out
+
+
+def _v0_of(bitstream, src_path, work, src_id=None):
     margs, primary, plabel = _vmaf_models()
     want = ([plabel] if primary else []) + ["VMAF-NEG"]
     cpath = _score_path(bitstream, src_path, src_id) if SCORE_CACHE else None
@@ -443,7 +708,8 @@ def main():
 
     if args.vmaf:
         print(f"vmaf scores: {SCORE_STATS['miss']} computed, "
-              f"{SCORE_STATS['hit']} from the score cache, models {MODELS}")
+              f"{SCORE_STATS['hit']} from the score cache, "
+              + (f"VMAF {V1_VER}" if GATE == "VMAF-v1" else f"models {MODELS}"))
     table = {}
     for clip, tag, q, size, m in metrics:
         if m is None:
@@ -451,7 +717,8 @@ def main():
         table.setdefault((clip, tag), []).append((q, size, m))
 
     # metric names come from the measured dict (e.g. VMAF-v1 + VMAF-NEG, or PSNR)
-    names = list(next(iter(table.values()))[0][2].keys())
+    # CAMBI is a banding score, lower is better, so it gets no BD-rate
+    names = [n for n in next(iter(table.values()))[0][2].keys() if n != "CAMBI"]
     for clip in clips:
         for i, nm in enumerate(names):
             rows = {}
@@ -472,4 +739,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # for the shell scorers: "<scaled 0|1> <w> <h> <scale filter> <rule>" of a y4m
+    if len(sys.argv) == 3 and sys.argv[1] == "--v1-display":
+        w, h, _ = _y4m_geometry(sys.argv[2])
+        print(int(v1_scaled(w, h)), w, h, V1_SCALE_VF, V1_RULE)
+        sys.exit(0)
     main()

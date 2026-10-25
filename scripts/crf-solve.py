@@ -69,12 +69,12 @@ on this tree (park_joy_720p, 300 frames, CRF 25, preset medium):
 
 Usage:
   crf-solve.py --clip tests/corpus/foreman_cif.y4m --seconds 6 --target-kbps 400
-  crf-solve.py --clip ... --target-vmaf 92          # match quality instead
-Env: YAH264, X264_ASM, VMAF, Y264_CRF_CACHE=0 to bypass the solve cache.
+  crf-solve.py --clip ... --target-vmaf 92          # match VMAF v1 instead
+Env: YAH264, X264_ASM, VMAF_V1_BIN, VMAF_V1_MODELS (scripts/bdcompare.py's v1
+path), Y264_CRF_CACHE=0 to bypass the solve cache.
 """
 import argparse
 import hashlib
-import json
 import math
 import os
 import shlex
@@ -83,6 +83,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch                                                  # noqa: E402
+import bdcompare                                                # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -160,16 +161,13 @@ def trim(clip, seconds, work):
 
 
 def vmaf_of(ref, bitstream, work, subsample):
-    dec = os.path.join(work, "dec.y4m")
-    js = os.path.join(work, "v.json")
-    sh(f'ffmpeg -v error -y -i {shlex.quote(bitstream)} -pix_fmt yuv420p {shlex.quote(dec)}')
-    binary = os.environ.get("VMAF", "vmaf")
-    r = sh(f'{shlex.quote(binary)} -r {shlex.quote(ref)} -d {shlex.quote(dec)} '
-           f'--subsample {subsample} --model version=vmaf_v0.6.1:name=vmaf '
-           f'--json -o {shlex.quote(js)}')
-    if r.returncode != 0:
-        sys.exit(f"crf-solve: vmaf failed: {r.stderr[-400:]}")
-    return json.load(open(js))["pooled_metrics"]["vmaf"]["mean"]
+    """VMAF v1, through bdcompare's v1 path (10-bit scoring, model by the
+    source's height and frame rate, CAMBI at the stream's bit depth)."""
+    bdcompare.SUBSAMPLE = subsample
+    r = bdcompare._v1_of(bitstream, ref, work)
+    if r is None:
+        sys.exit(f"crf-solve: VMAF v1 failed on {bitstream}")
+    return r["VMAF-v1"]
 
 
 class Encoder:
@@ -269,7 +267,7 @@ def main():
     ap.add_argument("--clip", required=True)
     ap.add_argument("--seconds", type=float, default=6.0)
     ap.add_argument("--target-kbps", type=float)
-    ap.add_argument("--target-vmaf", type=float)
+    ap.add_argument("--target-vmaf", type=float, help="target in VMAF v1 points")
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--preset", default="medium")
     # The caller passes the SAME arg strings it will hand perf-comp.sh. Not a
@@ -280,7 +278,7 @@ def main():
     ap.add_argument("--x264-args", default=None)
     ap.add_argument("--tol", type=float, default=0.02,
                     help="convergence tolerance: fraction of rate (kbps mode) "
-                         "or absolute VMAF points (vmaf mode)")
+                         "or absolute VMAF v1 points (vmaf mode)")
     ap.add_argument("--max-iters", type=int, default=6)
     # 1 = score every frame. A stride aliases against the mini-GOP frame-type
     # cadence and is worth up to 2.5 VMAF between two encodes that are actually
@@ -298,6 +296,10 @@ def main():
     # VMAF tolerance is in points, not a fraction; 0.02 VMAF is below the
     # metric's own subsampled noise, so give that mode a sane default.
     tol = args.tol if mode == "kbps" else (args.tol if args.tol > 0.05 else 0.3)
+    # The metric is in the pin and cache keys of a vmaf-mode solve, so a point
+    # chosen on the old v0.6.1 scale can never be served as a v1 one. A kbps
+    # solve's keys are unchanged: its point does not depend on the metric.
+    mode_key = mode if mode == "kbps" else "vmaf_v1"
 
     yah264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
     # Solve with the ASM x264 regardless of the tier being timed: see the header
@@ -332,7 +334,7 @@ def main():
     if os.environ.get("Y264_CRF_PIN", "1") == "1":
         ph = hashlib.md5()
         ph.update("|".join(str(x) for x in [
-            os.path.basename(clip), args.seconds, mode, target, args.threads,
+            os.path.basename(clip), args.seconds, mode_key, target, args.threads,
             args.preset, tol, args.seed_crf, args.subsample,
             args.y264_args, args.x264_args]).encode())
         pinfile = os.path.join(ROOT, "tests", ".crfpin", ph.hexdigest())
@@ -356,7 +358,7 @@ def main():
         for b in (yah264, x264):
             h.update(open(b, "rb").read())
         h.update("|".join(str(x) for x in [
-            os.path.basename(clip), args.seconds, mode, target, args.threads,
+            os.path.basename(clip), args.seconds, mode_key, target, args.threads,
             args.preset, tol, args.seed_crf, args.subsample,
             args.y264_args, args.x264_args, pin_target]).encode())
         key = os.path.join(ROOT, "tests", ".crfcache", h.hexdigest())
@@ -434,7 +436,7 @@ def main():
         lines.append(f"{tag}_crf={crf:.1f}")
         lines.append(f"{tag}_kbps={kbps:.1f}")
         if v is not None:
-            lines.append(f"{tag}_vmaf={v:.3f}")
+            lines.append(f"{tag}_vmaf_v1={v:.3f}")
         lines.append(f"{tag}_sweep={'/'.join(f'{c:.1f}:{k:.0f}' for c, k, _ in e.points)}")
         lines.append(f"{tag}_encodes={len(e.points)}")
 
