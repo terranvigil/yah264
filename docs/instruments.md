@@ -277,8 +277,10 @@ tree and live with the measurement records.
 ## 7. Traps that have each cost a round
 
 - **A build without `-Ddev_knobs=true` ignores the `Y264_*` knobs**, apart from
-  the CLI-carried ones, so an `ARM=` run against it reads two identical arms.
-  The CLI warns on stderr for each knob it ignores. `make` configures its build
+  the CLI-carried ones. The CLI warns on stderr for each knob it ignores, and
+  the harnesses refuse such a binary when a knob it would ignore is in play
+  (`scripts/devknobs.py`, or `scripts/devknobs.sh` from shell); a script of
+  your own that sets knobs should call it too. `make` configures its build
   with the option; a hand-made or pre-existing build dir needs
   `meson configure <dir> -Ddev_knobs=true`.
 
