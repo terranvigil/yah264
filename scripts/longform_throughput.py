@@ -1228,6 +1228,8 @@ def score(cell, bitstream, wd, start=0, count=None):
     model = v1_model(info)
     if not os.path.exists(model) or not os.access(VMAF, os.X_OK):
         sys.exit(f"longform: VMAF v1 needs {VMAF} and {model}")
+    if not bd.coded_size_is(bitstream, info["w"], info["h"]):
+        sys.exit(f"longform: {bitstream} is not coded at {info['w']}x{info['h']}")
     # v1 at display resolution (bdcompare.v1_scaled); PSNR always at the coded
     # size, so a scaled cell takes a second, PSNR-only pass
     scaled = bd.v1_scaled(info["w"], info["h"])
