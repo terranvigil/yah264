@@ -55,9 +55,9 @@ option('sve', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
   description : 'Build the aarch64 SVE tier (auto = on for aarch64 Linux).')
 
 # The Y264_* environment knobs (docs/knobs.md): tuning and measurement
-# switches read from the environment. Off, the library reads only the few the
-# CLI uses to carry its own options (src/common/env.h), so a release library's
-# output can't be changed by the environment. The harness, the tests and CI
-# build with it on.
+# switches read from the environment. Off, the library reads only the 16 the
+# CLI uses to carry its own options (src/common/env.h); no other variable
+# changes a release library's output. The harness, the tests and CI build with
+# it on.
 option('dev_knobs', type : 'boolean', value : false,
   description : 'Read the Y264_* tuning and measurement knobs from the environment.')

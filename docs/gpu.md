@@ -121,7 +121,7 @@ The 10-bit pipeline the library design reserves isn't built either.
 
 ## Measuring it
 
-- **Build it:** `meson setup build-gpu -Dgpu=enabled` on an Apple Silicon Mac.
+- **Build it:** `meson setup build-gpu -Dgpu=enabled -Ddev_knobs=true` on an Apple Silicon Mac.
 - **Arm it per run:** `Y264_GPU_PHASEA=1`.
 - **Isolate the floor:** `Y264_GPU_PHASEA=1 Y264_GPQ_WARMUP=10000` arms the
   offload but never submits, so only the background `ngc_open` runs. That

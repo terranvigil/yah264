@@ -2160,7 +2160,9 @@ static uint64_t y264_phys_mem(void)
  * only when the platform will not say how much RAM it has. */
 static uint64_t y264_input_budget(int *from_env)
 {
-    const char *ev = y264_env("Y264_MAX_INPUT_MB");
+    /* a resource limit the user is told to raise, read in every build: it
+     * bounds memory and never changes the stream */
+    const char *ev = getenv("Y264_MAX_INPUT_MB");
     *from_env = 0;
     if (ev) {
         double mb = atof(ev);
@@ -2873,8 +2875,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     long need = (long)(nthreads + 1) * keyint;
     if (nknown > 0 && nknown < need) need = nknown;
     int win_forced = 0;
-    if (y264_env("Y264_STREAM_WINDOW")) {
-        long w = atol(y264_env("Y264_STREAM_WINDOW"));
+    if (getenv("Y264_STREAM_WINDOW")) {         /* a memory bound, read in every build */
+        long w = atol(getenv("Y264_STREAM_WINDOW"));
         if (w > 0) { need = w; win_forced = 1; }
                                         /* no 2*keyint floor: a worker consumes
  * one frame at a time, so a window
@@ -4013,6 +4015,30 @@ static const char *rc_arg_mode_name(int m)
     }
 }
 
+#if !Y264_DEV_KNOBS
+#include "knob_names.h"
+extern char **environ;
+/* A release build ignores most Y264_* knobs; name each one set, so an A/B run
+ * against it can't read two identical arms as "no effect". */
+static void warn_ignored_knobs(void)
+{
+    for (char **e = environ; *e; e++) {
+        const char *eq = strchr(*e, '=');
+        size_t n = eq ? (size_t)(eq - *e) : strlen(*e);
+        for (size_t k = 0; k < sizeof y264_knob_names / sizeof *y264_knob_names; k++) {
+            const char *name = y264_knob_names[k];
+            if (strlen(name) != n || strncmp(*e, name, n))
+                continue;
+            if (!y264_env(name) && strcmp(name, "Y264_MAX_INPUT_MB") &&
+                strcmp(name, "Y264_STREAM_WINDOW"))
+                LOGF(LOG_WARN, "yah264: warning: %s is ignored: this build was configured "
+                     "without -Ddev_knobs=true\n", name);
+            break;
+        }
+    }
+}
+#endif
+
 int main(int argc, char **argv)
 {
     const char *in_path = NULL;
@@ -4719,7 +4745,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--output-depth") && i + 1 < argc)
             out_depth = opt_int("--output-depth", argv[++i], 8, 10);
         else if (!strcmp(argv[i], "--version")) {
-            printf("yah264 %s\n", yah264_version());
+            printf("yah264 %s%s\n", yah264_version(), Y264_DEV_KNOBS ? " (dev knobs)" : "");
             return 0;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") ||
                    !strcmp(argv[i], "--longhelp") || !strcmp(argv[i], "--fullhelp")) {
@@ -4735,6 +4761,9 @@ int main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+#if !Y264_DEV_KNOBS
+    warn_ignored_knobs();
+#endif
     /* Both write the one zone list, and which of two overlapping sources should
      * win has no answer worth guessing. */
     if (g_zones_cli && g_plan_cli) {

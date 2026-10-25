@@ -2,13 +2,15 @@
 
 Regenerate: `python3 scripts/knob_census.py`. CI check: `--check`.
 
+These are read only in a build configured with `-Ddev_knobs=true`; a default build reads just the ones the CLI uses to carry its own options (src/common/env.h).
+
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (42)
+## default (45)
 
 | knob | default | reader |
 |---|---|---|
-| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5477 |
+| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5506 |
 | `Y264_ABR_QCOMP` | 0.6 | src/encoder/rate.c:2497 |
 | `Y264_ABR_TOL` | = param | src/encoder/encoder.c:4837 |
 | `Y264_ABR_VBVOV` | 0.25 | src/encoder/rate.c:2518 |
@@ -33,7 +35,10 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_MBT_BLEG_REUSE` | 1 | src/encoder/encoder.c:7779 |
 | `Y264_MBT_BREF` | 1 | src/encoder/encoder.c:247 |
 | `Y264_MBT_PAIR_SCALE` | 1 | src/encoder/encoder.c:7235 |
+| `Y264_ME_AGREE` | 1 | src/encoder/motion.c:235 |
+| `Y264_ME_MINW` | 1920 | src/encoder/motion.c:233 |
 | `Y264_PART_EARLYTERM` | 4 | src/encoder/mbcode.c:5407 |
+| `Y264_QPEL_SKIPQ` | 96 | src/encoder/motion.c:245 |
 | `Y264_RCP_LAG` | 1 | src/encoder/encoder.c:456 |
 | `Y264_RC_CARRY` | 1 | cli/yah264_cli.c:1314 |
 | `Y264_STAIR_BDEPTH` | 1 | src/encoder/encoder.c:361 |
@@ -73,9 +78,9 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_EST_FROZEN` | 0 | src/encoder/mbcode.c:5310 |
 | `Y264_EST_SCRTRACE` | 0 | src/encoder/mbcode.c:4426 |
 | `Y264_EST_TWICE` | 0 | src/encoder/mbcode.c:5278 |
-| `Y264_GOP_FORCE_G` | ? | cli/yah264_cli.c:2928 |
-| `Y264_GOP_FORCE_K` | ? | cli/yah264_cli.c:2929 |
-| `Y264_GOP_TRACE` | ? | cli/yah264_cli.c:2833 |
+| `Y264_GOP_FORCE_G` | ? | cli/yah264_cli.c:2930 |
+| `Y264_GOP_FORCE_K` | ? | cli/yah264_cli.c:2931 |
+| `Y264_GOP_TRACE` | ? | cli/yah264_cli.c:2835 |
 | `Y264_GPQ_WARMUP` | 24 | src/encoder/gpu.c:104 |
 | `Y264_GPU_PHASEA` | 0 | src/encoder/gpu.c:44 |
 | `Y264_HEX_ORACLE` | 0 | src/encoder/motion.c:744 |
@@ -113,7 +118,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_VBV_ROWBRAKE_TRACE` | 0 | src/encoder/mbcode.c:5249 |
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:881 |
 
-## arm (18)
+## arm (21)
 
 | knob | default | reader |
 |---|---|---|
@@ -127,11 +132,14 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_BAND_PRECOMP` | 0 | src/encoder/mbcode.c:5492 |
 | `Y264_B_RECT` | 0 | src/encoder/mbcode.c:7167 |
 | `Y264_HW` | off | src/encoder/encoder.c:16768 |
-| `Y264_MAX_INPUT_MB` | ? | cli/yah264_cli.c:2163 |
+| `Y264_MAX_INPUT_MB` | ? | cli/yah264_cli.c:2165 |
 | `Y264_MCSTF` | ? | src/encoder/mcstf.c:56 |
 | `Y264_MCSTF_RANGE` | ? | src/encoder/mcstf.c:40 |
+| `Y264_ME_HQ` | 0 | src/encoder/motion.c:234 |
 | `Y264_NR_INTER` | 0 | src/encoder/encoder.c:1990 |
 | `Y264_NR_INTRA` | 0 | src/encoder/encoder.c:1989 |
 | `Y264_PSY_DARK` | ? | src/encoder/mbcode.c:449 |
-| `Y264_STREAM_WINDOW` | ? | cli/yah264_cli.c:2876 |
+| `Y264_QPSQ_MINW` | 0 | src/encoder/motion.c:241 |
+| `Y264_STREAM_WINDOW` | ? | cli/yah264_cli.c:2878 |
+| `Y264_SUB_FAR` | 0 | src/encoder/motion.c:236 |
 | `Y264_TREL_SMOOTH` | on (0 = off) | src/encoder/mbcode.c:1606 |
