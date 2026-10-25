@@ -3728,6 +3728,8 @@ static inline void add_dc_4x4(pixel *rec, int rs, const pixel *pred, int ps, int
     }
 }
 
+static int dc_nb(y264_frame_t *f, int mbx, int mby, int bit, int intra);
+
 /* Inter 4:2:0 chroma DC levels at commit (Y264_CDC_RD, default 1): chosen by
  * RD instead of the inter deadzone, which the trellis never revisits and
  * which drops the small DC shifts VMAF v1's chroma feature reads as lost
@@ -3751,10 +3753,11 @@ static int cdc_rd_on(void)
  * priced as SSD + lambda * CABAC bits. A DC-only change moves every pixel
  * of a 4x4 by rdc/64 and the source block's mean is dc/16, so the DC part
  * of the SSD x256 (the trellis's own scale) is (4*dc - rdc)^2 per block.
- * Same lev/rdc contract as y264_chroma_dc420_rt. The coded_block_flag is
- * priced with zero neighbour context, as the other trellis pricing does. */
+ * Same lev/rdc contract as y264_chroma_dc420_rt. nza/nzb are the left and
+ * top neighbours' chroma DC flags, the coded_block_flag context the writer
+ * uses. */
 static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
-                           dctcoef lev[4], dctcoef rdc[4])
+                           dctcoef lev[4], dctcoef rdc[4], int nza, int nzb)
 {
     int qp = f->cur_chroma_qp_scaled, w0 = cqm_dc4p(f, 0, 1 + c);
     dctcoef near[4], tr[4];
@@ -3792,7 +3795,7 @@ static int chroma_dc420_rd(const y264_frame_t *f, int c, const dctcoef dc[4],
             long e = 4L * dc[b] - r[b];
             d += e * e;
         }
-        long J = d + lam * y264_cabac_residual_bits(f->cabac, 3, l, 0, 0);
+        long J = d + lam * y264_cabac_residual_bits(f->cabac, 3, l, nza, nzb);
         if (J < bestJ) {
             bestJ = J;
             memcpy(lev, l, sizeof(l));
@@ -3876,7 +3879,9 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
         dctcoef rdc[Y264_CHROMA_MAXBLK];
         if (f->cf_idc == 1) {
             if (trel && f->cabac && cdc_rd_on()) {
-                if (chroma_dc420_rd(f, c, dc_raster, cr->dc_scan[c], rdc))
+                if (chroma_dc420_rd(f, c, dc_raster, cr->dc_scan[c], rdc,
+                                    dc_nb(f, mbx - 1, mby, 9 + c, 0),
+                                    dc_nb(f, mbx, mby - 1, 9 + c, 0)))
                     any_dc = 1;
             } else if (y264_chroma_dc420_rt(dc_raster, cr->dc_scan[c], rdc, f->cur_chroma_qp_scaled,
                                             0, cqm_dc4p(f, 0, 1 + c), f->lev_max))

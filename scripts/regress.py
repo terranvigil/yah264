@@ -319,10 +319,12 @@ def main():
         if formats and pick not in formats:
             pick = formats[0]                   # the 4:2:0 workhorse
         cells.append((args, pick))
-    # one fixed cell at the shipped defaults on 4:2:0, so the default inter
+    # one fixed cell at the shipped defaults on 4:2:0 (synthetic clips only,
+    # since --clip sets the format), so the default inter
     # path (CABAC with trellis) runs whatever the seed draws; appended last so
     # seeded cell numbers stay put
-    cells.append(("--threads 1", "yuv420p"))
+    if not a.clip:
+        cells.append(("--threads 1", "yuv420p"))
 
     print(f"regress: rev {REV}  seed {SEED}  {len(cells)} cells  "
           f"{nframes} frames  clip "
