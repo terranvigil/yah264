@@ -963,11 +963,10 @@ YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *enc, const y
 /* Retrieve the NAL units that open the stream (SPS and PPS, plus the AUD and
  * SEI those settings call for); write all of them, in order. On return *nal
  * points at an array of *count NAL units owned by the encoder. Returns 0 on
- * success. The software
- * encoder never emits SPS or PPS from encode, so a stream starts with these
- * NAL units. The hardware backend can't know them before its first frame is
- * coded: there this may return no NAL units, and encode then puts SPS and PPS
- * ahead of the first slice it returns. */
+ * success. The software encoder never emits SPS or PPS from encode, so a
+ * stream starts with these NAL units. The hardware backend can't know them
+ * before its first frame is coded: there this may return no NAL units, and
+ * encode then puts SPS and PPS ahead of the first slice it returns. */
 YAH264_EXPORT int yah264_encoder_headers(yah264_encoder_t *enc,
                             yah264_nal_t **nal, int *count);
 
@@ -1122,7 +1121,7 @@ YAH264_EXPORT int yah264_threads_auto(void);
  * whole cost of it and a latency-sensitive caller should be shown it. It is
  * fixed for a given parameter struct on a given machine, not a count of
  * frames still buffered: to drain the encoder, flush with encode(pic == NULL)
- * until it returns 0 bytes. */
+ * until it returns 0 bytes with *count == 0. */
 YAH264_EXPORT int yah264_lookahead_delay(const yah264_param_t *param);
 
 /* Scene-cut pre-scan, for callers that split an input into independent GOP
