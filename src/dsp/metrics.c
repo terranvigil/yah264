@@ -220,37 +220,6 @@ static void satd_quad_c_8x8(const pixel *src, int ss,
     scores[3] = satd_c_8x8(src, ss, r3, rs);
 }
 
-/* The averaged-reference metrics: build the 8x8 average, score it with the
- * plain C metric. The reference every optimised form is checked against. */
-static void avg_block_c_8x8(pixel blk[64], const pixel *a, const pixel *b, int rs)
-{
-    for (int y = 0; y < 8; y++)
-        for (int x = 0; x < 8; x++)
-            blk[y * 8 + x] = (pixel)((a[y * rs + x] + b[y * rs + x] + 1) >> 1);
-}
-static int avg_sad_c_8x8(const pixel *src, int ss, const pixel *a, const pixel *b, int rs)
-{
-    pixel blk[64];
-    avg_block_c_8x8(blk, a, b, rs);
-    return sad_c_8x8(src, ss, blk, 8);
-}
-static int avg_satd_c_8x8(const pixel *src, int ss, const pixel *a, const pixel *b, int rs)
-{
-    pixel blk[64];
-    avg_block_c_8x8(blk, a, b, rs);
-    return satd_c_8x8(src, ss, blk, 8);
-}
-static void avg_sad_quad_c_8x8(const pixel *src, int ss, const pixel *const a[4],
-                             const pixel *const b[4], int rs, int scores[4])
-{
-    for (int k = 0; k < 4; k++) scores[k] = avg_sad_c_8x8(src, ss, a[k], b[k], rs);
-}
-static void avg_satd_quad_c_8x8(const pixel *src, int ss, const pixel *const a[4],
-                              const pixel *const b[4], int rs, int scores[4])
-{
-    for (int k = 0; k < 4; k++) scores[k] = avg_satd_c_8x8(src, ss, a[k], b[k], rs);
-}
-
 static int satd_c_16x16(const pixel *a, int as, const pixel *b, int bs)
 {
     int s = 0;
@@ -558,10 +527,6 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->satd4x4 = satd_c_4x4;
     pf->satd8x8 = satd_c_8x8;
     pf->satd_quad_8x8 = satd_quad_c_8x8;
-    pf->avg_sad8x8 = avg_sad_c_8x8;
-    pf->avg_satd8x8 = avg_satd_c_8x8;
-    pf->avg_sad_quad_8x8 = avg_sad_quad_c_8x8;
-    pf->avg_satd_quad_8x8 = avg_satd_quad_c_8x8;
     for (int pu = 0; pu < Y264_PU_COUNT; pu++) { pf->satd_avg[pu] = NULL; pf->satd_pu[pu] = NULL; }
     pf->satd16x16 = satd_c_16x16;
     pf->sa8d8x8 = sa8d_c_8x8;
@@ -614,10 +579,6 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd4x4            = y264_satd_4x4_neon;
         pf->satd8x8            = y264_satd_8x8_neon;
         pf->satd_quad_8x8        = y264_satd_quad_8x8_neon;
-        pf->avg_sad8x8         = y264_avg_sad_8x8_neon;
-        pf->avg_satd8x8        = y264_avg_satd_8x8_neon;
-        pf->avg_sad_quad_8x8     = y264_avg_sad_quad_8x8_neon;
-        pf->avg_satd_quad_8x8    = y264_avg_satd_quad_8x8_neon;
         pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_neon;
         pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_neon;
         pf->satd_avg[Y264_PU_8x16]  = y264_satd_avg_8x16_neon;
@@ -682,10 +643,6 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd4x4            = y264_satd_4x4_sse4;
         pf->satd8x8            = y264_satd_8x8_sse4;
         pf->satd_quad_8x8        = y264_satd_quad_8x8_sse4;
-        pf->avg_sad8x8         = y264_avg_sad_8x8_sse4;
-        pf->avg_satd8x8        = y264_satd_avg_8x8_sse4;
-        pf->avg_sad_quad_8x8     = y264_avg_sad_quad_8x8_sse4;
-        pf->avg_satd_quad_8x8    = y264_avg_satd_quad_8x8_sse4;
         pf->satd16x16          = y264_satd_16x16_sse4;
         pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_sse4;
         pf->satd_avg[Y264_PU_16x8] = y264_satd_avg_16x8_sse4;
@@ -727,10 +684,6 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd4x4            = y264_satd_4x4_avx2;
         pf->satd8x8            = y264_satd_8x8_avx2;
         pf->satd_quad_8x8        = y264_satd_quad_8x8_avx2;
-        pf->avg_sad8x8         = y264_avg_sad_8x8_avx2;
-        pf->avg_satd8x8        = y264_satd_avg_8x8_avx2;
-        pf->avg_sad_quad_8x8     = y264_avg_sad_quad_8x8_avx2;
-        pf->avg_satd_quad_8x8    = y264_avg_satd_quad_8x8_avx2;
         pf->satd16x16          = y264_satd_16x16_avx2;
         pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_avx2;
         pf->satd_avg[Y264_PU_16x8] = y264_satd_avg_16x8_avx2;
