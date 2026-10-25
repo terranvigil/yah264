@@ -402,9 +402,8 @@ and `--bframes 3`.
   the encoder's buffer, `scripts/hrd_check.py` against a declared HRD.
 - **A rate divided by the wrong duration** reads as a large undershoot. Check the
   frame count before believing one.
-- **Check engagement before pricing a threading knob.** `Y264_STAIR_STAT=1`
-  shows wide launches and concurrent bursts. An unengaged arm is byte-identical
-  and reads as a 0.00% BD. Engagement depends on threads per GOP worker, so a
+- **Check engagement before pricing a threading knob.** An unengaged arm is
+  byte-identical and reads as a 0.00% BD. Engagement depends on threads per GOP worker, so a
   long clip can be inert at 18 threads and engaged at 36.
 - **Short single-GOP windows aren't quality measurements.** sintel's drain-split
   cost read +11.70% at 144 frames and +1.32% over 1152.

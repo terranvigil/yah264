@@ -438,9 +438,6 @@ struct yah264_encoder {
     struct { struct dpb_bag b; unsigned seq; } dpbp_pend[Y264_DPB_POOL_MAX];
     int            dpbp_npend;
     int            dpbp_n;      /* bags allocated; 0 = pool off, always wait */
-    int            dpbp_hi;     /* measured high-water parked bags */
-    int            dpbp_exh;    /* takes that found the pool empty (fell back) */
-    int            dpbp_take;   /* recycles served from the pool */
     int      next_frame_num;    /* running FrameNum counter (reset at IDR) */
     int      last_ref_fn;       /* FrameNum of the most recently coded reference */
     int      b_pyramid;         /* 1 = referenced hierarchical B */
@@ -475,11 +472,6 @@ struct yah264_encoder {
  * all, and P slices that spent a duplicate slot on one (--weightp 2). The
  * census the mode's default rests on. */
     int      stat_wp_p, stat_wp_frame, stat_wp_dup;
-    int      stat_hop2_slices;  /* Y264_STAIR_STAT: P slices prepped with hop 2 */
-    int      stat_hop2_refs;    /* of which, list-0 entries that take the clamp */
-    int      stat_refbgate;     /* Y264_STAIR_STAT: launches whose ref-B wait the
- * row gate replaced (per live burst) */
-    int      stat_refbblock;    /* and launches that still had to block */
     /* Staircase depth: a streaming anchor's SOURCE-luma interior sum, the
  * wp-estimate substitute for its not-yet-readable recon. Computed at every
  * pyramid anchor arrival when the depth gate is on.
