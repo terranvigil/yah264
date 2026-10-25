@@ -1134,6 +1134,12 @@ if [ ! -x "$enc" ]; then
     echo "conformance: encoder not found at $enc (build first)" >&2
     exit 2
 fi
+# several cells set Y264_* knobs, which only a dev_knobs build reads
+case "$("$enc" --version 2>/dev/null)" in
+    *"(dev knobs)"*) ;;
+    *) echo "conformance: $enc was built without -Ddev_knobs=true, and its cells set Y264_* knobs; run meson configure <dir> -Ddev_knobs=true" >&2
+       exit 2 ;;
+esac
 command -v ffmpeg  >/dev/null || { echo "conformance: ffmpeg required" >&2; exit 2; }
 command -v ffprobe >/dev/null || { echo "conformance: ffprobe required" >&2; exit 2; }
 

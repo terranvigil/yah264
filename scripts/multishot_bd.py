@@ -86,6 +86,7 @@ def main():
             env = tmpl[4:].strip()
             tmpl = (f"env {env} " if env else "") + f"{shlex.quote(ours)} --input-y4m {{src}} --crf {{q}} --threads {a.threads} -o {{out}}"
         arms[name] = tmpl
+    bdcompare.require_dev_knobs(ours, *a.arms)
     for seq in a.seqs.split(","):
         src = os.path.join(a.corpus, seq + ".y4m")
         cuts = [ln.split() for ln in open(os.path.join(a.corpus, seq + ".cuts")) if ln.strip()]

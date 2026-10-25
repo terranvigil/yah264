@@ -363,6 +363,16 @@ def main():
             print("docs/knobs.md missing"); rc = 1
         if not os.path.exists(NAMES_H) or open(NAMES_H).read() != names_header(list(knobs)):
             print("cli/knob_names.h is stale (regenerate)"); rc = 1
+        # the names the CLI sets to carry its own options must be the ones a
+        # release library reads (src/common/env.h), or a flag silently dies
+        cli = open(os.path.join(ROOT, "cli", "yah264_cli.c")).read()
+        sets = set(re.findall(r'"(Y(?:AH)?264_[A-Z0-9_]+)"',
+                              " ".join(re.findall(r"(?:setenv|opt_env)\(.*", cli))))
+        envh = open(os.path.join(ROOT, "src", "common", "env.h")).read()
+        allow = set(re.findall(r'"(Y(?:AH)?264_[A-Z0-9_]+)"', envh))
+        if sets != allow:
+            print("env.h cli_backed differs from the names the CLI sets:",
+                  "missing", sorted(sets - allow), "extra", sorted(allow - sets)); rc = 1
         for b in bad:
             print("STALE DEFAULT COMMENT:", b); rc = 1
         for h in dead_setters(set(knobs)):
