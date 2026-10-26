@@ -231,6 +231,33 @@ int main(void)
              y < 25 ? 24.0 : 120.0, y < 25 ? 3.0 : 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
+        /* the soft subtitle in the top bar and the walk below, the other way round */
+        FILL(((y < 6 || y >= H - 6) && !(y == 1 && x >= 20 && x < 60)) ||
+             (y >= H - 13 && y < H - 6 && x % 10 < 7), 16.0, 0.0,
+             y == 1 ? 60.0 : (y >= H - 13 ? 24.0 : 120.0),
+             y == 1 ? 10.0 : (y >= H - 13 ? 3.0 : 60.0))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* solid depths a block of rounding apart pair (1080p's 138-pixel bars) */
+        FILL(y < 8 || y >= H - 9 || (y < 20 && x % 10 < 6), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 8 && e[1] == 9);
+        /* both bars walk, to unequal depths: the solid ones pair */
+        FILL(y < 6 || y >= H - 6 || (y < 16 && x % 10 < 6) || (y >= H - 9 && x % 10 < 6),
+             16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* a faint logo block in a matte line doesn't end the solid depth */
+        FILL((y < 6 || y >= H - 6 || (y < 16 && x % 10 < 6) || (y >= H - 9 && x % 10 < 6)) &&
+             !(x == 40 && y == H - 3), 16.0, 0.0, x == 40 && y == H - 3 ? 40.0 : 24.0,
+             x == 40 && y == H - 3 ? 0.0 : 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* pillars beside a picture whose own top and bottom are black stay pillars */
+        FILL(x < 10 || x >= W - 10 || y < 4 || y >= H - 4 || (y < 14 && x % 10 < 4) ||
+             (y >= 37 && x % 10 < 4), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 10 && e[3] == 10);
         /* a dark subject in a black void isn't letterboxed: both walks pass the cap */
         FILL(!(x >= 20 && x < 60 && y >= 12 && y < 33), 16.0, 0.0, 30.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
@@ -246,7 +273,7 @@ int main(void)
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
         /* nor are bars past the cap rescued at a partly matte line inside them */
         FILL((y < 18 || y >= H - 18) && !((y == 3 || y == H - 4) && x < 30), 16.0, 0.0,
-             120.0, 60.0)
+             24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
         /* 2.39:1 inside 4:3, and a 9:16 video pillarboxed in 16:9 */

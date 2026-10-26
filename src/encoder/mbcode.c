@@ -456,8 +456,8 @@ static int pair(int a, int b, double ca, double cb, double drift)
  * depths first. A solid depth pairs only within a block of rounding: with the
  * off-center slack too, an off-center subject in a black void would pass.
  * Both walks past the cap are dark picture, not a matte. */
-static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
-                       double drift, int maxl)
+static int pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
+                      double drift, int maxl)
 {
     int ta[2] = { *a, sa }, tb[2] = { *b, sb };
     int ok = *a <= maxl || *b <= maxl;
@@ -467,16 +467,17 @@ static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
         if (da && db && da <= maxl && db <= maxl && pair(da, db, ca, cb, drift) &&
             (!k || abs(da - db) <= 1)) {
             *a = da; *b = db;
-            return;
+            return k;
         }
     }
+    return -1;
 }
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
     double vmax = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc;
     double drift = AQ_BAR_DRIFT * sc, vbusy = aq_dark_env(2) * sc * sc;
-    int top = 0, bottom = 0, left = 0, right = 0, sa, sb;
+    int top = 0, bottom = 0, left = 0, right = 0, sa, sb, k = -1;
     int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
     if (maxr > 0) {
         double ca = bar_color(mean, var, 0, 1, wmb, vmax);
@@ -485,17 +486,23 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
                         drift, &sa);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
                            vbusy, tol, drift, &sb);
-        pair_sides(&top, &bottom, sa, sb, ca, cb, drift, maxr);
+        k = pair_sides(&top, &bottom, sa, sb, ca, cb, drift, maxr);
     }
-    /* side bars only without top and bottom ones */
-    if (!top && maxc > 0) {
+    /* side bars only without top and bottom ones, or when those pair only at
+     * a solid depth: pillars run the full height, so a pillarboxed picture
+     * whose own top and bottom are black at the matte level pairs there too */
+    if (k && maxc > 0) {
         double ca = bar_color(mean, var, 0, wmb, hmb, vmax);
         double cb = bar_color(mean, var, wmb - 1, wmb, hmb, vmax);
         left = bar_depth(mean, var, 0, 1, wmb, hmb, maxc + 1, ca, vmax, vbusy, tol,
                          drift, &sa);
         right = bar_depth(mean, var, wmb - 1, -1, wmb, hmb, maxc + 1, cb, vmax, vbusy,
                           tol, drift, &sb);
-        pair_sides(&left, &right, sa, sb, ca, cb, drift, maxc);
+        int ks = pair_sides(&left, &right, sa, sb, ca, cb, drift, maxc);
+        if (ks == 0 || (ks > 0 && k < 0))
+            top = bottom = 0;
+        else
+            left = right = 0;
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
 }
