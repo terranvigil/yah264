@@ -2,7 +2,7 @@
 
 Regenerate: `python3 scripts/knob_census.py`. CI check: `--check`.
 
-These are read only in a build configured with `-Ddev_knobs=true`; a default build reads just the ones the CLI uses to carry its own options (src/common/env.h), and its CLI refuses to encode when another is set.
+These are read only in a build configured with `-Ddev_knobs=true`; a default build reads just the ones the CLI uses to carry its own options (src/common/env.h) and the CLI's two memory bounds, `Y264_MAX_INPUT_MB` and `Y264_STREAM_WINDOW`; its CLI refuses to encode when any other is set.
 
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 

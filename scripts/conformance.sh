@@ -557,8 +557,8 @@ check_irefresh_refusals() {  # check_irefresh_refusals <src>
         rc=$?
         sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
         t=$((t + 1))
-        if [ "$rc" -eq 0 ] || [ "$sz" -ne 0 ]; then
-            echo "  FAIL [--intra-refresh $c] should be refused (status $rc, $sz bytes)"
+        if [ "$rc" -ne 2 ] || [ "$sz" -ne 0 ]; then
+            echo "  FAIL [--intra-refresh $c] should be refused with status 2 (status $rc, $sz bytes)"
             f=$((f + 1))
         fi
     done
@@ -815,21 +815,22 @@ check_fnwrap_paff() {   # check_fnwrap_paff <src>
 # still feed a pass 2. Both halves run serially, because --dump-recon does.
 # --profile is a constraint, so half its contract is what it REFUSES. A
 # refusal that exits 0 and writes an empty file is the failure mode this
-# checks for: status must be nonzero AND no stream may appear.
+# checks for: status must be the refusal's own (a crash is not a refusal) AND
+# no stream may appear.
 check_profile_refusals() {  # check_profile_refusals <src>
     local src="$1" t=0 f=0 rc sz
     local cases=(
-        "baseline|--profile baseline --cabac"
-        "baseline|--profile baseline --bframes 3"
-        "baseline|--profile baseline --transform-8x8"
-        "main|--profile main --transform-8x8"
-        "main|--profile main --cqm jvt"
-        "high10|--profile high10"
-        "bogus|--profile nosuchprofile"
+        "2|--profile baseline --cabac"
+        "2|--profile baseline --bframes 3"
+        "2|--profile baseline --transform-8x8"
+        "2|--profile main --transform-8x8"
+        "2|--profile main --cqm jvt"
+        "1|--profile high10"
+        "2|--profile nosuchprofile"
     )
-    local c lbl args out
+    local c want args out
     for c in "${cases[@]}"; do
-        lbl="${c%%|*}"; args="${c#*|}"
+        want="${c%%|*}"; args="${c#*|}"
         out="$work/prof_refuse.$$.264"
         rm -f "$out"
         # shellcheck disable=SC2086
@@ -837,10 +838,8 @@ check_profile_refusals() {  # check_profile_refusals <src>
         rc=$?
         sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
         t=$((t + 1))
-        if [ "$rc" -ne 0 ] && [ "$sz" -eq 0 ]; then
-            :
-        else
-            echo "  FAIL [$args] should be refused (status $rc, $sz bytes)"
+        if [ "$rc" -ne "$want" ] || [ "$sz" -ne 0 ]; then
+            echo "  FAIL [$args] should be refused with status $want (status $rc, $sz bytes)"
             f=$((f + 1))
         fi
         rm -f "$out"
