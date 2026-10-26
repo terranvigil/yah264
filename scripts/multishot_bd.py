@@ -88,8 +88,8 @@ def main():
             tmpl = (f"env {env} " if env else "") + f"{shlex.quote(ours)} --input-y4m {{src}} --crf {{q}} --threads {a.threads} -o {{out}}"
             binp = ours
         else:
-            b = bdcompare.template_binary(tmpl)
-            binp = b if os.path.isfile(b) and bdcompare.devknobs.is_yah264(b) else None
+            bdcompare.check_template(tmpl, "multishot_bd")
+            binp = None
         # each yah264 arm against the binary it runs, which also inherits this environment
         if binp:
             bdcompare.require_dev_knobs(binp, tmpl)

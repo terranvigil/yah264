@@ -339,15 +339,18 @@ def _yah264_word(tmpl):
     except ValueError:
         return None
     for w in words:
+        if " " in w:                        # a quoted command string
+            # its relative paths follow a cd we can't track
+            if "yah264" in w and not re.search(r"(^|[;&|(]\s*)cd\s", w):
+                b = _yah264_word(w)
+                if b:
+                    return b
+            continue
         w = w.split("=", 1)[1] if _ASSIGN.match(w) else w     # YAH264=/path/yah264
         if os.path.basename(w) == "yah264":
             p = _resolve(w)
             if os.path.isfile(p) and os.access(p, os.X_OK):
                 return p
-        elif " " in w and "yah264" in w:    # a quoted command string
-            b = _yah264_word(w)
-            if b:
-                return b
     return None
 
 
@@ -380,6 +383,19 @@ def template_binary(tmpl):
         else:
             return _resolve(w)
     return ""
+
+
+def check_template(t, who="bdcompare"):
+    """Refuse a template that sets knobs its yah264 ignores, or whose binary
+    can't be found while it sets one (or names yah264 under a knob-carrying
+    environment): it can't be checked, so it isn't run."""
+    b = template_binary(t)
+    if b and os.path.isfile(b) and devknobs.is_yah264(b):
+        require_dev_knobs(b, t)
+    elif devknobs.ignored(t, environ=False) or (
+            ("yah264" in t or "$" in t) and devknobs.ignored()):
+        sys.exit(f"{who}: can't find the yah264 binary in {t!r} to check the dev "
+                 "knobs in play; name it plainly")
 
 
 def coded_size_is(bitstream, w, h):
@@ -698,13 +714,7 @@ def main():
     if args.vmaf:
         minigop_guard(SUBSAMPLE, [args.a, args.b])
     for t in (args.a, args.b):
-        b = template_binary(t)
-        if b and os.path.isfile(b) and devknobs.is_yah264(b):
-            require_dev_knobs(b, t)
-        elif "yah264" in t and devknobs.ignored(t):
-            # a yah264 template whose binary can't be found can't be checked
-            sys.exit(f"bdcompare: can't find the yah264 binary in {t!r} to check "
-                     "the dev knobs it sets; name it plainly")
+        check_template(t)
 
     points = [int(q) for q in args.points.split(",")]
     if args.klass:
