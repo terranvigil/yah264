@@ -465,12 +465,12 @@ static int pair(int a, int b, double ca, double cb, double drift)
 }
 /* the half-matte lines a subtitle needs can also walk a side into flat dark
  * picture beside the bar, so solid depths pair first, within a block of
- * rounding (two when b, the bottom, is deeper: it carries the coded frame's
- * padding rows). Wider slack there would let an off-center subject in a black
- * void pass. Full depths pair next, with the off-center slack, then a full
- * depth with a solid one. Both walks past the cap are dark picture, not a
- * matte; one past it beside a clean side is a fade into a black sky, so both
- * pair at the clean depth. */
+ * rounding, or two when lean is set and b is deeper (rows: the bottom carries
+ * the coded frame's padding). Wider slack there would let an off-center
+ * subject in a black void pass. Full depths pair next, with the off-center
+ * slack, then a full depth with a solid one, held to the solid limit. Both
+ * walks past the cap are dark picture, not a matte; one past it is a fade
+ * into a black sky, so both pair at the other side's solid depth. */
 static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
                        double drift, int maxl, int lean)
 {
@@ -486,8 +486,8 @@ static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
         return;
     }
     if (fabs(ca - cb) >= drift) return;
-    if (fa && fa == sa && fb > maxl && sb >= fa) *a = *b = fa;
-    else if (fb && fb == sb && fa > maxl && sa >= fb) *a = *b = fb;
+    if (sa && fb > maxl && sb >= sa) *a = *b = sa;
+    else if (sb && fa > maxl && sa >= sb) *a = *b = sb;
 }
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {

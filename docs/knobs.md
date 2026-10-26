@@ -38,10 +38,10 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_DZ_INTER` | -1 | src/dsp/transform.c:847 |
 | `Y264_DZ_INTRA` | -1 | src/dsp/transform.c:846 |
 | `Y264_FAST_PSKIP` | 1 | src/encoder/mbcode.c:5510 |
-| `Y264_GPQ_CONSUME` | 1 | src/encoder/encoder.c:7793 |
-| `Y264_MBT_BLEG_REUSE` | 1 | src/encoder/encoder.c:7783 |
+| `Y264_GPQ_CONSUME` | 1 | src/encoder/encoder.c:7795 |
+| `Y264_MBT_BLEG_REUSE` | 1 | src/encoder/encoder.c:7785 |
 | `Y264_MBT_BREF` | 1 | src/encoder/encoder.c:247 |
-| `Y264_MBT_PAIR_SCALE` | 1 | src/encoder/encoder.c:7239 |
+| `Y264_MBT_PAIR_SCALE` | 1 | src/encoder/encoder.c:7241 |
 | `Y264_ME_AGREE` | 1 | src/encoder/motion.c:235 |
 | `Y264_ME_MINW` | 1920 | src/encoder/motion.c:233 |
 | `Y264_PART_EARLYTERM` | 4 | src/encoder/mbcode.c:5549 |
@@ -79,7 +79,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_DIAG_DIRECTOK` | 0 | src/encoder/mbcode.c:39 |
 | `Y264_DIAG_NOHPEL` | 0 | src/encoder/motion.c:338 |
 | `Y264_DIAG_TDIRLIM` | 0 | src/encoder/mbcode.c:37 |
-| `Y264_DIRECT_LRVOTE` | 0 | src/encoder/encoder.c:7373 |
+| `Y264_DIRECT_LRVOTE` | 0 | src/encoder/encoder.c:7375 |
 | `Y264_DIRECT_PERMB` | -1 | src/encoder/encoder.c:483 |
 | `Y264_DIRECT_SCORE` | 0 | src/encoder/encoder.c:2422 |
 | `Y264_DIRECT_WHY` | 0 | src/encoder/encoder.c:2404 |
@@ -94,15 +94,15 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_HEX_ORACLE` | 0 | src/encoder/motion.c:744 |
 | `Y264_LA_BUF` | ? | src/encoder/encoder.c:909 |
 | `Y264_LA_STAT` | ? | src/encoder/encoder.c:5686 |
-| `Y264_LRSUB_CENSUS` | 0 | src/encoder/encoder.c:6621 |
-| `Y264_LRSUB_PROBE` | 0 | src/encoder/encoder.c:6680 |
+| `Y264_LRSUB_CENSUS` | 0 | src/encoder/encoder.c:6623 |
+| `Y264_LRSUB_PROBE` | 0 | src/encoder/encoder.c:6682 |
 | `Y264_MBTREE_OFF` | ? | src/encoder/encoder.c:5243 |
-| `Y264_MBTREE_STRENGTH` | = 5*(1-qcomp)*0.7, 1.4 at qcomp 0.6 (fallback path 2.0) | src/encoder/encoder.c:7908 |
+| `Y264_MBTREE_STRENGTH` | = 5*(1-qcomp)*0.7, 1.4 at qcomp 0.6 (fallback path 2.0) | src/encoder/encoder.c:7910 |
 | `Y264_MBT_DEPFLOOR` | = param | src/encoder/encoder.c:4432 |
-| `Y264_MBT_MISSWHY` | 0 | src/encoder/encoder.c:7811 |
-| `Y264_MBT_PLAY` | ? | src/encoder/encoder.c:9078 |
-| `Y264_MBT_REC` | ? | src/encoder/encoder.c:9078 |
-| `Y264_MBT_SPLIT` | 0 | src/encoder/encoder.c:7800 |
+| `Y264_MBT_MISSWHY` | 0 | src/encoder/encoder.c:7813 |
+| `Y264_MBT_PLAY` | ? | src/encoder/encoder.c:9080 |
+| `Y264_MBT_REC` | ? | src/encoder/encoder.c:9080 |
+| `Y264_MBT_SPLIT` | 0 | src/encoder/encoder.c:7802 |
 | `Y264_MEREUSE_TRACE` | 0 | src/encoder/mbcode.c:6022 |
 | `Y264_ME_ETSTAT` | 0 | src/encoder/motion.c:294 |
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:61 |
@@ -117,9 +117,9 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_SKIP_ORACLE_AT` | pre | src/encoder/skiporacle.c:47 |
 | `Y264_SKIP_ORACLE_SIDE` | ? | src/encoder/skiporacle.c:37 |
 | `Y264_THREAD_PROF` | 0 | src/encoder/encoder.c:109 |
-| `Y264_TYPE_ORACLE` | ? | src/encoder/encoder.c:9321 |
+| `Y264_TYPE_ORACLE` | ? | src/encoder/encoder.c:9323 |
 | `Y264_UNSAFE_NO_EMIT` | 0 | src/encoder/mbcode.c:5407 |
-| `Y264_UNSAFE_NO_MBT` | 0 | src/encoder/encoder.c:9276 |
+| `Y264_UNSAFE_NO_MBT` | 0 | src/encoder/encoder.c:9278 |
 | `Y264_UNSAFE_NO_NAL` | 0 | src/encoder/encoder.c:3224 |
 | `Y264_UNSAFE_NO_PREVPWAIT` | 0 | src/encoder/encoder.c:857 |
 | `Y264_UNSAFE_NO_REFBWAIT` | 0 | src/encoder/encoder.c:841 |
@@ -132,7 +132,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 |---|---|---|
 | `Y264_BAND_PRECOMP` | 0 | src/encoder/mbcode.c:5634 |
 | `Y264_B_RECT` | 0 | src/encoder/mbcode.c:7309 |
-| `Y264_HW` | off | src/encoder/encoder.c:16772 |
+| `Y264_HW` | off | src/encoder/encoder.c:16774 |
 | `Y264_MAX_INPUT_MB` | ? | cli/yah264_cli.c:2165 |
 | `Y264_MCSTF` | ? | src/encoder/mcstf.c:56 |
 | `Y264_MCSTF_RANGE` | ? | src/encoder/mcstf.c:40 |

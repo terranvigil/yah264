@@ -269,6 +269,12 @@ int main(void)
              (y >= 37 && x % 10 < 4), 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 4 && e[1] == 4 && e[2] == 10 && e[3] == 10);
+        /* pillars are looked for between the top and bottom bars: gray pillars
+         * inside black bars */
+        FILL(y < 6 || y >= H - 6 || x < 6 || x >= W - 6, y < 6 || y >= H - 6 ? 16.0 : 40.0,
+             0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6 && e[2] == 6 && e[3] == 6);
         /* a fade into a black sky walks one bar past the cap: both pair at the
          * clean bar's depth */
         FILL(y < 31 || y >= H - 8, 16.0, 0.0, 24.0, 3.0)
@@ -277,6 +283,14 @@ int main(void)
         FILL(y < 8 || y >= 14, 16.0, 0.0, 24.0, 3.0)   /* black ground below */
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 8 && e[1] == 8);
+        /* a fade beside a bar that walks into dark picture pairs at its solid depth */
+        FILL(y < 6 || y >= 20 || (y < 10 && x % 10 < 6), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* but not when the fading side's own solid depth is the shallower */
+        FILL(y < 8 || (y >= 14 && !(y == H - 6 && x % 10 >= 7)), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
         FILL(y < 31 || y >= H - 8, y < 31 ? 16.0 : 20.0, 0.0, 24.0, 3.0)   /* two colors */
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
