@@ -83,11 +83,11 @@ X_ARGS="--preset $PRESET"
 
 printf '%-18s %9s %9s %8s %9s %8s %8s\n' clip "x264 x" "dVMAF" "dsize" "dPSNR-Y" "kbit/s" "drift"
 printf '%-18s %9s %9s %8s %9s %8s %8s\n' ------------------ --------- --------- -------- --------- -------- --------
-xs=""; qs=""; ss=""; ps=""; n=0; warn=""
+xs=""; qs=""; ss=""; ps=""; n=0; warn=""; failed=0
 for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
     path="$root/tests/corpus/$clip.y4m"
-    [ -f "$path" ] || { printf '%-18s %9s\n' "$clip" "(missing)"; continue; }
+    [ -f "$path" ] || { printf '%-18s %9s\n' "$clip" "(missing)"; failed=$((failed + 1)); continue; }
 
     # --- solve: where is the common operating point on each encoder's scale? ---
     # Solved at the tier's THREAD COUNT because x264's output is not
@@ -115,6 +115,13 @@ PY
           python3 "$root/scripts/crf-solve.py" --clip "$path" --seconds "$SECONDS_PER" \
               $tgt_flag --threads "$THREADS" --preset "$PRESET" \
               --y264-args "$N_ARGS" --x264-args "$X_ARGS" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        printf '%-18s %9s\n' "$clip" "FAILED"
+        printf '%s\n' "$sol" | tail -3 >&2
+        failed=$((failed + 1))
+        continue
+    fi
     if ! printf '%s\n' "$sol" | grep -q '^solved=1'; then
         printf '%-18s %9s   %s\n' "$clip" "NO-POINT" \
             "$(printf '%s\n' "$sol" | grep -E '^(solve_warn|match_pct|.*saturated)=' | tr '\n' ' ')"
@@ -137,10 +144,12 @@ PY
         YAH264_ARGS="$N_ARGS" X264_ARGS="$X_ARGS" \
         PURE_C="$([ "$MODE" = pure ] && echo 1 || echo 0)" \
         bash "$root/scripts/perf-comp.sh" "$path" "$ncrf" "$SECONDS_PER" 2>&1)
+    rc=$?
     line=$(printf '%s\n' "$out" | grep 'speed: x264 is' || true)
-    if [ -z "$line" ]; then
+    if [ "$rc" -ne 0 ] || [ -z "$line" ]; then
         printf '%-18s %9s\n' "$clip" "FAILED"
         printf '%s\n' "$out" | tail -3 >&2
+        failed=$((failed + 1))
         continue
     fi
     x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
@@ -196,4 +205,8 @@ AGG
     python3 "$root/scripts/psnr_leg.py" 18 $ps
 fi
 [ -n "$warn" ] && echo "   [!] flags:$warn" >&2
+if [ "$failed" -gt 0 ]; then
+    echo "perf-comp-crf-set: $failed clip(s) failed or missing; the table above is partial" >&2
+    exit 1
+fi
 exit 0

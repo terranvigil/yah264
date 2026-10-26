@@ -403,7 +403,8 @@ for spec in $CLIPS; do
         for mode in '--crf 23' '--qp 26' \"--bitrate \$rate\"; do
             o=$idir/x.264
             $b8/cli/yah264 --input-y4m \"\$src\" --frames $FRAMES \$mode \\
-                --threads \$t -o \"\$o\" > /dev/null 2>&1
+                --threads \$t -o \"\$o\" > /dev/null 2> $idir/err \\
+                || { echo \"ENCODE FAILED \$clip t\$t \$mode: \$(head -1 $idir/err)\"; exit 1; }
             echo \"\$(md5sum < \"\$o\" | cut -d' ' -f1)  \$clip t\$t \$mode\" \\
                 >> $idir/md5.\$Y264_SIMD_FORCE
         done

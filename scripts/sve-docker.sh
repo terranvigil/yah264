@@ -195,9 +195,9 @@ enc() {   # enc <clip> <rate> <mode-name> <mode args...>
     local clip=\$1 rate=\$2 name=\$3; shift 3
     local o="\$dir/\$(basename "\$list").\$clip.\$name.264"
     \$run $B/cli/yah264 --input-y4m tests/corpus/\$clip.y4m --frames $FRAMES "\$@" \\
-        --threads 1 -o "\$o" > /dev/null 2>&1 || { echo "ENCODE FAILED \$clip \$name"; return 1; }
+        --threads 1 -o "\$o" > /dev/null 2> "\$o.err" || { echo "ENCODE FAILED \$clip \$name: \$(head -1 "\$o.err")"; return 1; }
     echo "\$(md5sum < "\$o" | cut -c1-32)  \$clip \$name" >> "\$list"
-    rm -f "\$o"
+    rm -f "\$o" "\$o.err"
 }
 for spec in $CLIPS; do
     clip=\${spec%%:*}; rate=\${spec##*:}

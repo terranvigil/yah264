@@ -48,7 +48,7 @@ X264_C="${X264_C:-$root/../x264/x264-noasm-autovec}"
 if [ "$(uname -s)" = "Darwin" ]; then
 measure() {  # -> "<instructions> <wall_seconds>"
     local rep
-    rep=$(/usr/bin/time -l "$@" 2>&1 >/dev/null)
+    rep=$(/usr/bin/time -l "$@" 2>&1 >/dev/null) || { printf '%s\n' "$rep" | grep -m1 . >&2; return 1; }
     printf '%s %s\n' \
         "$(printf '%s\n' "$rep" | awk '/instructions retired/{print $1; exit}')" \
         "$(printf '%s\n' "$rep" | awk '/ real /{print $1; exit}')"
@@ -57,7 +57,7 @@ else
 measure() {  # -> "<instructions> <wall_seconds>"
     local rep t0 t1
     t0=$(date +%s.%N)
-    rep=$(perf stat -x, -e instructions,cycles,task-clock -- "$@" 2>&1 >/dev/null)
+    rep=$(perf stat -x, -e instructions,cycles,task-clock -- "$@" 2>&1 >/dev/null) || { printf '%s\n' "$rep" | grep -m1 . >&2; return 1; }
     t1=$(date +%s.%N)
     printf '%s %s\n' \
         "$(printf '%s\n' "$rep" | awk -F, '$3 ~ /^instructions/ && $1 ~ /^[0-9]/ {print $1; exit}')" \
@@ -68,6 +68,7 @@ if ! command -v perf >/dev/null; then
 fi
 fi
 
+fail=0
 printf '%-18s %14s %14s %9s %9s\n' clip "y264 instr" "x264 instr" "instr x" "wall x"
 printf '%-18s %14s %14s %9s %9s\n' ------------------ -------------- -------------- --------- ---------
 for entry in $CLIPS; do
@@ -77,10 +78,12 @@ for entry in $CLIPS; do
     fps=$(awk 'NR==1{for(i=1;i<=NF;i++) if($i ~ /^F/){sub(/^F/,"",$i); split($i,a,":"); print a[1]/a[2]; exit}}' "$path")
     nf=$(python3 -c "print(int(round($fps*$SECONDS_PER)))")
 
-    n=$(measure env YAH264_NO_ASM=1 "$YAH264" --input-y4m "$path" --preset "$PRESET" \
-            --cabac --transform-8x8 --bitrate "$br" --threads 1 --frames "$nf" -o /dev/null)
-    x=$(measure "$X264_C" --preset "$PRESET" --bitrate "$br" --threads 1 \
-            --frames "$nf" -o /dev/null "$path")
+    if ! n=$(measure env YAH264_NO_ASM=1 "$YAH264" --input-y4m "$path" --preset "$PRESET" \
+            --cabac --transform-8x8 --bitrate "$br" --threads 1 --frames "$nf" -o /dev/null) ||
+       ! x=$(measure "$X264_C" --preset "$PRESET" --bitrate "$br" --threads 1 \
+            --frames "$nf" -o /dev/null "$path"); then
+        printf '%-18s %14s\n' "$clip" "ENCFAIL"; fail=1; continue
+    fi
     ni=${n%% *}; nw=${n##* }; xi=${x%% *}; xw=${x##* }
     [ -n "$ni" ] && [ -n "$xi" ] || { printf '%-18s %14s\n' "$clip" "NO-COUNTER"; continue; }
     python3 - "$clip" "$ni" "$xi" "$nw" "$xw" <<'R'
@@ -92,3 +95,4 @@ done
 echo
 echo "instr x and wall x are both yah264/x264: >1 means we do more / take longer."
 echo "They track => the row is WORK VOLUME. They diverge => the row is CPI."
+exit "$fail"
