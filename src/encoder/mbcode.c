@@ -406,7 +406,6 @@ int y264_aq_grain(double mean, double var)
 #define AQ_BAR_VAR       AQ_GRAIN_VMIN
 #define AQ_BAR_TOL       1.0
 #define AQ_BAR_DRIFT     0.5
-#define AQ_BAR_PAIR      2.0
 /* the mean of one line's low-variance blocks */
 static double bar_color(const float *mean, const float *var, int i0, int step,
                         int n, double vmax)
@@ -438,40 +437,40 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
     }
     return lines;
 }
-/* a matte's two sides: a block of rounding apart, or a few blocks when an off
- * center crop leaves them one color (an unrelated sky and ground rarely are) */
-static int depths_pair(int a, int b, double ca, double cb, double drift)
+/* a matte's two sides: one color (an unrelated sky and ground rarely are),
+ * and a block of rounding apart, or a few when a crop is off center */
+static int pair(int a, int b, double ca, double cb, double drift)
 {
     int lo = a < b ? a : b;
-    return abs(a - b) <= (fabs(ca - cb) < drift ? 1 + lo / 3 : 1);
+    return fabs(ca - cb) < drift && abs(a - b) <= 1 + lo / 3;
 }
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
     double vmax = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc;
-    double ptol = AQ_BAR_PAIR * sc, drift = AQ_BAR_DRIFT * sc;
+    double drift = AQ_BAR_DRIFT * sc;
     int top = 0, bottom = 0, left = 0, right = 0;
     int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
     double color_a = bar_color(mean, var, 0, 1, wmb, vmax);
     double color_b = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax);
-    if (fabs(color_a - color_b) < ptol && maxr > 0) {
+    if (maxr > 0) {
         top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, color_a, vmax,
                         tol, drift);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, color_b,
                            vmax, tol, drift);
-        if (!top || !bottom || !depths_pair(top, bottom, color_a, color_b, drift) || top > maxr || bottom > maxr)
+        if (!top || !bottom || !pair(top, bottom, color_a, color_b, drift) || top > maxr || bottom > maxr)
             top = bottom = 0;
     }
     /* side bars only without top and bottom ones */
     int rows = hmb - top - bottom, i0 = top * wmb;
     color_a = bar_color(mean, var, i0, wmb, rows, vmax);
     color_b = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax);
-    if (!top && fabs(color_a - color_b) < ptol && maxc > 0) {
+    if (!top && maxc > 0) {
         left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, color_a, vmax,
                          tol, drift);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, color_b,
                           vmax, tol, drift);
-        if (!left || !right || !depths_pair(left, right, color_a, color_b, drift) || left > maxc || right > maxc)
+        if (!left || !right || !pair(left, right, color_a, color_b, drift) || left > maxc || right > maxc)
             left = right = 0;
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;

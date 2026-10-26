@@ -166,8 +166,11 @@ int main(void)
         FILL(x < 6 || x >= W - 10, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 0 && e[3] == 0);
-        /* a flat sky and ground a level apart at depths 6 and 9 aren't a matte */
+        /* a flat sky and ground a level apart aren't a matte, at any depths */
         FILL(y < 6 || y >= H - 9, y < 6 ? 20.0 : 21.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
+        FILL(y < 6 || y >= H - 7, y < 6 ? 20.0 : 21.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
         /* sides a few blocks apart pair (a crop off center): 8 and 6 deep */
