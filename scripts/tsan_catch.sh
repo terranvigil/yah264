@@ -28,6 +28,7 @@ for r in $(seq 1 "${REPS:-12}"); do
     --input-y4m "$root/tests/corpus/$CLIP.y4m" --frames "${FRAMES:-24}" \
     --keyint 30 --cabac --bframes 3 --ref 1 --qp 26 --threads 18 \
     ${ARGS:-} --output /dev/null 2>"$OUT" >/dev/null
+  rc=$?
   if grep -q "WARNING: ThreadSanitizer" "$OUT"; then
     echo "caught on rep $r -> $OUT"
     grep -oE 'yah264:arm64\+0x[0-9a-f]+' "$OUT" | sort -u | \
@@ -35,6 +36,10 @@ for r in $(seq 1 "${REPS:-12}"); do
         printf '%s  ' "$a"; atos -o "$BIN" -l 0x100000000 "$a" 2>/dev/null || echo
       done
     exit 0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "tsan_catch: the encode failed on rep $r (exit $rc): $(head -1 "$OUT")" >&2
+    exit 2
   fi
 done
 echo "no report in ${REPS:-12} reps"

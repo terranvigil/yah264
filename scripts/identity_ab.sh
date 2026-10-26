@@ -69,6 +69,9 @@ EOF
     [ "$args_b" = "=" ] && args_b="$args_a"
     d="$work/cells/$name"; mkdir -p "$d"
 
+    # keep the failed encode's log for the summary
+    fail_enc() { cp "$log" "$d/fail.log"; echo FAIL; }
+
     # enc SIDE RUN -> prints the md5 of the stream (plus stats for 2-pass),
     # or FAIL
     enc() {
@@ -84,17 +87,17 @@ EOF
             env $arm "$bin" --input-y4m "$clip" --frames "$frames" \
                 --threads "$threads" --no-progress $args --pass 1 \
                 --stats "$d/$side$run.stats" -o /dev/null >"$log" 2>&1 \
-                || { echo FAIL; return; }
+                || { fail_enc; return; }
             env $arm "$bin" --input-y4m "$clip" --frames "$frames" \
                 --threads "$threads" --no-progress $args --pass 2 \
                 --stats "$d/$side$run.stats" -o "$out" >>"$log" 2>&1 \
-                || { echo FAIL; return; }
+                || { fail_enc; return; }
         else
             env $arm "$bin" --input-y4m "$clip" --frames "$frames" \
                 --threads "$threads" --no-progress $args -o "$out" \
-                >"$log" 2>&1 || { echo FAIL; return; }
+                >"$log" 2>&1 || { fail_enc; return; }
         fi
-        [ -s "$out" ] || { echo FAIL; return; }
+        [ -s "$out" ] || { fail_enc; return; }
         hash_of "$out"
     }
 
@@ -318,9 +321,13 @@ while IFS='|' read -r name _; do
     if [ "$n" = control_must_differ ]; then
         [ "$s" = DIFF ] && ctrl=OK
         printf '%-24s %3s  %-6s  (control: must be DIFF -> %s)\n' "$n" "$t" "$s" "$ctrl"
+        [ "$s" != FAIL ] || [ ! -s "$WORK/cells/$n/fail.log" ] ||
+            echo "    $(grep -m1 . "$WORK/cells/$n/fail.log")"
         continue
     fi
     printf '%-24s %3s  %-6s  %-38s %s\n' "$n" "$t" "$s" "$a" "$b"
+    [ "$s" != FAIL ] || [ ! -s "$WORK/cells/$n/fail.log" ] ||
+        echo "    $(grep -m1 . "$WORK/cells/$n/fail.log")"
     case "$s" in
         SAME) same=$((same + 1));; DIFF) diff=$((diff + 1));;
         VARIES) vary=$((vary + 1));; *) fail=$((fail + 1));;

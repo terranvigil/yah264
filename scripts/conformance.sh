@@ -1220,6 +1220,14 @@ echo "conformance: fixture key = $ffident"
 for geom in 320x240 176x144 210x146 178x100 62x50 16x16; do
     genlavfi "syn_$geom" "testsrc=size=$geom:rate=25" 8
 done
+# the encoder must run in this environment, or a refusal cell reads its failure
+# (a release build refusing an inherited knob) as the refusal it wanted
+if ! "$enc" --input-y4m "$fixdir/syn_16x16.y4m" --threads 1 -o "$work/preflight.264" \
+        2>"$work/preflight.err"; then
+    echo "conformance: $enc does not encode here:" >&2
+    cat "$work/preflight.err" >&2
+    exit 2
+fi
 genlavfi syn_motion "testsrc2=size=320x240:rate=30" 12
 genlavfi syn_long   "testsrc2=size=64x48:rate=25" 560
 genlavfi syn_noise  "nullsrc=size=192x160:rate=25,geq=random(1)*256:128:128" 3
@@ -1976,6 +1984,7 @@ fi
 # --- run the pool --------------------------------------------------------
 mode="full"; [ "$YAH264_CONF_FAST" = 1 ] && mode="fast"
 echo "conformance: $jobn checks, $mode mode, -P $JOBS, decoders: $DECODERS, $([ "$YAH264_CONF_DEV" = 1 ] && echo dev-knobs || echo release) build"
+[ "$jobn" -gt 0 ] || { echo "conformance: no checks selected (YAH264_CONF_ONLY='${YAH264_CONF_ONLY:-}')" >&2; exit 2; }
 printf '%s\0' "${jobs[@]}" | xargs -0 -P "$JOBS" -n1 bash -c 'eval "$1"' _ || true
 
 # --- aggregate in job order ---------------------------------------------

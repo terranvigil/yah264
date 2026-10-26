@@ -83,8 +83,8 @@ for clip in $CLIPS; do
                 out="$WORK/r.264"; rm -f "$out"
                 # shellcheck disable=SC2086
                 env $ARM "$ENC" --input-y4m "$src" --frames "$FRAMES" --ref "$r" \
-                    --crf 22 --threads "$t" $ARGS -o "$out" >/dev/null 2>&1 || {
-                        echo "  ENCFAIL $clip ref$r t$t" >&2; aborted=1; break; }
+                    --crf 22 --threads "$t" $ARGS -o "$out" >/dev/null 2>"$WORK/err" || {
+                        echo "  ENCFAIL $clip ref$r t$t: $(head -1 "$WORK/err")" >&2; aborted=1; break; }
                 # Guard the producer: two missing files have equal md5s.
                 [ -s "$out" ] || { echo "  EMPTY $clip ref$r t$t" >&2; aborted=1; break; }
                 md5 -q "$out" 2>/dev/null || md5sum "$out" | cut -d' ' -f1
