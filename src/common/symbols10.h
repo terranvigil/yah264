@@ -253,6 +253,10 @@
 #define y264_aq_dark                    y264_aq_dark_10
 #define y264_psy_dark_gain              y264_psy_dark_gain_10
 #define y264_aq_bright                  y264_aq_bright_10
+#define y264_aq_grain                   y264_aq_grain_10
+#define y264_aq_bars                    y264_aq_bars_10
+#define y264_mb_qp                      y264_mb_qp_10
+#define y264_aq_grain_share             y264_aq_grain_share_10
 #define y264_aq_dark_gate               y264_aq_dark_gate_10
 #define y264_mc_build_hpel              y264_mc_build_hpel_10
 #define y264_mc_build_hpel_rows         y264_mc_build_hpel_rows_10

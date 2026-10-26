@@ -3038,11 +3038,9 @@ static int qp_trace_on(void)          /* warmed in warm_lr_statics */
 static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int type)
 {
     if (!qp_trace_on() || !f->mbqp) return;
-    long n = (long)e->width_in_mbs * e->height_in_mbs, sum = 0, isum = 0, nskip = 0;
+    long n = (long)f->wmb * f->hmb, sum = 0, isum = 0, nskip = 0;
     for (long i = 0; i < n; i++) {
-        int q = f->qp + (f->mbtree_off ? f->mbtree_off[i]
-                                       : (f->aq_off ? (int)f->aq_off[i] : 0));
-        if (q < 0) q = 0; else if (q > 51) q = 51;
+        int q = y264_mb_qp(f, (int)(i % f->wmb), (int)(i / f->wmb));
         sum += f->mbqp[i]; isum += q; nskip += f->mbqp[i] != q;
     }
     fprintf(stderr, "QPT type=%d poc=%d slice_qp=%d mean_qp=%.2f intended=%.2f nodelta=%.2f moff=%.2f crf_dc=%.2f map=%s\n",
@@ -6380,12 +6378,12 @@ static void splat_prop(double *grid, int wmb, int hmb, int tx, int ty, double am
 
 /* AQ-aware inverse quantiser weights for mb-tree propagation. From a full-res
  * plane, derive per-MB the SAME log2(16x16 variance) offset that aq_analyze
- * applies at encode time (qp_offset_aq = strength*(log2var - mean)), then the
- * matching inverse-qscale weight ~ 2^(-qp_offset_aq/6): flat blocks (negative
+ * applies at encode time (offset = strength*(log2var - mean)), then the
+ * matching inverse-qscale weight ~ 2^(-offset/6): flat blocks (negative
  * offset, lower QP) weigh MORE, so they propagate more importance. Weights
  * are normalised to mean 1 so the global propagation
  * magnitude is unchanged (the ratio in the finish step is scale-invariant).
- * When aq_off is non-NULL the raw qp_offset_aq (unclamped, float) is returned
+ * When aq_off is non-NULL the raw AQ offset (unclamped, float) is returned
  * there for folding into the combined offset. */
 static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
                              int stride, int wmb, int hmb,
@@ -6394,8 +6392,10 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
     IP_SCOPE_B(IP_MBT_INVQ);
     int n = wmb * hmb;
     double sum = 0, sum2 = 0;
-    /* the dark-block cuts (y264_aq_dark), NULL when the term is off */
-    float *dk = y264_aq_dark(0.0, 0.0) < 0.0 ? malloc((size_t)n * sizeof(float)) : NULL;
+    /* the dark-block cuts and the luma mean and variance the gate reads; NULL
+     * when the term is off */
+    float *dk = y264_aq_dark(0.0, 0.0) < 0.0 ? malloc((size_t)n * 3 * sizeof(float)) : NULL;
+    float *means = dk ? dk + n : NULL, *vars = dk ? dk + 2 * n : NULL;
     int nbright = 0;
     for (int mby = 0; mby < hmb; mby++)
         for (int mbx = 0; mbx < wmb; mbx++) {
@@ -6409,9 +6409,16 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             invq[mby * wmb + mbx] = l;
             if (dk) dk[mby * wmb + mbx] = (float)y264_aq_dark(mean, var);
             nbright += y264_aq_bright(mean);
+            if (means) {
+                means[mby * wmb + mbx] = (float)mean;
+                vars[mby * wmb + mbx] = (float)var;
+            }
             sum += l; sum2 += l * l;
         }
-    double dg = y264_aq_dark_gate((double)nbright / n);
+    /* the bar walk only when brightness alone doesn't already open the gate */
+    double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
+    if (means && dg < 1.0)
+        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, wmb, hmb));
     /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
  * constant instead of the frame mean, so its DC is a frame-level complexity
  * term. The propagation weights are renormalised to mean 1 below, so a DC

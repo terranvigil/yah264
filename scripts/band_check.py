@@ -24,8 +24,13 @@ deviation 0.3-2.5), the blocks where banding shows:
 
 A window FAILS when yah264's flat share exceeds the reference's by more than
 FLAT_MARGIN or its CAMBI exceeds the reference's by more than CAMBI_MARGIN.
-A window whose size solve misses by more than SIZE_TOL is reported UNMATCHED
-and not judged. The default windows are the ones the dark-banding report was
+yah264 is solved onto the reference's size by CRF; when a step in the CRF
+curve overshoots SIZE_TOL it falls back to a multi-pass encode at the target
+bitrate, and each verdict line says which was judged. A window still off by
+more than SIZE_TOL is reported UNMATCHED and not judged. Exit status: 1 when a
+window failed, 2 when none failed but one was unmatched, 3 on an error (an
+encode or scorer failed, or the binary was refused), 0 otherwise. The default
+windows are the ones the dark-banding report was
 reproduced on: frames with both very bright and very dark areas, and mostly
 dark frames with faint grain.
 
@@ -34,7 +39,7 @@ arguments), FLAT_MARGIN (0.05), CAMBI_MARGIN (1.0), SIZE_TOL (0.03),
 THREADS (2), OUT (scratch directory, kept). The v1 binary and models are
 bdcompare's (VMAF_V1_BIN, VMAF_V1_MODELS).
 """
-import os, re, subprocess, sys, tempfile
+import glob, os, re, shutil, subprocess, sys, tempfile
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,10 +58,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bdcompare                                                # noqa: E402
 
 
+def die(msg):
+    # 3, so an error never reads as a failed (1) or unmatched (2) window
+    print(msg, file=sys.stderr)
+    sys.exit(3)
+
+
 def run(cmd):
     r = subprocess.run(cmd, capture_output=True)
     if r.returncode:
-        sys.exit(" ".join(cmd) + "\n" + r.stderr.decode(errors="replace")[-2000:])
+        die(" ".join(cmd) + "\n" + r.stderr.decode(errors="replace")[-2000:])
 
 
 def y4m_geom(path):
@@ -70,7 +81,10 @@ def y4m_geom(path):
 def cut(src, start, n, out):
     hdr, w, h = y4m_geom(src)
     fsz = w * h * 3 // 2
-    with open(src, "rb") as f, open(out, "wb") as o:
+    # written aside and renamed, so a cut killed mid-write is never reused as
+    # a short window
+    tmp = out + ".part"
+    with open(src, "rb") as f, open(tmp, "wb") as o:
         o.write(hdr)
         f.readline()
         first = f.readline()
@@ -81,6 +95,13 @@ def cut(src, start, n, out):
             if not line.startswith(b"FRAME"):
                 break
             o.write(line + f.read(fsz))
+    os.replace(tmp, out)
+
+
+def nframes(path):
+    """Frames in a y4m made by cut() (bare FRAME lines)."""
+    hdr, w, h = y4m_geom(path)
+    return (os.path.getsize(path) - len(hdr)) // (len(b"FRAME\n") + w * h * 3 // 2)
 
 
 def lumas(path):
@@ -120,7 +141,7 @@ def score(src, bs, tag, d):
     os.unlink(dec)
     v = bdcompare._v1_of(bs, src, d)
     if v is None:
-        sys.exit(f"band_check: VMAF v1 failed on {bs}")
+        die(f"band_check: VMAF v1 failed on {bs}")
     r["v1"], r["cambi1"] = v["VMAF-v1"], v["CAMBI"]
     r["cambi"] = full_cambi(src, bs, d)
     return r
@@ -149,16 +170,53 @@ def full_cambi(src, bs, d):
 
 
 def solve(src, target, out):
-    lo, hi, crf, ratio = 10.0, 40.0, 23.0, 0.0
+    """Encode yah264 onto the reference's size: bisect the CRF and keep the
+    closest encode. In a short dark window the size can step by more than the
+    tolerance between neighboring rate factors; then a multi-pass encode at
+    the target bitrate gets closer, and the closest encode is kept."""
+    lo, hi, crf = 10.0, 40.0, 23.0
+    keep, stats = out + ".best", out + ".stats"
+    try:
+        return _solve(src, target, out, lo, hi, crf, keep, stats)
+    finally:
+        for p in [keep, stats] + glob.glob(glob.escape(stats) + ".*"):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def _solve(src, target, out, lo, hi, crf, keep, stats):
+    best = None
     for _ in range(14):
         run([YAH264, "--input-y4m", src, "-o", out, "--crf", f"{crf:.3f}",
              "--threads", THREADS, "--quiet", "--no-progress"] + ARGS)
         ratio = os.path.getsize(out) / target
+        if best is None or abs(ratio - 1) < abs(best[1] - 1):
+            best = (f"crf {crf:.3f}", ratio)
+            shutil.copyfile(out, keep)
         if abs(ratio - 1) < 0.02:
             break
         lo, hi = (crf, hi) if ratio > 1 else (lo, crf)
         crf = round((lo + hi) / 2, 3)
-    return crf, ratio
+    if abs(best[1] - 1) > SIZE_TOL:
+        _, _, fps = bdcompare._y4m_geometry(src)
+        kbps = max(1, round(target * 8 / (nframes(src) / fps) / 1000))
+        # pass 3 encodes from the stats and rewrites them, so each one after
+        # the first refines against a real encode; a short dark window can
+        # need that to land on the target
+        for p in (1, 3, 3, 3):
+            run([YAH264, "--input-y4m", src, "-o", out, "--bitrate", str(kbps),
+                 "--pass", str(p), "--stats", stats, "--threads", THREADS,
+                 "--quiet", "--no-progress"] + ARGS)
+            if p == 1:
+                continue
+            ratio = os.path.getsize(out) / target
+            if abs(ratio - 1) < abs(best[1] - 1):
+                best = (f"multi-pass {kbps} kbit/s", ratio)
+                shutil.copyfile(out, keep)
+            if abs(ratio - 1) < 0.02:
+                break
+    shutil.move(keep, out)
+    return best
 
 
 def main():
@@ -166,33 +224,44 @@ def main():
     os.makedirs(d, exist_ok=True)
     print(f"# scratch {d}; margins flat +{FLAT_MARGIN}, cambi +{CAMBI_MARGIN}; args {' '.join(ARGS) or '(default)'}")
     print(f"# {'window':26s} {'side':6s} {'bytes':>9s} {'flat':>6s} {'keep':>6s} {'dark':>6s} {'cambi':>6s} {'cambi1':>6s} {'v1':>6s}")
-    fails = 0
+    fails = unmatched = 0
     for spec in WINDOWS.split(","):
         title, frame = spec.rsplit(":", 1)
         name = f"{title}_{frame}"
-        src = os.path.join(d, name + ".y4m")
-        if not os.path.exists(src):
+        src = os.path.join(d, f"{name}_{FRAMES}f.y4m")
+        if not os.path.exists(src) or nframes(src) != FRAMES:
             cut(os.path.join(SRC_DIR, title + ".y4m"), max(0, int(frame) - FRAMES // 2), FRAMES, src)
+        if nframes(src) != FRAMES:
+            die(f"band_check: window {name} holds {nframes(src)} frames, not {FRAMES} "
+                "(too near the end of the title?)")
         ref = os.path.join(d, name + ".ref.264")
         run([X264, "--preset", "medium", "--crf", "23", "--threads", THREADS, "--quiet",
              "-o", ref, src])
         mine = os.path.join(d, name + ".yah.264")
-        crf, ratio = solve(src, os.path.getsize(ref), mine)
+        how, ratio = solve(src, os.path.getsize(ref), mine)
         a, b = score(src, ref, name + ".ref", d), score(src, mine, name + ".yah", d)
         for side, r in (("ref", a), ("yah264", b)):
             print(f"  {name:26s} {side:6s} {r['bytes']:9d} {r['flat']:6.3f} {r['keep']:6.3f} "
                   f"{r['dark']:6.2f} {r['cambi']:6.3f} {r['cambi1']:6.3f} {r['v1']:6.2f}")
         if abs(ratio - 1) > SIZE_TOL:
-            verdict = f"UNMATCHED (size {ratio:.3f} at crf {crf})"
+            verdict = f"UNMATCHED (size {ratio:.3f} at {how})"; unmatched += 1
         elif b["flat"] > a["flat"] + FLAT_MARGIN or b["cambi"] > a["cambi"] + CAMBI_MARGIN:
             verdict = "FAIL"; fails += 1
         else:
             verdict = "pass"
         print(f"  {name:26s} {verdict}: flat {b['flat'] - a['flat']:+.3f}, cambi {b['cambi'] - a['cambi']:+.3f}, "
-              f"size {ratio:.3f}")
-    print(f"# {fails} window(s) failed")
-    sys.exit(1 if fails else 0)
+              f"size {ratio:.3f} ({how})")
+    print(f"# {fails} window(s) failed, {unmatched} unmatched (not judged)")
+    # 1: a window failed; 2: none failed but one couldn't be judged
+    sys.exit(1 if fails else (2 if unmatched else 0))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        sys.exit(3)

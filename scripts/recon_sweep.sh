@@ -81,6 +81,38 @@ for clip in $CLIPS; do
 CFGS
     done
 done
+
+# Pure --qp runs no AQ, so none of the cells above reach the dark-cut gate or
+# its bar detection. A letterboxed copy of the first clip found, at CRF, does:
+# black bars three macroblock rows deep.
+for clip in $CLIPS; do
+    src="$FIX/corpus_${clip}_cif_48f.y4m"
+    [ -f "$src" ] || continue
+    lb="$WORK/letterbox.y4m"
+    if ! ffmpeg -v error -y -i "$src" -vf "crop=352:192:0:48,pad=352:288:0:48:black" "$lb"; then
+        echo "  FAIL letterbox: couldn't make the clip"; total=$((total + 1)); fails=$((fails + 1)); break
+    fi
+    for crf in 20 34; do
+        for cfg in "" "--cavlc" "--bframes 0" "--aq-strength 0" "--slices 3"; do
+            total=$((total + 1))
+            out="$WORK/s.264"; rec="$WORK/s.rec.y4m"
+            rm -f "$out" "$rec"
+            # shellcheck disable=SC2086
+            env $ARM "$ENC" --input-y4m "$lb" --crf "$crf" --threads 1 \
+                ${FRAMES:+--frames $FRAMES} $cfg -o "$out" --dump-recon "$rec" \
+                >/dev/null 2>"$WORK/err"
+            rc=$?
+            if [ $rc -ne 0 ]; then
+                echo "  ENCFAIL rc=$rc letterbox crf$crf $cfg: $(head -1 "$WORK/err")"; fails=$((fails + 1)); continue
+            fi
+            a="$(md5frames "$rec")"; b="$(md5frames "$out")"
+            if [ -z "$a" ] || [ "$a" != "$b" ]; then
+                echo "  FAIL letterbox crf$crf $cfg"; fails=$((fails + 1))
+            fi
+        done
+    done
+    break
+done
 echo "RECON-SWEEP $((total - fails))/$total  arm='${ARM:-<default>}'"
 # no cells means CLIPS named none, which is not a pass
 [ "$total" -gt 0 ] || { echo "recon_sweep: no clips named in CLIPS" >&2; exit 2; }

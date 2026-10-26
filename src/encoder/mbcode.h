@@ -456,6 +456,9 @@ typedef struct {
     int rd_aborted;
 } y264_frame_t;
 
+/* a macroblock's coded QP from the frame's maps, without mb_qp_pre's side effects */
+int y264_mb_qp(const y264_frame_t *f, int mbx, int mby);
+
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),
  * writing the slice_data to `bs` and filling rec[]. Thin wrapper over the
  * analyze/emit split below (kept for callers that don't overlap the two). */
@@ -497,7 +500,10 @@ double           y264_aq_gain(double mean, double sd, int bpath, int abr);
 double           y264_aq_dark(double mean, double var);
 double           y264_psy_dark_gain(double mean, double var);
 int              y264_aq_bright(double mean);
-double           y264_aq_dark_gate(double bright_share);
+int              y264_aq_grain(double mean, double var);
+void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4]);
+double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
+double           y264_aq_dark_gate(double bright_share, double grain_share);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
 int              y264_rb_trace_on(void);
