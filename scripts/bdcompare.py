@@ -329,29 +329,38 @@ def _resolve(w):
     return shutil.which(w) or w
 
 
-def _yah264_word(tmpl):
-    """The yah264 word anywhere in a shell template: across pipes and command
-    lists and inside an `sh -c` body. None when there isn't one."""
+_CD = re.compile(r"(^|[;&|(]\s*)cd\s")
+
+
+def _yah264_words(tmpl):
+    """Every yah264 a shell template runs, across pipes and command lists and
+    inside quoted command strings, as executable paths. None when one can't
+    be resolved: a name that isn't an executable file, or a path after a cd,
+    whose target we don't track."""
+    if _CD.search(tmpl):
+        return None if "yah264" in tmpl else []
     try:
         lex = shlex.shlex(tmpl, posix=True, punctuation_chars=True)
         lex.whitespace_split = True
         words = list(lex)
     except ValueError:
         return None
+    found = []
     for w in words:
         if " " in w:                        # a quoted command string
-            # its relative paths follow a cd we can't track
-            if "yah264" in w and not re.search(r"(^|[;&|(]\s*)cd\s", w):
-                b = _yah264_word(w)
-                if b:
-                    return b
+            if "yah264" in w:
+                sub = _yah264_words(w)
+                if sub is None:
+                    return None
+                found += sub
             continue
         w = w.split("=", 1)[1] if _ASSIGN.match(w) else w     # YAH264=/path/yah264
         if os.path.basename(w) == "yah264":
             p = _resolve(w)
-            if os.path.isfile(p) and os.access(p, os.X_OK):
-                return p
-    return None
+            if not (os.path.isfile(p) and os.access(p, os.X_OK)):
+                return None
+            found.append(p)
+    return found
 
 
 def template_binary(tmpl):
@@ -360,9 +369,9 @@ def template_binary(tmpl):
     the first word that is neither an env assignment nor a launcher (env,
     nice, time, taskpolicy, caffeinate, timeout) or one of its options, as the
     shell would find it."""
-    y = _yah264_word(tmpl)
-    if y:
-        return y
+    ys = _yah264_words(tmpl)
+    if ys:
+        return ys[0]
     try:
         words = shlex.split(tmpl)
     except ValueError:
@@ -389,7 +398,13 @@ def check_template(t, who="bdcompare"):
     """Refuse a template that sets knobs its yah264 ignores, or whose binary
     can't be found while it sets one (or names yah264 under a knob-carrying
     environment): it can't be checked, so it isn't run."""
-    b = template_binary(t)
+    ys = _yah264_words(t)
+    if ys:
+        for b in ys:
+            if devknobs.is_yah264(b):
+                require_dev_knobs(b, t)
+        return
+    b = template_binary(t) if ys is not None else None
     if b and os.path.isfile(b) and devknobs.is_yah264(b):
         require_dev_knobs(b, t)
     elif devknobs.ignored(t, environ=False) or (
@@ -756,7 +771,7 @@ def main():
     def _ckey(tmpl, clip, q):
         binp = template_binary(tmpl)
         # no binary to key a rebuild on, or one a `cd` makes ambiguous: don't cache
-        if not (binp and os.path.isfile(binp)) or re.search(r"(^|[;&|(]\s*)cd\s", tmpl):
+        if not (binp and os.path.isfile(binp)) or _CD.search(tmpl):
             return None
         mt = os.path.getmtime(binp)
         # the encoder inherits the environment's knobs, so they're part of the key
