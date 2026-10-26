@@ -65,13 +65,37 @@ jobs:
       # libraries (-Davx512=false leaves AVX-512 out). It is the default, and it is
       # named here so the log says which shape was built.
       - name: Configure (-Dsimd=auto)
-        run: meson setup build -Dsimd=auto
+        run: meson setup build -Ddev_knobs=true -Dsimd=auto
 
       - name: Build
         run: ninja -C build
 
       - name: Unit tests + checkasm
         run: meson test -C build --print-errorlogs
+
+      - name: Default build (no dev knobs) builds and tests
+        run: |
+          meson setup build-default
+          ninja -C build-default
+          meson test -C build-default --print-errorlogs
+          # a release CLI encodes with no knob set and refuses one it would
+          # ignore, even under --quiet; the dev build shows the knob does change output
+          ffmpeg -v error -f lavfi -i testsrc=size=176x144:rate=25:duration=1 -pix_fmt yuv420p kn.y4m
+          build-default/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o a.264
+          test -s a.264
+          rc=0
+          Y264_AQ_DC=0.4 build-default/cli/yah264 --quiet --input-y4m kn.y4m --crf 23 --threads 1 -o b.264 2> refuse.txt || rc=$?
+          if [ "$rc" -ne 2 ]; then echo "release build exited $rc with Y264_AQ_DC set, not 2"; exit 1; fi
+          grep -q "Y264_AQ_DC" refuse.txt
+          build/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o c.264
+          Y264_AQ_DC=0.4 build/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o d.264
+          if cmp -s c.264 d.264; then echo "dev build ignored Y264_AQ_DC"; exit 1; fi
+
+      # The shipped configuration gets its own recon-match run. Fast mode keeps
+      # the runner time down: the full run on the dev build below covers every
+      # QP, and the cells that read dev knobs are skipped here and counted.
+      - name: Conformance on the default build (fast)
+        run: ./scripts/conformance.sh --fast build-default/cli/yah264
 
       # `make test` runs this and `meson test` does not, so for as long as this
       # job ran the latter the check never saw an x86 build directory -- and
@@ -135,7 +159,7 @@ jobs:
 
       - name: 10-bit build and unit tests
         run: |
-          meson setup build10 -Dbit_depth=10
+          meson setup build10 -Ddev_knobs=true -Dbit_depth=10
           ninja -C build10
           meson test -C build10 --print-errorlogs
 
@@ -144,7 +168,7 @@ jobs:
       # because a higher tier's flags were also on the command line.
       - name: SSE4.2-only build (-Dsimd=sse4) + checkasm
         run: |
-          meson setup build-sse4 -Dsimd=sse4
+          meson setup build-sse4 -Ddev_knobs=true -Dsimd=sse4
           ninja -C build-sse4
           ./build-sse4/tools/checkasm/checkasm --isa sse4
           meson test -C build-sse4 --print-errorlogs
@@ -170,13 +194,19 @@ jobs:
         run: ./scripts/hygiene_check.sh
 
       - name: Configure
-        run: meson setup build
+        run: meson setup build -Ddev_knobs=true
 
       - name: Build
         run: ninja -C build
 
       - name: Unit tests + checkasm
         run: meson test -C build --print-errorlogs
+
+      - name: Default build (no dev knobs) builds and tests
+        run: |
+          meson setup build-default
+          ninja -C build-default
+          meson test -C build-default --print-errorlogs
 
       - name: checkasm --isa neon
         run: |
@@ -194,7 +224,7 @@ jobs:
 
       - name: 10-bit build and unit tests
         run: |
-          meson setup build10 -Dbit_depth=10
+          meson setup build10 -Ddev_knobs=true -Dbit_depth=10
           ninja -C build10
           meson test -C build10 --print-errorlogs
 

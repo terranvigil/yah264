@@ -116,7 +116,7 @@ if has_leg build; then
     for cc in gcc clang; do
         bd="scratch/sve-docker/build-$cc"
         if dk "set -e
-            [ -f $bd/build.ninja ] || CC=$cc meson setup $bd --buildtype=release -Doptimization=3
+            [ -f $bd/build.ninja ] || CC=$cc meson setup $bd -Ddev_knobs=true --buildtype=release -Doptimization=3
             ninja -C $bd -j$JOBS" > "$out/build-$cc.log" 2>&1; then
             if grep -q 'Y264_HAVE_SVE=1' "$root/$bd/build.ninja"; then
                 row "build $cc (release -O3)" PASS "SVE tier compiled in"
@@ -195,9 +195,9 @@ enc() {   # enc <clip> <rate> <mode-name> <mode args...>
     local clip=\$1 rate=\$2 name=\$3; shift 3
     local o="\$dir/\$(basename "\$list").\$clip.\$name.264"
     \$run $B/cli/yah264 --input-y4m tests/corpus/\$clip.y4m --frames $FRAMES "\$@" \\
-        --threads 1 -o "\$o" > /dev/null 2>&1 || { echo "ENCODE FAILED \$clip \$name"; return 1; }
+        --threads 1 -o "\$o" > /dev/null 2> "\$o.err" || { echo "ENCODE FAILED \$clip \$name: \$(head -1 "\$o.err")"; return 1; }
     echo "\$(md5sum < "\$o" | cut -c1-32)  \$clip \$name" >> "\$list"
-    rm -f "\$o"
+    rm -f "\$o" "\$o.err"
 }
 for spec in $CLIPS; do
     clip=\${spec%%:*}; rate=\${spec##*:}

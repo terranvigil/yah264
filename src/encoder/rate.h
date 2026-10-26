@@ -36,7 +36,6 @@ double abr_qcomp_env(void);
 double abr_vbvov_frac(void);
 int frame_qp(const yah264_encoder_t *e, int type, int is_ref);
 int qp_bound(const yah264_encoder_t *e, int q);
-int rcp_dbg_on(void);
 double tp_bits_at(const yah264_encoder_t *e, int i, double q);
 double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend);
 double tp_qscale2qp(double q);
@@ -61,7 +60,6 @@ double vbv_limit_at(const yah264_encoder_t *e, double fill);
 void tp_build_plan(yah264_encoder_t *e);
 double abr_pbrate_scale(const yah264_encoder_t *e);
 int crf_cplx_env(void);
-int vbv_stat_on(void);
 int vbv_bounded_now(const yah264_encoder_t *e);
 
 #endif

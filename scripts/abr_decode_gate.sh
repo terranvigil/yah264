@@ -44,11 +44,14 @@ for spec in $CLIPS; do
     src="$ROOT/tests/corpus/$clip.y4m"
     [ -f "$src" ] || { echo "skip $clip (no corpus file)"; continue; }
     ran=$((${ran:-0}+1))
-    out="$WORK/$clip.264"
+    out="$WORK/$clip.264"; rm -f "$out"
     # shellcheck disable=SC2086
-    env $ARM "$ENC" --input-y4m "$src" --bitrate "$kbps" --preset medium \
+    if ! env $ARM "$ENC" --input-y4m "$src" --bitrate "$kbps" --preset medium \
         --cabac --transform-8x8 --ref 3 --bframes 3 --threads "$THREADS" \
-        $ARGS -o "$out" 2>/dev/null
+        $ARGS -o "$out" 2>"$WORK/err"; then
+        printf '  %-16s t%-3s ENCFAIL: %s\n' "$clip" "$THREADS" "$(head -1 "$WORK/err")"
+        fails=$((fails+1)); continue
+    fi
     want=$(ffprobe -v error -count_frames -select_streams v \
            -show_entries stream=nb_read_frames -of csv=p=0 "$src" 2>/dev/null)
     got=$(ffprobe -v error -count_frames -select_streams v \

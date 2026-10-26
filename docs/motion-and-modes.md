@@ -168,9 +168,6 @@ of magnitude 2 or more forces keep. `--no-dct-decimate` turns it off.
 
 ## Measuring it
 
-- `Y264_ME_STATS=1` prints per-search counters: stage reached, probes, UMH
-  improvement and distance, sub-pel iterations, and the oracle histogram. Run
-  it at `--threads 1`, since the accumulators are plain globals.
 - `Y264_ME_ETSTAT=1` buckets searches by seed cost and reports how far the
   integer stages moved the vector. Read the distance column, not the SATD
   gain. Gain volume is mostly 1-pel moves and doesn't predict BD.

@@ -18,7 +18,7 @@ A/B harness that's already in the tree under a name nobody remembered.
 | `Y264_MBT_SPLIT=1` | mb-tree by stage: invq / bind / phaseA / phaseB / finish, plus source and memo-miss counts | ref-B's cost is ~95% phase A |
 | `Y264_MBT_MISSWHY=1\|2` | **why a Phase A source had no pair legs to reuse**: splits MBT_SPLIT's `nobleg` bucket into anchor / untyped / null-leg / no-have. `=2` prints one line per miss with the source's POC, its ring offset, the settled bound, the STORED pair's anchor POCs and the pair the walk WANTED | Needs `Y264_MBT_SPLIT=1` beside it. `=2` is t1 only because the lines interleave on the pool. The misses it finds are window-frontier leaves with no future anchor bracket yet (`want <poc>/INT_MIN`), not a keying defect. Counting only, md5-identical on/off |
 | `-Dc_args=-DY264_STAGE_PROF` + `Y264_STAGE_PROF=1` | per-stage ms inside the macroblock loop and deblock | **t1 ONLY: it fails SILENTLY at higher widths** (a zero-byte bitstream and exit 0). The fault is in the probe, not shipped code. Read a number off it only from a t1 run |
-| `-Dc_args=-DY264_IPROF` (a separate release build dir, e.g. `meson setup build-ip --buildtype=release -Dc_args=-DY264_IPROF`) | **exact retired instructions by stage**: integer ME, sub-pel, RD trial, RD trial bits, commit re-encode, intra, entropy emit, deblock, lookahead, mb-tree, the rest of the macroblock decision, hpel + borders; printed as `IPROF` lines at exit | Reads the thread's own instruction counter (`thread_selfcounts`, no root needed) at scope entry and exit. The innermost open scope owns the instructions. One read costs ~1,690 instructions, and that cost is taken back off. Per thread, so it works at any `--threads`. The normal build compiles it out. Use it instead of a time profile whenever the question is "how many instructions": a time sample charges memory stalls to whatever was stalling (it inflated the per-trial psy term ~6x on sunflower). Stage totals reach 97% of an unperturbed run; frame-level bookkeeping is the rest |
+| `-Dc_args=-DY264_IPROF` (a separate release build dir, e.g. `meson setup build-ip --buildtype=release -Ddev_knobs=true -Dc_args=-DY264_IPROF`) | **exact retired instructions by stage**: integer ME, sub-pel, RD trial, RD trial bits, commit re-encode, intra, entropy emit, deblock, lookahead, mb-tree, the rest of the macroblock decision, hpel + borders; printed as `IPROF` lines at exit | Reads the thread's own instruction counter (`thread_selfcounts`, no root needed) at scope entry and exit. The innermost open scope owns the instructions. One read costs ~1,690 instructions, and that cost is taken back off. Per thread, so it works at any `--threads`. The normal build compiles it out. Use it instead of a time profile whenever the question is "how many instructions": a time sample charges memory stalls to whatever was stalling (it inflated the per-trial psy term ~6x on sunflower). Stage totals reach 97% of an unperturbed run; frame-level bookkeeping is the rest |
 | `Y264_THREAD_PROF=1` | per-stage buckets across the whole encode | **profiler buckets have lied before**; corroborate before acting |
 | the same **plus `Y264_NTP_PROF=1`** | adds a **pool-idle** column per driver stage: how many of its milliseconds ran with no live pool job | A bucket's wall can't separate a stage that holds the machine idle from one that overlaps the wavefront. This column can |
 | `Y264_NTP_PROF=1` idle split | busy / midrow / gate / ramp / tail / nojob per worker | the sleep is split against the pool's empty clock |
@@ -275,6 +275,13 @@ Notes about instrumenting the reference encoder itself stay out of the public
 tree and live with the measurement records.
 
 ## 7. Traps that have each cost a round
+
+- **A build without `-Ddev_knobs=true` reads only the CLI-carried `Y264_*`
+  knobs.** Its CLI refuses to encode, with exit status 2 and the knob's name on
+  stderr, when any other knob is set, so a script of your own must treat a
+  failed encode as a failure, not a result. `make` configures its build with
+  the option; a hand-made or pre-existing build dir needs
+  `meson configure <dir> -Ddev_knobs=true`.
 
 - **The table's dVMAF is only comparable across builds if the operating point
   is pinned.** Our CRF staircase (~13% of rate per rung) lets a fresh solve land

@@ -76,6 +76,7 @@ CLIPS="${CLIPS:-foreman_cif:400:21.4:22.7:27:27 bus_cif:400:28.6:27.9:34:35 stef
 script="$root/scripts/perf-comp.sh"
 [ "$MODE" = pure ] && export PURE_C=1
 
+failed=0
 for m in $MODES; do
     echo
     case "$m" in
@@ -91,7 +92,7 @@ for m in $MODES; do
     for entry in $CLIPS; do
         IFS=: read -r clip br ncrf xcrf nqp xqp <<<"$entry"
         path="$root/tests/corpus/$clip.y4m"
-        [ -f "$path" ] || { printf '%-16s %8s\n' "$clip" "(missing)"; continue; }
+        [ -f "$path" ] || { printf '%-16s %8s\n' "$clip" "(missing)"; failed=$((failed + 1)); continue; }
         # The capped-VBR cap is set BELOW the calibrated CRF rate on purpose, so
         # it binds. A realistic delivery cap (1.2x the average) was measured on
         # this corpus and never engages: foreman at CRF 21.4 runs 416 kbit/s and
@@ -133,10 +134,12 @@ for m in $MODES; do
               Y264_MBTREE_OFF="$mbt" \
               YAH264_ARGS="$NA" X264_ARGS="$XA" \
               bash "$script" "$path" "$ncrf" "$SECONDS_PER" 2>&1)
+        rc=$?
         line=$(printf '%s\n' "$out" | grep 'speed: x264 is' || true)
-        if [ -z "$line" ]; then
+        if [ "$rc" -ne 0 ] || [ -z "$line" ]; then
             printf '%-16s %8s\n' "$clip" "FAILED"
             printf '%s\n' "$out" | tail -3 >&2
+            failed=$((failed + 1))
             continue
         fi
         x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
@@ -166,3 +169,7 @@ echo
 echo "(${MODE}, ${THREADS} thread(s), ${SECONDS_PER}s windows, median of ${RUNS} runs)"
 echo "NO cross-mode mean is printed on purpose: the modes take structurally"
 echo "different paths through the encoder -- see this script's header."
+if [ "$failed" -gt 0 ]; then
+    echo "perf-comp-modes: $failed row(s) failed or missing; the tables above are partial" >&2
+    exit 1
+fi

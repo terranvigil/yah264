@@ -104,16 +104,22 @@ FORMATS = ["yuv420p", "yuv420p", "yuv420p", "yuv420p",
            "yuv422p", "yuv444p", "yuv420p10le"]
 
 
+FORMAT_REFUSAL = re.compile(r"unsupported Y4M geometry/colorspace|"
+                            r"-bit input is not supported")
+
+
 def probe_formats(work):
     kept = []
     for fmt in dict.fromkeys(FORMATS):          # unique, order kept
         clip = synth_clip(work, 2, fmt)
         r = sh(f"{YAH264} --input-y4m {clip} --frames 1 -o {os.devnull}")
+        last = (r.stderr.strip().splitlines() or [""])[-1][:80]
         if r.returncode == 0:
             kept.append(fmt)
+        elif r.returncode in (1, 2) and FORMAT_REFUSAL.search(r.stderr):
+            print(f"  format {fmt} excluded: {last}")
         else:
-            print(f"  format {fmt} excluded: "
-                  f"{r.stderr.strip().splitlines()[-1][:80]}")
+            sys.exit(f"regress: format probe {fmt} exited {r.returncode}: {last}")
     return [f for f in FORMATS if f in kept]
 
 
@@ -326,6 +332,8 @@ def main():
     if not a.clip:
         cells.append(("--threads 1", "yuv420p"))
 
+    if a.cell is not None and not 0 <= a.cell < len(cells):
+        sys.exit(f"regress: --cell {a.cell} is out of range (0..{len(cells) - 1})")
     print(f"regress: rev {REV}  seed {SEED}  {len(cells)} cells  "
           f"{nframes} frames  clip "
           f"{os.path.basename(a.clip) if a.clip else 'synthetic per-format'}  "
@@ -337,8 +345,13 @@ def main():
                 continue
             clip = a.clip or synth_clip(work, max(nframes, 150), fmt)
             ok &= run_cell(i, args, clip, nframes, work, record, a.keep)
-    print("regress: ALL PASS" if ok else "regress: FAILURES (replay with "
-          f"--seed {SEED} --cell N)")
+    # the cell numbers belong to this tier, product count and clip, so the
+    # replay names them all
+    replay = f"--seed {SEED} --tier {a.tier}"
+    replay += f" --products {a.products}" if a.products else ""
+    replay += f" --frames {a.frames}" if a.frames else ""
+    replay += f" --clip {a.clip}" if a.clip else ""
+    print("regress: ALL PASS" if ok else f"regress: FAILURES (replay with {replay} --cell N)")
     sys.exit(0 if ok else 1)
 
 

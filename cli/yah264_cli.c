@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "yah264.h"
+#include "common/env.h"
 #include "hw/vt_map.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1088,7 +1089,7 @@ typedef struct {
     size_t   *gop_size;
     /* gop_start[g] is the first frame of GOP g, gop_start[n_gops] is n_frames.
  * Arithmetic by default (g*keyint); cut-aware
- * under Y264_CUT_SPLIT. Worker slicing reads only this, so the two paths
+ * under --cut-split. Worker slicing reads only this, so the two paths
  * differ in the array's contents and nowhere else. */
     int *gop_start;
     int n_gops;
@@ -1165,8 +1166,7 @@ typedef struct {
  * gop_cons[g] the next one its worker will take. */
     int seek_rd, readahead;
     int *gop_rd, *gop_cons;
-    int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
-    size_t held, max_held;          /* published-but-unwritten output bytes */
+    size_t held;                    /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
     int gops_final, gops_cap;
     unsigned char *gop_done;
@@ -1311,7 +1311,7 @@ static void buf_append(uint8_t **buf, size_t *sz, size_t *cap,
 static int rc_carry_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RC_CARRY"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    if (v < 0) { const char *s = y264_env("Y264_RC_CARRY"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -1648,7 +1648,6 @@ static void *gop_worker(void *arg)
         if (j->gop_fst) j->gop_fst[g] = fst_buf; else free(fst_buf);
         j->gop_done[g] = 1;
         j->held += sz;
-        if (j->held > j->max_held) j->max_held = j->held;
         pthread_cond_broadcast(&j->cv_space);
         pthread_cond_broadcast(&j->cv_emit);
         pthread_mutex_unlock(&j->lock);
@@ -1755,7 +1754,7 @@ static void *y4m_reader(void *arg)
         pthread_mutex_lock(&j->lock);
         *slot = f;
         j->n_read = ++n;
-        if (++j->live > j->max_live) j->max_live = j->live;
+        ++j->live;
         /* Without a known frame count the GOP table is built as the frames
  * arrive: a GOP becomes dispatchable exactly when its last frame is
  * read, which is also what keeps the queue running forward. */
@@ -1877,7 +1876,7 @@ static void *y4m_reader_seek(void *arg)
         *slot = f;
         j->gop_rd[g] = i + 1;
         if (i + 1 > j->n_read) j->n_read = i + 1;
-        if (++j->live > j->max_live) j->max_live = j->live;
+        ++j->live;
         pthread_cond_broadcast(&j->cv_ready);
         pthread_mutex_unlock(&j->lock);
     }
@@ -2161,6 +2160,8 @@ static uint64_t y264_phys_mem(void)
  * only when the platform will not say how much RAM it has. */
 static uint64_t y264_input_budget(int *from_env)
 {
+    /* a resource limit the user is told to raise, read in every build: it
+     * bounds memory and never changes the stream */
     const char *ev = getenv("Y264_MAX_INPUT_MB");
     *from_env = 0;
     if (ev) {
@@ -2645,7 +2646,7 @@ out:
  * the plan and the frame file force. shots may be NULL (ns < 0) when none of
  * the options that read them is on. idr is modified. Returns the GOP count. */
 static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
-                      unsigned char *idr, const yah264_shot_t *shots, int ns, double scan_ms)
+                      unsigned char *idr, const yah264_shot_t *shots, int ns)
 {
     int nidr = 0;
     for (int i = 0; i < n; i++) nidr += idr[i];
@@ -2692,11 +2693,6 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
                     k, shots[k].first, shots[k].last, shots[k].last - shots[k].first + 1,
                     shots[k].icost_mean, shots[k].icost_peak, shots[k].pcost_mean, shots[k].ratio, k + 1 < ns ? "," : "");
         fprintf(stderr, "]\n");
-    }
-    if (getenv("Y264_CUT_SPLIT_STAT") && atoi(getenv("Y264_CUT_SPLIT_STAT"))) {
-        fprintf(stderr, "yah264: cut pre-scan %.1f ms, %d IDR(s) at", scan_ms, nidr);
-        for (int i = 0; i < n; i++) if (idr[i]) fprintf(stderr, " %d", i);
-        fprintf(stderr, "\n");
     }
     for (int z = 0; z < g_nzones; z++)          /* the plan's forced IDRs split GOPs too */
         if ((g_zones[z].flags & YAH264_ZONE_IDR) && g_zones[z].first > 0 && g_zones[z].first < n && !idr[g_zones[z].first]) {
@@ -2798,9 +2794,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * payload by arithmetic and measured +242 MiB of peak RSS on 1253 frames of
  * 720p (2058 -> 2300 MB), i.e. +14% of the array. Price it in there. From a
  * file none of this is resident: see scan_pass. */
-    int cut_split = (g_cut_split || g_plan_idr || g_force_idr ||
-                     (getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")))) &&
-                    keyint > 1;
+    int cut_split = (g_cut_split || g_plan_idr || g_force_idr) && keyint > 1;
     /* From a file the pre-scan is a pass of its own (scan_pass) and the encode
      * streams; only a pipe still reads the input whole. */
     int whole = cut_split && !y264_seekable(in);
@@ -2838,19 +2832,16 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * it twice -- once for the path it declined and once for the serial path
  * that takes over. Nothing has been printed before this point. */
     LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
-    g_gop_trace = getenv("Y264_GOP_TRACE") && atoi(getenv("Y264_GOP_TRACE"));
+    g_gop_trace = y264_env("Y264_GOP_TRACE") && atoi(y264_env("Y264_GOP_TRACE"));
     if (g_gop_trace) clock_gettime(CLOCK_MONOTONIC, &g_gop_trace_t0);
 
     /* Pass 1, or its saved answer. With the frame count in hand from here on,
      * the rest is the ordinary known-length encode on the scan's GOP table. */
     scan_plan_t plan;
     memset(&plan, 0, sizeof plan);
-    double scan_ms = 0;
     if (cut_split && !whole) {
         off_t pos0 = ftello(in);
         int hl = nknown > 0 ? hdr_len : -1;
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
         if (g_scan_in) {
             long nin = nknown >= 0 ? nknown : scan_count_frames(in, pos0, max_frames, payload);
             if (nin < 0) {
@@ -2870,8 +2861,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 return 1;
             }
         }
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        scan_ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
         if (plan.n == 0) return 0;              /* nothing to encode */
         nknown = plan.n;
     }
@@ -2886,7 +2875,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     long need = (long)(nthreads + 1) * keyint;
     if (nknown > 0 && nknown < need) need = nknown;
     int win_forced = 0;
-    if (getenv("Y264_STREAM_WINDOW")) {
+    if (getenv("Y264_STREAM_WINDOW")) {         /* a memory bound, read in every build */
         long w = atol(getenv("Y264_STREAM_WINDOW"));
         if (w > 0) { need = w; win_forced = 1; }
                                         /* no 2*keyint floor: a worker consumes
@@ -2938,8 +2927,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * the full window refused a piped 2160p encode at --threads 0 on a 64 GiB
  * box that then needs ~8 GiB of input store. */
     int waits_for_split = nknown <= 0 &&
-        !(nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
-          !getenv("Y264_GOP_FORCE_K"));
+        !(nthreads > 1 && !y264_env("Y264_GOP_FORCE_G") &&
+          !y264_env("Y264_GOP_FORCE_K"));
     if (budget && per_frame) {
         long hold = whole ? y264_projected_frames(in, payload + 6) : need;
         if (!whole && !waits_for_split && !win_forced && store_cap < hold)
@@ -2991,7 +2980,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     if (plan.n > 0) {
         n = plan.n;
         job.gop_start = NULL;
-        n_gops = scan_apply(&job, param, n, plan.idr, plan.shots, plan.ns, scan_ms);
+        n_gops = scan_apply(&job, param, n, plan.idr, plan.shots, plan.ns);
         job.gops_final = 1;
         scan_plan_free(&plan);
     } else if (nknown > 0 && !cut_split) {
@@ -3088,8 +3077,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 luma[i] = (const uint8_t *)job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)].y + yoff;
                 lstride[i] = W;
             }
-            struct timespec t0, t1;
-            clock_gettime(CLOCK_MONOTONIC, &t0);
             yah264_shot_t *shots = NULL;
             int ns = -1;
             if (g_shot_table || g_shot_crf || g_open_gop) {
@@ -3103,9 +3090,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             } else
                 g_api->scan_idr_frames(param, luma, lstride, n, nthreads,
                                        g_api->depth, idr);
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-            double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
-            n_gops = scan_apply(&job, param, n, idr, shots, ns, ms);
+            n_gops = scan_apply(&job, param, n, idr, shots, ns);
             free(shots); free(luma); free(lstride); free(idr);
         }
         job.gops_final = 1;
@@ -3134,8 +3119,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * +/-0.12% on the three 1080p segments. One thread keeps the wait, since one worker gains nothing
  * from starting early and --threads 1 must write what it always wrote;
  * the forced splits keep it too, since their point is a fixed share. */
-        if (nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
-            !getenv("Y264_GOP_FORCE_K")) {
+        if (nthreads > 1 && !y264_env("Y264_GOP_FORCE_G") &&
+            !y264_env("Y264_GOP_FORCE_K")) {
             early = 1;
         } else {
             /* The reader has to be able to reach the (nthreads+1)'th GOP
@@ -3250,8 +3235,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * pins k at 1. NOT bitstream-neutral: a GOP's bits depend on its frame-thread
  * share (500 frames of meridian_1080p, one worker, k = 1 / 2 / 3: three
  * different md5s, measured 2026-09-26), so a forced k moves the bytes. */
-    if (getenv("Y264_GOP_FORCE_G")) {
-        int fg = atoi(getenv("Y264_GOP_FORCE_G"));
+    if (y264_env("Y264_GOP_FORCE_G")) {
+        int fg = atoi(y264_env("Y264_GOP_FORCE_G"));
         if (fg > 0) g = fg < n_gops ? fg : n_gops;
     }
     /* A forced k is the share every worker gets: the per-GOP sizing below
@@ -3260,8 +3245,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
      * ceil(len * nthreads / total), 2 on a 12-GOP 1080p segment at --threads 0,
      * whatever K asked for. */
     int force_k = 0;
-    if (getenv("Y264_GOP_FORCE_K")) {
-        int fk = atoi(getenv("Y264_GOP_FORCE_K"));
+    if (y264_env("Y264_GOP_FORCE_K")) {
+        int fk = atoi(y264_env("Y264_GOP_FORCE_K"));
         if (fk > 0) { k = fk; force_k = 1; }
     }
     /* Size the GOP concurrency to the memory budget (--max-memory, else half
@@ -3275,7 +3260,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * run at once, so only that many are priced. */
     int mem_g = 0;
     uint64_t mem_budget = y264_mem_budget();
-    if (mem_budget && per_frame && g > 1 && !force_k && !getenv("Y264_GOP_FORCE_G")) {
+    if (mem_budget && per_frame && g > 1 && !force_k && !y264_env("Y264_GOP_FORCE_G")) {
         int la = param->rc.lookahead;
         long ra = STREAM_READAHEAD;
         long conc_cap = early && store_cap < INT_MAX ? store_cap / keyint + 1 : LONG_MAX;
@@ -3647,14 +3632,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             early ? " (early dispatch, per-GOP)" :
             gstart_known ? "" : " (streamed split)",
             job.window == INT_MAX ? n : job.window);
-    /* What the window ACTUALLY held, which is the claim worth checking: peak RSS
- * moves for reasons that are not this store, so measure the store. */
-    if (getenv("Y264_STREAM_STAT") && atoi(getenv("Y264_STREAM_STAT")))
-        fprintf(stderr, "yah264: stream peak %d frame(s) resident of %d "
-                "(%.1f MiB), output held %.1f MiB\n", job.max_live,
-                job.window == INT_MAX ? n : job.window,
-                (double)job.max_live * (double)per_frame / 1048576.0,
-                (double)job.max_held / 1048576.0);
 
     for (int i = 0; i < n_gops; i++) free(job.gop_data[i]);
     for (int i = 0; i < job.n_read; i++) {
@@ -4014,7 +3991,7 @@ static const char *part_str(int mask, char *buf, size_t cap)
 static void opt_env(const char *var, const char *flag, const char *flagval,
                     const char *envval)
 {
-    const char *cur = getenv(var);
+    const char *cur = y264_env(var);
     if (cur && strcmp(cur, envval)) {
         LOGF(LOG_WARN, "yah264: warning: %s=%s in the environment overrides "
                 "%s %s\n", var, cur, flag, flagval);
@@ -4037,6 +4014,37 @@ static const char *rc_arg_mode_name(int m)
     default:             return "";
     }
 }
+
+#if !Y264_DEV_KNOBS
+#include "knob_names.h"
+extern char **environ;
+/* A release build would ignore most Y264_* knobs, and an A/B run against it
+ * would then measure the default under the arm's name; refuse instead. The two
+ * memory bounds are read by the CLI in every build. */
+static int refuse_ignored_knobs(void)
+{
+    int n = 0;
+    for (char **e = environ; *e; e++) {
+        const char *eq = strchr(*e, '=');
+        size_t len = eq ? (size_t)(eq - *e) : strlen(*e);
+        for (size_t k = 0; k < sizeof y264_knob_names / sizeof *y264_knob_names; k++) {
+            const char *name = y264_knob_names[k];
+            if (strlen(name) != len || strncmp(*e, name, len))
+                continue;
+            if (!y264_env(name) && strcmp(name, "Y264_MAX_INPUT_MB") &&
+                strcmp(name, "Y264_STREAM_WINDOW")) {
+                fprintf(stderr, "yah264: %s is set, and this build ignores it\n", name);
+                n++;
+            }
+            break;
+        }
+    }
+    if (n)
+        fprintf(stderr, "yah264: unset %s, or use a -Ddev_knobs=true build\n",
+                n > 1 ? "them" : "it");
+    return n;
+}
+#endif
 
 int main(int argc, char **argv)
 {
@@ -4744,7 +4752,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--output-depth") && i + 1 < argc)
             out_depth = opt_int("--output-depth", argv[++i], 8, 10);
         else if (!strcmp(argv[i], "--version")) {
-            printf("yah264 %s\n", yah264_version());
+            printf("yah264 %s%s\n", yah264_version(), Y264_DEV_KNOBS ? " (dev knobs)" : "");
             return 0;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") ||
                    !strcmp(argv[i], "--longhelp") || !strcmp(argv[i], "--fullhelp")) {
@@ -4760,6 +4768,10 @@ int main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+#if !Y264_DEV_KNOBS
+    if (refuse_ignored_knobs())
+        return 2;
+#endif
     /* Both write the one zone list, and which of two overlapping sources should
      * win has no answer worth guessing. */
     if (g_zones_cli && g_plan_cli) {
@@ -5499,7 +5511,7 @@ int main(int argc, char **argv)
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
     if (param.rc.method == YAH264_RC_2PASS) {
-        const char *ev = getenv("Y264_2PASS_MT");
+        const char *ev = y264_env("Y264_2PASS_MT");
         tp_mt = (!ev || atoi(ev)) && param.rc.stats
              && (pass < 2 || tp_stats_have_markers(param.rc.stats));
     }
@@ -5514,7 +5526,7 @@ int main(int argc, char **argv)
         /* Ordered by what actually decided it, not by what is also true: with
  * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */
-        const char *mt_ev = getenv("Y264_2PASS_MT");
+        const char *mt_ev = y264_env("Y264_2PASS_MT");
         const char *why =
             recon_path                ? "--dump-recon needs one continuous "
                                         "self-consistent recon stream, which per-GOP "

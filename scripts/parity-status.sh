@@ -82,7 +82,14 @@ run_tier() {  # $1=mode(pure|asm) $2=threads $3=label; table -> stderr, "median 
     # keeps 3 because it really is quieter, but not 1.
     runs=3; [ "$2" -gt 1 ] && runs=5
     out=$(RUNS="$runs" SET_THREADS="$2" POINT="$POINT" bash "$setscript" "$1")
+    rc=$?
     printf '%s\n' "$out" >&2
+    # a partial clip set has no median to quote
+    if [ "$rc" -ne 0 ]; then
+        : > "$legdir/failed.$1$2"
+        printf 'FAILED n/a n/a n/a n/a\n'
+        return
+    fi
     # The floor's verdict and its debt list are per-clip STRINGS, not numbers,
     # so they go to a file rather than through this function's numeric return.
     printf '%s\n' "$out" | sed -n 's/^PSNR-FLOOR[[:space:]]*//p' > "$legdir/floor.$1$2"
@@ -186,3 +193,7 @@ fi
 echo " Run 'make parity-modes' for the per-mode matrix before quoting any of"
 echo " the above as \"the\" gap.  docs/rate-control.md"
 echo "=================================================================="
+if ls "$legdir"/failed.* >/dev/null 2>&1; then
+    echo "parity-status: a tier's clip set failed (see stderr above); its row reads FAILED" >&2
+    exit 1
+fi

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "cpu.h"
+#include "env.h"
 #include <string.h>
 #include <unistd.h>              /* sysconf, the portable core count */
 #if defined(__APPLE__)
@@ -209,12 +210,12 @@ static void cpu_detect_once(void)
 #else
     y264_cpu_cached_ = 0;
 #endif
-    const char *force = getenv("Y264_SIMD_FORCE");
+    const char *force = y264_env("Y264_SIMD_FORCE");
     if (force)
         y264_cpu_cached_ &= ~parse_simd_force(force);
-    if (getenv("YAH264_NO_ASM"))       /* measurement hook: force scalar C */
+    if (y264_env("YAH264_NO_ASM"))       /* measurement hook: force scalar C */
         y264_cpu_cached_ = 0;
-    const char *off = getenv("Y264_ASM_OFF");
+    const char *off = y264_env("Y264_ASM_OFF");
     y264_asm_off_ = off ? parse_asm_off(off) : 0;
     atomic_store_explicit(&y264_cpu_ready_, 1, memory_order_release);
 }

@@ -52,6 +52,8 @@
 #
 # Usage: scripts/conformance.sh [--fast] [path/to/yah264]
 #   --fast   dev-loop mode: 3 QPs, short corpus, skip the ffprobe codec probe.
+#   A release binary (-Ddev_knobs=false) runs every cell; the few checks that
+#   read dev knobs are skipped, and the summary says how many.
 # Env: YAH264_CONF_JOBS      parallelism (default: cores)
 #      YAH264_CONF_FAST      1 = fast mode (same as --fast)
 #      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
@@ -328,6 +330,26 @@ ident_info() {
     fi
 }
 
+# Runs "$@", dropping its leading Y264_*=v pins on a release build, which
+# would refuse them.
+pinned() {
+    if [ "$YAH264_CONF_DEV" != 1 ]; then
+        while [ $# -gt 0 ] && [[ $1 == Y264_*=* ]]; do shift; done
+    fi
+    env "$@"
+}
+
+# An informational comparison whose arms pin dev knobs. A release build runs
+# without the pins, so the comparison would read the designs they pin off, not races.
+pinned_info() {
+    if [ "$YAH264_CONF_DEV" = 1 ]; then
+        ident_info "$@"
+    else
+        echo "  SKIP informational, the pins need a -Ddev_knobs=true build: $1"
+        echo "SKIPPED 0 1"
+    fi
+}
+
 check_determinism() {   # check_determinism <label> <src> [feat]
     # hard: at --threads 1 two runs must match (owner, 2026-09-25), and the
     # stream still has to decode.
@@ -373,19 +395,19 @@ check_threading() {     # check_threading <label> <src> <feat>
     local label="$1" src="$2" feat="$3"
     local p="$work/th_$label" lbl="${feat:-baseline}"
     # shellcheck disable=SC2086
-    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
+    pinned Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
+    pinned Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 8 -o "$p.8.264" 2>/dev/null || true
-    ident_info "threads 1 vs 2 ($lbl)" "$p.1.264" "$p.2.264"
-    ident_info "threads 1 vs 8 ($lbl)" "$p.1.264" "$p.8.264"
+    pinned Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 8 -o "$p.8.264" 2>/dev/null || true
+    pinned_info "threads 1 vs 2 ($lbl)" "$p.1.264" "$p.2.264"
+    pinned_info "threads 1 vs 8 ($lbl)" "$p.1.264" "$p.8.264"
     # The ABR carry across per-GOP encoders (Y264_RC_CARRY, the CLI's
     # rc_state/rc_import handoff) is thread-count-VARIANT by design; two runs
     # at threads 8 with three GOPs are compared for information only.
-    Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c1.264" 2>/dev/null || true
-    Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c2.264" 2>/dev/null || true
-    ident_info "ABR carry across GOPs, two runs at threads 8 ($lbl)" "$p.c1.264" "$p.c2.264"
+    pinned Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c1.264" 2>/dev/null || true
+    pinned Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c2.264" 2>/dev/null || true
+    pinned_info "ABR carry across GOPs, two runs at threads 8 ($lbl)" "$p.c1.264" "$p.c2.264"
     local f=0 x
     for x in 2 8 c1; do
         if [ -z "$(md5frames "$p.$x.264")" ]; then
@@ -535,8 +557,8 @@ check_irefresh_refusals() {  # check_irefresh_refusals <src>
         rc=$?
         sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
         t=$((t + 1))
-        if [ "$rc" -eq 0 ] || [ "$sz" -ne 0 ]; then
-            echo "  FAIL [--intra-refresh $c] should be refused (status $rc, $sz bytes)"
+        if [ "$rc" -ne 2 ] || [ "$sz" -ne 0 ]; then
+            echo "  FAIL [--intra-refresh $c] should be refused with status 2 (status $rc, $sz bytes)"
             f=$((f + 1))
         fi
     done
@@ -695,10 +717,10 @@ sys.exit(1 if bad or not seen else 0)
     # is allowed); the threads-4 stream still has to decode.
     t=$((t + 1))
     # shellcheck disable=SC2086
-    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
+    pinned Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
-    ident_info "threads 1 vs 4 ($spec)" "$p.1.264" "$p.4.264"
+    pinned Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
+    pinned_info "threads 1 vs 4 ($spec)" "$p.1.264" "$p.4.264"
     if [ -n "$(md5frames "$p.4.264")" ]; then
         echo "  ok   threads-4 stream decodes ($spec)"
     else
@@ -793,21 +815,22 @@ check_fnwrap_paff() {   # check_fnwrap_paff <src>
 # still feed a pass 2. Both halves run serially, because --dump-recon does.
 # --profile is a constraint, so half its contract is what it REFUSES. A
 # refusal that exits 0 and writes an empty file is the failure mode this
-# checks for: status must be nonzero AND no stream may appear.
+# checks for: status must be the refusal's own (a crash is not a refusal) AND
+# no stream may appear.
 check_profile_refusals() {  # check_profile_refusals <src>
     local src="$1" t=0 f=0 rc sz
     local cases=(
-        "baseline|--profile baseline --cabac"
-        "baseline|--profile baseline --bframes 3"
-        "baseline|--profile baseline --transform-8x8"
-        "main|--profile main --transform-8x8"
-        "main|--profile main --cqm jvt"
-        "high10|--profile high10"
-        "bogus|--profile nosuchprofile"
+        "2|--profile baseline --cabac"
+        "2|--profile baseline --bframes 3"
+        "2|--profile baseline --transform-8x8"
+        "2|--profile main --transform-8x8"
+        "2|--profile main --cqm jvt"
+        "1|--profile high10"
+        "2|--profile nosuchprofile"
     )
-    local c lbl args out
+    local c want args out
     for c in "${cases[@]}"; do
-        lbl="${c%%|*}"; args="${c#*|}"
+        want="${c%%|*}"; args="${c#*|}"
         out="$work/prof_refuse.$$.264"
         rm -f "$out"
         # shellcheck disable=SC2086
@@ -815,10 +838,8 @@ check_profile_refusals() {  # check_profile_refusals <src>
         rc=$?
         sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
         t=$((t + 1))
-        if [ "$rc" -ne 0 ] && [ "$sz" -eq 0 ]; then
-            :
-        else
-            echo "  FAIL [$args] should be refused (status $rc, $sz bytes)"
+        if [ "$rc" -ne "$want" ] || [ "$sz" -ne 0 ]; then
+            echo "  FAIL [$args] should be refused with status $want (status $rc, $sz bytes)"
             f=$((f + 1))
         fi
         rm -f "$out"
@@ -879,15 +900,23 @@ PY
     fi
     # And the cells below only test --weightp 2 if --weightp 2 does something:
     # the duplicate slot has to fire on the clip the gate points it at.
-    d="$(Y264_WEIGHTP_STAT=1 "$enc" --input-y4m "$xsrc" --qp 26 --threads 1 \
-         --cabac --ref 3 --weightp 2 -o "$out" 2>&1 \
-         | sed 's/[^0-9 ]/ /g' | awk '{d += $3} END {print d + 0}')"
-    t=$((t + 1))
-    if [ "${d:-0}" -lt 1 ]; then
-        echo "  FAIL --weightp 2 spent no duplicate slot on the crossfade clip"
-        f=$((f + 1))
+    # The slot count comes from a stat knob, which a release build doesn't read.
+    if [ "$YAH264_CONF_DEV" = 1 ]; then
+        d="$(Y264_WEIGHTP_STAT=1 "$enc" --input-y4m "$xsrc" --qp 26 --threads 1 \
+             --cabac --ref 3 --weightp 2 -o "$out" 2>&1 \
+             | sed 's/[^0-9 ]/ /g' | awk '{d += $3} END {print d + 0}')"
+        t=$((t + 1))
+        if [ "${d:-0}" -lt 1 ]; then
+            echo "  FAIL --weightp 2 spent no duplicate slot on the crossfade clip"
+            f=$((f + 1))
+        fi
+        d="$d duplicate slots at 2"
+    else
+        echo "  SKIP --weightp 2 duplicate-slot count: it needs a -Ddev_knobs=true build"
+        echo "SKIPPED 1 0"
+        d="duplicate slots not counted"
     fi
-    [ "$f" -eq 0 ] && echo "  ok   --weightp: 3 refusals, 1 byte-identical, Baseline at 0, $d duplicate slots at 2"
+    [ "$f" -eq 0 ] && echo "  ok   --weightp: 3 refusals, 1 byte-identical, Baseline at 0, $d"
     echo "SUMMARY $t $f"
 }
 
@@ -1134,6 +1163,14 @@ if [ ! -x "$enc" ]; then
     echo "conformance: encoder not found at $enc (build first)" >&2
     exit 2
 fi
+# A few checks set Y264_* knobs, which only a dev_knobs build reads. On a
+# release build, the shipped configuration, those are skipped and counted and
+# every other cell runs.
+case "$("$enc" --version 2>/dev/null)" in
+    *"(dev knobs)"*) YAH264_CONF_DEV=1 ;;
+    *) YAH264_CONF_DEV=0 ;;
+esac
+export YAH264_CONF_DEV
 command -v ffmpeg  >/dev/null || { echo "conformance: ffmpeg required" >&2; exit 2; }
 command -v ffprobe >/dev/null || { echo "conformance: ffprobe required" >&2; exit 2; }
 
@@ -1182,6 +1219,14 @@ echo "conformance: fixture key = $ffident"
 for geom in 320x240 176x144 210x146 178x100 62x50 16x16; do
     genlavfi "syn_$geom" "testsrc=size=$geom:rate=25" 8
 done
+# the encoder must run in this environment, or a refusal cell reads its failure
+# (a release build refusing an inherited knob) as the refusal it wanted
+if ! "$enc" --input-y4m "$fixdir/syn_16x16.y4m" --threads 1 -o "$work/preflight.264" \
+        2>"$work/preflight.err"; then
+    echo "conformance: $enc does not encode here:" >&2
+    cat "$work/preflight.err" >&2
+    exit 2
+fi
 genlavfi syn_motion "testsrc2=size=320x240:rate=30" 12
 genlavfi syn_long   "testsrc2=size=64x48:rate=25" 560
 genlavfi syn_noise  "nullsrc=size=192x160:rate=25,geq=random(1)*256:128:128" 3
@@ -1937,7 +1982,8 @@ fi
 
 # --- run the pool --------------------------------------------------------
 mode="full"; [ "$YAH264_CONF_FAST" = 1 ] && mode="fast"
-echo "conformance: $jobn checks, $mode mode, -P $JOBS, decoders: $DECODERS"
+echo "conformance: $jobn checks, $mode mode, -P $JOBS, decoders: $DECODERS, $([ "$YAH264_CONF_DEV" = 1 ] && echo dev-knobs || echo release) build"
+[ "$jobn" -gt 0 ] || { echo "conformance: no checks selected (YAH264_CONF_ONLY='${YAH264_CONF_ONLY:-}')" >&2; exit 2; }
 printf '%s\0' "${jobs[@]}" | xargs -0 -P "$JOBS" -n1 bash -c 'eval "$1"' _ || true
 
 # --- aggregate in job order ---------------------------------------------
@@ -1954,10 +2000,10 @@ for r in "$resdir"/*; do
         # was thread-variant while the run printed "1217/1217 passed", because
         # the carry check that followed it passed and overwrote the count.
         set -- $(awk '$1 == "SUMMARY" { t += $2; f += $3 } END { print t+0, f+0 }' "$r")
-        grep -v -e '^SECTION ' -e '^SUMMARY ' -e '^DEC ' "$r" || true
+        grep -v -e '^SECTION ' -e '^SUMMARY ' -e '^DEC ' -e '^SKIPPED ' "$r" || true
         tests=$((tests + $1)); fails=$((fails + $2))
     else
-        grep -v -e '^SECTION ' -e '^DEC ' "$r" || true
+        grep -v -e '^SECTION ' -e '^DEC ' -e '^SKIPPED ' "$r" || true
         echo "  FAIL (worker produced no summary)"
         tests=$((tests + 1)); fails=$((fails + 1))
     fi
@@ -1981,5 +2027,9 @@ fi
 
 warns=$(cat "$resdir"/* 2>/dev/null | grep -c '^  WARN ' || true)
 echo "conformance: $((tests - fails))/$tests passed"
+if [ "$YAH264_CONF_DEV" = 0 ]; then
+    set -- $(cat "$resdir"/* 2>/dev/null | awk '$1 == "SKIPPED" { c += $2; i += $3 } END { print c+0, i+0 }')
+    echo "conformance: release build: $1 check(s) and $2 informational comparison(s) skipped, they need -Ddev_knobs=true"
+fi
 [ "${warns:-0}" -gt 0 ] && echo "conformance: $warns informational byte-identity WARN line(s), not failures (owner, 2026-09-25)"
 [ "$fails" -eq 0 ]

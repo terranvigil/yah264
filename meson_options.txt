@@ -23,8 +23,9 @@ option('videotoolbox', type : 'combo', choices : ['auto', 'enabled', 'disabled']
   description : 'Build the VideoToolbox hardware mode (auto = on for darwin).')
 
 # The SIMD tier CAP, and it is a BUILD-time bound only. What runs is the CPU's
-# own feature word, narrowed at runtime by Y264_SIMD_FORCE and YAH264_NO_ASM;
-# this option decides what is in the binary for those to narrow.
+# own feature word, narrowed at runtime by YAH264_NO_ASM and, in a
+# -Ddev_knobs=true build, Y264_SIMD_FORCE; this option decides what is in the
+# binary for those to narrow.
 #
 # 'auto' compiles every tier the host architecture has kernels for: NEON on
 # aarch64, SSE4.2, AVX2 and AVX-512 on x86-64 (AVX-512 unless -Davx512=false).
@@ -49,7 +50,16 @@ option('avx512', type : 'boolean', value : true,
 # no Apple part has SVE, so there it would be code that can never run. Like
 # NEON it is 8-bit only and folded into the 8-bit library. Building it changes
 # nothing on a CPU without SVE; what runs is decided at runtime from the hwcaps
-# and the vector length, and Y264_SIMD_FORCE=neon turns it off.
+# and the vector length, and Y264_SIMD_FORCE=neon turns it off in a
+# -Ddev_knobs=true build.
 option('sve', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
   value : 'auto',
   description : 'Build the aarch64 SVE tier (auto = on for aarch64 Linux).')
+
+# The Y264_* environment knobs (docs/knobs.md): tuning and measurement
+# switches read from the environment. Off, the library reads only the 16 the
+# CLI uses to carry its own options (src/common/env.h); no other variable
+# changes a release library's output, and the release CLI refuses to encode
+# when another is set. The harness, the tests and CI build with it on.
+option('dev_knobs', type : 'boolean', value : false,
+  description : 'Read the Y264_* tuning and measurement knobs from the environment.')

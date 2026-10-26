@@ -263,9 +263,15 @@ def self_test(enc):
                     "--vbv-bufsize", "1500", "--bitrate", "1500", "--bframes", "3",
                     "--b-pyramid", "normal", "--keyint", "10")
 
+        def ours(cmd):
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            if r.returncode:
+                sys.exit("hrd_check --self-test: yah264 failed (exit %d):\n%s"
+                         % (r.returncode, r.stderr[-400:]))
+
         # yah264's own VBV: a real stream with no HRD in it at all.
         yvbv = os.path.join(tmp, "yvbv.264")
-        _run([enc, "--input-y4m", src, "--cabac", "--crf", "20", "--vbv-maxrate",
+        ours([enc, "--input-y4m", src, "--cabac", "--crf", "20", "--vbv-maxrate",
               "600", "--vbv-bufsize", "600", "--threads", "1", "-o", yvbv])
 
         # ...and the same encode declaring the model it already obeys. These two
@@ -277,7 +283,7 @@ def self_test(enc):
         # above does, and it fails if our padding ever becomes a no-op.
         def y264(name, *args):
             out = os.path.join(tmp, name + ".264")
-            _run([enc, "--input-y4m", src, "--cabac", "--crf", "20",
+            ours([enc, "--input-y4m", src, "--cabac", "--crf", "20",
                   "--vbv-maxrate", "600", "--vbv-bufsize", "600",
                   "--threads", "1"] + list(args) + ["-o", out])
             return out

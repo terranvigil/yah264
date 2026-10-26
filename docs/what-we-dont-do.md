@@ -25,7 +25,7 @@ listed here with the reason. "Refused" is a decision.
 | `--input-depth` | Automatic | The input's own format tag picks the bit depth (docs/formats.md). |
 | `--bluray-compat` | Refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, access-unit delimiters, picture structure) are each available on their own, except the strict B-pyramid, which is refused. |
 | `--slice-max-size` `--slice-max-mbs` `--slice-min-mbs` `--slices-max` | Refused | Packet-sized slices only matter for RTP-style delivery, which isn't a target. `--slices N` covers the count form. |
-| `--asm` | Refused | `--no-asm` and `Y264_SIMD_FORCE` cover testing. Every kernel already matches its C reference. |
+| `--asm` | Refused | `--no-asm` (and `Y264_SIMD_FORCE` in a dev_knobs build) cover testing. Every kernel already matches its C reference. |
 
 Every other x264 option is built, under its own name or the one docs/options.md
 gives it.

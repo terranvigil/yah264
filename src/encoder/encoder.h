@@ -209,8 +209,6 @@ struct rc_knobs {
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
     double crf_level, crf_fps_slope;
-    int    rc_trace;            /* Y264_RC_TRACE */
-    int    dbg_cplx;            /* Y264_DBG_CPLX */
 };
 
 /* One calibrated bits model, the shape every rate-control mode predicts with:
@@ -440,9 +438,6 @@ struct yah264_encoder {
     struct { struct dpb_bag b; unsigned seq; } dpbp_pend[Y264_DPB_POOL_MAX];
     int            dpbp_npend;
     int            dpbp_n;      /* bags allocated; 0 = pool off, always wait */
-    int            dpbp_hi;     /* measured high-water parked bags */
-    int            dpbp_exh;    /* takes that found the pool empty (fell back) */
-    int            dpbp_take;   /* recycles served from the pool */
     int      next_frame_num;    /* running FrameNum counter (reset at IDR) */
     int      last_ref_fn;       /* FrameNum of the most recently coded reference */
     int      b_pyramid;         /* 1 = referenced hierarchical B */
@@ -477,11 +472,6 @@ struct yah264_encoder {
  * all, and P slices that spent a duplicate slot on one (--weightp 2). The
  * census the mode's default rests on. */
     int      stat_wp_p, stat_wp_frame, stat_wp_dup;
-    int      stat_hop2_slices;  /* Y264_STAIR_STAT: P slices prepped with hop 2 */
-    int      stat_hop2_refs;    /* of which, list-0 entries that take the clamp */
-    int      stat_refbgate;     /* Y264_STAIR_STAT: launches whose ref-B wait the
- * row gate replaced (per live burst) */
-    int      stat_refbblock;    /* and launches that still had to block */
     /* Staircase depth: a streaming anchor's SOURCE-luma interior sum, the
  * wp-estimate substitute for its not-yet-readable recon. Computed at every
  * pyramid anchor arrival when the depth gate is on.
@@ -561,7 +551,6 @@ struct yah264_encoder {
  * its mini-GOP depend on each of its macroblocks (backward propagation). */
     /* Early-skip probe settings, resolved once in encoder_open (never a lazy
  * static: workers read them concurrently). See y264_frame_t. */
-    int      bskip_probe;
     int      bskip_screen;                  /* exact zero-block screen, see y264_frame_t */
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
@@ -1006,8 +995,6 @@ struct yah264_encoder {
     int      tp_plan_on;        /* master gate */
     int      tp_corr;           /* runtime correction against the plan */
     int      tp_resolve;        /* correct by re-solving the remaining curve */
-    int      tp_dbg;            /* Y264_TP_DBG: per-frame plan trace */
-    int      tp_rctrace;        /* Y264_RC_TRACE on the rcp commit path */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
     double   tp_ipf, tp_pbf;    /* qscale ip / pb factors */
     double  *tp_cost;           /* per record: QP-invariant cost, bits at qscale 1 */
@@ -1133,8 +1120,6 @@ struct yah264_encoder {
  * regime shock the model is only trusted as
  * far as it has recently earned. ~1 in steady
  * state (no effect); decays 0.7/account. */
-    /* Y264_VBV_STAT counters */
-    int      rcp_vbv_nburst, rcp_vbv_ntight, rcp_vbv_nclamp;
 
     /* PAFF (--tff / --bff). `fields` is 0 for frame coding, 1 top-field-first,
  * 2 bottom-field-first. Each input frame is then coded as TWO pictures, and
@@ -1219,17 +1204,6 @@ struct yah264_encoder {
  * cache (CPU detect, config, tables) on one thread before any parallel frame
  * touches them -- otherwise those idempotent first-writes trip TSan. */
     struct ntp_pool *pool;
-    /* Optional nextgpu backend for the lookahead's lowres integer search
- * (src/encoder/gpu.h). NULL whenever the library is not linked or
- * Y264_GPU_LOWRES is not armed; Metal availability is probed lazily at
- * the first batch begin (gpu.h), and the CPU search stays complete
- * and default. */
-    struct y264_gpu *gpu;
-    struct y264_gpu *gpu_warm;  /* the pre-thread's own handle: the warm and the
- * NEXT walk overlap by design (the warm joins at
- * the launch AFTER that walk), so sharing one
- * stateful handle would race. Two handles are
- * two independent Metal queues. */
     struct y264_gpq *gpq;       /* per-push Phase-A leg batching (Y264_GPU_PHASEA,
  * gpu.h): the chain submits SEARCHQ legs at push,
  * the walk/warm consume fields frames later. */
@@ -1245,16 +1219,11 @@ struct yah264_encoder {
     struct y264_nr_slot *nr_ring;
     int              nr_intra, nr_inter;
     int              nr_seq, nr_fold_next;
-    int              nr_gate_q8, nr_trace;
+    int              nr_gate_q8;
     pthread_mutex_t  nr_mx;
     /* --mcstf (mcstf.h): the pre-filter queue in front of the lookahead,
  * NULL when off. */
     struct y264_mcstf *mcstf;
-    int              mcstf_qp;
-    /* which input indices came out of the filter filtered (Y264_MCSTF_QP
- * reads it in frame_qp); a ring far longer than any lookahead */
-    uint8_t          mcstf_filt[1024];
-    int              mcstf_pushed;
 
     /* Thread-scaled clamp: the staircase's row-gate margin and vertical MV
  * clamp, computed once at open from height_in_mbs and the pool width by

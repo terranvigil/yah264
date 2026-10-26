@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "skiporacle.h"
+#include "../common/env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,9 +32,9 @@ static size_t idx(int poc, int is_b, int mbx, int mby, int wmb)
 
 static void skor_init(void)
 {
-    g_path = getenv("Y264_SKIP_ORACLE");
+    g_path = y264_env("Y264_SKIP_ORACLE");
     if (!g_path || !*g_path) { g_mode = 0; return; }
-    const char *s = getenv("Y264_SKIP_ORACLE_SIDE");
+    const char *s = y264_env("Y264_SKIP_ORACLE_SIDE");
     if (s && *s) { g_side_b = (*s == 'b' || *s == 'B'); g_side_p = (*s == 'p' || *s == 'P');
                    if (!g_side_b && !g_side_p) { g_side_b = g_side_p = 1; } }
     /* post = exit after the searches, order UNCHANGED. Byte-identical, so the
@@ -43,7 +44,7 @@ static void skor_init(void)
  * them. Changes the halfpel-threshold order and hence the output, so
  * it reports CHANGED by construction; its value is the DELTA over
  * post, which is what the reorder is worth. */
-    const char *a = getenv("Y264_SKIP_ORACLE_AT");
+    const char *a = y264_env("Y264_SKIP_ORACLE_AT");
     if (a && a[0] == 'p' && a[1] == 'o') g_at_post = a[4] == 'r' ? 2 : 1;
     /* The RECORDING pass must see every verdict whatever the replay filters say,
  * or the bitmap it writes is not the thing being replayed. Filters apply to

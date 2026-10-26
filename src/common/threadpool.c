@@ -11,31 +11,20 @@
  * worker claims the next READY row from the OLDEST job that has one -- a row
  * is ready when its external gate is open and the row above has produced its
  * first cells -- so frames drain oldest-first and a gate-blocked frame never
- * parks a worker that another frame could use.
+ * holds a worker that another frame could use. A claimed row runs to the end
+ * on the worker that claimed it: the analyze run functions keep row-carried
+ * per-worker state (the CABAC est_ctx advances across a row in the worker's
+ * private engine copy).
  *
- * PARKING (what makes the overlap real): when a claimed row stalls mid-row on
- * the row above and other work is runnable, the worker parks the row as a
- * resumable continuation (row, column, needed progress) and serves the other
- * frame; the wavefront's lag-chain bubbles become cross-frame throughput
- * instead of sleep. A parked row is WORKER-BOUND: the analyze run functions
- * keep row-carried per-worker state (the CABAC est_ctx advances across a row
- * in the worker's private engine copy), so only the owning worker may resume
- * it, and while it holds a parked row of job J it takes no other unit of J
- * (which would clobber that state). Re-entering a job after running another
- * one triggers `thread_attach` (re-install cheap thread-locals, e.g. the ME
- * hpel registry) -- never `thread_init`, which would reset row-carried state;
- * jobs providing thread_init but no thread_attach are simply never parked.
- *
- * Within a job nothing changes: rows are claimed in increasing order and
- * processed left-to-right; before cell (r,c) the worker waits until row r-1
- * has completed c+2 cells, tracked in the job's atomic `progress` array with
- * the per-row wake-slot + seq_cst-fence discipline that fixed the 9b6251f
- * lost wakeup (see run_row_from). With a single registered job there is never
- * an alternative unit, so nothing parks and this reduces exactly to the v1
- * wavefront -- same claim order, same cell schedule, byte-identical output
- * (worker identity never reaches the bitstream -- the determinism invariant).
+ * Within a job, rows are claimed in increasing order and processed
+ * left-to-right; before cell (r,c) the worker waits until row r-1 has
+ * completed c+2 cells, tracked in the job's atomic `progress` array with the
+ * per-row wake-slot + seq_cst-fence discipline that prevents a lost wakeup
+ * (see run_row_from). Worker identity never reaches the bitstream -- the
+ * determinism invariant.
  */
 #include "common/threadpool.h"
+#include "env.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -45,46 +34,6 @@
 #include <stdint.h>
 #include <limits.h>
 #include <time.h>
-
-/* Debug counters (Y264_NTP_STATS=1): printed at pool destroy. Relaxed atomics,
- * negligible cost, no behavioural effect. */
-static _Atomic long st_parks, st_resumes, st_hint_bc, st_start_sig, st_inplace,
-                    st_claims, st_rowfast, st_idle_sleeps,
-                    st_spin_row, st_spin_row_hit, st_spin_idle, st_spin_idle_hit;
-
-/* Mid-row parking (Y264_NTP_PARK=1, default OFF): measured a NET LOSS on both
- * live multi-frame topologies (fpipe pair t18: 4.29 -> 4.47 s; staircase t18:
- * 4.31 -> 4.76 s park_joy 500f) -- catch-up stalls are ~one cell long, and a
- * park/switch/resume round-trip (two lock+scan passes, cold row state, and on
- * the staircase a delayed producer row on the trailer's critical path) costs
- * more than the bubble it fills. Kept env-gated for future topologies where
- * stalls are long; scheduling-only, cannot change bits. */
-static int park_on(void)
-{
-    static _Atomic int v = -1;
-    int x = atomic_load_explicit(&v, memory_order_relaxed);
-    if (x < 0) {
-        const char *e = getenv("Y264_NTP_PARK");
-        x = e ? (atoi(e) ? 1 : 0) : 0;
-        atomic_store_explicit(&v, x, memory_order_relaxed);
-    }
-    return x;
-}
-
-/* Y264_NTP_STATS=1: debug counters at pool destroy. Same atomic lazy-static
- * pattern as park_on -- two GOP workers' destroys race a plain-int version
- * (same-value init; the TSan floor is 0). Resolved at create (main thread). */
-static int ntp_stats_on(void)
-{
-    static _Atomic int v = -1;
-    int x = atomic_load_explicit(&v, memory_order_relaxed);
-    if (x < 0) {
-        const char *e = getenv("Y264_NTP_STATS");
-        x = e ? (atoi(e) ? 1 : 0) : 0;
-        atomic_store_explicit(&v, x, memory_order_relaxed);
-    }
-    return x;
-}
 
 /* --- Y264_NTP_PROF=1: per-worker wait accounting (zero cost when off: every
  * instrumented path is behind one `p->prof` int test; when on, the cost is two
@@ -101,14 +50,15 @@ static int ntp_stats_on(void)
  * SERIAL phase between submissions.
  * Plus the mid-row in-place stall (the wake-slot wait inside a claimed row)
  * and, per job TAG (ntp_prof_tag at the submission site), busy time, rows,
- * stall time, submitter join time and job span. Same lazy-static env pattern
- * as park_on; resolved at pool/bg create (main thread) per the warm rule. */
+ * stall time, submitter join time and job span. An atomic lazy static, since
+ * two GOP workers' pools race a plain-int one; resolved at pool/bg create
+ * (main thread) per the warm rule. */
 static int ntp_prof_env(void)
 {
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("Y264_NTP_PROF");
+        const char *e = y264_env("Y264_NTP_PROF");
         x = e ? atoi(e) : 0;             /* 2 = also histogram every cell */
         if (x < 0) x = 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
@@ -133,7 +83,7 @@ enum { NPW_GATE, NPW_RAMP, NPW_TAIL, NPW_NOJOB, NPW_NCLASS };
  * dependency-slope question) vs the WAKE ROUND-TRIP itself (the sleeper's
  * condvar latency AFTER the dependency was already satisfied -- the only part
  * a faster wait primitive can recover). The split is per stall event, with
- * duration histograms, the resolution path (spun / raced / slept / parked) and
+ * duration histograms, the resolution path (spun / raced / slept) and
  * -- on the sleep path -- the producer's signal timestamp, which decomposes a
  * slept stall into dep-wait (before the signal) + wake latency (after it). */
 enum { NSS_ENTRY, NSS_MID, NSS_NSITE };
@@ -164,8 +114,8 @@ static inline int leadbucket(int l)
 }
 
 struct ntp_sitestat {
-    uint64_t spin_ns, sleep_ns, park_ns, dep_ns, wake_ns;
-    long     spin_hit, raced, slept, parked, wake_n;
+    uint64_t spin_ns, sleep_ns, dep_ns, wake_ns;
+    long     spin_hit, raced, slept, wake_n;
     long     hspin[NTP_HB], hsleep[NTP_HB], hwake[NTP_HB];
     long     deficit[8];
 };
@@ -218,8 +168,7 @@ static _Atomic long     st_bg_syncs;
  * The budget is ~the wake round-trip: spinning longer than a sleep+wake
  * costs can never pay. Scheduling-only: claim rules, wake protocol and the
  * lost-wakeup proof are untouched (a fruitless spin falls into the same
- * register+fence+re-scan+sleep path). Workers holding parked
- * rows never spin (their sleep must stay reachable by the owner-poke).
+ * register+fence+re-scan+sleep path).
  * Bits cannot change: worker identity and timing never reach the bitstream
  * (the pool's determinism invariant, gated as always).
  *
@@ -315,7 +264,6 @@ struct ntp_job {
     int   kind;                 /* 0 = wavefront, 1 = parallel-for */
     int   nrows, ncols;
     void (*thread_init)(void *, int);
-    void (*thread_attach)(void *, int);
     void (*cell_fn)(void *, int, int, int);
     void (*for_fn)(void *, int, int);
     void *ctx;
@@ -350,12 +298,6 @@ struct ntp_job {
  * under the pool mutex) -- a row counted twice
  * is a rows_done overcount, which the
  * incarnation traps catch downstream */
-    /* Producer-visible ONE-SHOT poke hint: the progress row r-1 must reach for
- * parked row r to resume (INT_MAX = not parked / already poked), plus the
- * owning worker to poke. The resume itself is owner-only; this only steers
- * the single targeted wakeup at the crossing moment. */
-    _Atomic int *parked_need;
-    int         *parked_owner;
     int    progress_cap;
 };
 
@@ -366,11 +308,8 @@ struct ntp_lane {
     size_t      scap[8];
 };
 
-/* One worker's parked continuations: at most one per job (holding a row of J
- * forbids taking further units of J). Worker-local, no locking. */
+/* Worker-local, no locking. */
 struct ntp_wctx {
-    int nheld;
-    struct { struct ntp_job *j; int row, col, need; unsigned seq; } held[NTP_MAX_JOBS];
     unsigned cur_seq;           /* job seq of the last unit run (thread-local
  * state -- ME hpel -- currently installed) */
 };
@@ -381,9 +320,9 @@ struct ntp_pool {
 
     pthread_mutex_t  mtx;
     pthread_cond_t   slot_cv;                 /* submitters wait for a job slot */
-    /* Idle workers park on their OWN condvar, registered in a LIFO stack; every
- * wake names its target explicitly (pop one / poke a parked row's owner /
- * drain all on registration+kick) and removes it from the stack BEFORE
+    /* Idle workers sleep on their OWN condvar, registered in a LIFO stack; every
+ * wake names its target explicitly (pop one / drain all on
+ * registration+kick) and removes it from the stack BEFORE
  * signalling, so `!in_stack[me]` is the wait predicate and no wake is ever
  * broadcast to workers that cannot use it (the thundering-herd scar). */
     pthread_cond_t  *worker_cv;               /* [nthreads] */
@@ -405,7 +344,6 @@ struct ntp_pool {
  * woken sleeper can split its stall into dep-wait + wake round-trip. */
     _Atomic uint64_t wsig[NTP_CV_SLOTS];
     _Atomic int      idlers;                  /* workers registered as idle */
-    _Atomic int      nparked;                 /* parked rows, pool-wide */
 
     int              shutdown;
     unsigned         seq_next;                /* job registration counter */
@@ -427,7 +365,7 @@ struct ntp_pool {
     _Atomic uint64_t  empty_pub, empty_since; /* the same clock, lock-free read */
     uint64_t          slot_wait_ns;           /* job_register table-full waits */
     long              njobs;
-    long              wakes_one, wakes_worker, wakes_all, kicks;
+    long              wakes_one, wakes_all, kicks;
 };
 
 /* --- idle-stack wake primitives (pool mutex held for all of them) --- */
@@ -455,15 +393,6 @@ static void wake_one(struct ntp_pool *p)
     p->in_stack[id] = 0;
     if (p->prof) p->wakes_one++;
     pthread_cond_signal(&p->worker_cv[id]);
-}
-
-/* Wake a SPECIFIC worker (the owner of a parked row) if it is idle. */
-static void wake_worker(struct ntp_pool *p, int id)
-{
-    if (stack_remove(p, id)) {
-        if (p->prof) p->wakes_worker++;
-        pthread_cond_signal(&p->worker_cv[id]);
-    }
 }
 
 /* Wake every idle worker (job registration / external kick: several rows may
@@ -509,8 +438,8 @@ static int job_claim_pfor(struct ntp_job *j, unsigned seq32, int nrows)
 
 /* INCARNATION TRAP: a NULL j->cell_fn call from the kind-0 path means a job
  * slot changed identity under a running worker, which every hold invariant
- * individually forbids. Every claim and park stamps the incarnation (seq);
- * run entry, every cell, and resume verify it
+ * individually forbids. Every claim stamps the incarnation (seq); run
+ * entry and every cell verify it
  * and abort with the full state, so the violated invariant names itself
  * instead of leaving a corpse. Integer compares against already-hot fields:
  * cheap enough to keep armed permanently. */
@@ -592,31 +521,19 @@ static uint64_t empty_acc(const struct ntp_pool *p, uint64_t now)
     return p->empty_ns + (p->live_jobs == 0 ? now - p->t_empty0 : 0);
 }
 
-/* A claimable fresh row for this worker, skipping `jcur` and every job `w`
- * holds a parked row of (their row-carried per-worker state must not be
- * touched by this worker until the parked row resumes). Job choice: the job
+/* A claimable fresh row for this worker. Job choice: the job
  * the worker LAST ran wins when it has a ready row (AFFINITY -- keeps a
  * worker's consecutive rows on one frame: warm caches, no per-row
  * init/attach churn; without it a two-frame pool ping-pongs workers between
- * frames on every row), else the OLDEST ready job (drain order). w/jcur may
- * be NULL (exclusion-free peek, no affinity).
+ * frames on every row), else the OLDEST ready job (drain order). w may be
+ * NULL (a peek with no affinity).
  * (pool mutex held; does not claim -- doubles as a peek.) */
-static struct ntp_job *pick_fresh(struct ntp_pool *p, const struct ntp_wctx *w,
-                                  const struct ntp_job *jcur)
+static struct ntp_job *pick_fresh(struct ntp_pool *p, const struct ntp_wctx *w)
 {
     struct ntp_job *best = NULL, *aff = NULL, *hi = NULL;
     unsigned aseq = w ? w->cur_seq : 0;         /* seq counter starts at 1 */
     for (int i = 0; i < NTP_MAX_JOBS; i++) {
         struct ntp_job *j = &p->job[i];
-        if (j == jcur)
-            continue;
-        if (w) {
-            int held = 0;
-            for (int k = 0; k < w->nheld; k++)
-                if (w->held[k].j == j) { held = 1; break; }
-            if (held)
-                continue;
-        }
         if (!job_next_ready(j))
             continue;
         if (aseq && j->seq == aseq)
@@ -637,50 +554,20 @@ static struct ntp_job *pick_fresh(struct ntp_pool *p, const struct ntp_wctx *w,
     return hi ? hi : aff ? aff : best;
 }
 
-/* Index into w->held of a parked row that can resume NOW (oldest job first),
- * or -1. Owner-only by construction: w is this worker's. */
-static int held_resumable(const struct ntp_wctx *w)
-{
-    int best = -1;
-    for (int k = 0; k < w->nheld; k++) {
-        const struct ntp_job *j = w->held[k].j;
-        if (atomic_load_explicit(&j->progress[w->held[k].row - 1],
-                                 memory_order_acquire) >= w->held[k].need &&
-            (best < 0 || j->seq < w->held[best].j->seq))
-            best = k;
-    }
-    return best;
-}
-
-/* Run row r of job j from column c0 (0 = fresh claim, >0 = parked resume).
- * Returns -1 when the row completed, or the column it PARKED at: when the row
- * stalls on the row above and this worker has something else to run -- another
- * frame's row, a parallel-for index, or one of its own parked rows that became
- * resumable -- the row is recorded in w->held and the worker goes to serve
- * that instead of sleeping inside this job. A worker already holding parked
- * rows never commits to a single-row sleep here (a targeted sleep while
- * holding a resumable-later row of another job can cross-deadlock: two
- * sleepers each owning the continuation the other's chain needs); it parks
- * unconditionally and does its waiting in the worker loop's idle stack, where
- * every wake source can reach it. With a single registered job neither branch
- * ever fires, so the stall path is byte-for-byte the classic in-place
- * wake-slot wait. */
-static int run_row_from(struct ntp_pool *p, struct ntp_job *j,
-                        struct ntp_wctx *w, int idx, int r, int c0)
+/* Run row r of job j to the end. A stall on the row above spins, then
+ * sleeps on the row's wake slot. */
+static void run_row(struct ntp_pool *p, struct ntp_job *j, int idx, int r)
 {
     int ncols = j->ncols;
     int ji = (int)(j - p->job);
     unsigned seq0 = j->seq;                 /* incarnation at entry (trap) */
-    NTP_CHECK(p, j, seq0, "row-entry", idx, r, c0);
+    NTP_CHECK(p, j, seq0, "row-entry", idx, r, 0);
     int start_need = job_start_need(j);
     struct ntp_wprof *wp = p->prof ? &p->wprof[idx] : NULL;
     int deep = p->prof >= 2;               /* per-cell timing (diagnostic runs) */
     uint64_t t_row = wp ? prof_now() : 0, stall_ns = 0;
-    /* Parking needs thread_attach on re-entry unless the job installs no
- * thread-locals at all (thread_init NULL). */
-    int parkable = (j->thread_attach || !j->thread_init) && park_on();
-    int nstall = 0;             /* prof: stalls so far in this row segment */
-    for (int c = c0; c < ncols; c++) {
+    int nstall = 0;             /* prof: stalls so far in this row */
+    for (int c = 0; c < ncols; c++) {
         NTP_CHECK(p, j, seq0, "cell", idx, r, c);
         if (r > 0) {
             /* need the top-right neighbour (r-1, c+1) done, i.e. progress[r-1] >=
@@ -700,13 +587,10 @@ static int run_row_from(struct ntp_pool *p, struct ntp_job *j,
                                              memory_order_relaxed))]++;
                 {                           /* poll the dependency before sleeping */
                     int _sat = 0;
-                    atomic_fetch_add_explicit(&st_spin_row, 1, memory_order_relaxed);
                     NTP_SPIN_WAIT(NTP_SPIN_NS,
                         atomic_load_explicit(&j->progress[r - 1],
                                              memory_order_acquire) >= need);
                     if (_sat) {
-                        atomic_fetch_add_explicit(&st_spin_row_hit, 1,
-                                                  memory_order_relaxed);
                         if (wp) {
                             uint64_t d = prof_now() - t_st;
                             stall_ns += d;
@@ -729,34 +613,6 @@ static int run_row_from(struct ntp_pool *p, struct ntp_job *j,
                     }
                     goto satisfied;
                 }
-                if (parkable && (w->nheld > 0 || pick_fresh(p, w, j))) {
-                    atomic_fetch_add_explicit(&st_parks, 1, memory_order_relaxed);
-                    w->held[w->nheld].j = j;
-                    w->held[w->nheld].row = r;
-                    w->held[w->nheld].col = c;
-                    w->held[w->nheld].need = need;
-                    w->held[w->nheld].seq = j->seq;   /* incarnation stamp */
-                    w->nheld++;
-                    j->parked_owner[r] = idx;
-                    atomic_store_explicit(&j->parked_need[r], need,
-                                          memory_order_release);
-                    atomic_fetch_add_explicit(&p->nparked, 1, memory_order_relaxed);
-                    pthread_mutex_unlock(&p->mtx);
-                    if (wp) {
-                        uint64_t now = prof_now();
-                        ss->park_ns += now - t_st; ss->parked++;
-                        stall_ns += now - t_st;
-                        wp->busy_ns += now - t_row - stall_ns;
-                        wp->midrow_ns += stall_ns;
-                        if (j->tag_idx >= 0) {
-                            atomic_fetch_add_explicit(&p->tag[j->tag_idx].busy_ns,
-                                now - t_row - stall_ns, memory_order_relaxed);
-                            atomic_fetch_add_explicit(&p->tag[j->tag_idx].midrow_ns,
-                                stall_ns, memory_order_relaxed);
-                        }
-                    }
-                    return c;
-                }
                 /* Register as a waiter (once) BEFORE the re-check, and fence, so the
  * producer -- which stores progress then loads the slot's waiter
  * count WITHOUT the lock -- can never read 0 while we are about to
@@ -768,7 +624,6 @@ static int run_row_from(struct ntp_pool *p, struct ntp_job *j,
  * INSIDE the loop after the check with only relaxed ordering gives a
  * rare lost wakeup that hangs the whole encode (one worker stuck here
  * => the job never completes => the join never returns). */
-                atomic_fetch_add_explicit(&st_inplace, 1, memory_order_relaxed);
                 atomic_fetch_add_explicit(&p->wslot[slot], 1, memory_order_relaxed);
                 atomic_thread_fence(memory_order_seq_cst);
                 while (atomic_load_explicit(&j->progress[r - 1],
@@ -821,34 +676,17 @@ satisfied:
             pthread_cond_broadcast(&p->prog_cv[wake]);
             pthread_mutex_unlock(&p->mtx);
         }
-        /* Idle-worker wakes (only when someone is sleeping, i.e. the pool is
- * starved -- a saturated single-job run never pays this):
- * - c+1 hit the start need: row r+1 became CLAIMABLE -> wake ONE;
- * - c+1 crossed parked row r+1's recorded need: poke exactly its
- * OWNER, one-shot (the hint is consumed under the lock, so later
- * cells of this row do not re-fire; a busy owner re-scans its held
- * rows at its next loop anyway). Fence pairing as above: an idler
- * registers, fences, then re-scans before sleeping, so either we
- * see it here or its re-scan sees our progress store. */
-        if (atomic_load_explicit(&p->idlers, memory_order_relaxed) > 0) {
-            int hint = r + 1 < j->nrows &&
-                       atomic_load_explicit(&j->parked_need[r + 1],
-                                            memory_order_relaxed) <= c + 1;
-            if (hint || c + 1 == start_need) {
-                atomic_fetch_add_explicit(hint ? &st_hint_bc : &st_start_sig, 1,
-                                          memory_order_relaxed);
-                pthread_mutex_lock(&p->mtx);
-                if (hint &&
-                    atomic_load_explicit(&j->parked_need[r + 1],
-                                         memory_order_relaxed) <= c + 1) {
-                    atomic_store_explicit(&j->parked_need[r + 1], INT_MAX,
-                                          memory_order_relaxed);
-                    wake_worker(p, j->parked_owner[r + 1]);
-                } else if (!hint) {
-                    wake_one(p);
-                }
-                pthread_mutex_unlock(&p->mtx);
-            }
+        /* Idle-worker wake (only when someone is sleeping, i.e. the pool is
+ * starved -- a saturated single-job run never pays this): c+1 hit the
+ * start need, so row r+1 became CLAIMABLE -> wake ONE. Fence pairing
+ * as above: an idler registers, fences, then re-scans before
+ * sleeping, so either we see it here or its re-scan sees our progress
+ * store. */
+        if (atomic_load_explicit(&p->idlers, memory_order_relaxed) > 0 &&
+            c + 1 == start_need) {
+            pthread_mutex_lock(&p->mtx);
+            wake_one(p);
+            pthread_mutex_unlock(&p->mtx);
         }
     }
     if (wp) {
@@ -865,7 +703,6 @@ satisfied:
                                       memory_order_relaxed);
         }
     }
-    return -1;
 }
 
 
@@ -893,116 +730,94 @@ static void *worker_main(void *arg)
     pthread_mutex_lock(&p->mtx);
     for (;;) {
         struct ntp_job *j = NULL;
-        int r, c0;
+        int r;
         /* Iterations that reach the run below never slept (every idle path
  * `continue`s), so this measures the pure claim-scan hold. */
         uint64_t t_it = p->prof ? prof_now() : 0;
-        int hi = held_resumable(&w);
-        if (hi < 0) {
-            j = pick_fresh(p, &w, NULL);
-            if (!j) {
-                if (p->shutdown)
-                    break;
-                /* Register as an idler (idlers counter + own slot on the idle
+        j = pick_fresh(p, &w);
+        if (!j) {
+            if (p->shutdown)
+                break;
+            /* Register as an idler (idlers counter + own slot on the idle
  * stack) BEFORE the final re-scan; the fence pairs with the
  * producers': either they see idlers > 0 and name us (or some
  * idler) as a wake target, or the re-scan sees their progress/
  * publish. Registration, re-scan and the wait all happen under
  * the pool mutex, and every waker removes its target from the
- * stack under it too: no lost-wakeup window. Workers holding
- * parked rows sleep HERE too (never on a single row's slot) so
- * the owner-poke can always reach them. */
-                atomic_fetch_add_explicit(&p->idlers, 1, memory_order_relaxed);
-                p->idle_stack[p->nidle_stack++] = idx;
-                p->in_stack[idx] = 1;
-                atomic_thread_fence(memory_order_seq_cst);
-                hi = held_resumable(&w);
-                if (hi < 0 && !(j = pick_fresh(p, &w, NULL))) {
-                    atomic_fetch_add_explicit(&st_idle_sleeps, 1, memory_order_relaxed);
-                    int cls = 0;
-                    uint64_t t_idle = 0, e0 = 0;
-                    if (p->prof) {
-                        cls = idle_class(p); t_idle = prof_now();
-                        e0 = empty_acc(p, t_idle);
-                    }
-                    while (p->in_stack[idx] && !p->shutdown)
-                        pthread_cond_wait(&p->worker_cv[idx], &p->mtx);
-                    if (p->prof) {
-                        /* The class is what was blocking at ENTRY; a sleep that
+ * stack under it too: no lost-wakeup window. */
+            atomic_fetch_add_explicit(&p->idlers, 1, memory_order_relaxed);
+            p->idle_stack[p->nidle_stack++] = idx;
+            p->in_stack[idx] = 1;
+            atomic_thread_fence(memory_order_seq_cst);
+            if (!(j = pick_fresh(p, &w))) {
+                int cls = 0;
+                uint64_t t_idle = 0, e0 = 0;
+                if (p->prof) {
+                    cls = idle_class(p); t_idle = prof_now();
+                    e0 = empty_acc(p, t_idle);
+                }
+                while (p->in_stack[idx] && !p->shutdown)
+                    pthread_cond_wait(&p->worker_cv[idx], &p->mtx);
+                if (p->prof) {
+                    /* The class is what was blocking at ENTRY; a sleep that
  * outlives the last live job spends its remainder with
  * the pool empty, and billing all of it to `tail`
  * inflated that bucket by the whole serial term (the
  * 08-15 audit read 31% of tail against 2% of nojob on a
  * cell whose pool-empty was 28% of the wall). The
  * pool's own empty clock splits the interval exactly. */
-                        uint64_t now = prof_now(), d = now - t_idle;
-                        uint64_t emp = empty_acc(p, now) - e0;
-                        if (emp > d) emp = d;
-                        p->wprof[idx].idle_ns[cls] += d - emp;
-                        p->wprof[idx].idle_cnt[cls]++;
-                        if (emp) {
-                            p->wprof[idx].idle_ns[NPW_NOJOB] += emp;
-                            if (cls != NPW_NOJOB) p->wprof[idx].idle_cnt[NPW_NOJOB]++;
-                        }
+                    uint64_t now = prof_now(), d = now - t_idle;
+                    uint64_t emp = empty_acc(p, now) - e0;
+                    if (emp > d) emp = d;
+                    p->wprof[idx].idle_ns[cls] += d - emp;
+                    p->wprof[idx].idle_cnt[cls]++;
+                    if (emp) {
+                        p->wprof[idx].idle_ns[NPW_NOJOB] += emp;
+                        if (cls != NPW_NOJOB) p->wprof[idx].idle_cnt[NPW_NOJOB]++;
                     }
-                    atomic_fetch_sub_explicit(&p->idlers, 1, memory_order_relaxed);
-                    continue;
                 }
-                stack_remove(p, idx);          /* found work: withdraw */
                 atomic_fetch_sub_explicit(&p->idlers, 1, memory_order_relaxed);
+                continue;
             }
+            stack_remove(p, idx);          /* found work: withdraw */
+            atomic_fetch_sub_explicit(&p->idlers, 1, memory_order_relaxed);
         }
-        if (hi >= 0) {                          /* resume own parked row */
-            atomic_fetch_add_explicit(&st_resumes, 1, memory_order_relaxed);
-            j = w.held[hi].j;
-            r = w.held[hi].row;
-            c0 = w.held[hi].col;
-            NTP_CHECK(p, j, w.held[hi].seq, "resume", idx, r, c0);
-            atomic_store_explicit(&j->parked_need[r], INT_MAX,
-                                  memory_order_relaxed);
-            atomic_fetch_sub_explicit(&p->nparked, 1, memory_order_relaxed);
-            w.held[hi] = w.held[--w.nheld];
-        } else {                                /* fresh claim */
-            atomic_fetch_add_explicit(&st_claims, 1, memory_order_relaxed);
-            if (j->kind != 0) {
-                r = job_claim_pfor(j, j->seq, j->nrows);
-                if (r < 0)
-                    continue;   /* lost the row to a lock-free claimer: rescan */
-            } else {
-                /* E3 made next_row a shared CAS counter: a row-fast claimer can
+        if (j->kind != 0) {
+            r = job_claim_pfor(j, j->seq, j->nrows);
+            if (r < 0)
+                continue;   /* lost the row to a lock-free claimer: rescan */
+        } else {
+            /* E3 made next_row a shared CAS counter: a row-fast claimer can
  * advance it between pick_fresh's readiness check and this claim,
  * so re-validate and claim atomically; on any change, rescan (the
  * same "lost the row to a lock-free claimer" rule as kind!=0). */
-                int r0 = atomic_load_explicit(&j->next_row, memory_order_relaxed);
-                if (!job_next_ready(j) ||
-                    !atomic_compare_exchange_strong_explicit(&j->next_row, &r0, r0 + 1,
-                                                             memory_order_acq_rel, memory_order_relaxed))
-                    continue;
-                r = r0;
-            }
-            c0 = 0;
-            if (p->prof) {
-                p->wprof[idx].claims++;
-                if (j->kind == 0 && r > 0)   /* how much lead did we claim with? */
-                    p->wprof[idx].lead[leadbucket(
-                        atomic_load_explicit(&j->progress[r - 1],
-                                             memory_order_relaxed))]++;
-            }
+            int r0 = atomic_load_explicit(&j->next_row, memory_order_relaxed);
+            if (!job_next_ready(j) ||
+                !atomic_compare_exchange_strong_explicit(&j->next_row, &r0, r0 + 1,
+                                                         memory_order_acq_rel, memory_order_relaxed))
+                continue;
+            r = r0;
+        }
+        if (p->prof) {
+            p->wprof[idx].claims++;
+            if (j->kind == 0 && r > 0)   /* how much lead did we claim with? */
+                p->wprof[idx].lead[leadbucket(
+                    atomic_load_explicit(&j->progress[r - 1],
+                                         memory_order_relaxed))]++;
         }
         /* Cascade: if claimable work remains beyond the unit we just took and
  * another worker is idle, wake one -- keeps the invariant "runnable
  * work + idle worker => a wakeup is in flight" through multi-row
  * events (job registration, a kick opening several rows). */
         if (atomic_load_explicit(&p->idlers, memory_order_relaxed) > 0 &&
-            pick_fresh(p, NULL, NULL)) {
+            pick_fresh(p, NULL)) {
             wake_one(p);
         }
         if (p->prof) p->wprof[idx].pick_ns += prof_now() - t_it;
         pthread_mutex_unlock(&p->mtx);
 
-        int parked_at = -1;
         unsigned run_seq = j->seq;          /* incarnation at dispatch (trap) */
-        NTP_CHECK(p, j, run_seq, "dispatch", idx, r, c0);
+        NTP_CHECK(p, j, run_seq, "dispatch", idx, r, 0);
         /* THE PHANTOM-COUNT BUG: branching the bottom accounting on j->kind
  * read AFTER the run lets an EXHAUSTED parallel-for worker whose job
  * completed and was re-registered as a kind-0 wavefront before it took
@@ -1014,24 +829,18 @@ static void *worker_main(void *arg)
  * touched. */
         int was_pfor = (j->kind != 0);
         if (j->kind == 0) {
-            /* Fresh row after a job switch: (re)run thread_init -- safe, all
- * row-carried state re-seeds at the row start. Mid-row RESUME
- * after a switch: thread_attach only (re-install thread-locals);
- * thread_init would reset the row-carried per-worker state. */
+            /* Row after a job switch: (re)run thread_init -- safe, all
+ * row-carried state re-seeds at the row start. */
             if (w.cur_seq != j->seq) {
                 uint64_t t0 = p->prof ? prof_now() : 0;
-                if (c0 == 0) {
-                    if (j->thread_init) j->thread_init(j->ctx, idx);
-                } else {
-                    if (j->thread_attach) j->thread_attach(j->ctx, idx);
-                }
+                if (j->thread_init) j->thread_init(j->ctx, idx);
                 w.cur_seq = j->seq;
                 if (p->prof) {
                     p->wprof[idx].init_ns += prof_now() - t0;
                     p->wprof[idx].init_n++;
                 }
             }
-            parked_at = run_row_from(p, j, &w, idx, r, c0);
+            run_row(p, j, idx, r);
             /* Row fast path: after a wavefront row completes, claim the SAME job's next
  * row lock-free when it is already runnable (its row above is far enough
  * along and the external row gate passes), no worker is idle (so no cascade
@@ -1044,8 +853,7 @@ static void *worker_main(void *arg)
  * design. Measured target: 1.0-1.8% of t12 CPU in pool-mutex acquires
  * (foreman 9.2k units, sunflower 44.7k). md5-identical with and without it at
  * --threads 3 on sunflower_1080p and bbb_2160p, where the fast path took
- * 16.1k of 33.7k row claims (Y264_NTP_STATS=1 prints the rowfast count). The
- * pool does not exist at --threads 1, so one thread cannot move.
+ * 16.1k of 33.7k row claims. The pool does not exist at --threads 1, so one thread cannot move.
  *
  * ORDER MATTERS: claim the next row BEFORE
  * counting this one's completion. While row r is uncounted the job
@@ -1056,8 +864,7 @@ static void *worker_main(void *arg)
  * this loop still read it (a 1-in-12 segfault at 18 threads). Other
  * jobs are consulted by plain flags only, never through their
  * arrays. */
-            while (parked_at < 0 && w.nheld == 0 &&
-                   j->seq == run_seq &&
+            while (j->seq == run_seq &&
                    atomic_load_explicit(&p->idlers, memory_order_relaxed) == 0) {
                 int prio_live = 0;
                 for (int i = 0; i < NTP_MAX_JOBS; i++) {
@@ -1086,12 +893,10 @@ static void *worker_main(void *arg)
                     abort();
                 }
                 atomic_fetch_add_explicit(&j->rows_done, 1, memory_order_acq_rel);   /* never the last: r2 is open */
-                atomic_fetch_add_explicit(&st_claims, 1, memory_order_relaxed);
-                atomic_fetch_add_explicit(&st_rowfast, 1, memory_order_relaxed);
                 if (p->prof) p->wprof[idx].claims++;
-                r = r2; c0 = 0;
-                NTP_CHECK(p, j, run_seq, "dispatch-fast", idx, r, c0);
-                parked_at = run_row_from(p, j, &w, idx, r, c0);
+                r = r2;
+                NTP_CHECK(p, j, run_seq, "dispatch-fast", idx, r, 0);
+                run_row(p, j, idx, r);
             }
         } else {
             /* Parallel-for units: run, then complete AND claim the next unit
@@ -1150,7 +955,7 @@ static void *worker_main(void *arg)
  * mid-cell means some row completed twice. Mark each kind-0 row's
  * completion under the mutex and abort loudly on a duplicate, naming
  * the row. */
-        if (!was_pfor && parked_at < 0) {
+        if (!was_pfor) {
             if (j->counted && atomic_exchange_explicit(&j->counted[r], 1, memory_order_relaxed)) {
                 fprintf(stderr, "NTP DOUBLE COUNT: worker=%d job=%d seq=%u row=%d"
                         " (progress=%d/%d rows_done=%d/%d)" "\n",
@@ -1175,7 +980,7 @@ static void *worker_main(void *arg)
                && atomic_load_explicit(&j->rows_done, memory_order_acquire)
                   == j->nrows
                && !j->done)
-            : (parked_at < 0 && atomic_fetch_add_explicit(&j->rows_done, 1,
+            : (atomic_fetch_add_explicit(&j->rows_done, 1,
                                     memory_order_relaxed) + 1 == j->nrows)) {
             j->done = 1;
             if (p->prof) {
@@ -1202,8 +1007,7 @@ ntp_pool_t *ntp_pool_create(int nthreads)
 {
     if (nthreads < 1)
         return NULL;
-    (void)park_on(); (void)ntp_stats_on();   /* resolve env statics up front */
-    (void)ntp_prof_env();
+    (void)ntp_prof_env();                    /* resolve env statics up front */
     struct ntp_pool *p = calloc(1, sizeof *p);
     if (!p)
         return NULL;
@@ -1380,10 +1184,10 @@ static void ntp_prof_dump(struct ntp_pool *p, uint64_t t_end)
             for (int k = 0; k < NSS_NSITE; k++) {
                 struct ntp_sitestat *d = &s[k], *o = &p->wprof[i].site[k];
                 d->spin_ns += o->spin_ns; d->sleep_ns += o->sleep_ns;
-                d->park_ns += o->park_ns; d->dep_ns += o->dep_ns;
+                d->dep_ns += o->dep_ns;
                 d->wake_ns += o->wake_ns;
                 d->spin_hit += o->spin_hit; d->raced += o->raced;
-                d->slept += o->slept; d->parked += o->parked;
+                d->slept += o->slept;
                 d->wake_n += o->wake_n;
                 for (int b = 0; b < NTP_HB; b++) {
                     d->hspin[b] += o->hspin[b];
@@ -1396,19 +1200,18 @@ static void ntp_prof_dump(struct ntp_pool *p, uint64_t t_end)
         }
         fprintf(stderr, "  --- midrow sub-attribution (entry = first stall after a"
                 " row claim, mid = catch-up) ---\n");
-        fprintf(stderr, "  %-5s %9s %8s %7s %7s %8s %8s %8s   %s\n", "site",
+        fprintf(stderr, "  %-5s %9s %8s %7s %7s %8s %8s   %s\n", "site",
                 "events", "spin-hit", "spin-ms", "slp-ms", "dep-ms", "wake-ms",
-                "park-ms", "p50/p90/p99 us: spin | sleep | wake-latency");
+                "p50/p90/p99 us: spin | sleep | wake-latency");
         for (int k = 0; k < NSS_NSITE; k++) {
             struct ntp_sitestat *d = &s[k];
-            long n = d->spin_hit + d->raced + d->slept + d->parked;
-            fprintf(stderr, "  %-5s %9ld %7.1f%% %7.1f %7.1f %8.1f %8.1f %8.1f   "
+            long n = d->spin_hit + d->raced + d->slept;
+            fprintf(stderr, "  %-5s %9ld %7.1f%% %7.1f %7.1f %8.1f %8.1f   "
                     "%.2f/%.2f/%.2f | %.1f/%.1f/%.1f | %.1f/%.1f/%.1f\n",
                     k == NSS_ENTRY ? "entry" : "mid", n,
                     n ? 100.0 * (double)d->spin_hit / (double)n : 0.0,
                     (double)d->spin_ns * MS, (double)d->sleep_ns * MS,
                     (double)d->dep_ns * MS, (double)d->wake_ns * MS,
-                    (double)d->park_ns * MS,
                     hist_pct(d->hspin, 0.5), hist_pct(d->hspin, 0.9),
                     hist_pct(d->hspin, 0.99),
                     hist_pct(d->hsleep, 0.5), hist_pct(d->hsleep, 0.9),
@@ -1416,9 +1219,9 @@ static void ntp_prof_dump(struct ntp_pool *p, uint64_t t_end)
                     hist_pct(d->hwake, 0.5), hist_pct(d->hwake, 0.9),
                     hist_pct(d->hwake, 0.99));
             fprintf(stderr, "        raced=%ld slept=%ld (wake-stamped %ld) "
-                    "parked=%ld  deficit cells 1:%ld 2:%ld 3:%ld 4:%ld 5-8:%ld "
+                    " deficit cells 1:%ld 2:%ld 3:%ld 4:%ld 5-8:%ld "
                     "9-16:%ld 17-32:%ld >32:%ld\n", d->raced, d->slept,
-                    d->wake_n, d->parked, d->deficit[0], d->deficit[1],
+                    d->wake_n, d->deficit[0], d->deficit[1],
                     d->deficit[2], d->deficit[3], d->deficit[4], d->deficit[5],
                     d->deficit[6], d->deficit[7]);
         }
@@ -1433,7 +1236,7 @@ static void ntp_prof_dump(struct ntp_pool *p, uint64_t t_end)
                 "  claim scan %.1f ms (%.1f%%)  over %ld units\n",
                 (double)lk * MS, 100.0 * (double)lk * MS / cap,
                 (double)pk * MS, 100.0 * (double)pk * MS / cap, tot.rows);
-        fprintf(stderr, "  job-switch thread_init/attach: %.1f ms (%.1f%% of cap)"
+        fprintf(stderr, "  job-switch thread_init: %.1f ms (%.1f%% of cap)"
                 " over %ld switches\n", (double)ik * MS,
                 100.0 * (double)ik * MS / cap, in);
         if (p->prof >= 2) {
@@ -1463,8 +1266,8 @@ static void ntp_prof_dump(struct ntp_pool *p, uint64_t t_end)
                     (double)atomic_load(&ts->span_ns) * MS);
         }
     }
-    fprintf(stderr, "  wakes: one=%ld worker=%ld all-events=%ld kicks=%ld  "
-            "slot-wait %.1f ms\n", p->wakes_one, p->wakes_worker, p->wakes_all,
+    fprintf(stderr, "  wakes: one=%ld all-events=%ld kicks=%ld  "
+            "slot-wait %.1f ms\n", p->wakes_one, p->wakes_all,
             p->kicks, (double)p->slot_wait_ns * MS);
     fprintf(stderr, "  bg (process-wide): syncs=%ld wait %.1f ms\n",
             atomic_load(&st_bg_syncs),
@@ -1475,19 +1278,6 @@ void ntp_pool_destroy(ntp_pool_t *p)
 {
     if (!p)
         return;
-    {
-        if (ntp_stats_on())
-            fprintf(stderr, "NTP claims=%ld rowfast=%ld inplace=%ld parks=%ld resumes=%ld "
-                    "start_sig=%ld hint_bc=%ld idle_sleeps=%ld "
-                    "spin_row=%ld/%ld spin_idle=%ld/%ld\n",
-                    atomic_load(&st_claims), atomic_load(&st_rowfast),
-                    atomic_load(&st_inplace),
-                    atomic_load(&st_parks), atomic_load(&st_resumes),
-                    atomic_load(&st_start_sig), atomic_load(&st_hint_bc),
-                    atomic_load(&st_idle_sleeps),
-                    atomic_load(&st_spin_row_hit), atomic_load(&st_spin_row),
-                    atomic_load(&st_spin_idle_hit), atomic_load(&st_spin_idle));
-    }
     uint64_t t_end = p->prof ? prof_now() : 0;  /* pre-shutdown: exclude teardown */
     pthread_mutex_lock(&p->mtx);
     p->shutdown = 1;
@@ -1505,8 +1295,6 @@ void ntp_pool_destroy(ntp_pool_t *p)
     for (int i = 0; i < NTP_MAX_JOBS; i++) {
         pthread_cond_destroy(&p->job[i].done_cv);
         free(p->job[i].progress);
-        free(p->job[i].parked_need);
-        free(p->job[i].parked_owner);
         free(p->job[i].counted);
     }
     for (int k = 0; k < NTP_LANES; k++)
@@ -1544,7 +1332,7 @@ double ntp_pool_empty_ms(const ntp_pool_t *p)
 
 /* External-progress kick: re-evaluate every gated claim. Called by a producer
  * outside the pool (e.g. the staircase trailer after publishing a consumable
- * anchor row) so parked workers re-check row_ready gates. Broadcast is fine
+ * anchor row) so idle workers re-check row_ready gates. Broadcast is fine
  * here: kicks are per-published-row (~one per MB row per frame), not per cell. */
 void ntp_pool_kick(ntp_pool_t *p)
 {
@@ -1567,7 +1355,6 @@ void ntp_pool_kick(ntp_pool_t *p)
 static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
                                     int nrows, int ncols,
                                     void (*thread_init)(void *, int),
-                                    void (*thread_attach)(void *, int),
                                     void (*cell_fn)(void *, int, int, int),
                                     void (*for_fn)(void *, int, int), void *ctx,
                                     int (*row_ready)(void *, int), void *gate_ctx,
@@ -1600,14 +1387,10 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
     if (kind == 0) {
         if (nrows > j->progress_cap) {
             _Atomic int *np = realloc(j->progress, (size_t)nrows * sizeof *np);
-            _Atomic int *pn = realloc(j->parked_need, (size_t)nrows * sizeof *pn);
-            int         *po = realloc(j->parked_owner, (size_t)nrows * sizeof *po);
             _Atomic uint8_t *ct = realloc(j->counted, (size_t)nrows);
             if (np) j->progress = np;
-            if (pn) j->parked_need = pn;
-            if (po) j->parked_owner = po;
             if (ct) j->counted = ct;
-            if (!np || !pn || !po || !ct) { /* leave old buffers; caller must retry serial */
+            if (!np || !ct) { /* leave old buffers; caller must retry serial */
                 pthread_mutex_unlock(&p->mtx);
                 return NULL;
             }
@@ -1615,7 +1398,6 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
         }
         for (int r = 0; r < nrows; r++) {
             atomic_store_explicit(&j->progress[r], 0, memory_order_relaxed);
-            atomic_store_explicit(&j->parked_need[r], INT_MAX, memory_order_relaxed);
             j->counted[r] = 0;
         }
     }
@@ -1649,7 +1431,6 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
     j->nrows = nrows;
     j->ncols = ncols;
     j->thread_init = thread_init;
-    j->thread_attach = thread_attach;
     j->cell_fn = cell_fn;
     j->for_fn = for_fn;
     j->ctx = ctx;
@@ -1674,12 +1455,11 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
 static struct ntp_job *job_register(struct ntp_pool *p, int kind,
                                     int nrows, int ncols,
                                     void (*thread_init)(void *, int),
-                                    void (*thread_attach)(void *, int),
                                     void (*cell_fn)(void *, int, int, int),
                                     void (*for_fn)(void *, int, int), void *ctx,
                                     int (*row_ready)(void *, int), void *gate_ctx)
 {
-    return job_register_ex(p, kind, nrows, ncols, thread_init, thread_attach,
+    return job_register_ex(p, kind, nrows, ncols, thread_init,
                            cell_fn, for_fn, ctx, row_ready, gate_ctx, 0, NULL);
 }
 
@@ -1708,14 +1488,13 @@ static void job_wait(struct ntp_pool *p, struct ntp_job *j)
 
 void ntp_wavefront_gated(ntp_pool_t *p, int nrows, int ncols,
                          void (*thread_init)(void *, int),
-                         void (*thread_attach)(void *, int),
                          void (*cell_fn)(void *, int, int, int), void *ctx,
                          int (*row_ready)(void *, int), void *gate_ctx)
 {
     if (nrows <= 0 || ncols <= 0)
         return;
     struct ntp_job *j = job_register(p, 0, nrows, ncols, thread_init,
-                                     thread_attach, cell_fn, NULL, ctx,
+                                     cell_fn, NULL, ctx,
                                      row_ready, gate_ctx);
     if (!j) {
         /* Progress-array OOM. The caller cannot retry (this returns void and
@@ -1725,7 +1504,6 @@ void ntp_wavefront_gated(ntp_pool_t *p, int nrows, int ncols,
  * 2026-09-04 review: before this, an OOM here committed a frame from
  * uninitialised macroblock decisions. */
         if (thread_init) thread_init(ctx, 0);
-        if (thread_attach) thread_attach(ctx, 0);
         for (int r = 0; r < nrows; r++) {
             while (row_ready && !row_ready(gate_ctx, r))
                 sched_yield();
@@ -1741,7 +1519,7 @@ void ntp_wavefront(ntp_pool_t *p, int nrows, int ncols,
                    void (*thread_init)(void *, int),
                    void (*cell_fn)(void *, int, int, int), void *ctx)
 {
-    ntp_wavefront_gated(p, nrows, ncols, thread_init, NULL, cell_fn, ctx,
+    ntp_wavefront_gated(p, nrows, ncols, thread_init, cell_fn, ctx,
                         NULL, NULL);
 }
 
@@ -1772,7 +1550,7 @@ void ntp_wavefront_batch(ntp_pool_t *p, int n, const ntp_wf_spec_t *spec)
             ntp_tls_prio = prio;
             int table_full = 0;
             jobs[i] = job_register_ex(p, 0, spec[i].nrows, spec[i].ncols,
-                                      spec[i].thread_init, NULL, spec[i].cell_fn,
+                                      spec[i].thread_init, spec[i].cell_fn,
                                       NULL, spec[i].ctx, NULL, NULL,
                                       held > 0, &table_full);
             if (!jobs[i] && table_full)
@@ -1803,7 +1581,7 @@ void ntp_parallel_for(ntp_pool_t *p, int n,
 {
     if (n <= 0)
         return;
-    struct ntp_job *j = job_register(p, 1, n, 1, NULL, NULL, NULL, for_fn, ctx,
+    struct ntp_job *j = job_register(p, 1, n, 1, NULL, NULL, for_fn, ctx,
                                      NULL, NULL);
     if (!j) {                            /* progress OOM: run it here */
         for (int i = 0; i < n; i++)

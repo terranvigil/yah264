@@ -113,6 +113,8 @@ file.
 
 ### Runtime overrides
 
+Read only in a build configured with `-Ddev_knobs=true`, except `YAH264_NO_ASM`.
+
 | variable | effect |
 |---|---|
 | `Y264_SIMD_FORCE` | Caps one binary at a lower tier: `none`, `sse4`, `avx2`, `avx512` on x86-64; `neon` (no SVE), `sve128` (dispatch as a 128-bit part would), `sve`, `sve2` on aarch64. Names for the other architecture are inert. An unknown value changes nothing, so a typo can't silently drop to C. |

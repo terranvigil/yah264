@@ -56,7 +56,8 @@ with open(W + "/ranges.txt", "w") as o:
 PY
 fail=0; n=0
 while read -r g a b; do
-    "$BIN" --input-y4m "$W/g$g.y4m" --crf "$CRF" --threads "$K" --gop-threads "$K" "$@" -o "$W/alone$g.264" 2>/dev/null
+    "$BIN" --input-y4m "$W/g$g.y4m" --crf "$CRF" --threads "$K" --gop-threads "$K" "$@" -o "$W/alone$g.264" 2>"$W/alone.log" \
+        || { echo "  FAIL GOP $g frames $a-$((b-1)): the alone encode failed: $(head -1 "$W/alone.log")"; exit 1; }
     [ -s "$W/alone$g.264" ] || { echo "  FAIL GOP $g frames $a-$((b-1)): the alone encode produced nothing"; exit 1; }
     if cmp -s "$W/seg$g.264" "$W/alone$g.264"; then echo "  ok   GOP $g frames $a-$((b-1)) ($(stat -f %z "$W/seg$g.264") bytes)"; elif [ "$T" = 1 ]; then echo "  FAIL GOP $g frames $a-$((b-1)): alone differs from its segment at --threads 1"; fail=2; else echo "  WARN GOP $g frames $a-$((b-1)): alone differs from its segment (informational)"; fail=1; fi
     n=$((n+1))

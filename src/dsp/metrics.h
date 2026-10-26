@@ -86,19 +86,6 @@ typedef void (*y264_intra16_satd_trio_fn)(const pixel *src, int s_stride,
                                          const pixel *top, const pixel *left,
                                          int dc, int costs[3]);
 
-/* Metric of an 8x8 source block against the ROUNDED AVERAGE of two
- * reference blocks sharing a stride, (a + b + 1) >> 1 per sample -- the
- * quarter-pel sample formed from its two nearest half-pel (or whole) samples,
- * scored without materialising it. a == b is legal and scores the plain
- * block (the average of a sample with itself is the sample). The x4 forms
- * take four (a, b) pairs; every score equals the single form exactly. */
-typedef int (*y264_avg_metric_fn)(const pixel *src, int s_stride,
-                                  const pixel *a, const pixel *b, int r_stride);
-typedef void (*y264_avg_metric_x4_fn)(const pixel *src, int s_stride,
-                                      const pixel *const a[4],
-                                      const pixel *const b[4],
-                                      int r_stride, int scores[4]);
-
 typedef struct {
     y264_sad_fn  sad[Y264_PU_COUNT];
     y264_sad_quad_fn sad_quad[Y264_PU_COUNT];
@@ -110,8 +97,6 @@ typedef struct {
  * loop wrappers over the NEON satd4x4. Callers loop these for other sizes. */
     y264_satd_fn satd8x8;
     y264_satd_quad_fn satd_quad_8x8;    /* NULL is legal: callers fall back to satd8x8 */
-    y264_avg_metric_fn    avg_sad8x8,    avg_satd8x8;     /* see y264_avg_metric_fn */
-    y264_avg_metric_x4_fn avg_sad_quad_8x8, avg_satd_quad_8x8;
     /* SATD of src against (p + q + 1) >> 1 without building the average, by
      * partition shape; p and q share stride ps. A NULL entry is legal (the
      * shapes under 8x8, and every shape on tiers without a kernel): callers

@@ -292,51 +292,6 @@ static int run_satd_quad(const char *name, satdx4fn kern)
     return bad;
 }
 
-/* ---- averaged-reference metrics (the lowres quarter-pel probes) ----------
- * One source block against the rounded average of two reference blocks. The
- * pairs cover a == b (a plain block), neighbouring blocks one sample apart on
- * either axis (the half/whole pairings a quarter-pel read makes) and far
- * apart ones; every score must equal the C reference exactly. */
-typedef int  (*avgfn)(const pixel *, int, const pixel *, const pixel *, int);
-typedef void (*avgx4fn)(const pixel *, int, const pixel *const[4],
-                        const pixel *const[4], int, int[4]);
-
-static int run_avg_metric(const char *name, avgfn one, avgx4fn four, int satd)
-{
-    int bad = 0;
-    refs();
-    avgfn r1 = satd ? ref.avg_satd8x8 : ref.avg_sad8x8;
-    for (int t = 0; t < TRIALS; t++) {
-        plane();
-        if (t == 0) memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel));
-        const pixel *a[4] = { pb, pb + 1, pb + STRIDE, pb + 5 * STRIDE + 7 };
-        const pixel *b[4] = { pb, pb + 2, pb + 2 * STRIDE + 1, pb + 17 * STRIDE + 40 };
-        int s[4], e[4];
-        four(pa, STRIDE, a, b, STRIDE, s);
-        for (int k = 0; k < 4; k++) {
-            e[k] = r1(pa, STRIDE, a[k], b[k], STRIDE);
-            int o = one(pa, STRIDE, a[k], b[k], STRIDE);
-            if (o != e[k] && !bad++)
-                ca_fail("%s single: pair %d %d vs %d", name, k, o, e[k]);
-        }
-        if (memcmp(s, e, sizeof s) && !bad++)
-            ca_fail("%s x4: {%d,%d,%d,%d} vs {%d,%d,%d,%d}", name,
-                    s[0], s[1], s[2], s[3], e[0], e[1], e[2], e[3]);
-    }
-    if (ca_bench) {
-        const pixel *a[4] = { pb, pb + 1, pb + STRIDE, pb + 5 * STRIDE + 7 };
-        const pixel *b[4] = { pb + 1, pb + 2, pb + 2 * STRIDE + 1, pb + 5 * STRIDE + 8 };
-        int s[4];
-        volatile int sink = 0;
-        CA_BENCH2(name, (four(pa, STRIDE, a, b, STRIDE, s), sink += s[0]),
-                  (sink += r1(pa, STRIDE, a[0], b[0], STRIDE) + r1(pa, STRIDE, a[1], b[1], STRIDE)
-                         + r1(pa, STRIDE, a[2], b[2], STRIDE) + r1(pa, STRIDE, a[3], b[3], STRIDE)));
-        (void)sink;
-    }
-    return bad;
-}
-
 /* ---- single-plane energies ----------------------------------------------- */
 
 static int run_hadamard_ac(const char *name, pixfn1 kern)
@@ -944,10 +899,6 @@ static int t_sa8d16x16(void)
 { refs(); return run_metric2("sa8d16x16", y264_sa8d_16x16_neon, ref.sa8d16x16, 16, 16); }
 static int t_satd_quad_8x8(void)
 { return run_satd_quad("satd_quad_8x8", y264_satd_quad_8x8_neon); }
-static int t_avg_sad8x8(void)
-{ return run_avg_metric("avg_sad8x8", y264_avg_sad_8x8_neon, y264_avg_sad_quad_8x8_neon, 0); }
-static int t_avg_satd8x8(void)
-{ return run_avg_metric("avg_satd8x8", y264_avg_satd_8x8_neon, y264_avg_satd_quad_8x8_neon, 1); }
 static int t_hadamard_ac(void)
 { return run_hadamard_ac("hadamard_ac8x8", y264_hadamard_ac_8x8_neon); }
 static int t_texture_ac4(void)
@@ -1227,37 +1178,6 @@ static int run_satd_avg(const struct satdavgrow *rows, int n)
     return bad;
 }
 
-/* The shared averaged-metric body checks values only. This adds the read
- * window for the x86 rows: the single with its two blocks a sample and a row
- * apart, and the batch with four pairs spread over one (8+3) x (8+2) union,
- * each at both tails beside the source window. */
-#if Y264_HAVE_SSE4  /* no SVE twin yet */
-static int pg_avg_metric(const char *name, avgfn one, avgx4fn four)
-{
-    size_t win = ca_pg_window_pix(STRIDE, 8 + 3, 8 + 2);
-    size_t swin = ca_pg_window_pix(STRIDE, 8, 8);
-    for (int tail = 0; tail <= 1; tail++) {
-        ca_pg gs, gr;
-        pixel *src = ca_pg_alloc(&gs, swin, tail);
-        pixel *r = ca_pg_alloc(&gr, win, tail);
-        const pixel *a[4] = { r, r + 1, r + STRIDE, r + 2 * STRIDE + 3 };
-        const pixel *b[4] = { r + 2 * STRIDE + 3, r, r + 3, r + STRIDE + 2 };
-        int s[4];
-        volatile int sink;
-        ca_pg_fill_pix(&gs, swin / sizeof(pixel));
-        ca_pg_fill_pix(&gr, win / sizeof(pixel));
-        ca_pg_arm(name);
-        sink = one(src, STRIDE, a[3], b[2], STRIDE);
-        sink += one(src, STRIDE, a[0], b[1], STRIDE);
-        four(src, STRIDE, a, b, STRIDE, s);
-        ca_pg_disarm();
-        (void)sink;
-        ca_pg_free(&gs);
-        ca_pg_free(&gr);
-    }
-    return 0;
-}
-#endif
 
 /* The shared batched-SATD body checks values only. This adds the read window
  * for the x86 rows, laid out as the batched SAD's is: four candidates at +0,
@@ -1340,20 +1260,6 @@ static int t_satd_avg_sse4(void)
         { "satd_avg_8x8_sse4",    8,  8, y264_satd_avg_8x8_sse4   },
     };
     return run_satd_avg(rows, 4);
-}
-static int t_avg_sad8x8_sse4(void)
-{
-    int bad = run_avg_metric("avg_sad8x8_sse4", y264_avg_sad_8x8_sse4,
-                             y264_avg_sad_quad_8x8_sse4, 0);
-    return bad ? bad : pg_avg_metric("avg_sad8x8_sse4", y264_avg_sad_8x8_sse4,
-                                     y264_avg_sad_quad_8x8_sse4);
-}
-static int t_avg_satd8x8_sse4(void)
-{
-    int bad = run_avg_metric("avg_satd8x8_sse4", y264_satd_avg_8x8_sse4,
-                             y264_avg_satd_quad_8x8_sse4, 1);
-    return bad ? bad : pg_avg_metric("avg_satd8x8_sse4", y264_satd_avg_8x8_sse4,
-                                     y264_avg_satd_quad_8x8_sse4);
 }
 static int t_sa8d8x8_sse4(void)
 { refs(); return run_metric2("sa8d8x8_sse4", y264_sa8d_8x8_sse4, ref.sa8d8x8, 8, 8); }
@@ -1444,20 +1350,6 @@ static int t_satd_avg_avx2(void)
         { "satd_avg_8x8_avx2",    8,  8, y264_satd_avg_8x8_avx2   },
     };
     return run_satd_avg(rows, 4);
-}
-static int t_avg_sad8x8_avx2(void)
-{
-    int bad = run_avg_metric("avg_sad8x8_avx2", y264_avg_sad_8x8_avx2,
-                             y264_avg_sad_quad_8x8_avx2, 0);
-    return bad ? bad : pg_avg_metric("avg_sad8x8_avx2", y264_avg_sad_8x8_avx2,
-                                     y264_avg_sad_quad_8x8_avx2);
-}
-static int t_avg_satd8x8_avx2(void)
-{
-    int bad = run_avg_metric("avg_satd8x8_avx2", y264_satd_avg_8x8_avx2,
-                             y264_avg_satd_quad_8x8_avx2, 1);
-    return bad ? bad : pg_avg_metric("avg_satd8x8_avx2", y264_satd_avg_8x8_avx2,
-                                     y264_avg_satd_quad_8x8_avx2);
 }
 static int t_sa8d8x8_avx2(void)
 { refs(); return run_metric2("sa8d8x8_avx2", y264_sa8d_8x8_avx2, ref.sa8d8x8, 8, 8); }
@@ -1673,8 +1565,6 @@ const ca_test ca_pixel_tests[] = {
     { "satd8x8",          "pixel", Y264_CPU_NEON,                    t_satd8x8 },
     { "satd16x16",        "pixel", Y264_CPU_NEON,                    t_satd16x16 },
     { "satd_quad_8x8",      "pixel", Y264_CPU_NEON,                    t_satd_quad_8x8 },
-    { "avg_sad8x8",       "pixel", Y264_CPU_NEON,                    t_avg_sad8x8 },
-    { "avg_satd8x8",      "pixel", Y264_CPU_NEON,                    t_avg_satd8x8 },
     { "sa8d8x8",          "pixel", Y264_CPU_NEON,                    t_sa8d8x8 },
     { "sa8d16x16",        "pixel", Y264_CPU_NEON,                    t_sa8d16x16 },
     { "hadamard_ac8x8",   "pixel", Y264_CPU_NEON,                    t_hadamard_ac },
@@ -1701,8 +1591,6 @@ const ca_test ca_pixel_tests[] = {
     { "satd16x8_sse4",         "pixel", Y264_CPU_SSE4_ALL, t_satd16x8_sse4 },
     { "satd8x16_sse4",         "pixel", Y264_CPU_SSE4_ALL, t_satd8x16_sse4 },
     { "satd_avg_sse4",         "pixel", Y264_CPU_SSE4_ALL, t_satd_avg_sse4 },
-    { "avg_sad8x8_sse4",       "pixel", Y264_CPU_SSE4_ALL, t_avg_sad8x8_sse4 },
-    { "avg_satd8x8_sse4",      "pixel", Y264_CPU_SSE4_ALL, t_avg_satd8x8_sse4 },
     { "satd_quad_8x8_sse4",      "pixel", Y264_CPU_SSE4_ALL, t_satd_quad_8x8_sse4 },
     { "sa8d8x8_sse4",          "pixel", Y264_CPU_SSE4_ALL, t_sa8d8x8_sse4 },
     { "sa8d16x16_sse4",        "pixel", Y264_CPU_SSE4_ALL, t_sa8d16x16_sse4 },
@@ -1726,8 +1614,6 @@ const ca_test ca_pixel_tests[] = {
     { "satd16x8_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_satd16x8_avx2 },
     { "satd8x16_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_satd8x16_avx2 },
     { "satd_avg_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_satd_avg_avx2 },
-    { "avg_sad8x8_avx2",       "pixel", Y264_CPU_AVX2_ALL, t_avg_sad8x8_avx2 },
-    { "avg_satd8x8_avx2",      "pixel", Y264_CPU_AVX2_ALL, t_avg_satd8x8_avx2 },
     { "satd_quad_8x8_avx2",      "pixel", Y264_CPU_AVX2_ALL, t_satd_quad_8x8_avx2 },
     { "sa8d8x8_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_sa8d8x8_avx2 },
     { "sa8d16x16_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_sa8d16x16_avx2 },

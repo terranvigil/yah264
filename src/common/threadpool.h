@@ -64,34 +64,26 @@ void ntp_wavefront(ntp_pool_t *p, int nrows, int ncols,
  * completes, and calls may overlap from different threads. ONE worker set
  * serves them all: an idle worker claims the next READY row from the OLDEST
  * job that has one (drain order bounds latency), so a stalled frame never
- * parks a worker another frame could use. With a single registered job this
- * reduces exactly to the classic wavefront above.
- *
- * When a claimed row stalls mid-row and other work is runnable, the worker
- * PARKS the row (a resumable continuation) and serves the other frame; only
- * the same worker later resumes it, so row-carried per-worker state survives.
- * Re-entering a job after running another one calls `thread_attach` (re-
- * install cheap thread-locals, e.g. the ME hpel registry) -- thread_init runs
- * only before FRESH rows, where all row state re-seeds. A job that has a
- * thread_init but no thread_attach is never parked (its rows stall in place,
- * v1 behaviour).
+ * holds a worker another frame could use. With a single registered job this
+ * reduces exactly to the classic wavefront above. A claimed row runs to its
+ * end on one worker; thread_init runs whenever a worker starts a row of a
+ * job other than the one it last ran, and all row state re-seeds there.
  *
  * ntp_wavefront_gated additionally takes an external per-row claim gate: row
  * `r` is only claimed once row_ready(gate_ctx, r) returns nonzero. The
  * predicate is called under the pool's internal mutex, so it must be cheap,
  * non-blocking and MONOTONIC (once true for a row it must stay true -- e.g.
  * an atomic watermark read). Whoever advances the gate's source must call
- * ntp_pool_kick so parked workers re-evaluate. Used by the staircase: a B
+ * ntp_pool_kick so idle workers re-evaluate. Used by the staircase: a B
  * frame's rows gate on the in-flight anchor's published consumable rows.
  */
 void ntp_wavefront_gated(ntp_pool_t *p, int nrows, int ncols,
                          void (*thread_init)(void *ctx, int thread_idx),
-                         void (*thread_attach)(void *ctx, int thread_idx),
                          void (*cell_fn)(void *ctx, int thread_idx, int row, int col),
                          void *ctx,
                          int (*row_ready)(void *gate_ctx, int row), void *gate_ctx);
 
-/* Wake parked workers to re-evaluate gated claims (call after advancing any
+/* Wake idle workers to re-evaluate gated claims (call after advancing any
  * row_ready gate's source). Cheap; safe from any thread. */
 void ntp_pool_kick(ntp_pool_t *p);
 

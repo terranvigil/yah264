@@ -171,4 +171,3 @@ Joining one cell's segments reproduced that cell's encode byte for byte.
   test is the long-form corpus ([corpus-sources.md](corpus-sources.md)).
 - `T=1 scripts/shot_determinism.sh` is the determinism gate. Without `T=1` it
   only reports.
-- `Y264_CUT_SPLIT_STAT=1` prints the pre-scan's time and the IDRs it placed.

@@ -30,7 +30,9 @@ import hashlib
 import json
 import math
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -296,6 +298,93 @@ def _packets(bitstream):
         return int(r.stdout.strip().split(",")[0])
     except ValueError:
         return None
+
+
+_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+# launchers a template may put in front of the encoder, with the options of
+# each that take a value
+_WRAPPERS = {
+    "env": ("-u", "-C", "-P", "-S"), "nice": ("-n",), "time": (),
+    "taskpolicy": ("-c", "-d", "-g", "-t", "-l", "-p"), "caffeinate": ("-w", "-t"),
+    "timeout": ("-s", "-k"),
+}
+
+
+def _resolve(w):
+    if os.path.isabs(w) or os.path.exists(w):
+        return os.path.abspath(w)
+    if os.sep in w:
+        return os.path.normpath(os.path.join(ROOT, w))
+    return shutil.which(w) or w
+
+
+_CD = re.compile(r"(^|[;&|(]\s*)cd\s")
+
+
+def _yah264_words(tmpl):
+    """Every yah264 a shell template runs, across pipes and command lists and
+    inside quoted command strings, as executable paths. None when one can't
+    be resolved: a name that isn't an executable file, or a path after a cd,
+    whose target we don't track."""
+    if _CD.search(tmpl):
+        return None if "yah264" in tmpl else []
+    try:
+        lex = shlex.shlex(tmpl, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        words = list(lex)
+    except ValueError:
+        return None
+    found = []
+    for w in words:
+        if " " in w:                        # a quoted command string
+            if "yah264" in w:
+                sub = _yah264_words(w)
+                if sub is None:
+                    return None
+                found += sub
+            continue
+        w = w.split("=", 1)[1] if _ASSIGN.match(w) else w     # YAH264=/path/yah264
+        if os.path.basename(w) == "yah264":
+            p = _resolve(w)
+            if not (os.path.isfile(p) and os.access(p, os.X_OK)):
+                return None
+            found.append(p)
+    return found
+
+
+def template_binary(tmpl):
+    """The program an encode template runs. A yah264 named anywhere in it (a
+    pipeline, a command list, an `sh -c` body) is that program; otherwise it's
+    the first word that is neither an env assignment nor a launcher (env,
+    nice, time, taskpolicy, caffeinate, timeout) or one of its options, as the
+    shell would find it. "" when a yah264 in it can't be resolved."""
+    ys = _yah264_words(tmpl)
+    if ys is None:
+        return ""
+    if ys:
+        return ys[0]
+    try:
+        words = shlex.split(tmpl)
+    except ValueError:
+        return ""
+    wrap, skip, need_arg = None, False, False
+    for w in words:
+        if skip:
+            skip = False
+        elif _ASSIGN.match(w):
+            pass
+        elif os.path.basename(w) in _WRAPPERS:
+            wrap = os.path.basename(w)
+            need_arg = wrap == "timeout"
+        elif wrap and w.startswith("-"):
+            skip = w in _WRAPPERS[wrap]
+        elif need_arg:
+            need_arg = False            # timeout's duration
+        else:
+            return _resolve(w)
+    return ""
 
 
 def coded_size_is(bitstream, w, h):
@@ -652,22 +741,31 @@ def main():
         os.makedirs(cache_dir, exist_ok=True)
 
     def _ckey(tmpl, clip, q):
-        binp = (shlex.split(tmpl)[0] if tmpl.strip() else "")
-        mt = os.path.getmtime(binp) if os.path.exists(binp) else 0
-        h = hashlib.sha1(f"{tmpl}|{clip}|{q}|{args.frames}|{mt}".encode()).hexdigest()[:20]
+        binp = template_binary(tmpl)
+        # no binary to key a rebuild on, or one a `cd` makes ambiguous: don't cache
+        if not (binp and os.path.isfile(binp)) or _CD.search(tmpl):
+            return None
+        mt = os.path.getmtime(binp)
+        # the encoder inherits the environment's knobs, so they're part of the key
+        envk = " ".join(f"{k}={v}" for k, v in sorted(os.environ.items())
+                        if k.startswith(("Y264_", "YAH264_")))
+        h = hashlib.sha1(f"{tmpl}|{clip}|{q}|{args.frames}|{mt}|{envk}".encode()).hexdigest()[:20]
         return os.path.join(cache_dir, h + ".264")
+
+    errs = {}
 
     def encode(tag, tmpl, clip, q):
         out = os.path.join(work, f"{clip}_{tag}_{q}.264")
-        if args.cache:
-            ck = _ckey(tmpl, clip, q)
+        ck = _ckey(tmpl, clip, q) if args.cache else None
+        if ck:
             if os.path.exists(ck):
                 return (tag, clip, q, ck)
         cmd = tmpl.format(src=shlex.quote(srcs[clip]), q=q, out=shlex.quote(out))
         r = sh(cmd)
         if r.returncode != 0 or not os.path.exists(out):
+            errs[(tag, clip, q)] = f"exit {r.returncode}: {r.stderr[-400:]}"
             return (tag, clip, q, None)
-        if args.cache:
+        if ck:
             try:
                 os.replace(out, ck); return (tag, clip, q, ck)
             except OSError:
@@ -685,7 +783,7 @@ def main():
     outs = {(t, c, q): o for t, c, q, o in results}
     if any(o is None for o in outs.values()):
         bad = [k for k, v in outs.items() if v is None]
-        sys.exit(f"bdcompare: encode failed for {bad[:3]}")
+        sys.exit(f"bdcompare: encode failed for {bad[:3]}\n{errs.get(bad[0], '')}")
 
     src_raw = {}
     if not args.vmaf:

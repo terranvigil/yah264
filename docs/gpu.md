@@ -41,14 +41,13 @@ The offload is 8-bit only. The library takes 8-bit samples and the 10-bit
 library's `pixel` is 16 bits, so `src/encoder/gpu.c` compiles to stubs in the
 10-bit build.
 
-### The two offloads in `src/encoder/gpu.c`
+### The offload in `src/encoder/gpu.c`
 
-Both are runtime knobs, both default to 0, and both fall back to the CPU
-search on any failure.
+It's a runtime knob, default 0, and it falls back to the CPU search on any
+failure.
 
 | knob | default | what it does |
 |---|---|---|
-| `Y264_GPU_LOWRES` | 0 | The GPU runs an exhaustive integer-pel window search per 8x8 lowres block and hands the CPU a starting vector. The CPU keeps its quarter-pel refinement, since that precision matters to the lowres cost. The half-window is 8 lowres whole pels: 16 would match the CPU diamond's reach, but 8 is cheaper (0.53 ms against 1.52 ms per leg at 720p). |
 | `Y264_GPU_PHASEA` | 0 | Offloads the mb-tree's per-frame lowres legs. Each frame push submits a round of quarter-pel searches against the previous `bframes + 1` frames. The kernel returns, per 8x8 block, the best quarter-pel vector with its SATD plus the zero-vector SATD, and the CPU prices rate between those two. Covered legs skip the CPU search entirely. Each round searches a range of 8 and carries 4 pushes. |
 | `Y264_GPQ_WARMUP` | 24 | Pushes that get no GPU coverage, so the background Metal init runs behind the first frames instead of stalling the chain. |
 
@@ -102,7 +101,6 @@ developer here:
 | Runtime knobs default to 0 even when linked | Linking decides what's in the binary. Arming it is a measurement choice. |
 | Submit/wait API | The first synchronous version measured 1.86x slower at 12 threads, and still 1.33x slower at a search range where the GPU did almost no work. |
 | One Metal context per process | Per-handle contexts made the armed build 21% to 171% slower on short board cells, and the all-intra cells (no GPU work, identical output) paid the most. That was pure init. |
-| GPU supplies integer seeds, CPU keeps sub-pel | Our lowres search is quarter-pel and the library's first search was integer-pel. Dropping the quarter-pel step would change the lookahead's costs. |
 | Library in its own repository, pinned by a wrap | Vendored copies drift. An unpinned include lets one consumer's change move another's validated output. |
 | Metal only, no OpenCL | The machines this targets are Apple Silicon. OpenCL is on the refusal list. |
 
@@ -123,8 +121,8 @@ The 10-bit pipeline the library design reserves isn't built either.
 
 ## Measuring it
 
-- **Build it:** `meson setup build-gpu -Dgpu=enabled` on an Apple Silicon Mac.
-- **Arm it per run:** `Y264_GPU_PHASEA=1` or `Y264_GPU_LOWRES=1`.
+- **Build it:** `meson setup build-gpu -Dgpu=enabled -Ddev_knobs=true` on an Apple Silicon Mac.
+- **Arm it per run:** `Y264_GPU_PHASEA=1`.
 - **Isolate the floor:** `Y264_GPU_PHASEA=1 Y264_GPQ_WARMUP=10000` arms the
   offload but never submits, so only the background `ngc_open` runs. That
   reads the per-process floor (about +16 ms on bus and +17 ms on stefan).

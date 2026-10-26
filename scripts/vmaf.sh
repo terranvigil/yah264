@@ -30,7 +30,8 @@ frflag=""; [ "$frames" -gt 0 ] 2>/dev/null && frflag="--frames $frames"
 enccfg="${ENCCFG:---crf $crf --cabac --bframes 2}"
 
 # shellcheck disable=SC2086
-"$CLI" --input-y4m "$clip" $enccfg $frflag -o "$wd/out.264" 2>/dev/null
+"$CLI" --input-y4m "$clip" $enccfg $frflag -o "$wd/out.264" 2>"$wd/err" ||
+    { echo "vmaf.sh: the encode failed: $(head -1 "$wd/err")"; exit 1; }
 bytes=$(wc -c < "$wd/out.264")
 ffmpeg -v error -y -i "$wd/out.264" -fps_mode passthrough -pix_fmt yuv420p10le -strict -1 "$wd/dec.y4m"
 

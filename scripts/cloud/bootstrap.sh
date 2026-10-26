@@ -280,7 +280,7 @@ st_build_y264() {
     local opts=(--buildtype=release -Dsimd=auto)
     [ "$CLOUD" = 1 ] && opts+=(-Davx512=true)
     ( cd "$C_SRC" || exit 1
-      [ -f "$C_B8/build.ninja" ] || meson setup "$C_B8" "${opts[@]}" || exit 1
+      [ -f "$C_B8/build.ninja" ] || meson setup "$C_B8" -Ddev_knobs=true "${opts[@]}" || exit 1
       ninja -C "$C_B8" -j"$JOBS" ) || return 1
     echo "cpu (the binary's own CPUID): $(c_y264_cpu_name "$C_B8/tools/checkasm/checkasm")"
     return 0
@@ -288,7 +288,7 @@ st_build_y264() {
 
 st_build_y264_10() {
     ( cd "$C_SRC" || exit 1
-      [ -f "$C_B10/build.ninja" ] || meson setup "$C_B10" --buildtype=release -Dbit_depth=10 || exit 1
+      [ -f "$C_B10/build.ninja" ] || meson setup "$C_B10" -Ddev_knobs=true --buildtype=release -Dbit_depth=10 || exit 1
       ninja -C "$C_B10" -j"$JOBS" ) || return 1
     return 0
 }
@@ -420,7 +420,7 @@ st_build_ffmpeg() {
     [ -d "$C_FFB/prefix-x264-asm/lib/pkgconfig" ] || { c_skip "no installed libx264; the x264 stage did not finish"; return; }
 
     ( cd "$C_SRC" || exit 1
-      meson setup "$CLOUD_WORK/build-shared" --buildtype=release -Dsimd=auto \
+      meson setup "$CLOUD_WORK/build-shared" -Ddev_knobs=true --buildtype=release -Dsimd=auto \
           --default-library=shared --prefix="$C_FFB/prefix-y264" >/dev/null 2>&1 \
         || meson configure "$CLOUD_WORK/build-shared" --prefix="$C_FFB/prefix-y264" || exit 1
       ninja -C "$CLOUD_WORK/build-shared" -j"$JOBS" || exit 1

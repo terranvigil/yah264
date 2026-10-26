@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "motion.h"
+#include "../common/env.h"
 #include "../common/iprof.h"
 #include "yah264.h"            /* YAH264_ME_* -- the --me values we gate on */
 #include "../dsp/interp.h"
@@ -144,9 +145,6 @@ void y264_me_set_subpel(int subpel)
 static _Thread_local struct me_tls {
     const y264_hpel_ref_t *hpel;     /* half-pel plane registry (see motion.h) */
     int hpel_n, hpel_stride;
-    int orc_valid;                   /* lowres oracle (single-shot) */
-    long orc_cost;
-    int orc_mvx, orc_mvy;
     int hpel_thresh[2];              /* half-pel qpel-skip threshold, PER LIST */
     int me_list;                     /* which list the current search is on */
     int me_isb;                      /* oracle attribution: B-frame search */
@@ -160,7 +158,7 @@ static _Thread_local struct me_tls {
     int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
     int me_xmax, me_xmaxf;           /* --intra-refresh horizontal qpel caps:
  * whole-pel vectors, fractional vectors */
-} s_met = { NULL, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0,
+} s_met = { NULL, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, INT_MAX, INT_MAX };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
@@ -175,150 +173,6 @@ void y264_me_set_stq(int q) { s_met.stq = q; }
 /* Half-pel plane operands per quarter-pel position: one table now, in interp.h,
  * shared with the y264_mc_luma_hp kernel that reads the planes. The zero-copy
  * probes below need only plane a, and only at even (half/integer) positions. */
-
-/* --- lazy-hpel census -------------------------------------------------------
- * Which row bands of a built half-pel plane does anything ever read? A band is
- * the unit an on-touch build would have to fill, so the untouched share is that
- * build's whole ceiling. Off unless Y264_HPEL_CENSUS=<band rows>; the marking
- * is not atomic, so run it at --threads 1. Bands are indexed in plane rows
- * offset by HPC_OFF so the border rows (negative) index non-negatively. */
-#define HPC_MAX   72
-#define HPC_ROWS  2048
-#define HPC_OFF   64
-#define HPC_COLS  16            /* column tiles of HPC_CW px, for the 2D bound */
-#define HPC_CW    128
-struct hpc_ent {
-    const void *h;              /* the H plane pointer identifies the triple */
-    int lo, hi;                 /* rows built since the last flush (index space) */
-    int ncol;                   /* column tiles this plane actually spans */
-    unsigned char row[HPC_ROWS];
-    unsigned char cell[HPC_ROWS][HPC_COLS];
-};
-static struct hpc_ent s_hpc[HPC_MAX];
-static int s_hpc_n, s_hpc_band = -1;
-static long long s_hpc_built, s_hpc_used, s_hpc_rows, s_hpc_rows_used;
-static long long s_hpc_cells, s_hpc_cells_used;
-static long long s_hpc_builds, s_hpc_marks;
-
-int y264_hpel_census_on(void)
-{
-    if (s_hpc_band < 0) {
-        const char *e = getenv("Y264_HPEL_CENSUS");
-        s_hpc_band = e ? atoi(e) : 0;
-        if (s_hpc_band < 0) s_hpc_band = 0;
-    }
-    return s_hpc_band;
-}
-
-/* Fold one entry's marks into the run totals and clear it. */
-static void hpc_flush(struct hpc_ent *e)
-{
-    if (e->hi <= e->lo) return;
-    int b = s_hpc_band;
-    int b0 = e->lo / b, b1 = (e->hi + b - 1) / b;
-    for (int k = b0; k < b1; k++) {
-        int y0 = k * b, y1 = y0 + b;
-        if (y0 < e->lo) y0 = e->lo;
-        if (y1 > e->hi) y1 = e->hi;
-        int hit = 0;
-        for (int y = y0; y < y1; y++) hit |= e->row[y];
-        s_hpc_built++;
-        s_hpc_used += hit != 0;
-    }
-    s_hpc_rows += e->hi - e->lo;
-    for (int y = e->lo; y < e->hi; y++) {
-        s_hpc_rows_used += e->row[y] != 0;
-        for (int x = 0; x < e->ncol; x++) s_hpc_cells_used += e->cell[y][x] != 0;
-    }
-    s_hpc_cells += (long long)(e->hi - e->lo) * e->ncol;
-    memset(e->row + e->lo, 0, (size_t)(e->hi - e->lo));
-    memset(e->cell[e->lo], 0, (size_t)(e->hi - e->lo) * HPC_COLS);
-    e->lo = e->hi = 0;
-}
-
-static struct hpc_ent *hpc_find(const void *h)
-{
-    for (int i = 0; i < s_hpc_n; i++)
-        if (s_hpc[i].h == h) return &s_hpc[i];
-    if (s_hpc_n >= HPC_MAX) return NULL;
-    s_hpc[s_hpc_n].h = h;
-    return &s_hpc[s_hpc_n++];
-}
-
-void y264_hpel_census_built(const void *h, int y0, int y1, int stride)
-{
-    if (!y264_hpel_census_on() || !h) return;
-    struct hpc_ent *e = hpc_find(h);
-    if (!e) return;
-    e->ncol = (stride + HPC_OFF + HPC_CW - 1) / HPC_CW;   /* real tiles only */
-    if (e->ncol > HPC_COLS) e->ncol = HPC_COLS;
-    y0 += HPC_OFF; y1 += HPC_OFF;
-    if (y0 < 0) y0 = 0;
-    if (y1 > HPC_ROWS) y1 = HPC_ROWS;
-    if (y1 <= y0) return;
-    if (y0 < e->hi) hpc_flush(e);              /* overlaps -> this is a rebuild */
-    if (e->hi == e->lo) e->lo = y0;
-    e->hi = y1;
-    s_hpc_builds++;
-}
-
-/* Mark the w x n window at (x, y) of the plane triple whose H plane is `h` as
- * read. The column tiles are the 2D bound only -- the item builds row bands. */
-static void hpc_mark(const void *h, int x, int y, int w, int n)
-{
-    if (!h) return;
-    struct hpc_ent *e = hpc_find(h);
-    if (!e) return;
-    int y0 = y + HPC_OFF, y1 = y0 + n + 1;     /* +1: the fy==3 / 2-tap row */
-    if (y0 < 0) y0 = 0;
-    if (y1 > HPC_ROWS) y1 = HPC_ROWS;
-    int x0 = (x + HPC_OFF) / HPC_CW, x1 = (x + HPC_OFF + w) / HPC_CW;
-    if (x0 < 0) x0 = 0;
-    if (x1 > HPC_COLS - 1) x1 = HPC_COLS - 1;
-    for (int i = y0; i < y1; i++) {
-        e->row[i] = 1;
-        for (int j = x0; j <= x1; j++) e->cell[i][j] = 1;
-    }
-    s_hpc_marks++;
-}
-
-/* Same, but only when the qpel phase actually reads an H/V/C plane -- a pure
- * integer position reads the reference plane and needs no build. */
-static void hpc_mark_q(const void *h, int qi, int x, int y, int w, int n)
-{
-    if (y264_qpel_plane_a[qi] || ((qi & 5) && y264_qpel_plane_b[qi])) hpc_mark(h, x, y, w, n);
-}
-
-__attribute__((destructor)) static void hpc_dump(void)
-{
-    if (!s_hpc_band) return;
-    for (int i = 0; i < s_hpc_n; i++) hpc_flush(&s_hpc[i]);
-    if (!s_hpc_built) return;
-    fprintf(stderr, "=== Y264_HPEL_CENSUS band=%d ===\n", s_hpc_band);
-    fprintf(stderr, "  builds %lld  planes %d  marks %lld\n",
-            s_hpc_builds, s_hpc_n, s_hpc_marks);
-    fprintf(stderr, "  bands built %lld  touched %lld  (%.1f%%)  untouched %.1f%%\n",
-            s_hpc_built, s_hpc_used, 100.0 * (double)s_hpc_used / (double)s_hpc_built,
-            100.0 - 100.0 * (double)s_hpc_used / (double)s_hpc_built);
-    fprintf(stderr, "  rows  built %lld  touched %lld  (%.1f%%)\n",
-            s_hpc_rows, s_hpc_rows_used,
-            100.0 * (double)s_hpc_rows_used / (double)s_hpc_rows);
-    fprintf(stderr, "  cells built %lld  touched %lld  (%.1f%%)  [%dpx tiles, the "
-            "2D bound]\n", s_hpc_cells, s_hpc_cells_used,
-            100.0 * (double)s_hpc_cells_used / (double)s_hpc_cells, HPC_CW);
-}
-
-/* --- lowres oracle: the per-block lookahead prior the escalation gates
- * condition on. The caller sets it before a 16x16 ref0 search (where lr_seed
- * maps cleanly) and clears it otherwise. The search only READS it to record
- * distributions -- no gate acts, so the default is byte-identical.
- * Thread-local like s_met.hpel (safe under the wavefront).
- * docs/motion-and-modes.md. */
-void y264_me_set_oracle(int valid, long cost, int mvx, int mvy)
-{
-    s_met.orc_valid = valid;
-    s_met.orc_cost = cost; s_met.orc_mvx = mvx; s_met.orc_mvy = mvy;
-}
 
 /* The half-pel threshold (a subpel-refinement rule): after half-pel refinement,
  * skip quarter-pel refinement on any candidate whose SATD-scored cost*7/8 exceeds
@@ -373,7 +227,7 @@ void y264_me_set_ref16(int valid, int mvx, int mvy)
  *                    D qpel (L1) from the 16x16 winner skips quarter-pel */
 static int env_int(const char *name, int dflt)
 {
-    const char *e = getenv(name);
+    const char *e = y264_env(name);
     return e ? atoi(e) : dflt;
 }
 static int me_minw(void)  { static int v = -1; if (v < 0) v = env_int("Y264_ME_MINW", 1920); return v; }
@@ -403,43 +257,6 @@ void y264_me_set_list(int l) { s_met.me_list = (l == 1); }
 static int hpel_thresh_on(void)
 {
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 7;
-}
-
-/* --- ME instrumentation (Y264_ME_STATS). Zero cost when off (one predicted
- * branch on a once-read flag). Run --threads 1 for a clean single-thread merge
- * (the accumulators are a plain global; the diagnostic doesn't need threading).
- * The 2D histogram over (hex_bcost/oracle_cost, |hex_mv - oracle_mv|) with the
- * UMH-improved rate per cell is what sets the escalation gate's (alpha, r);
- * the subpel-iteration histogram sets the subpel budget. --- */
-#define ORC_RB 16      /* ratio buckets: floor(hex_bcost*4/oracle_cost), capped */
-#define ORC_DB 6       /* mv-distance buckets (qpel): 0, <=4, <=8, <=16, <=32, >32 */
-static struct me_stats {
-    long searches, s16_oracle;                 /* all searches; 16x16-with-oracle */
-    long umh_ran, umh_improved;                /* over all UMH-eligible searches */
-    long cell_n[ORC_RB][ORC_DB];               /* joint histogram, 16x16-oracle */
-    long cell_umh_imp[ORC_RB][ORC_DB];         /* of which UMH then improved */
-    double cell_umh_gain[ORC_RB][ORC_DB];      /* sum (hex_bcost - umh_bcost) */
-    long subpel_iters[3][9];                    /* [level 2=hpel,1=qpel][iters 0..8] */
-    long probes_int, probes_sub;                /* total, to size current cost */
-    /* Of the SATD-gain UMH buys, how far (integer pels) is the
- * improved MV from the hex result? NEAR = a better local search/seed would
- * have found it (the cheap search is under-powered); FAR = a separated
- * cost-surface minimum only a wide scan reaches
- * (UMH intrinsic). Buckets by |final-hex| in integer pels: 0, 1, 2, <=4,
- * <=8, >8. Gain-weighted (what matters is quality bought, not MB count). */
-    long   umhdist_n[6];
-    double umhdist_gain[6];
-} g_ms;
-static int umhdist_bucket(int px)
-{
-    if (px <= 0) return 0; if (px == 1) return 1; if (px == 2) return 2;
-    if (px <= 4) return 3; if (px <= 8) return 4; return 5;
-}
-static int me_stats_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_STATS"); v = e ? atoi(e) : 0; }
-    return v;
 }
 
 /* --- Y264_ME_ETSTAT: what an integer-search EARLY-OUT would cost and save.
@@ -474,7 +291,7 @@ static struct me_et_stats {
 static int me_et_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ETSTAT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_ME_ETSTAT"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -511,12 +328,6 @@ static int me_et_stat_on(void)
  * quality-safe half -- their seed is the refined parent MV -- while a 16x16
  * exit is only safe when the seed is a near-perfect match. */
 #define ME_ET_K16 4
-static int dist_bucket(int d)
-{
-    if (d <= 0) return 0; if (d <= 4) return 1; if (d <= 8) return 2;
-    if (d <= 16) return 3; if (d <= 32) return 4; return 5;
-}
-
 /* DIAG: force the non-hpel fallback everywhere. An accessor rather than a
  * static inside y264_me_mc_luma_s so y264_me_warm_statics can resolve it: it
  * was read inline on wavefront workers of concurrent GOP encoders, and its
@@ -524,7 +335,7 @@ static int dist_bucket(int d)
 static int diag_nohpel(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIAG_NOHPEL"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_DIAG_NOHPEL"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -553,7 +364,6 @@ void y264_me_mc_luma_s(pixel *dst, int dstride, const pixel *ref, int rs,
     if (diag_nohpel()) hp_h = NULL;
     if (hp_h && ix >= -B && iy >= -B &&
         ix + w + 1 <= pw + B && iy + h + 1 <= ph + B) {
-        if (s_hpc_band > 0) hpc_mark_q(hp_h, (mvy & 3) * 4 + (mvx & 3), ix, iy, w, h);
         y264_mc_luma_hp_i(dst, dstride, ref, hp_h, hp_v, hp_c, rs,
                           ix, iy, mvx & 3, mvy & 3, w, h);
     }
@@ -841,9 +651,6 @@ static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, in
  * writes exactly these pixels, so the metric is byte-identical. Quarter-pel
  * (fx|fy odd) still needs the 2-tap average build. */
     if (inb && c->f1 && !(fx & 1) && !(fy & 1)) {
-        if (s_hpc_band > 0)
-            hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
-                       c->by + (mvy >> 2), c->w, c->h);
         const pixel *s = c->hp[y264_qpel_plane_a[fy * 4 + fx]]
                        + (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
         NLED(getref_ptr, 1);
@@ -853,9 +660,6 @@ static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, in
         return d + mv_cost_ctx(c, mvx, mvy);
     }
     if (inb) {
-        if (s_hpc_band > 0)
-            hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
-                       c->by + (mvy >> 2), c->w, c->h);
         /* a quarter position is the rounded average of two planes; SATD it
          * straight off them when the shape tiles into 8x8 (the same samples
          * the builder below would store) */
@@ -906,9 +710,6 @@ static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
             return 0;
         r[k] = c->hp[y264_qpel_plane_a[fy * 4 + fx]]
              + (ptrdiff_t)(c->by + (my >> 2)) * c->rs + c->bx + (mx >> 2);
-        if (s_hpc_band > 0)
-            hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mx >> 2),
-                       c->by + (my >> 2), c->w, c->h);
     }
     int s[8];
     NLED(probe_sub, n); NLED(getref_ptr, n);
@@ -940,7 +741,7 @@ static int no_umh(void)
 static int hex_oracle(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_HEX_ORACLE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_HEX_ORACLE"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -966,7 +767,7 @@ void y264_me_set_xmax(int xmax_qpel, int xmaxf_qpel)
 static int umh_range(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_UMH_RANGE"); v = e ? atoi(e) : 16; }
+    if (v < 0) { const char *e = y264_env("Y264_UMH_RANGE"); v = e ? atoi(e) : 16; }
     return v > 0 ? v : 16;
 }
 
@@ -1025,11 +826,6 @@ static int me_search_core(const pixel *src, int ss,
                           int *out_mvx, int *out_mvy, int *out_satd)
 {
     IP_SCOPE(IP_ME);
-    /* Consume the oracle single-shot: it applies to exactly this search, so no
- * stale prior leaks into sub-partition / B / other-ref searches that never set it. */
-    int  orc_v = s_met.orc_valid; long orc_c = s_met.orc_cost;
-    int  orc_mx = s_met.orc_mvx, orc_my = s_met.orc_mvy;
-    s_met.orc_valid = 0;
 
     /* Resolve this reference's precomputed half-pel planes (once per search). */
     const pixel *hp_h = NULL, *hp_v = NULL, *hp_c = NULL;
@@ -1140,7 +936,6 @@ static int me_search_core(const pixel *src, int ss,
  * lowres seeds frequently coincide after fpel alignment. */
     int bmx = 0, bmy = 0;
     int bcost = 0;
-    const int stats = me_stats_on();
     if (s_met.qpo) {                /* refine a given vector */
         bmx = s_met.qpox; bmy = s_met.qpoy;
         goto qpel_only;
@@ -1386,8 +1181,7 @@ static int me_search_core(const pixel *src, int ss,
  * RARE distant finds are the load-bearing part on motion. The wide scan is
  * not replaceable by cheap local refinement. */
     /* Capture the post-hex state (the gate would decide here). */
-    int hex_bcost = bcost, hex_bmx = bmx, hex_bmy = bmy;
-    if (stats) g_ms.searches++;
+    int hex_bmx = bmx, hex_bmy = bmy;
     /* UMH: uneven cross + multi-hexagon grid, bounded by the search range, to
  * escape the wider local minima the local hex stalls in on high-motion
  * content. The cross is searched fully in x but half in y (camera
@@ -1467,27 +1261,6 @@ static int me_search_core(const pixel *src, int ss,
             }
         }
     }
-    /* Record what UMH bought and where -- the gate-setting distribution. */
-    if (stats && umh) {
-        int umh_imp = bcost < hex_bcost;
-        g_ms.umh_ran++; g_ms.umh_improved += umh_imp;
-        if (umh_imp) {
-            int px = (abs(bmx - hex_bmx) + abs(bmy - hex_bmy)) >> 2;  /* qpel->pel */
-            int b = umhdist_bucket(px);
-            g_ms.umhdist_n[b]++;
-            g_ms.umhdist_gain[b] += (double)(hex_bcost - bcost);
-        }
-        if (w == 16 && h == 16 && orc_v && orc_c > 0) {
-            g_ms.s16_oracle++;
-            int rb = (int)((long)hex_bcost * 4 / orc_c);
-            if (rb < 0) rb = 0; if (rb >= ORC_RB) rb = ORC_RB - 1;
-            int db = dist_bucket(abs(hex_bmx - orc_mx) + abs(hex_bmy - orc_my));
-            g_ms.cell_n[rb][db]++;
-            g_ms.cell_umh_imp[rb][db] += umh_imp;
-            g_ms.cell_umh_gain[rb][db] += (double)(hex_bcost - bcost);
-        }
-    }
-
     /* Small-diamond finish: refine to the nearest integer-pel minimum. */
     static const int dx[4] = { 4, -4, 0, 0 };
     static const int dy[4] = { 0, 0, 4, -4 };
@@ -1642,7 +1415,6 @@ qpel_only:
                     }
                 psx2 = cbx; psy2 = cby; havep = 1;
             }
-            if (stats) g_ms.subpel_iters[step == 2 ? 0 : 1][sit > 8 ? 8 : sit]++;
         }
     } else {
         /* Variants: hpel in SAD (the medium tier), 4-point diamond
@@ -1727,7 +1499,6 @@ qpel_only:
                     }
                 pdx = cbx; pdy = cby; havep = 1;
             }
-            if (stats) g_ms.subpel_iters[step == 2 ? 0 : 1][sit > 8 ? 8 : sit]++;
         }
     }
 
@@ -1769,50 +1540,6 @@ static void me_et_stats_dump(void)
 void y264_me_stats_dump(void)
 {
     me_et_stats_dump();
-    if (!me_stats_on()) return;
-    fprintf(stderr, "\n=== Y264_ME_STATS (E2, motion-and-modes.md) ===\n");
-    fprintf(stderr, "searches=%ld  umh_ran=%ld  umh_improved=%ld (%.1f%%)  16x16-oracle=%ld\n",
-            g_ms.searches, g_ms.umh_ran, g_ms.umh_improved,
-            g_ms.umh_ran ? 100.0 * g_ms.umh_improved / g_ms.umh_ran : 0.0, g_ms.s16_oracle);
-    fprintf(stderr, "\nG1 gate table: 16x16-with-oracle searches, by (hex_bcost/oracle) x |hex_mv-oracle_mv|.\n");
-    fprintf(stderr, "  cell = N / %%UMH-improved / mean-gain. Skip UMH where %%improved ~ 0.\n");
-    fprintf(stderr, "  ratio\\dist  |  =0      <=4     <=8     <=16    <=32    >32\n");
-    for (int rb = 0; rb < ORC_RB; rb++) {
-        long rn = 0; for (int db = 0; db < ORC_DB; db++) rn += g_ms.cell_n[rb][db];
-        if (!rn) continue;
-        fprintf(stderr, "  %4.2f-%-4.2f  |", rb / 4.0, (rb + 1) / 4.0);
-        for (int db = 0; db < ORC_DB; db++) {
-            long n = g_ms.cell_n[rb][db];
-            if (!n) { fprintf(stderr, "  .          "); continue; }
-            fprintf(stderr, " %5ld/%2.0f%%/%-4.0f", n,
-                    100.0 * g_ms.cell_umh_imp[rb][db] / n, g_ms.cell_umh_gain[rb][db] / n);
-        }
-        fprintf(stderr, "\n");
-    }
-    fprintf(stderr, "\nG2 subpel iterations used (of budget): [hpel] then [qpel]\n");
-    for (int lv = 0; lv < 2; lv++) {
-        long tot = 0; for (int k = 0; k < 9; k++) tot += g_ms.subpel_iters[lv][k];
-        if (!tot) continue;
-        fprintf(stderr, "  %s:", lv == 0 ? "hpel" : "qpel");
-        for (int k = 0; k < 9; k++)
-            if (g_ms.subpel_iters[lv][k])
-                fprintf(stderr, " %d:%.0f%%", k, 100.0 * g_ms.subpel_iters[lv][k] / tot);
-        fprintf(stderr, "\n");
-    }
-    fprintf(stderr, "\nR5: UMH gain by |final-hex| distance (integer pels). "
-                    "NEAR=local-search-fixable, FAR=separated-minimum-intrinsic.\n");
-    double gtot = 0; long ntot = 0;
-    for (int b = 0; b < 6; b++) { gtot += g_ms.umhdist_gain[b]; ntot += g_ms.umhdist_n[b]; }
-    static const char *bl[6] = { "0px", "1px", "2px", "<=4px", "<=8px", ">8px" };
-    fprintf(stderr, "  dist    %%of-improved-MBs   %%of-total-SATD-gain\n");
-    for (int b = 0; b < 6; b++)
-        fprintf(stderr, "  %-6s  %6.1f%%            %6.1f%%\n", bl[b],
-                ntot ? 100.0 * g_ms.umhdist_n[b] / ntot : 0.0,
-                gtot ? 100.0 * g_ms.umhdist_gain[b] / gtot : 0.0);
-    fprintf(stderr, "  (NEAR = 0..2px: %.1f%% of gain; FAR = >4px: %.1f%% of gain)\n",
-            gtot ? 100.0 * (g_ms.umhdist_gain[0] + g_ms.umhdist_gain[1] + g_ms.umhdist_gain[2]) / gtot : 0.0,
-            gtot ? 100.0 * (g_ms.umhdist_gain[4] + g_ms.umhdist_gain[5]) / gtot : 0.0);
-    fprintf(stderr, "=== end ME stats ===\n\n");
 }
 
 /* Resolve every env-gated lazy static in the motion search ONCE, on the calling
@@ -1821,11 +1548,9 @@ void y264_me_stats_dump(void)
  * READ them, so there is no first-use race across GOP workers / the wavefront. */
 void y264_me_warm_statics(void)
 {
-    (void)me_stats_on();
     (void)me_et_stat_on();
     (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far(); (void)qpsq_minw();
 
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();
-    (void)y264_hpel_census_on();
     (void)diag_nohpel();
 }

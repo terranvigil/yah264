@@ -4,19 +4,10 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "gpu.h"
+#include "../common/env.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-int y264_gpu_lowres_mode(void)
-{
-    static int v = -1;
-    if (v < 0) {
-        const char *s = getenv("Y264_GPU_LOWRES");
-        v = s ? (atoi(s) ? 1 : 0) : 0;
-    }
-    return v;
-}
 
 /* The library is 8-bit today (NGC_DEPTH_8), and our `pixel` is uint16 above
  * 8-bit, so the offload is confined to the 8-bit build rather than silently
@@ -28,12 +19,10 @@ int y264_gpu_lowres_mode(void)
 
 /* ONE Metal context per process, not per handle. ngc_open creates the device
  * and loads (or compiles) the shader library -- tens of milliseconds -- and
- * the CLI opens a probe encoder plus one encoder per GOP worker, each of
- * which now opens two handles (walk + warm). Per-handle contexts made the
- * armed GPU build 21-171% slower on SHORT board cells with the all-intra
- * cells (zero GPU work, md5-identical output) paying the most: pure init.
- * Metal devices, libraries and pipelines are thread-safe and immutable;
- * per-handle state is the STREAM (its own command queue) and the buffers. */
+ * the CLI opens a probe encoder plus one encoder per GOP worker, so
+ * per-handle contexts would pay that init on every one. Metal devices,
+ * libraries and pipelines are thread-safe and immutable; per-handle state is
+ * the STREAM (its own command queue) and the buffers. */
 static pthread_once_t g_ngc_once = PTHREAD_ONCE_INIT;
 static ngc_ctx *g_ngc_shared;
 static int g_ngc_lw, g_ngc_lh;
@@ -46,170 +35,13 @@ static void ngc_open_once(void)
     g_ngc_shared = ngc_open(&cfg);
 }
 
-struct y264_gpu {
-    ngc_ctx    *ctx;
-    ngc_stream *stream;
-    int         lw, lh;                 /* current batch geometry */
-    int         max_lw, max_lh, max_planes, max_legs;
-    ngc_buf   **plane;                  /* uploaded lowres planes, deduped */
-    const pixel **plane_src;            /* the pointer each slot holds */
-    int         nplane;
-    ngc_buf   **out;                    /* one per leg */
-    int        *leg_cur, *leg_ref;
-    int16_t   **leg_dst;
-    int         nleg;
-    ngc_job    *job;
-    ngc_fence  *fence;                  /* in flight when non-NULL */
-};
-
-static void gpu_free(y264_gpu *g)
-{
-    if (!g) return;
-    if (g->fence) { ngc_fence_wait(g->fence); ngc_fence_release(g->fence); }
-    for (int i = 0; g->plane && i < g->max_planes; i++) if (g->plane[i]) ngc_buf_free(g->plane[i]);
-    for (int i = 0; g->out && i < g->max_legs; i++) if (g->out[i]) ngc_buf_free(g->out[i]);
-    free(g->plane); free(g->plane_src); free(g->out);
-    free(g->leg_cur); free(g->leg_ref); free(g->leg_dst); free(g->job);
-    if (g->stream) ngc_stream_close(g->stream);
-    /* g->ctx is the process-shared context: never closed here (freed at exit). */
-    free(g);
-}
-
-y264_gpu *y264_gpu_open(int max_lw, int max_lh, int max_planes, int max_legs)
-{
-    if (!y264_gpu_lowres_mode() || max_lw <= 0 || max_lh <= 0
-        || max_planes <= 0 || max_legs <= 0)
-        return NULL;
-    y264_gpu *g = calloc(1, sizeof *g);
-    if (!g) return NULL;
-    g->max_lw = max_lw; g->max_lh = max_lh;
-    g->max_planes = max_planes; g->max_legs = max_legs;
-    /* The once-config uses the FIRST caller's geometry; every encoder in a
- * process encodes the same input, so the geometry is process-constant
- * (GOP workers inherit it). A mismatch falls back to CPU, never UB.
- * The ngc_open itself is DEFERRED to the first begin along with the
- * buffers: it builds the Metal device and pipelines (~tens of ms once
- * per process), which an armed encode that never submits -- all-intra,
- * or the CLI's probe encoder -- must not pay. A box with no Metal is
- * discovered at the first begin, which returns 0 and leaves the CPU
- * path, the same required degradation as every other failure here. */
-    g_ngc_lw = max_lw; g_ngc_lh = max_lh;
-    g->plane     = calloc((size_t)max_planes, sizeof *g->plane);
-    g->plane_src = calloc((size_t)max_planes, sizeof *g->plane_src);
-    g->out       = calloc((size_t)max_legs, sizeof *g->out);
-    g->leg_cur   = calloc((size_t)max_legs, sizeof *g->leg_cur);
-    g->leg_ref   = calloc((size_t)max_legs, sizeof *g->leg_ref);
-    g->leg_dst   = calloc((size_t)max_legs, sizeof *g->leg_dst);
-    g->job       = calloc((size_t)max_legs, sizeof *g->job);
-    if (!g->plane || !g->plane_src || !g->out
-        || !g->leg_cur || !g->leg_ref || !g->leg_dst || !g->job) { gpu_free(g); return NULL; }
-
-    /* MTLBuffers are allocated LAZILY at the first begin, not here: the CLI
- * opens a probe encoder plus two handles per GOP worker, and eager
- * allocation (48+96 buffers each) made ARMED encodes that never submit --
- * the all-intra cells -- read +50 to +135% with md5-identical output
- * (bin_ab 2026-08-19). A handle that never begins now allocates nothing. */
-    return g;
-}
-
-static int gpu_bufs_ensure(y264_gpu *g)
-{
-    if (g->plane[0]) return 1;
-    if (!g->ctx) {
-        pthread_once(&g_ngc_once, ngc_open_once);
-        g->ctx = g_ngc_shared;
-        if (!g->ctx) return 0;                 /* no Metal: the presence test */
-    }
-    if (!g->stream && !(g->stream = ngc_stream_open(g->ctx))) return 0;
-    size_t psz = (size_t)g->max_lw * g->max_lh;
-    size_t nblk = (size_t)(g->max_lw / 8) * (g->max_lh / 8);
-    for (int i = 0; i < g->max_planes; i++)
-        if (!(g->plane[i] = ngc_buf_alloc(g->ctx, psz))) return 0;
-    for (int i = 0; i < g->max_legs; i++)
-        if (!(g->out[i] = ngc_buf_alloc(g->ctx, nblk * sizeof(ngc_search_out)))) return 0;
-    return 1;
-}
-
-void y264_gpu_close(y264_gpu *g) { gpu_free(g); }
-
-int y264_gpu_lowres_begin(y264_gpu *g, int lw, int lh)
-{
-    if (!g || g->fence || lw > g->max_lw || lh > g->max_lh) return 0;
-    if (!gpu_bufs_ensure(g)) return 0;      /* OOM: CPU path, never UB */
-    g->lw = lw; g->lh = lh; g->nplane = 0; g->nleg = 0;
-    return 1;
-}
-
-int y264_gpu_lowres_plane(y264_gpu *g, const pixel *p)
-{
-    if (!g || !p) return -1;
-    for (int i = 0; i < g->nplane; i++)     /* dedupe: the walk's legs share anchors */
-        if (g->plane_src[i] == p) return i;
-    if (g->nplane >= g->max_planes) return -1;
-    int i = g->nplane++;
-    g->plane_src[i] = p;
-    memcpy(ngc_buf_ptr(g->plane[i]), p, (size_t)g->lw * g->lh);
-    return i;
-}
-
-int y264_gpu_lowres_leg(y264_gpu *g, int cur_slot, int ref_slot, int16_t *out)
-{
-    if (!g || cur_slot < 0 || ref_slot < 0 || g->nleg >= g->max_legs || !out) return 0;
-    int i = g->nleg++;
-    g->leg_cur[i] = cur_slot; g->leg_ref[i] = ref_slot; g->leg_dst[i] = out;
-    return 1;
-}
-
-int y264_gpu_lowres_submit(y264_gpu *g, int range)
-{
-    if (!g || g->fence || g->nleg <= 0) return 0;
-    for (int i = 0; i < g->nleg; i++) {
-        memset(&g->job[i], 0, sizeof g->job[i]);
-        g->job[i].kind = NGC_JOB_SEARCH;
-        g->job[i].src = (ngc_plane){ g->plane[g->leg_cur[i]], 0,
-                                     (uint32_t)g->lw, (uint32_t)g->lh, (uint32_t)g->lw };
-        g->job[i].ref = (ngc_plane){ g->plane[g->leg_ref[i]], 0,
-                                     (uint32_t)g->lw, (uint32_t)g->lh, (uint32_t)g->lw };
-        g->job[i].out = g->out[i];
-        g->job[i].out_offset = 0;
-        g->job[i].u.search.block_w = 8;
-        g->job[i].u.search.block_h = 8;
-        g->job[i].u.search.range = range;
-        g->job[i].u.search.metric = NGC_METRIC_SATD;   /* our lowres metric */
-        /* lambda 0: the GPU says where the DISTORTION minimum is; the CPU refine
- * re-prices every candidate with the encoder's own rate model against
- * the real predictor, so pricing here too would double-count it. */
-        g->job[i].u.search.lambda = 0;
-        g->job[i].u.search.pred = NULL;
-        g->job[i].u.search.pred_offset = 0;
-    }
-    g->fence = ngc_submit(g->stream, g->job, (uint32_t)g->nleg);
-    return g->fence != NULL;
-}
-
-int y264_gpu_lowres_wait(y264_gpu *g)
-{
-    if (!g || !g->fence) return 0;
-    int rc = ngc_fence_wait(g->fence);
-    ngc_fence_release(g->fence);
-    g->fence = NULL;
-    if (rc) return 0;
-    uint32_t nblk = (uint32_t)(g->lw / 8) * (uint32_t)(g->lh / 8);
-    for (int i = 0; i < g->nleg; i++) {
-        const ngc_search_out *o = ngc_buf_ptr(g->out[i]);
-        int16_t *d = g->leg_dst[i];
-        for (uint32_t b = 0; b < nblk; b++) { d[b * 2] = o[b].mvx; d[b * 2 + 1] = o[b].mvy; }
-    }
-    return 1;
-}
-
 /* ------------------------------- gpq (per-push Phase-A legs; see gpu.h) --- */
 
 int y264_gpq_mode(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *s = getenv("Y264_GPU_PHASEA");
+        const char *s = y264_env("Y264_GPU_PHASEA");
         v = s ? (atoi(s) ? 1 : 0) : 0;
     }
     return v;
@@ -269,7 +101,7 @@ static void gpq_die(y264_gpq *g, const char *why)
 static int gpq_warmup_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_GPQ_WARMUP"); v = s ? atoi(s) : 24;
+    if (v < 0) { const char *s = y264_env("Y264_GPQ_WARMUP"); v = s ? atoi(s) : 24;
                  if (v < 0) v = 0; }
     return v;
 }
@@ -539,21 +371,11 @@ const y264_gpq_blk *y264_gpq_field(y264_gpq *g, long src_push, long ref_push,
  * real report. */
 void y264_gpu_warm_statics(void)
 {
-    (void)y264_gpu_lowres_mode(); (void)y264_gpq_mode();
+    (void)y264_gpq_mode();
     (void)gpq_warmup_env();
 }
 
 #else   /* library not linked, or a bit depth it does not serve */
-
-y264_gpu *y264_gpu_open(int a, int b, int c, int d)
-{ (void)a; (void)b; (void)c; (void)d; return NULL; }
-void y264_gpu_close(y264_gpu *g) { (void)g; }
-int y264_gpu_lowres_begin(y264_gpu *g, int lw, int lh) { (void)g; (void)lw; (void)lh; return 0; }
-int y264_gpu_lowres_plane(y264_gpu *g, const pixel *p) { (void)g; (void)p; return -1; }
-int y264_gpu_lowres_leg(y264_gpu *g, int c, int r, int16_t *o)
-{ (void)g; (void)c; (void)r; (void)o; return 0; }
-int y264_gpu_lowres_submit(y264_gpu *g, int range) { (void)g; (void)range; return 0; }
-int y264_gpu_lowres_wait(y264_gpu *g) { (void)g; return 0; }
 
 int y264_gpq_mode(void) { return 0; }
 y264_gpq *y264_gpq_open(int lw, int lh, int nslots, int reach)
@@ -564,6 +386,6 @@ void y264_gpq_push(y264_gpq *g, long push, int slot, const pixel *lowres)
 const y264_gpq_blk *y264_gpq_field(y264_gpq *g, long src_push, long ref_push,
                                    long max_push)
 { (void)g; (void)src_push; (void)ref_push; (void)max_push; return NULL; }
-void y264_gpu_warm_statics(void) { (void)y264_gpu_lowres_mode(); }
+void y264_gpu_warm_statics(void) {}
 
 #endif

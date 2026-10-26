@@ -33,6 +33,7 @@ X=${X264:-x264}
 THREADS=${THREADS:-4}
 D=${CLIPS_P10_DIR:-/Volumes/seagate/media/_p10}
 want="$*"
+fail=0
 
 for entry in $CLIPS_P10; do
     clip=${entry%%:*}; targets=${entry#*:}
@@ -43,5 +44,7 @@ for entry in $CLIPS_P10; do
         --a "$Y --input-y4m {src} --crf {q} --threads $THREADS -o {out}" \
         --b "$X --profile high10 --output-depth 10 --crf {q} --threads $THREADS --log-level none -o {out} {src}" \
         --clip "$clip" --src "$src" --dec-pixfmt yuv420p10le \
-        --targets "$targets" --label-a yah264-10 --label-b x264-high10
+        --targets "$targets" --label-a yah264-10 --label-b x264-high10 ||
+        { echo "board10: $clip failed"; fail=1; }
 done
+exit "$fail"

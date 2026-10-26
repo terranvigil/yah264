@@ -479,9 +479,9 @@ if [ -n "$xkey" ] && [ -f "$cachedir/$xkey" ]; then
     x_cached=1
     echo ">> x264 baseline: cached (tests/.perfcache/$xkey; Y264_REFENC_CACHE=0 to re-measure)"
 else
-    read -r n_sec x_sec <<EOF
-$(timed2 "$n_cmd" "$x_cmd")
-EOF
+    # a status inside a here-document is lost; an assignment keeps it for set -e
+    secs=$(timed2 "$n_cmd" "$x_cmd")
+    read -r n_sec x_sec <<< "$secs"
 fi
 
 # passthrough, so the decoder's frames reach libvmaf one for one: never dropped,

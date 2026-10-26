@@ -27,11 +27,28 @@ BITRATE="${BITRATE:-400}"
 . "$root/scripts/scratch.sh"
 y264_scratch_dir reconthread WORK
 [ -x "$BIN" ] || { echo "recon_thread_gate: build tools/reconcmp first" >&2; exit 2; }
+# reconcmp reads knobs through its build's library and, unlike the CLI, can't
+# refuse the ones a release library ignores
+names() { sed -n "/$2/,/};/p" "$root/$1" | grep -o '"Y264_[A-Z0-9_]*"' | tr -d '"'; }
+knobs=$(env | sed -n 's/^\(Y264_[A-Za-z0-9_]*\)=.*/\1/p' |
+  grep -Fxf <(names cli/knob_names.h y264_knob_names) |
+  grep -Fxvf <(names src/common/env.h cli_backed; echo Y264_MAX_INPUT_MB; echo Y264_STREAM_WINDOW) |
+  tr '\n' ' ')
+if [ -n "$knobs" ]; then
+  cli="$(dirname "$BIN")/../../cli/yah264"
+  if [ ! -x "$cli" ]; then
+    echo "recon_thread_gate: ${knobs}set, and the build kind of $BIN couldn't be determined (no CLI at $cli); run it from a -Ddev_knobs=true build tree" >&2
+    exit 2
+  elif ! "$cli" --version | grep -q "(dev knobs)"; then
+    echo "recon_thread_gate: ${knobs}set, and $BIN is a release build; use a -Ddev_knobs=true build" >&2
+    exit 2
+  fi
+fi
 
-fail=0
+fail=0 ok=0
 for clip in $CLIPS; do
   src="$root/tests/corpus/$clip.y4m"
-  [ -f "$src" ] || { printf '  %-16s (missing)\n' "$clip"; continue; }
+  [ -f "$src" ] || { printf '  %-16s (missing)\n' "$clip"; fail=1; continue; }
   for th in $THREADS; do
     if ! "$BIN" "$src" "$WORK/o.264" "$WORK/rec.yuv" "$FRAMES" "$th" "$BITRATE" 2>"$WORK/err"; then
       printf '  %-16s t%-3s ENCODER FAILED: %s\n' "$clip" "$th" "$(head -1 "$WORK/err")"
@@ -75,10 +92,11 @@ PY
       fail=1
     else
       printf '  %-16s t%-3s %3s frames  recon-match ok\n' "$clip" "$th" "$n"
+      ok=$((ok + 1))
     fi
   done
 done
-if [ $fail -ne 0 ]; then
+if [ $fail -ne 0 ] || [ $ok -eq 0 ]; then
   echo "RECON-THREAD-GATE: FAILED (see rows above: a MISMATCH means the encoder"
   echo "  emitted frames it cannot itself reproduce; anything else means the check"
   echo "  could not run, which is not a pass)"

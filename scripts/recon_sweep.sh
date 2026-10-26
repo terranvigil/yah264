@@ -46,7 +46,9 @@ md5frames() { ffmpeg -v error -i "$1" -f framemd5 - 2>/dev/null | grep -v '^#' |
 fails=0; total=0
 for clip in $CLIPS; do
     src="$FIX/corpus_${clip}_cif_48f.y4m"
-    [ -f "$src" ] || { echo "  skip $clip (no fixture)"; continue; }
+    if [ ! -f "$src" ]; then
+        echo "  FAIL $clip: no fixture at $src"; total=$((total + 1)); fails=$((fails + 1)); continue
+    fi
     for qp in $QPS; do
         while IFS= read -r cfg; do
             [ -n "$cfg" ] || continue
@@ -56,10 +58,10 @@ for clip in $CLIPS; do
             # shellcheck disable=SC2086
             env $ARM "$ENC" --input-y4m "$src" --qp "$qp" --threads 1 \
                 ${FRAMES:+--frames $FRAMES} $cfg -o "$out" --dump-recon "$rec" \
-                >/dev/null 2>&1
+                >/dev/null 2>"$WORK/err"
             rc=$?
             if [ $rc -ne 0 ]; then
-                echo "  ENCFAIL rc=$rc $clip qp$qp $cfg"; fails=$((fails + 1)); continue
+                echo "  ENCFAIL rc=$rc $clip qp$qp $cfg: $(head -1 "$WORK/err")"; fails=$((fails + 1)); continue
             fi
             a="$(md5frames "$rec")"; b="$(md5frames "$out")"
             if [ -z "$a" ] || [ "$a" != "$b" ]; then
@@ -80,4 +82,6 @@ CFGS
     done
 done
 echo "RECON-SWEEP $((total - fails))/$total  arm='${ARM:-<default>}'"
+# no cells means CLIPS named none, which is not a pass
+[ "$total" -gt 0 ] || { echo "recon_sweep: no clips named in CLIPS" >&2; exit 2; }
 [ "$fails" -eq 0 ]

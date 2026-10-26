@@ -199,7 +199,7 @@ most of what it does is move the CRF scale, and that's ladder placement, not
 quality. The 12-clip CRF band can't see the across-shot term at all, so run
 the multi-shot gate too. mb-tree's constants were fitted together, so don't
 re-sweep one alone. `Y264_PSY_FLAT_LOG=1` prints each frame's flat share and
-whether the psy gate fired. `Y264_MBTREE_DBG` prints the mb-tree offsets.
+whether the psy gate fired.
 `Y264_TYPE_ORACLE=<file>` replays a frame-type sequence through the encoder,
 which prices a placement policy apart from everything downstream of it.
 

@@ -155,13 +155,15 @@ kbps_of() {  # <bitstream> -> achieved kbit/s over the trimmed window
 pct() { python3 -c "import sys;print(f'{float(sys.argv[1])/float(sys.argv[2])*100-100:+.1f}')" "$1" "$2"; }
 
 one_point() {  # <target> -> one table row, written to $wd/row.<target>
-    local br="$1" nk xk nv nn xv xn
+    local br="$1" nk xk nv nn xv xn err=""
     "$YAH264" --input-y4m "$ref" $nargs --bitrate "$br" --threads "$THREADS" \
-        -o "$wd/n$br.264" >/dev/null 2>&1
+        -o "$wd/n$br.264" >/dev/null 2>"$wd/n$br.err" || err="$wd/n$br.err"
     "$X264" $xargs_ --bitrate "$br" --threads "$THREADS" --demuxer y4m \
-        -o "$wd/x$br.264" "$ref" >/dev/null 2>&1
-    if [ ! -s "$wd/n$br.264" ] || [ ! -s "$wd/x$br.264" ]; then
-        printf '%8s  ENCODE FAILED\n' "$br" > "$wd/row.$br"; return
+        -o "$wd/x$br.264" "$ref" >/dev/null 2>"$wd/x$br.err" || err="${err:-$wd/x$br.err}"
+    if [ -n "$err" ] || [ ! -s "$wd/n$br.264" ] || [ ! -s "$wd/x$br.264" ]; then
+        printf '%8s  ENCODE FAILED %s\n' "$br" "$([ -n "$err" ] && head -1 "$err")" > "$wd/row.$br"
+        : > "$wd/failed.$br"
+        return
     fi
     nk=$(kbps_of "$wd/n$br.264"); xk=$(kbps_of "$wd/x$br.264")
     ffmpeg -v error -y -i "$wd/n$br.264" -fps_mode passthrough -pix_fmt yuv420p10le -strict -1 "$wd/n$br.y4m"
@@ -194,3 +196,7 @@ for br in $list; do
 done
 wait
 for br in $list; do cat "$wd/row.$br" 2>/dev/null; done
+if ls "$wd"/failed.* >/dev/null 2>&1; then
+    echo "parity-clip-calib: an encode failed (rows above)" >&2
+    exit 1
+fi

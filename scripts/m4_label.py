@@ -60,7 +60,9 @@ def encode(src, crf, out, env=None, frames=None):
         cmd[5:5] = ["--frames", str(frames)]
     e = dict(os.environ, **(env or {}))
     p = subprocess.run(cmd, capture_output=True, text=True, env=e)
-    return (os.path.getsize(out) if os.path.exists(out) else 0), p.stderr
+    if p.returncode or not os.path.exists(out):
+        sys.exit(f"m4_label: encode failed ({p.returncode}): {' '.join(cmd)}\n{p.stderr[-400:]}")
+    return os.path.getsize(out), p.stderr
 
 
 def solve(src, target, out, env, lo=8.0, hi=51.0, iters=10):

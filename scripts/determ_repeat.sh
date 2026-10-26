@@ -8,7 +8,8 @@
 # A DIAGNOSTIC, NOT A GATE. Repeatable byte-exact output is not a requirement
 # (owner, 2026-09-25, extending the 2026-08-10 ruling on thread counts), so
 # distinct bitstreams are reported as WARN and the exit status is 0 unless a
-# run failed to produce a stream (exit 1). At --threads 1 distinct bitstreams
+# run failed to produce a stream, a clip is missing or nothing ran (exit 1); a
+# RUNS under 2 or not a number is refused (exit 2). At --threads 1 distinct bitstreams
 # are a FAIL (exit 1): one thread must repeat (owner, same day). STRICT=1 makes distinct bitstreams
 # exit 1 as well, for when you are hunting something with it: an uninitialised
 # read, a publish-before-data race, or an A/B arm whose args never reached the
@@ -45,6 +46,9 @@ ENC="${ENC:-$ROOT/build/cli/yah264}"
 . "$ROOT/scripts/scratch.sh"
 WORK="${WORK:-}"
 RUNS="${RUNS:-12}"
+# a repeat needs two runs at least, and seq takes anything
+case "$RUNS" in ''|*[!0-9]*) echo "determ_repeat: RUNS must be a number" >&2; exit 2 ;; esac
+[ "$RUNS" -ge 2 ] || { echo "determ_repeat: RUNS must be 2 or more" >&2; exit 2; }
 FRAMES="${FRAMES:-120}"
 CLIPS="${CLIPS:-foreman_cif bus_cif stefan_cif fourpeople_720p}"
 THREADS="${THREADS:-8 18}"
@@ -59,7 +63,9 @@ if [ -n "$WORK" ]; then mkdir -p "$WORK"; else y264_scratch_dir determrepeat WOR
 fails=0; warns=0; total=0
 for clip in $CLIPS; do
     src="$ROOT/tests/corpus/$clip.y4m"
-    [ -f "$src" ] || { echo "  skip $clip (no clip)"; continue; }
+    if [ ! -f "$src" ]; then
+        echo "  FAIL $clip: no clip at $src"; total=$((total + 1)); fails=$((fails + 1)); continue
+    fi
     for r in $REFS; do
         for t in $THREADS; do
             total=$((total + 1))
@@ -83,8 +89,8 @@ for clip in $CLIPS; do
                 out="$WORK/r.264"; rm -f "$out"
                 # shellcheck disable=SC2086
                 env $ARM "$ENC" --input-y4m "$src" --frames "$FRAMES" --ref "$r" \
-                    --crf 22 --threads "$t" $ARGS -o "$out" >/dev/null 2>&1 || {
-                        echo "  ENCFAIL $clip ref$r t$t" >&2; aborted=1; break; }
+                    --crf 22 --threads "$t" $ARGS -o "$out" >/dev/null 2>"$WORK/err" || {
+                        echo "  ENCFAIL $clip ref$r t$t: $(head -1 "$WORK/err")" >&2; aborted=1; break; }
                 # Guard the producer: two missing files have equal md5s.
                 [ -s "$out" ] || { echo "  EMPTY $clip ref$r t$t" >&2; aborted=1; break; }
                 md5 -q "$out" 2>/dev/null || md5sum "$out" | cut -d' ' -f1
@@ -105,7 +111,8 @@ for clip in $CLIPS; do
         done
     done
 done
-echo "DETERM-REPEAT $((total - fails - warns))/$total configs repeat byte-identically over $RUNS runs each, $fails producer failures  arm='${ARM:-<default>}' args='${ARGS:-<default>}'"
+echo "DETERM-REPEAT $((total - fails - warns))/$total configs repeat byte-identically over $RUNS runs each, $fails failures  arm='${ARM:-<default>}' args='${ARGS:-<default>}'"
 [ "$fails" -eq 0 ] || exit 1
+[ "$total" -gt 0 ] || { echo "  FAIL nothing ran (empty CLIPS, REFS or THREADS)"; exit 1; }
 [ "${STRICT:-0}" = 1 ] && [ "$warns" -gt 0 ] && exit 1
 exit 0
