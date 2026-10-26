@@ -223,6 +223,13 @@ int main(void)
              y == H - 2 ? 10.0 : (y < 13 ? 3.0 : 60.0))
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
+        /* subtitles in both bars: the soft edges around busy glyphs are text,
+         * so neither bar's solid depth stops at its subtitle line */
+        FILL(((y < 6 || y >= H - 6) && !((y == 1 || y == H - 2) && x >= 20 && x < 61 &&
+                                         x % 4 != 2)),
+             16.0, 0.0, x % 4 ? 40.0 : 200.0, x % 4 ? 8.0 : 500.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
         /* busy subtitle text doesn't end a solid depth, so a bar holding one can
          * walk into dark picture too */
         FILL(((y < 6 || y >= H - 6) && !(y == H - 3 && x >= 20 && x < 60)) ||

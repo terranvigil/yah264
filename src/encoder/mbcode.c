@@ -430,7 +430,8 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
 }
 /* bar lines counted inward from one edge; line k starts at i0 + k * lstep.
  * *solid gets the lines before the first that is partly picture: matte
- * beside blocks quiet enough to be dark picture, where text would be busy */
+ * beside blocks quiet enough to be dark picture, where text would be busy.
+ * A quiet block next to a busy one is a glyph's soft edge, not picture. */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                      int step, int n, int maxl, double color, double vmax,
                      double vbusy, double tol, double drift, int *solid)
@@ -444,7 +445,9 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
             int i = line + t * step;
             if (var[i] < vmax && fabs(mean[i] - color) < tol) {
                 matte++; sum += mean[i];
-            } else if (var[i] < vbusy) {
+            } else if (var[i] < vbusy &&
+                       !(t > 0 && var[i - step] >= vbusy) &&
+                       !(t + 1 < n && var[i + step] >= vbusy)) {
                 quiet++;
             }
         }
