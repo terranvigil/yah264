@@ -45,6 +45,9 @@ ENC="${ENC:-$ROOT/build/cli/yah264}"
 . "$ROOT/scripts/scratch.sh"
 WORK="${WORK:-}"
 RUNS="${RUNS:-12}"
+# a repeat needs two runs at least, and seq takes anything
+case "$RUNS" in ''|*[!0-9]*) echo "determ_repeat: RUNS must be a number" >&2; exit 2 ;; esac
+[ "$RUNS" -ge 2 ] || { echo "determ_repeat: RUNS must be 2 or more" >&2; exit 2; }
 FRAMES="${FRAMES:-120}"
 CLIPS="${CLIPS:-foreman_cif bus_cif stefan_cif fourpeople_720p}"
 THREADS="${THREADS:-8 18}"
