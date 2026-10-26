@@ -431,8 +431,8 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
 /* bar lines counted inward from one edge; line k starts at i0 + k * lstep.
  * solid[0] gets the lines before the first that is partly picture: matte
  * beside blocks quiet enough to be dark picture, where text would be busy.
- * On a text line (a row, its non-matte blocks one compact run clear of both
- * ends) a quiet block next to a busy one is a glyph's soft edge, not picture;
+ * On a text line (a row whose non-matte blocks fill at least half the span
+ * from the first to the last, clear of both ends) a quiet block next to a busy one is a glyph's soft edge, not picture;
  * a lit edge of the picture runs to the frame's side, and text never runs
  * down a pillar. solid[1] counts every quiet block as picture. */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
@@ -491,9 +491,9 @@ static int pair(int a, int b, double ca, double cb, double drift)
  * pair next, with the off-center slack, then a full depth with a solid one,
  * held to the solid limit. Both walks past the cap are dark picture, not a
  * matte; one past it is a fade into a black sky, so both pair at the other
- * side's solid depth. */
+ * side's solid depth, when fade is set. */
 static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
-                       double drift, int maxl, int lean)
+                       double drift, int maxl, int lean, int fade)
 {
     int fa = *a, fb = *b;
     int ta[4] = { sa, fa, sa, fa }, tb[4] = { sb, fb, fb, sb };
@@ -506,7 +506,7 @@ static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
         *a = p; *b = q;
         return;
     }
-    if (fabs(ca - cb) >= drift) return;
+    if (!fade || fabs(ca - cb) >= drift) return;
     if (sa && fb > maxl && sb >= sa) *a = *b = sa;
     else if (sb && fa > maxl && sa >= sb) *a = *b = sb;
 }
@@ -525,13 +525,14 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
                            vbusy, tol, drift, 1, sb);
         int t = top, b = bottom;
-        pair_sides(&top, &bottom, sa[0], sb[0], ca, cb, drift, maxr, 1);
+        pair_sides(&top, &bottom, sa[0], sb[0], ca, cb, drift, maxr, 1, 1);
         /* a lit subject clear of both sides, against a black sky at the bar's
          * inner edge, can read as text and carry a solid depth into the
-         * picture; when nothing pairs, try again without the glyph edges */
+         * picture; when nothing pairs, try again without the glyph edges.
+         * A fade was already tried at the glyph-edge depths. */
         if (!top) {
             top = t; bottom = b;
-            pair_sides(&top, &bottom, sa[1], sb[1], ca, cb, drift, maxr, 1);
+            pair_sides(&top, &bottom, sa[1], sb[1], ca, cb, drift, maxr, 1, 0);
         }
     }
     /* side bars between any top and bottom ones: a windowbox has both */
@@ -543,7 +544,7 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
                          drift, 0, sa);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, cb, vmax,
                           vbusy, tol, drift, 0, sb);
-        pair_sides(&left, &right, sa[0], sb[0], ca, cb, drift, maxc, 0);
+        pair_sides(&left, &right, sa[0], sb[0], ca, cb, drift, maxc, 0, 1);
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
 }

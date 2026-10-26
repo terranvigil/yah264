@@ -18,6 +18,17 @@
 #define V(v) ((v) * SC * SC)
 
 static int fails;
+/* a subtitle row from block 22 on: a quiet glow then a busy glyph (1, 2), at
+ * a four-block pitch, then g pairs at a five-block pitch; matte (0) between */
+static int sparse(int x, int g)
+{
+    int u = x - 22, w = u - 24;
+    if (u < 0) return 0;
+    if (u < 24) return u % 4 < 2 ? u % 4 + 1 : 0;
+    if (w < 5 * g) return w % 5 < 2 ? w % 5 + 1 : 0;
+    w -= 5 * g;
+    return w < 2 ? w + 1 : 0;
+}
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
 int main(void)
@@ -288,6 +299,16 @@ int main(void)
              y < 6 || y >= H - 6 ? (x % 4 ? 8.0 : 500.0) : 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
+        /* a text line exactly half filled from its first block to its last is
+         * text; just under half, its glows end both solid depths there */
+        for (int g = 2; g <= 3; g++) {
+            FILL(((y < 6 || y >= H - 6) && !((y == 1 || y == H - 2) && sparse(x, g))) ||
+                 (y >= 6 && y < H - 6 && (y < 13 || y >= H - 13) && x % 10 < 7), 16.0, 0.0,
+                 y < 6 || y >= H - 6 ? (sparse(x, g) == 2 ? 200.0 : 40.0) : 24.0,
+                 y < 6 || y >= H - 6 ? (sparse(x, g) == 2 ? 500.0 : 8.0) : 3.0)
+            y264_aq_bars(m, v, W, H, e);
+            CHECK(g == 2 ? e[0] == 6 && e[1] == 6 : e[0] == 1 && e[1] == 1);
+        }
         /* one walk past the cap still pairs at its solid depth */
         FILL(y < 6 || y >= H - 6 || (y < 25 && x % 10 < 7), 16.0, 0.0,
              y < 25 ? 24.0 : 120.0, y < 25 ? 3.0 : 60.0)
@@ -340,6 +361,9 @@ int main(void)
         FILL(y < 8 || y >= 14, 16.0, 0.0, 24.0, 3.0)   /* black ground below */
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 8 && e[1] == 8);
+        FILL(x < 35 || x >= W - 8, 16.0, 0.0, 24.0, 3.0)   /* and beside a pillar */
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[2] == 8 && e[3] == 8);
         /* a fade beside a bar that walks into dark picture pairs at its solid depth */
         FILL(y < 6 || y >= 20 || (y < 10 && x % 10 < 6), 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
@@ -348,12 +372,24 @@ int main(void)
         FILL(y < 8 || (y >= 14 && !(y == H - 6 && x % 10 >= 7)), 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
+        /* a subtitle in the top bar doesn't change that */
+        FILL((y < 8 && !(y == 1 && x >= 20 && x < 61 && x % 4 != 2)) ||
+             (y >= 14 && !(y == H - 6 && x % 10 >= 7)), 16.0, 0.0,
+             y == 1 ? (x % 4 ? 40.0 : 200.0) : 24.0, y == 1 ? (x % 4 ? 8.0 : 500.0) : 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
         FILL(y < 31 || y >= H - 8, y < 31 ? 16.0 : 20.0, 0.0, 24.0, 3.0)   /* two colors */
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
         /* 1080 is coded as 1088, so an off-center letterbox's bottom solid depth
          * may run two deeper; the top may not */
         FILL(y < 7 || y >= H - 9 || (y >= H - 16 && x % 10 < 7), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 7 && e[1] == 9);
+        /* the same lean when the top's walk is a lit subject below its bar */
+        FILL(y < 7 || y >= H - 9 || (y < 14 && (x < 29 || x > 50)), 16.0, 0.0,
+             y < 14 && (x == 29 || x == 50) ? 40.0 : (y < 14 ? 120.0 : 24.0),
+             y < 14 && (x == 29 || x == 50) ? 8.0 : (y < 14 ? 60.0 : 3.0))
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 7 && e[1] == 9);
         FILL(y < 9 || y >= H - 7 || (y < 16 && x % 10 < 7), 16.0, 0.0, 24.0, 3.0)
