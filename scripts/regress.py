@@ -104,16 +104,22 @@ FORMATS = ["yuv420p", "yuv420p", "yuv420p", "yuv420p",
            "yuv422p", "yuv444p", "yuv420p10le"]
 
 
+FORMAT_REFUSAL = re.compile(r"unsupported Y4M geometry/colorspace|"
+                            r"-bit input is not supported")
+
+
 def probe_formats(work):
     kept = []
     for fmt in dict.fromkeys(FORMATS):          # unique, order kept
         clip = synth_clip(work, 2, fmt)
         r = sh(f"{YAH264} --input-y4m {clip} --frames 1 -o {os.devnull}")
+        last = (r.stderr.strip().splitlines() or [""])[-1][:80]
         if r.returncode == 0:
             kept.append(fmt)
+        elif r.returncode in (1, 2) and FORMAT_REFUSAL.search(r.stderr):
+            print(f"  format {fmt} excluded: {last}")
         else:
-            print(f"  format {fmt} excluded: "
-                  f"{r.stderr.strip().splitlines()[-1][:80]}")
+            sys.exit(f"regress: format probe {fmt} exited {r.returncode}: {last}")
     return [f for f in FORMATS if f in kept]
 
 
