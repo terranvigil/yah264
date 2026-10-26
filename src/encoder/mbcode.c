@@ -432,9 +432,10 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
  * solid[0] gets the lines before the first that is partly picture: matte
  * beside blocks quiet enough to be dark picture, where text would be busy.
  * On a text line (a row whose non-matte blocks fill at least half the span
- * from the first to the last, clear of both ends) a quiet block next to a busy one is a glyph's soft edge, not picture;
- * a lit edge of the picture runs to the frame's side, and text never runs
- * down a pillar. solid[1] counts every quiet block as picture. */
+ * from the first to the last, clear of both ends) a quiet block next to a
+ * busy one is a glyph's soft edge, not picture; a lit edge of the picture
+ * runs to the frame's side, and text never runs down a pillar. solid[1]
+ * counts every quiet block as picture. */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                      int step, int n, int maxl, double color, double vmax,
                      double vbusy, double tol, double drift, int text, int solid[2])

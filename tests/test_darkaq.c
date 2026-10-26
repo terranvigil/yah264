@@ -19,7 +19,8 @@
 
 static int fails;
 /* a subtitle row from block 22 on: a quiet glow then a busy glyph (1, 2), at
- * a four-block pitch, then g pairs at a five-block pitch; matte (0) between */
+ * a four-block pitch, then g pairs at a five-block pitch and a closing pair;
+ * matte (0) between */
 static int sparse(int x, int g)
 {
     int u = x - 22, w = u - 24;
@@ -384,6 +385,13 @@ int main(void)
         /* 1080 is coded as 1088, so an off-center letterbox's bottom solid depth
          * may run two deeper; the top may not */
         FILL(y < 7 || y >= H - 9 || (y >= H - 16 && x % 10 < 7), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 7 && e[1] == 9);
+        /* and with a subtitle in the bottom bar, where the strict retry can't stand in */
+        FILL((y < 7 || y >= H - 9 || (y >= H - 16 && x % 10 < 7)) &&
+             !(y == H - 2 && x >= 20 && x < 61 && x % 4 != 2), 16.0, 0.0,
+             y == H - 2 ? (x % 4 ? 40.0 : 200.0) : 24.0,
+             y == H - 2 ? (x % 4 ? 8.0 : 500.0) : 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 7 && e[1] == 9);
         /* the same lean when the top's walk is a lit subject below its bar */
