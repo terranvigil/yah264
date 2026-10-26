@@ -46,7 +46,9 @@ md5frames() { ffmpeg -v error -i "$1" -f framemd5 - 2>/dev/null | grep -v '^#' |
 fails=0; total=0
 for clip in $CLIPS; do
     src="$FIX/corpus_${clip}_cif_48f.y4m"
-    [ -f "$src" ] || { echo "  skip $clip (no fixture)"; continue; }
+    if [ ! -f "$src" ]; then
+        echo "  FAIL $clip: no fixture at $src"; total=$((total + 1)); fails=$((fails + 1)); continue
+    fi
     for qp in $QPS; do
         while IFS= read -r cfg; do
             [ -n "$cfg" ] || continue

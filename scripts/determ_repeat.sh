@@ -8,7 +8,7 @@
 # A DIAGNOSTIC, NOT A GATE. Repeatable byte-exact output is not a requirement
 # (owner, 2026-09-25, extending the 2026-08-10 ruling on thread counts), so
 # distinct bitstreams are reported as WARN and the exit status is 0 unless a
-# run failed to produce a stream or a clip is missing (exit 1). At --threads 1 distinct bitstreams
+# run failed to produce a stream, a clip is missing or nothing ran (exit 1). At --threads 1 distinct bitstreams
 # are a FAIL (exit 1): one thread must repeat (owner, same day). STRICT=1 makes distinct bitstreams
 # exit 1 as well, for when you are hunting something with it: an uninitialised
 # read, a publish-before-data race, or an A/B arm whose args never reached the
@@ -45,6 +45,9 @@ ENC="${ENC:-$ROOT/build/cli/yah264}"
 . "$ROOT/scripts/scratch.sh"
 WORK="${WORK:-}"
 RUNS="${RUNS:-12}"
+# a repeat needs two runs at least, and seq takes anything
+case "$RUNS" in ''|*[!0-9]*) echo "determ_repeat: RUNS must be a number" >&2; exit 2 ;; esac
+[ "$RUNS" -ge 2 ] || { echo "determ_repeat: RUNS must be 2 or more" >&2; exit 2; }
 FRAMES="${FRAMES:-120}"
 CLIPS="${CLIPS:-foreman_cif bus_cif stefan_cif fourpeople_720p}"
 THREADS="${THREADS:-8 18}"
