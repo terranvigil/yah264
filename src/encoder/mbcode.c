@@ -479,14 +479,11 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
 }
 
 /* the share of dark grain macroblocks, bars left out: counted in, they'd
- * dilute a letterboxed night scene's share. The line a bar's edge cuts through
- * goes too, since a bar rarely ends on a block boundary */
+ * dilute a letterboxed night scene's share */
 double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb)
 {
     int bars[4];
     y264_aq_bars(mean, var, wmb, hmb, bars);
-    for (int k = 0; k < 4; k++)
-        if (bars[k]) bars[k]++;
     int n = 0, g = 0;
     for (int y = bars[0]; y < hmb - bars[1]; y++)
         for (int x = bars[2]; x < wmb - bars[3]; x++) {

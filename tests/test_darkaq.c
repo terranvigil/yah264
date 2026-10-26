@@ -168,8 +168,7 @@ int main(void)
         FILL(y < 6 || y >= H - 6, 16.0, 0.0, y < 22 ? 16.9 : 150.0, y < 22 ? 0.5 : 90.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
-        /* the share leaves out the bars and the line past each */
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - 15.0 / 31.0) < 1e-9);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - 16.0 / 33.0) < 1e-9);
         /* black bars beside dark grain */
         FILL(y < 6 || y >= H - 6, 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
