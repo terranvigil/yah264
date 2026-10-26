@@ -82,6 +82,6 @@ CFGS
     done
 done
 echo "RECON-SWEEP $((total - fails))/$total  arm='${ARM:-<default>}'"
-# no cells means no clips were found under FIX, which is not a pass
-[ "$total" -gt 0 ] || { echo "recon_sweep: no clips found under $FIX" >&2; exit 2; }
+# no cells means CLIPS named none, which is not a pass
+[ "$total" -gt 0 ] || { echo "recon_sweep: no clips named in CLIPS" >&2; exit 2; }
 [ "$fails" -eq 0 ]
