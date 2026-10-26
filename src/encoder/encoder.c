@@ -3042,8 +3042,8 @@ static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int
     for (long i = 0; i < n; i++) {
         int q = f->qp + (f->mbtree_off ? f->mbtree_off[i]
                                        : (f->aq_off ? (int)f->aq_off[i] : 0));
-        if (y264_mb_in_bars(f->bar, f->wmb, f->hmb, (int)(i % f->wmb), (int)(i / f->wmb)) &&
-            q < f->qp + y264_aq_bar_floor())
+        if (q < f->qp + y264_aq_bar_floor() &&
+            y264_mb_bar_floored(f, (int)(i % f->wmb), (int)(i / f->wmb)))
             q = f->qp + y264_aq_bar_floor();
         if (q < 0) q = 0; else if (q > 51) q = 51;
         sum += f->mbqp[i]; isum += q; nskip += f->mbqp[i] != q;
@@ -6383,12 +6383,12 @@ static void splat_prop(double *grid, int wmb, int hmb, int tx, int ty, double am
 
 /* AQ-aware inverse quantiser weights for mb-tree propagation. From a full-res
  * plane, derive per-MB the SAME log2(16x16 variance) offset that aq_analyze
- * applies at encode time (qp_offset_aq = strength*(log2var - mean)), then the
- * matching inverse-qscale weight ~ 2^(-qp_offset_aq/6): flat blocks (negative
+ * applies at encode time (offset = strength*(log2var - mean)), then the
+ * matching inverse-qscale weight ~ 2^(-offset/6): flat blocks (negative
  * offset, lower QP) weigh MORE, so they propagate more importance. Weights
  * are normalised to mean 1 so the global propagation
  * magnitude is unchanged (the ratio in the finish step is scale-invariant).
- * When aq_off is non-NULL the raw qp_offset_aq (unclamped, float) is returned
+ * When aq_off is non-NULL the raw AQ offset (unclamped, float) is returned
  * there for folding into the combined offset. */
 static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
                              int stride, int wmb, int hmb,

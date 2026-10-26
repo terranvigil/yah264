@@ -452,6 +452,12 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
     }
     return 2 * k < n ? 0 : lines;
 }
+/* a matte's two sides, which a crop off center can leave a few blocks apart */
+static int depths_pair(int a, int b)
+{
+    int lo = a < b ? a : b;
+    return abs(a - b) <= (lo / 3 > 1 ? lo / 3 : 1);
+}
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4],
                   int sharp)
 {
@@ -467,7 +473,7 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
                         tol, drift, sc, sharp);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, color_b,
                            vmax, tol, drift, sc, sharp);
-        if (!top || !bottom || abs(top - bottom) > 1 || top > maxr || bottom > maxr)
+        if (!top || !bottom || !depths_pair(top, bottom) || top > maxr || bottom > maxr)
             top = bottom = 0;
     }
     /* side bars only without top and bottom ones */
@@ -479,15 +485,40 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
                          tol, drift, sc, sharp);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, color_b,
                           vmax, tol, drift, sc, sharp);
-        if (!left || !right || abs(left - right) > 1 || left > maxc || right > maxc)
+        if (!left || !right || !depths_pair(left, right) || left > maxc || right > maxc)
             left = right = 0;
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
 }
 
-int y264_mb_in_bars(const int bars[4], int wmb, int hmb, int mbx, int mby)
+static int mb_flat(const y264_frame_t *f, int mbx, int mby)
 {
-    return mby < bars[0] || mby >= hmb - bars[1] || mbx < bars[2] || mbx >= wmb - bars[3];
+    int i = mby * f->wmb + mbx;
+    uint32_t v2[2];
+    if (f->mbvar && *f->mbvar_src == f->src[0]) {
+        v2[0] = f->mbvar[2 * i]; v2[1] = f->mbvar[2 * i + 1];
+    } else {
+        int ss = f->src_stride[0];
+        y264_dsp.var16x16(f->src[0] + (mby * 16) * ss + mbx * 16, ss, v2);
+    }
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    double mean = v2[0] / 256.0;
+    return v2[1] / 256.0 - mean * mean < AQ_BAR_VAR * sc * sc;
+}
+
+/* inside the bars and flat with its four neighbors, so a subtitle or logo in
+ * a bar, and the blocks around it, are coded as picture */
+int y264_mb_bar_floored(const y264_frame_t *f, int mbx, int mby)
+{
+    if (mby >= f->bar[0] && mby < f->hmb - f->bar[1] &&
+        mbx >= f->bar[2] && mbx < f->wmb - f->bar[3])
+        return 0;
+    if (!mb_flat(f, mbx, mby)) return 0;
+    if (mbx > 0 && !mb_flat(f, mbx - 1, mby)) return 0;
+    if (mbx < f->wmb - 1 && !mb_flat(f, mbx + 1, mby)) return 0;
+    if (mby > 0 && !mb_flat(f, mbx, mby - 1)) return 0;
+    if (mby < f->hmb - 1 && !mb_flat(f, mbx, mby + 1)) return 0;
+    return 1;
 }
 
 /* the share of dark grain macroblocks, bars left out: counted in, they dilute
@@ -729,12 +760,12 @@ static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
 {
     int i = mby * f->wmb + mbx;
     /* When mb-tree runs, its per-MB offset is the COMBINED offset
- * (qp_offset_aq folded in), so the standalone AQ offset must not be added
+ * (the AQ offset folded in), so the standalone AQ offset must not be added
  * again. Standalone AQ applies only where mb-tree is off (e.g. bframes 0). */
     int q = f->mbtree_off
           ? f->qp + f->mbtree_off[i]
           : f->qp + (f->aq_off ? f->aq_off[i] : 0);
-    if (y264_mb_in_bars(f->bar, f->wmb, f->hmb, mbx, mby) && q < f->qp + y264_aq_bar_floor())
+    if (q < f->qp + y264_aq_bar_floor() && y264_mb_bar_floored(f, mbx, mby))
         q = f->qp + y264_aq_bar_floor();
     return q < 0 ? 0 : (q > 51 ? 51 : q);
 }

@@ -457,6 +457,8 @@ typedef struct {
     int rd_aborted;
 } y264_frame_t;
 
+int y264_mb_bar_floored(const y264_frame_t *f, int mbx, int mby);
+
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),
  * writing the slice_data to `bs` and filling rec[]. Thin wrapper over the
  * analyze/emit split below (kept for callers that don't overlap the two). */
@@ -501,7 +503,6 @@ int              y264_aq_bright(double mean);
 int              y264_aq_grain(double mean, double var);
 void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4],
                               int sharp);
-int              y264_mb_in_bars(const int bars[4], int wmb, int hmb, int mbx, int mby);
 int              y264_aq_bar_floor(void);
 double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
 double           y264_aq_dark_gate(double bright_share, double grain_share);

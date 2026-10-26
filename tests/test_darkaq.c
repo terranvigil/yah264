@@ -124,14 +124,44 @@ int main(void)
                 m[y * W + x] = (float)((bar) ? M(mb) : M(mp));       \
                 v[y * W + x] = (float)((bar) ? V(vb) : V(vp));       \
             }
-        /* a flat vertical gradient darkest at both edges drifts: no bars */
-        FILL(1, 0.0, 0.0, 20.0 + 30.0 * (1.0 - fabs(y - 22.0) / 22.0), 0.1)
+        /* a flat vertical gradient darkest at both edges drifts: at most its
+         * edge line reads as bar (flat, so harmless), and it's never floored */
+        FILL(0, 0.0, 0.0, 20.0 + 30.0 * (1.0 - fabs(y - 22.0) / 22.0), 0.1)
         y264_aq_bars(m, v, W, H, e, 0);
+        CHECK(e[0] <= 1 && e[1] <= 1);
+        y264_aq_bars(m, v, W, H, e, 1);
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
         /* nor is a flat vignette */
-        FILL(1, 0.0, 0.0, 48.0 - 28.0 * pow(fabs(x - 39.5) / 39.5, 2), 0.1)
+        FILL(0, 0.0, 0.0, 48.0 - 28.0 * pow(fabs(x - 39.5) / 39.5, 2), 0.1)
+        y264_aq_bars(m, v, W, H, e, 0);
+        CHECK(e[2] <= 1 && e[3] <= 1);
+        y264_aq_bars(m, v, W, H, e, 1);
+        CHECK(e[2] == 0 && e[3] == 0);
+        /* letterbox bars past three eighths of the height aren't bars */
+        FILL(y < 18 || y >= H - 18, 16.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e, 0);
+        CHECK(e[0] == 0 && e[1] == 0);
+        /* bars of unequal depth, and a bar on one edge only, aren't a letterbox */
+        FILL(y < 3 || y >= H - 5, 16.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e, 0);
+        CHECK(e[0] == 0 && e[1] == 0);
+        FILL(y < 1 || (y == H - 1 && x < 50), 16.0, 0.0, 120.0, 60.0)  /* bottom edge part matte */
+        y264_aq_bars(m, v, W, H, e, 0);
+        CHECK(e[0] == 0 && e[1] == 0);
+        /* sides a few blocks apart pair (a crop off center): 8 and 6 deep */
+        FILL(x < 8 || x >= W - 6, 16.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e, 1);
+        CHECK(e[2] == 8 && e[3] == 6);
+        FILL(x < 3 || x >= W - 5, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e, 0);
         CHECK(e[2] == 0 && e[3] == 0);
+        /* the floor's edge: a flat step alone, or grain alone, is sharp */
+        FILL(y < 6 || y >= H - 6, 16.0, 0.0, 40.0, 0.1)
+        y264_aq_bars(m, v, W, H, e, 1);
+        CHECK(e[0] == 6 && e[1] == 6);
+        FILL(y < 6 || y >= H - 6, 16.0, 0.0, 17.5, 2.0)
+        y264_aq_bars(m, v, W, H, e, 1);
+        CHECK(e[0] == 6 && e[1] == 6);
         /* a flat dark gradient across the line isn't uniform along it */
         FILL(y < 8 || y >= H - 8, 13.5 + 6.0 * x / (W - 1.0), 0.1, 120.0, 80.0)
         y264_aq_bars(m, v, W, H, e, 0);

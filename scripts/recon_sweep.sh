@@ -37,7 +37,7 @@ CLIPS="${CLIPS:-foreman mobile bus stefan akiyo coastguard}"
 QPS="${QPS:-6 18 26 37 51}"
 FRAMES="${FRAMES:-0}"
 . "$ROOT/scripts/devknobs.sh"
-y264_require_dev_knobs "$ENC" "$ARM" Y264_AQ_BAR    # the letterbox cells set it
+y264_require_dev_knobs "$ENC" "$ARM"
 
 # A caller-named WORK is the caller's to keep; an unnamed one is per-run
 # scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).
@@ -92,13 +92,18 @@ for clip in $CLIPS; do
     if ! ffmpeg -v error -y -i "$src" -vf "crop=352:192:0:48,pad=352:288:0:48:black" "$lb"; then
         echo "  FAIL letterbox: couldn't make the clip"; total=$((total + 1)); fails=$((fails + 1)); break
     fi
-    # the cells below only cover the floor if it fires on this clip
+    # the cells below only cover the floor if it fires on this clip; a release
+    # binary ignores the knob that turns it off, so only a dev build can tell
     case "$ARM" in *Y264_AQ_BAR*) ;; *)
-        total=$((total + 1))
-        a="$(env $ARM "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
-        b="$(env $ARM Y264_AQ_BAR=-1 "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
-        if [ "$a" = "$b" ]; then
-            echo "  FAIL letterbox: the bar floor didn't engage"; fails=$((fails + 1))
+        if ! "$ENC" --version 2>/dev/null | grep -q "(dev knobs)"; then
+            echo "  skip letterbox floor check (release build)"
+        else
+            total=$((total + 1))
+            a="$(env $ARM "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
+            b="$(env $ARM Y264_AQ_BAR=-1 "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
+            if [ "$a" = "$b" ]; then
+                echo "  FAIL letterbox: the bar floor didn't engage"; fails=$((fails + 1))
+            fi
         fi ;;
     esac
     for crf in 20 34; do
