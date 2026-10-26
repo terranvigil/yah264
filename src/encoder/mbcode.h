@@ -458,6 +458,8 @@ typedef struct {
 } y264_frame_t;
 
 int y264_mb_bar_floored(const y264_frame_t *f, int mbx, int mby);
+/* a macroblock's coded QP from the frame's maps, without mb_qp_pre's side effects */
+int y264_mb_qp(const y264_frame_t *f, int mbx, int mby);
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),
  * writing the slice_data to `bs` and filling rec[]. Thin wrapper over the

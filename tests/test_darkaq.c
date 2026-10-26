@@ -8,6 +8,8 @@
 // this test is what stops that from happening silently. The cases are written
 // on the 8-bit scale and moved to the build's pixel scale before the call.
 #include "../src/encoder/mbcode.h"
+#include "../src/dsp/metrics.h"
+#include <string.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,6 +200,27 @@ int main(void)
         y264_aq_bars(m, v, W, H, e, 0);
         CHECK(e[2] == 0 && e[3] == 0);
 #undef FILL
+    }
+
+    /* the floor takes a bar block only when it and its four neighbors are
+     * flat: a subtitle block in the bar, and the blocks around it, stay picture */
+    {
+        enum { W = 8, H = 8, S = W * 16 };
+        static pixel plane[S * H * 16];
+        y264_dsp_init();
+        for (int i = 0; i < S * H * 16; i++) plane[i] = (pixel)M(16.0);
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 16; x++)
+                plane[y * S + 3 * 16 + x] = (pixel)M((x + y) & 1 ? 200.0 : 16.0);
+        y264_frame_t f;
+        memset(&f, 0, sizeof f);
+        f.src[0] = plane; f.src_stride[0] = S; f.wmb = W; f.hmb = H;
+        f.bar[0] = 2; f.bar[1] = 2;
+        CHECK(!y264_mb_bar_floored(&f, 3, 0));          /* the subtitle block */
+        CHECK(!y264_mb_bar_floored(&f, 2, 0) && !y264_mb_bar_floored(&f, 4, 0) &&
+              !y264_mb_bar_floored(&f, 3, 1));          /* its neighbors */
+        CHECK(y264_mb_bar_floored(&f, 0, 0) && y264_mb_bar_floored(&f, 6, 7));
+        CHECK(!y264_mb_bar_floored(&f, 3, 4));          /* picture */
     }
 
     if (fails) fprintf(stderr, "%d failure(s)\n", fails);

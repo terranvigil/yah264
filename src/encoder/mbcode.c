@@ -507,12 +507,19 @@ static int mb_flat(const y264_frame_t *f, int mbx, int mby)
 }
 
 /* inside the bars and flat with its four neighbors, so a subtitle or logo in
- * a bar, and the blocks around it, are coded as picture */
+ * a bar, and the blocks around it, are coded as picture. Only in I slices and
+ * unweighted P slices: an explicit luma weight shifts the bars too, and a B
+ * slice inherits that from its references; at the frame QP the residual that
+ * would put them back quantizes to zero, so black pumps */
 int y264_mb_bar_floored(const y264_frame_t *f, int mbx, int mby)
 {
     if (mby >= f->bar[0] && mby < f->hmb - f->bar[1] &&
         mbx >= f->bar[2] && mbx < f->wmb - f->bar[3])
         return 0;
+    if (f->slice_type == 2) return 0;
+    if (f->slice_type == 1)
+        for (int r = 0; r < 16; r++)
+            if (f->wp_luma[r]) return 0;
     if (!mb_flat(f, mbx, mby)) return 0;
     if (mbx > 0 && !mb_flat(f, mbx - 1, mby)) return 0;
     if (mbx < f->wmb - 1 && !mb_flat(f, mbx + 1, mby)) return 0;
@@ -768,6 +775,11 @@ static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
     if (q < f->qp + y264_aq_bar_floor() && y264_mb_bar_floored(f, mbx, mby))
         q = f->qp + y264_aq_bar_floor();
     return q < 0 ? 0 : (q > 51 ? 51 : q);
+}
+
+int y264_mb_qp(const y264_frame_t *f, int mbx, int mby)
+{
+    return mb_cur_qp(f, mbx, mby);
 }
 
 /* W1: deterministic prev_qp for the pass-1 mb_qp_delta pricing -- the QP map's

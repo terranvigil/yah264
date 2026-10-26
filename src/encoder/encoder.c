@@ -3038,14 +3038,9 @@ static int qp_trace_on(void)          /* warmed in warm_lr_statics */
 static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int type)
 {
     if (!qp_trace_on() || !f->mbqp) return;
-    long n = (long)e->width_in_mbs * e->height_in_mbs, sum = 0, isum = 0, nskip = 0;
+    long n = (long)f->wmb * f->hmb, sum = 0, isum = 0, nskip = 0;
     for (long i = 0; i < n; i++) {
-        int q = f->qp + (f->mbtree_off ? f->mbtree_off[i]
-                                       : (f->aq_off ? (int)f->aq_off[i] : 0));
-        if (q < f->qp + y264_aq_bar_floor() &&
-            y264_mb_bar_floored(f, (int)(i % f->wmb), (int)(i / f->wmb)))
-            q = f->qp + y264_aq_bar_floor();
-        if (q < 0) q = 0; else if (q > 51) q = 51;
+        int q = y264_mb_qp(f, (int)(i % f->wmb), (int)(i / f->wmb));
         sum += f->mbqp[i]; isum += q; nskip += f->mbqp[i] != q;
     }
     fprintf(stderr, "QPT type=%d poc=%d slice_qp=%d mean_qp=%.2f intended=%.2f nodelta=%.2f moff=%.2f crf_dc=%.2f map=%s\n",

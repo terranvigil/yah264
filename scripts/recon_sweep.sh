@@ -97,9 +97,13 @@ for clip in $CLIPS; do
             echo "  skip letterbox floor check (release build)"
         else
             total=$((total + 1))
-            a="$(env $ARM "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
-            b="$(env $ARM Y264_AQ_BAR=-1 "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o - 2>/dev/null | cksum)"
-            if [ "$a" = "$b" ]; then
+            env $ARM "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o "$WORK/on.264" >/dev/null 2>&1
+            ra=$?
+            env $ARM Y264_AQ_BAR=-1 "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o "$WORK/off.264" >/dev/null 2>&1
+            rb=$?
+            if [ $ra -ne 0 ] || [ $rb -ne 0 ] || [ ! -s "$WORK/on.264" ] || [ ! -s "$WORK/off.264" ]; then
+                echo "  ENCFAIL letterbox floor check (rc $ra/$rb)"; fails=$((fails + 1))
+            elif cmp -s "$WORK/on.264" "$WORK/off.264"; then
                 echo "  FAIL letterbox: the bar floor didn't engage"; fails=$((fails + 1))
             fi
         fi ;;
