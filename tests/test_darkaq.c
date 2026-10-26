@@ -173,6 +173,13 @@ int main(void)
         FILL(y < 6 || y >= H - 7, y < 6 ? 20.0 : 21.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
+        /* one color means within half a level: 0.4 apart pairs, 0.7 doesn't */
+        FILL(y < 6 || y >= H - 9, y < 6 ? 20.0 : 20.4, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 9);
+        FILL(y < 6 || y >= H - 6, y < 6 ? 20.0 : 20.7, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
         /* sides a few blocks apart pair (a crop off center): 8 and 6 deep */
         FILL(x < 8 || x >= W - 6, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
