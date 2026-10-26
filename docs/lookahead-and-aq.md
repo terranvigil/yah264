@@ -96,15 +96,12 @@ aren't flat, counted over the picture leaving out any letterbox bars, none at
 35% and full at 50%. A dark frame with neither is left to
 the variance offset.
 
-**Letterbox and pillarbox bars.** Bars of any matte color are found per frame:
-matched pairs of flat edge rows (or columns) of one color, of about the same
-depth, that don't drift line to line, up to three eighths of the height or
+**Letterbox and pillarbox bars.** The grain share leaves out bars of any matte
+color: matched pairs of flat edge rows (or columns) of one color, of about the
+same depth, that don't drift line to line, up to three eighths of the height or
 width a side. Only flat blocks count, so a grainy sky is never a bar; grainy
-film-scan bars count as picture. Bars are left out of the dark gate's grain
-share. Where a bar ends at a sharp edge, its flat blocks whose neighbors are
-flat too never go below the frame QP in I and unweighted P slices, so AQ and
-mb-tree spend nothing there; a subtitle or logo in the bar, and the blocks
-around it, are coded as picture.
+film-scan bars count as picture. Without this, the bars of a letterboxed night
+scene would dilute its share and keep the gate shut.
 
 **Psy-trellis and the flat-content lattice.** `--psy-trellis` defaults to 0.
 When on, the trellis rewards keeping the AC energy of the reconstructed

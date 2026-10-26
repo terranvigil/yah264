@@ -80,9 +80,9 @@ CFGS
     done
 done
 
-# Pure --qp runs no AQ, so none of the cells above reach the letterbox floor
-# (per-MB QP held at the frame QP inside matte bars). A letterboxed copy of the
-# first clip found, at CRF, covers it: black bars three macroblock rows deep.
+# Pure --qp runs no AQ, so none of the cells above reach the dark-cut gate or
+# its bar detection. A letterboxed copy of the first clip found, at CRF, does:
+# black bars three macroblock rows deep.
 for clip in $CLIPS; do
     src="$FIX/corpus_${clip}_cif_48f.y4m"
     [ -f "$src" ] || continue
@@ -90,24 +90,6 @@ for clip in $CLIPS; do
     if ! ffmpeg -v error -y -i "$src" -vf "crop=352:192:0:48,pad=352:288:0:48:black" "$lb"; then
         echo "  FAIL letterbox: couldn't make the clip"; total=$((total + 1)); fails=$((fails + 1)); break
     fi
-    # the cells below only cover the floor if it fires on this clip; a release
-    # binary ignores the knob that turns it off, so only a dev build can tell
-    case "$ARM" in *Y264_AQ_BAR*) ;; *)
-        if ! "$ENC" --version 2>/dev/null | grep -q "(dev knobs)"; then
-            echo "  skip letterbox floor check (release build)"
-        else
-            total=$((total + 1))
-            env $ARM "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o "$WORK/on.264" >/dev/null 2>&1
-            ra=$?
-            env $ARM Y264_AQ_BAR=-1 "$ENC" --input-y4m "$lb" --crf 20 --threads 1 -o "$WORK/off.264" >/dev/null 2>&1
-            rb=$?
-            if [ $ra -ne 0 ] || [ $rb -ne 0 ] || [ ! -s "$WORK/on.264" ] || [ ! -s "$WORK/off.264" ]; then
-                echo "  ENCFAIL letterbox floor check (rc $ra/$rb)"; fails=$((fails + 1))
-            elif cmp -s "$WORK/on.264" "$WORK/off.264"; then
-                echo "  FAIL letterbox: the bar floor didn't engage"; fails=$((fails + 1))
-            fi
-        fi ;;
-    esac
     for crf in 20 34; do
         for cfg in "" "--cavlc" "--bframes 0" "--aq-strength 0" "--slices 3"; do
             total=$((total + 1))
