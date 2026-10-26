@@ -403,14 +403,17 @@ int y264_aq_grain(double mean, double var)
            var < aq_dark_env(2) * sc * sc;
 }
 
-/* Letterbox and pillarbox bars: uniform, non-drifting edge lines of one matte
- * color, in matched pairs (docs/lookahead-and-aq.md). sharp also
- * wants a clear step into the picture, so the QP floor never lands on picture
- * that happens to match the matte for a few lines. */
-#define AQ_BAR_VAR   4.0
-#define AQ_BAR_TOL   3.0
-#define AQ_BAR_DRIFT 1.0
-#define AQ_BAR_PAIR  6.0
+/* Letterbox and pillarbox bars: flat, non-drifting edge lines of one matte
+ * color, in matched pairs (docs/lookahead-and-aq.md). Only flat blocks count,
+ * so a grainy sky is never a bar, and a flat block taken for one can't band.
+ * sharp also wants a clear step into the picture, so the QP floor never lands
+ * on the edge rows of a gentle gradient. */
+#define AQ_BAR_VAR       AQ_GRAIN_VMIN
+#define AQ_BAR_TOL       1.0
+#define AQ_BAR_DRIFT     0.5
+#define AQ_BAR_PAIR      2.0
+#define AQ_BAR_EDGE_VAR  1.0
+#define AQ_BAR_EDGE_STEP 4.0
 /* the mean of one line's low-variance blocks; *ok when they're at least half */
 static double bar_color(const float *mean, const float *var, int i0, int step,
                         int n, double vmax, int *ok)
@@ -425,7 +428,7 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
 /* bar lines counted inward from one edge; line k starts at i0 + k * lstep */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                      int step, int n, int maxl, double color, double vmax,
-                     double tol, double drift, int sharp)
+                     double tol, double drift, double sc, int sharp)
 {
     int lines = 0;
     for (; lines < maxl; lines++) {
@@ -445,7 +448,7 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
     int k = 0, line = i0 + lines * lstep;
     for (int t = 0; t < n; t++) {
         int i = line + t * step;
-        k += var[i] >= vmax || fabs(mean[i] - color) >= 2.0 * tol;
+        k += var[i] >= AQ_BAR_EDGE_VAR * sc * sc || fabs(mean[i] - color) >= AQ_BAR_EDGE_STEP * sc;
     }
     return 2 * k < n ? 0 : lines;
 }
@@ -456,14 +459,14 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
     double vmax = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc;
     double ptol = AQ_BAR_PAIR * sc, drift = AQ_BAR_DRIFT * sc;
     int top = 0, bottom = 0, left = 0, right = 0, ok_a, ok_b;
-    int maxr = hmb / 4, maxc = wmb / 6;
+    int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
     double color_a = bar_color(mean, var, 0, 1, wmb, vmax, &ok_a);
     double color_b = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax, &ok_b);
     if (ok_a && ok_b && fabs(color_a - color_b) < ptol && maxr > 0) {
         top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, color_a, vmax,
-                        tol, drift, sharp);
+                        tol, drift, sc, sharp);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, color_b,
-                           vmax, tol, drift, sharp);
+                           vmax, tol, drift, sc, sharp);
         if (!top || !bottom || abs(top - bottom) > 1 || top > maxr || bottom > maxr)
             top = bottom = 0;
     }
@@ -473,9 +476,9 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
     color_b = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax, &ok_b);
     if (!top && ok_a && ok_b && fabs(color_a - color_b) < ptol && maxc > 0) {
         left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, color_a, vmax,
-                         tol, drift, sharp);
+                         tol, drift, sc, sharp);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, color_b,
-                          vmax, tol, drift, sharp);
+                          vmax, tol, drift, sc, sharp);
         if (!left || !right || abs(left - right) > 1 || left > maxc || right > maxc)
             left = right = 0;
     }
