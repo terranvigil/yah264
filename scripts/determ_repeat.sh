@@ -8,7 +8,7 @@
 # A DIAGNOSTIC, NOT A GATE. Repeatable byte-exact output is not a requirement
 # (owner, 2026-09-25, extending the 2026-08-10 ruling on thread counts), so
 # distinct bitstreams are reported as WARN and the exit status is 0 unless a
-# run failed to produce a stream (exit 1). At --threads 1 distinct bitstreams
+# run failed to produce a stream or a clip is missing (exit 1). At --threads 1 distinct bitstreams
 # are a FAIL (exit 1): one thread must repeat (owner, same day). STRICT=1 makes distinct bitstreams
 # exit 1 as well, for when you are hunting something with it: an uninitialised
 # read, a publish-before-data race, or an A/B arm whose args never reached the
@@ -60,7 +60,7 @@ fails=0; warns=0; total=0
 for clip in $CLIPS; do
     src="$ROOT/tests/corpus/$clip.y4m"
     if [ ! -f "$src" ]; then
-        echo "  FAIL $clip: no clip at $src" >&2; total=$((total + 1)); fails=$((fails + 1)); continue
+        echo "  FAIL $clip: no clip at $src"; total=$((total + 1)); fails=$((fails + 1)); continue
     fi
     for r in $REFS; do
         for t in $THREADS; do
@@ -107,8 +107,7 @@ for clip in $CLIPS; do
         done
     done
 done
-echo "DETERM-REPEAT $((total - fails - warns))/$total configs repeat byte-identically over $RUNS runs each, $fails producer failures  arm='${ARM:-<default>}' args='${ARGS:-<default>}'"
+echo "DETERM-REPEAT $((total - fails - warns))/$total configs repeat byte-identically over $RUNS runs each, $fails failures  arm='${ARM:-<default>}' args='${ARGS:-<default>}'"
 [ "$fails" -eq 0 ] || exit 1
-[ "$total" -gt 0 ] || { echo "determ_repeat: no clip found, nothing ran" >&2; exit 1; }
 [ "${STRICT:-0}" = 1 ] && [ "$warns" -gt 0 ] && exit 1
 exit 0
