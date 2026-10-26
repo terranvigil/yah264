@@ -44,7 +44,10 @@ fail=0; total=0
 for th in 1 4; do
   for cfg in "${configs[@]}"; do
     read -r clip frames extra <<<"$cfg"
-    cp="$CORPUS/$clip.y4m"; [ -f "$cp" ] || continue
+    cp="$CORPUS/$clip.y4m"
+    if [ ! -f "$cp" ]; then
+      echo "FAIL  t$th  $clip missing from $CORPUS"; fail=$((fail+1)); total=$((total+1)); continue
+    fi
     args="--input-y4m $cp --qp 26 --keyint 1000 --frames $frames --threads $th $extra"
     rm -f "$work/c.264" "$work/r.264"
     total=$((total+1))

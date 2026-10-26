@@ -74,7 +74,7 @@ printf '%-18s %14s %14s %9s %9s\n' ------------------ -------------- -----------
 for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
     path="$root/tests/corpus/$clip.y4m"
-    [ -f "$path" ] || { printf '%-18s %14s\n' "$clip" "(missing)"; continue; }
+    [ -f "$path" ] || { printf '%-18s %14s\n' "$clip" "(missing)"; fail=1; continue; }
     fps=$(awk 'NR==1{for(i=1;i<=NF;i++) if($i ~ /^F/){sub(/^F/,"",$i); split($i,a,":"); print a[1]/a[2]; exit}}' "$path")
     nf=$(python3 -c "print(int(round($fps*$SECONDS_PER)))")
 
@@ -85,7 +85,7 @@ for entry in $CLIPS; do
         printf '%-18s %14s\n' "$clip" "ENCFAIL"; fail=1; continue
     fi
     ni=${n%% *}; nw=${n##* }; xi=${x%% *}; xw=${x##* }
-    [ -n "$ni" ] && [ -n "$xi" ] || { printf '%-18s %14s\n' "$clip" "NO-COUNTER"; continue; }
+    [ -n "$ni" ] && [ -n "$xi" ] || { printf '%-18s %14s\n' "$clip" "NO-COUNTER"; fail=1; continue; }
     python3 - "$clip" "$ni" "$xi" "$nw" "$xw" <<'R'
 import sys
 c, ni, xi, nw, xw = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])

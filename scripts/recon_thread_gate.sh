@@ -37,10 +37,10 @@ if ! "$(dirname "$BIN")/../../cli/yah264" --version 2>/dev/null | grep -q "(dev 
   fi
 fi
 
-fail=0
+fail=0 ok=0
 for clip in $CLIPS; do
   src="$root/tests/corpus/$clip.y4m"
-  [ -f "$src" ] || { printf '  %-16s (missing)\n' "$clip"; continue; }
+  [ -f "$src" ] || { printf '  %-16s (missing)\n' "$clip"; fail=1; continue; }
   for th in $THREADS; do
     if ! "$BIN" "$src" "$WORK/o.264" "$WORK/rec.yuv" "$FRAMES" "$th" "$BITRATE" 2>"$WORK/err"; then
       printf '  %-16s t%-3s ENCODER FAILED: %s\n' "$clip" "$th" "$(head -1 "$WORK/err")"
@@ -84,10 +84,11 @@ PY
       fail=1
     else
       printf '  %-16s t%-3s %3s frames  recon-match ok\n' "$clip" "$th" "$n"
+      ok=$((ok + 1))
     fi
   done
 done
-if [ $fail -ne 0 ]; then
+if [ $fail -ne 0 ] || [ $ok -eq 0 ]; then
   echo "RECON-THREAD-GATE: FAILED (see rows above: a MISMATCH means the encoder"
   echo "  emitted frames it cannot itself reproduce; anything else means the check"
   echo "  could not run, which is not a pass)"
