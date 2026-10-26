@@ -417,26 +417,29 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
     return flat ? sum / flat : 0.0;
 }
 /* bar lines counted inward from one edge; line k starts at i0 + k * lstep.
- * *solid gets the lines before the first that is only partly matte */
+ * *solid gets the lines before the first that is partly picture: matte
+ * beside blocks quiet enough to be dark picture, where text would be busy */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                      int step, int n, int maxl, double color, double vmax,
-                     double tol, double drift, int *solid)
+                     double vbusy, double tol, double drift, int *solid)
 {
     int lines = 0;
     *solid = -1;
     for (; lines < maxl; lines++) {
-        int matte = 0, line = i0 + lines * lstep;
+        int matte = 0, quiet = 0, line = i0 + lines * lstep;
         double sum = 0;
         for (int t = 0; t < n; t++) {
             int i = line + t * step;
             if (var[i] < vmax && fabs(mean[i] - color) < tol) {
                 matte++; sum += mean[i];
+            } else if (var[i] < vbusy) {
+                quiet++;
             }
         }
         /* subtitles: the outermost line must be nearly all matte, inner ones half */
         if (lines ? 2 * matte < n : 10 * matte < 9 * n) break;
         if (fabs(sum / matte - color) >= drift) break;
-        if (*solid < 0 && 10 * matte < 9 * n) *solid = lines;
+        if (*solid < 0 && 10 * matte < 9 * n && quiet) *solid = lines;
     }
     if (*solid < 0) *solid = lines;
     return lines;
@@ -458,9 +461,9 @@ static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
     int ok = *a <= maxl || *b <= maxl;
     *a = *b = 0;
     for (int k = 0; ok && k < 4; k++) {
-        int x = ta[k & 1], y = tb[k >> 1];
-        if (x && y && x <= maxl && y <= maxl && pair(x, y, ca, cb, drift)) {
-            *a = x; *b = y;
+        int da = ta[k & 1], db = tb[k >> 1];
+        if (da && db && da <= maxl && db <= maxl && pair(da, db, ca, cb, drift)) {
+            *a = da; *b = db;
             return;
         }
     }
@@ -469,24 +472,26 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
     double vmax = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc;
-    double drift = AQ_BAR_DRIFT * sc;
+    double drift = AQ_BAR_DRIFT * sc, vbusy = aq_dark_env(2) * sc * sc;
     int top = 0, bottom = 0, left = 0, right = 0, sa, sb;
     int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
     if (maxr > 0) {
         double ca = bar_color(mean, var, 0, 1, wmb, vmax);
         double cb = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax);
-        top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, ca, vmax, tol, drift, &sa);
+        top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, ca, vmax, vbusy, tol,
+                        drift, &sa);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
-                           tol, drift, &sb);
+                           vbusy, tol, drift, &sb);
         pair_sides(&top, &bottom, sa, sb, ca, cb, drift, maxr);
     }
     /* side bars only without top and bottom ones */
     if (!top && maxc > 0) {
         double ca = bar_color(mean, var, 0, wmb, hmb, vmax);
         double cb = bar_color(mean, var, wmb - 1, wmb, hmb, vmax);
-        left = bar_depth(mean, var, 0, 1, wmb, hmb, maxc + 1, ca, vmax, tol, drift, &sa);
-        right = bar_depth(mean, var, wmb - 1, -1, wmb, hmb, maxc + 1, cb, vmax, tol,
-                          drift, &sb);
+        left = bar_depth(mean, var, 0, 1, wmb, hmb, maxc + 1, ca, vmax, vbusy, tol,
+                         drift, &sa);
+        right = bar_depth(mean, var, wmb - 1, -1, wmb, hmb, maxc + 1, cb, vmax, vbusy,
+                          tol, drift, &sb);
         pair_sides(&left, &right, sa, sb, ca, cb, drift, maxc);
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;

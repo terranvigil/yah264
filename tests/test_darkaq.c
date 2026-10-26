@@ -210,17 +210,32 @@ int main(void)
              x >= W - 22 ? 24.0 : 120.0, x >= W - 22 ? 3.0 : 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 15 && e[3] == 15);
-        /* and pairs with a bar holding a subtitle, whose own solid depth is 1 */
+        /* a bar that walks into dark picture also pairs with one holding a soft,
+         * quiet subtitle, whose own solid depth is 1 */
         FILL(((y < 6 || y >= H - 6) && !(y == H - 2 && x >= 20 && x < 60)) ||
              (y >= 6 && y < 13 && x % 10 < 7), 16.0, 0.0,
-             y == H - 2 ? 200.0 : (y < 13 ? 24.0 : 120.0),
-             y == H - 2 ? 500.0 : (y < 13 ? 3.0 : 60.0))
+             y == H - 2 ? 60.0 : (y < 13 ? 24.0 : 120.0),
+             y == H - 2 ? 10.0 : (y < 13 ? 3.0 : 60.0))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* busy subtitle text doesn't end a solid depth, so a bar holding one can
+         * walk into dark picture too */
+        FILL(((y < 6 || y >= H - 6) && !(y == H - 3 && x >= 20 && x < 60)) ||
+             (y >= H - 13 && y < H - 6 && x % 10 < 7), 16.0, 0.0,
+             y == H - 3 ? 200.0 : (y >= H - 13 ? 24.0 : 120.0),
+             y == H - 3 ? 500.0 : (y >= H - 13 ? 3.0 : 60.0))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* one walk past the cap still pairs at its solid depth */
+        FILL(y < 6 || y >= H - 6 || (y < 25 && x % 10 < 7), 16.0, 0.0,
+             y < 25 ? 24.0 : 120.0, y < 25 ? 3.0 : 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
         /* a dark subject in a black void isn't letterboxed: both walks pass the cap */
         FILL(!(x >= 20 && x < 60 && y >= 12 && y < 33), 16.0, 0.0, 30.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        /* nor are bars past the cap rescued at a partly matte line inside them */
         FILL((y < 18 || y >= H - 18) && !((y == 3 || y == H - 4) && x < 30), 16.0, 0.0,
              120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
