@@ -492,7 +492,6 @@ double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb
     return n ? (double)g / n : 0.0;
 }
 
-
 /* a ramp from 0 at a to 1 at b; a step at a when the two coincide */
 static double ramp(double x, double a, double b)
 {
@@ -561,9 +560,9 @@ double y264_psy_dark_gain(double mean, double var)
     return k > 1.0 ? 1.0 + (k - 1.0) * aq_dark_weight(mean, var) : 1.0;
 }
 
-/* per-macroblock luma mean and variance; the exact copies are optional */
+/* per-macroblock luma mean and variance, exact and as floats */
 static void aq_mb_stats(const y264_frame_t *f, float *means, float *vars,
-                           double *dmeans, double *dvars)
+                        double *dmeans, double *dvars)
 {
     const uint32_t *mbv = f->mbvar && *f->mbvar_src == f->src[0] ? f->mbvar : NULL;
     int ss = f->src_stride[0];
@@ -582,10 +581,9 @@ static void aq_mb_stats(const y264_frame_t *f, float *means, float *vars,
             if (var < 0) var = 0;
             means[i] = (float)mean;
             vars[i] = (float)var;
-            if (dmeans) { dmeans[i] = mean; dvars[i] = var; }
+            dmeans[i] = mean; dvars[i] = var;
         }
 }
-
 
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
  * and banding are visible), raise it on busy ones (where distortion is masked).
@@ -601,7 +599,7 @@ static void aq_analyze(y264_frame_t *f)
         for (int i = 0; i < n; i++) f->aq_off[i] = 0;
         return;
     }
-    /* exact mean and variance, then lv, dk and the float copies the bar tests read */
+    /* exact mean and variance, then lv, dk and the float copies the grain share reads */
     double *dmeans = malloc((size_t)n * (2 * sizeof(double) + 4 * sizeof(float)));
     if (!dmeans) {
         for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
