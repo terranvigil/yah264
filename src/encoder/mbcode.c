@@ -438,12 +438,12 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
     }
     return lines;
 }
-/* a matte's two sides, which a crop off center can leave a few blocks apart,
- * on top of a block of rounding to whole rows */
-static int depths_pair(int a, int b)
+/* a matte's two sides: a block of rounding apart, or a few blocks when an off
+ * center crop leaves them one color (an unrelated sky and ground rarely are) */
+static int depths_pair(int a, int b, double ca, double cb, double drift)
 {
     int lo = a < b ? a : b;
-    return abs(a - b) <= 1 + lo / 3;
+    return abs(a - b) <= (fabs(ca - cb) < drift ? 1 + lo / 3 : 1);
 }
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
@@ -459,7 +459,7 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
                         tol, drift);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, color_b,
                            vmax, tol, drift);
-        if (!top || !bottom || !depths_pair(top, bottom) || top > maxr || bottom > maxr)
+        if (!top || !bottom || !depths_pair(top, bottom, color_a, color_b, drift) || top > maxr || bottom > maxr)
             top = bottom = 0;
     }
     /* side bars only without top and bottom ones */
@@ -471,7 +471,7 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
                          tol, drift);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, color_b,
                           vmax, tol, drift);
-        if (!left || !right || !depths_pair(left, right) || left > maxc || right > maxc)
+        if (!left || !right || !depths_pair(left, right, color_a, color_b, drift) || left > maxc || right > maxc)
             left = right = 0;
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
