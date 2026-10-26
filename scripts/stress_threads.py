@@ -13,7 +13,7 @@ or the wavefront analysis path.
 
 Usage: scripts/stress_threads.py [--rounds N] [--per-round-timeout S]
 Exit 0 = no hang; exit 1 = a hang was caught (a /tmp/stress_hang.sample is written)
-or an encode failed.
+or an encode failed or was still running at the per-round timeout.
 """
 import argparse
 import os
@@ -87,13 +87,12 @@ def main():
     hangs = fails = 0
     for r in range(args.rounds):
         procs = [enc(c, q) for c in clips for q in (BITRATES if ABR else CRFS)]
-        zero, t0 = {}, time.time()
+        zero, t0, hit = {}, time.time(), None
         while time.time() - t0 < args.per_round_timeout:
             alive = [p for p in procs if p.poll() is None]
             if not alive:
                 break
             time.sleep(2)
-            hit = None
             for p in alive:
                 v = cpu(p.pid)
                 zero[p.pid] = zero.get(p.pid, 0) + 1 if 0 <= v < 1.0 else 0
@@ -109,6 +108,10 @@ def main():
         for p in procs:
             if p.poll() is None:
                 p.kill(); p.wait()
+                if hit is None:                 # busy, not wedged, at the timeout
+                    fails += 1
+                    print(f"TIMEOUT round {r}: {p.clip} still running after "
+                          f"{args.per_round_timeout:g}s")
             elif p.returncode:
                 fails += 1
                 p.err.seek(0)
