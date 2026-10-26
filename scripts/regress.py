@@ -332,6 +332,8 @@ def main():
     if not a.clip:
         cells.append(("--threads 1", "yuv420p"))
 
+    if a.cell is not None and not 0 <= a.cell < len(cells):
+        sys.exit(f"regress: --cell {a.cell} is out of range (0..{len(cells) - 1})")
     print(f"regress: rev {REV}  seed {SEED}  {len(cells)} cells  "
           f"{nframes} frames  clip "
           f"{os.path.basename(a.clip) if a.clip else 'synthetic per-format'}  "
