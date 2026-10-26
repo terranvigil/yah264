@@ -752,6 +752,8 @@ def main():
         h = hashlib.sha1(f"{tmpl}|{clip}|{q}|{args.frames}|{mt}|{envk}".encode()).hexdigest()[:20]
         return os.path.join(cache_dir, h + ".264")
 
+    errs = {}
+
     def encode(tag, tmpl, clip, q):
         out = os.path.join(work, f"{clip}_{tag}_{q}.264")
         ck = _ckey(tmpl, clip, q) if args.cache else None
@@ -761,6 +763,7 @@ def main():
         cmd = tmpl.format(src=shlex.quote(srcs[clip]), q=q, out=shlex.quote(out))
         r = sh(cmd)
         if r.returncode != 0 or not os.path.exists(out):
+            errs[(tag, clip, q)] = f"exit {r.returncode}: {r.stderr[-400:]}"
             return (tag, clip, q, None)
         if ck:
             try:
@@ -780,7 +783,7 @@ def main():
     outs = {(t, c, q): o for t, c, q, o in results}
     if any(o is None for o in outs.values()):
         bad = [k for k, v in outs.items() if v is None]
-        sys.exit(f"bdcompare: encode failed for {bad[:3]}")
+        sys.exit(f"bdcompare: encode failed for {bad[:3]}\n{errs.get(bad[0], '')}")
 
     src_raw = {}
     if not args.vmaf:

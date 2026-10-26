@@ -133,7 +133,7 @@ def main():
         if not os.path.exists(log):
             p = run(base.format(b=shlex.quote(REF)), {"Y264_RC_REC": log + ".tmp"})
             if p.returncode or not os.path.exists(log + ".tmp"):
-                print(f"{name:28} record failed"); nbad += 1; continue
+                print(f"{name:28} record failed: {p.stderr.strip()[-120:]}"); nbad += 1; continue
             os.replace(log + ".tmp", log)
         q = run(base.format(b=shlex.quote(CAND)), dict(cenv, Y264_RC_PLAY=log))
         m = re.search(r"RCREPLAY slices=(\d+) qp_match=(\d+) qp_diff=(\d+) modelled=(\d+) "

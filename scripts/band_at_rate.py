@@ -101,7 +101,7 @@ def run(clip):
            "--label-a", "arm", "--label-b", "default",
            "--a", arm, "--b", BASE]
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    return clip, r.stdout + r.stderr
+    return clip, r.stdout + r.stderr, r.returncode
 
 
 # EARLY STOP, as in hd_band.py: the arm is refused, and the clips not yet
@@ -118,7 +118,7 @@ print(f"default: {BASE}")
 print(f"gate {GATE}; early stop "
       + (f"on (one clip > {EARLY_ONE:+.2f}% or {EARLY_N} > {EARLY_SOME:+.2f}%)\n"
          if EARLY_STOP else "off\n"))
-results, refused = {}, None
+results, refused, failed = {}, None, []
 with ThreadPoolExecutor(max_workers=JOBS) as ex:
     # as_completed, not map: a 720p clip takes an order of magnitude longer than
     # a CIF one, and in submission order one of those hides every result behind
@@ -127,8 +127,10 @@ with ThreadPoolExecutor(max_workers=JOBS) as ex:
     for fut in as_completed(futs):
         if fut.cancelled():
             continue
-        clip, out = fut.result()
+        clip, out, rc = fut.result()
         print(out.rstrip())
+        if rc:
+            failed.append(clip)
         m = re.search(r"BD-rate\(" + re.escape(GATE) + r"\).*?:\s*([-+][\d.]+)%", out)
         if m:
             results[clip] = float(m.group(1))
@@ -154,3 +156,5 @@ if results:
           f"negative {sum(1 for v in vals if v < 0)}/{len(vals)}   worst {max(vals):+.2f}%")
 if refused:
     print(f"  REFUSED by early stop on {refused}; read {len(results)}/{len(ladders)} clips")
+if failed:
+    sys.exit(f"band_at_rate: {len(failed)} clip(s) failed: {', '.join(sorted(failed))}")

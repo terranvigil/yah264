@@ -287,7 +287,9 @@ def enc(env, q, src, out):
         cmd = cmd + " " + flags
     if env:
         cmd = env + " " + cmd
-    subprocess.run(cmd, shell=True, capture_output=True, cwd=ROOT)
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=ROOT)
+    if r.returncode:
+        sys.exit(f"hd_band: encode failed: {cmd}\n{r.stderr[-400:]}")
     return os.path.getsize(out) if os.path.exists(out) else 0
 
 

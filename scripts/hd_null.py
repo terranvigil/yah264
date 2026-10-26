@@ -116,9 +116,11 @@ def anchor_bytes(ref, clip, rungs, args):
 
     def one(q):
         o = f"{out}.{q:g}"
-        subprocess.run(f"{shlex.quote(ref)} --input-y4m {shlex.quote(src)} --frames {args.frames} "
-                       f"--preset {args.preset} {tools}--crf {q:.4f} --threads {args.threads} "
-                       f"-o {shlex.quote(o)}", shell=True, capture_output=True, cwd=ROOT)
+        r = subprocess.run(f"{shlex.quote(ref)} --input-y4m {shlex.quote(src)} --frames {args.frames} "
+                           f"--preset {args.preset} {tools}--crf {q:.4f} --threads {args.threads} "
+                           f"-o {shlex.quote(o)}", shell=True, capture_output=True, text=True, cwd=ROOT)
+        if r.returncode:
+            sys.exit(f"hd_null: {clip} crf {q:g} encode failed:\n{r.stderr[-400:]}")
         return os.path.getsize(o) if os.path.exists(o) else 0
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         sizes = list(ex.map(one, rungs))

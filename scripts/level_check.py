@@ -174,7 +174,12 @@ def self_test(enc, corpus):
 
         def y264(name, src, *args):
             out = os.path.join(tmp, name + ".264")
-            _run([enc, "--input-y4m", src, "--threads", "1"] + list(args) + ["-o", out])
+            r = subprocess.run([enc, "--input-y4m", src, "--threads", "1"] + list(args)
+                               + ["-o", out], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, text=True)
+            if r.returncode:
+                sys.exit("level_check --self-test: yah264 failed on %s (exit %d):\n%s"
+                         % (name, r.returncode, r.stderr[-400:]))
             return out
 
         # x264's own auto pick, with its HRD carrying the rate leg.

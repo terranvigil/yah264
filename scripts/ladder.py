@@ -67,7 +67,10 @@ def bd_for_preset(preset, clips, args):
            "--jobs", str(args.jobs)]
     if args.no_cache:
         cmd.append("--no-cache")
-    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(f"ladder: bdcompare failed at {preset} ({r.returncode}):\n{r.stderr[-400:]}")
+    out = r.stdout
     res = {}
     for line in out.splitlines():
         m = re.match(r"(\S+)\s+BD-rate\((VMAF(?:-NEG|-v1)?)\) A vs B:\s+([-+]?[\d.]+)%", line)
@@ -82,9 +85,11 @@ def time_encode(tmpl, binp, src, preset, q, ref):
     cmd = tmpl.format(bin=shlex.quote(binp), src=shlex.quote(src), out=shlex.quote(out),
                       p=preset, q=q)
     t0 = time.time()
-    r = subprocess.run(shlex.split(cmd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    r = subprocess.run(shlex.split(cmd), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     dt = time.time() - t0
-    return dt if r.returncode == 0 and dt > 0 else None
+    if r.returncode:
+        sys.exit(f"ladder: encode failed ({r.returncode}): {cmd}\n{r.stderr[-400:]}")
+    return dt if dt > 0 else None
 
 
 def speed_for_preset(preset, clip, args):
