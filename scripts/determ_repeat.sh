@@ -8,7 +8,8 @@
 # A DIAGNOSTIC, NOT A GATE. Repeatable byte-exact output is not a requirement
 # (owner, 2026-09-25, extending the 2026-08-10 ruling on thread counts), so
 # distinct bitstreams are reported as WARN and the exit status is 0 unless a
-# run failed to produce a stream, a clip is missing or nothing ran (exit 1). At --threads 1 distinct bitstreams
+# run failed to produce a stream, a clip is missing or nothing ran (exit 1); a
+# RUNS under 2 or not a number is refused (exit 2). At --threads 1 distinct bitstreams
 # are a FAIL (exit 1): one thread must repeat (owner, same day). STRICT=1 makes distinct bitstreams
 # exit 1 as well, for when you are hunting something with it: an uninitialised
 # read, a publish-before-data race, or an A/B arm whose args never reached the
