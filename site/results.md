@@ -433,7 +433,7 @@ scripts/multishot_bd.py --arms flat=env:Y264_AQ_DC=0.4 new=env: x264
 ```
 
 It needs a build from `make`, or one configured with `-Ddev_knobs=true`, since a
-default build ignores `Y264_AQ_DC`.
+default build refuses to encode with `Y264_AQ_DC` set.
 
 The numbers: each sequence runs 150 frames per shot, except the CIF sequence's
 third shot at 90. CIF runs at 30 fps, 720p at 50 and 1080p at 25. The CRF points

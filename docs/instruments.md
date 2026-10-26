@@ -276,12 +276,11 @@ tree and live with the measurement records.
 
 ## 7. Traps that have each cost a round
 
-- **A build without `-Ddev_knobs=true` ignores the `Y264_*` knobs**, apart from
-  the CLI-carried ones. The CLI warns on stderr for each knob it ignores, and
-  the harnesses refuse such a binary when a knob it would ignore is in play
-  (`scripts/devknobs.py`, or `scripts/devknobs.sh` from shell); a script of
-  your own that sets knobs should call it too. `make` configures its build
-  with the option; a hand-made or pre-existing build dir needs
+- **A build without `-Ddev_knobs=true` reads only the CLI-carried `Y264_*`
+  knobs.** Its CLI refuses to encode, with exit status 2 and the knob's name on
+  stderr, when any other knob is set, so a script of your own must treat a
+  failed encode as a failure, not a result. `make` configures its build with
+  the option; a hand-made or pre-existing build dir needs
   `meson configure <dir> -Ddev_knobs=true`.
 
 - **The table's dVMAF is only comparable across builds if the operating point

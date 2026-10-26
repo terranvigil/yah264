@@ -78,13 +78,15 @@ jobs:
           meson setup build-default
           ninja -C build-default
           meson test -C build-default --print-errorlogs
-          # a release CLI ignores a non-CLI knob (unchanged output) and says so;
-          # the dev build shows the same knob does change output
+          # a release CLI encodes with no knob set and refuses one it would
+          # ignore, even under --quiet; the dev build shows the knob does change output
           ffmpeg -v error -f lavfi -i testsrc=size=176x144:rate=25:duration=1 -pix_fmt yuv420p kn.y4m
           build-default/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o a.264
-          Y264_AQ_DC=0.4 build-default/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o b.264 2> warn.txt
-          cmp a.264 b.264
-          grep -q "Y264_AQ_DC is ignored" warn.txt
+          test -s a.264
+          rc=0
+          Y264_AQ_DC=0.4 build-default/cli/yah264 --quiet --input-y4m kn.y4m --crf 23 --threads 1 -o b.264 2> refuse.txt || rc=$?
+          if [ "$rc" -ne 2 ]; then echo "release build exited $rc with Y264_AQ_DC set, not 2"; exit 1; fi
+          grep -q "Y264_AQ_DC" refuse.txt
           build/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o c.264
           Y264_AQ_DC=0.4 build/cli/yah264 --input-y4m kn.y4m --crf 23 --threads 1 -o d.264
           if cmp -s c.264 d.264; then echo "dev build ignored Y264_AQ_DC"; exit 1; fi
