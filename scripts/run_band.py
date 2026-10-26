@@ -61,9 +61,6 @@ ARM = os.environ.get("ARM", "")
 # ARM_ARGS: extra CLI flags for the arm side, for knobs that are CLI
 # options rather than env vars (--aq-strength, --psy-rd, ...).
 ARM_ARGS = os.environ.get("ARM_ARGS", "")
-sys.path.insert(0, HERE)
-import bdcompare                                                # noqa: E402
-bdcompare.require_dev_knobs(N if os.path.isabs(N) else os.path.join(ROOT, N), ARM, ARM_ARGS)
 
 # VMAF_MODELS=neg (the default) scores VMAF-NEG alone, the only number the band
 # gates on, for a little over half the scoring cost of both models; the per-rung

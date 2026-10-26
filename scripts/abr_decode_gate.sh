@@ -33,8 +33,6 @@ ARM="${ARM:-}"
 # every arm then produces nothing, whose PSNRs match.
 #   ARGS='--tff --bframes 0' scripts/abr_decode_gate.sh   # the field ABR path
 ARGS="${ARGS:-}"
-. "$ROOT/scripts/devknobs.sh"
-y264_require_dev_knobs "$ENC" "$ARM"
 
 # A caller-named WORK is the caller's to keep; an unnamed one is per-run
 # scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).

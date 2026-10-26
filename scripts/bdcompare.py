@@ -40,7 +40,6 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch                                                  # noqa: E402
-import devknobs                                                 # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -301,14 +300,6 @@ def _packets(bitstream):
         return None
 
 
-def require_dev_knobs(binary, *texts):
-    """Exit when `texts` (arm specs, env strings) or the environment set a
-    Y264_* knob that `binary` ignores because it was built without
-    -Ddev_knobs=true: two arms would come out byte-identical and read as 'no
-    effect'. Harness variables and the CLI-carried knobs don't count."""
-    devknobs.require(binary, *texts)
-
-
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
@@ -368,8 +359,10 @@ def template_binary(tmpl):
     pipeline, a command list, an `sh -c` body) is that program; otherwise it's
     the first word that is neither an env assignment nor a launcher (env,
     nice, time, taskpolicy, caffeinate, timeout) or one of its options, as the
-    shell would find it."""
+    shell would find it. "" when a yah264 in it can't be resolved."""
     ys = _yah264_words(tmpl)
+    if ys is None:
+        return ""
     if ys:
         return ys[0]
     try:
@@ -392,25 +385,6 @@ def template_binary(tmpl):
         else:
             return _resolve(w)
     return ""
-
-
-def check_template(t, who="bdcompare"):
-    """Refuse a template that sets knobs its yah264 ignores, or whose binary
-    can't be found while it sets one (or names yah264 under a knob-carrying
-    environment): it can't be checked, so it isn't run."""
-    ys = _yah264_words(t)
-    if ys:
-        for b in ys:
-            if devknobs.is_yah264(b):
-                require_dev_knobs(b, t)
-        return
-    b = template_binary(t) if ys is not None else None
-    if b and os.path.isfile(b) and devknobs.is_yah264(b):
-        require_dev_knobs(b, t)
-    elif devknobs.ignored(t, environ=False) or (
-            ("yah264" in t or "$" in t) and devknobs.ignored()):
-        sys.exit(f"{who}: can't find the yah264 binary in {t!r} to check the dev "
-                 "knobs in play; name it plainly")
 
 
 def coded_size_is(bitstream, w, h):
@@ -728,8 +702,6 @@ def main():
         MODELS = args.models
     if args.vmaf:
         minigop_guard(SUBSAMPLE, [args.a, args.b])
-    for t in (args.a, args.b):
-        check_template(t)
 
     points = [int(q) for q in args.points.split(",")]
     if args.klass:

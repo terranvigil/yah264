@@ -17,8 +17,6 @@ BIN="${1:?bin}"; TH="${2:-18}"; REPS="${3:-12}"; shift 3 2>/dev/null || shift $#
 EXTRA=("$@")
 C="$root/tests/corpus"
 . "$root/scripts/scratch.sh"
-. "$root/scripts/devknobs.sh"
-y264_require_dev_knobs "$BIN" Y264_STAIR_WIDE ${EXTRA[@]+"${EXTRA[@]}"}
 y264_scratch_dir stairdeterm work
 md5f() { md5 -q "$1" 2>/dev/null || md5sum "$1" | awk '{print $1}'; }
 

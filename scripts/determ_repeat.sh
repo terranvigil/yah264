@@ -51,8 +51,6 @@ THREADS="${THREADS:-8 18}"
 REFS="${REFS:-1 3}"
 ARM="${ARM:-}"
 ARGS="${ARGS:-}"
-. "$ROOT/scripts/devknobs.sh"
-y264_require_dev_knobs "$ENC" "$ARM"
 
 # A caller-named WORK is the caller's to keep; an unnamed one is per-run
 # scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).

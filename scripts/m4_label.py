@@ -160,7 +160,6 @@ def main():
                     help="baseline CRF points; their achieved bytes become the "
                          "matched-rate targets every arm is solved onto")
     a = ap.parse_args()
-    bd.require_dev_knobs(BIN, "Y264_PSY_FLAT_LOG Y264_ADME_LOG", *(" ".join(e) for e in ARMS.values()))
 
     done = set()
     if os.path.exists(a.out):

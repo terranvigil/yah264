@@ -330,8 +330,17 @@ ident_info() {
     fi
 }
 
-# An informational comparison whose arms pin dev knobs. A release build ignores
-# the pins, so the comparison would read the designs they pin off, not races.
+# Runs "$@", dropping its leading Y264_*=v pins on a release build, which
+# would refuse them.
+pinned() {
+    if [ "$YAH264_CONF_DEV" != 1 ]; then
+        while [ $# -gt 0 ] && [[ $1 == Y264_*=* ]]; do shift; done
+    fi
+    env "$@"
+}
+
+# An informational comparison whose arms pin dev knobs. A release build runs
+# without the pins, so the comparison would read the designs they pin off, not races.
 pinned_info() {
     if [ "$YAH264_CONF_DEV" = 1 ]; then
         ident_info "$@"
@@ -386,18 +395,18 @@ check_threading() {     # check_threading <label> <src> <feat>
     local label="$1" src="$2" feat="$3"
     local p="$work/th_$label" lbl="${feat:-baseline}"
     # shellcheck disable=SC2086
-    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
+    pinned Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
+    pinned Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 8 -o "$p.8.264" 2>/dev/null || true
+    pinned Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 8 -o "$p.8.264" 2>/dev/null || true
     pinned_info "threads 1 vs 2 ($lbl)" "$p.1.264" "$p.2.264"
     pinned_info "threads 1 vs 8 ($lbl)" "$p.1.264" "$p.8.264"
     # The ABR carry across per-GOP encoders (Y264_RC_CARRY, the CLI's
     # rc_state/rc_import handoff) is thread-count-VARIANT by design; two runs
     # at threads 8 with three GOPs are compared for information only.
-    Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c1.264" 2>/dev/null || true
-    Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c2.264" 2>/dev/null || true
+    pinned Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c1.264" 2>/dev/null || true
+    pinned Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c2.264" 2>/dev/null || true
     pinned_info "ABR carry across GOPs, two runs at threads 8 ($lbl)" "$p.c1.264" "$p.c2.264"
     local f=0 x
     for x in 2 8 c1; do
@@ -708,9 +717,9 @@ sys.exit(1 if bad or not seen else 0)
     # is allowed); the threads-4 stream still has to decode.
     t=$((t + 1))
     # shellcheck disable=SC2086
-    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
+    pinned Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
+    pinned Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
     pinned_info "threads 1 vs 4 ($spec)" "$p.1.264" "$p.4.264"
     if [ -n "$(md5frames "$p.4.264")" ]; then
         echo "  ok   threads-4 stream decodes ($spec)"

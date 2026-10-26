@@ -143,10 +143,6 @@ done
 [ -f "$clip" ] || { echo "perf-comp: clip not found: $clip" >&2; exit 2; }
 
 . "$root/scripts/scratch.sh"
-# a Y264_* knob reaches yah264 only through this environment (perf-comp-set,
-# -modes and -crf-set run through here too)
-. "$root/scripts/devknobs.sh"
-y264_require_dev_knobs "$YAH264"
 y264_scratch_dir perfcomp wd
 
 # Clip fps as a rational -> a plain number, for the VMAF subsample factor.
