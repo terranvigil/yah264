@@ -230,6 +230,28 @@ int main(void)
              16.0, 0.0, x % 4 ? 40.0 : 200.0, x % 4 ? 8.0 : 500.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
+        /* a lit picture edge isn't text: its soft column ends the solid depth,
+         * since the busy run reaches the frame's side */
+        FILL(y < 6 || y >= H - 6 || (y < 13 && x < 40), 16.0, 0.0,
+             y < 13 && x == 40 ? 40.0 : 120.0, y < 13 && x == 40 ? 8.0 : 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        FILL(y < 6 || y >= H - 6 || (y < 13 && x > 39), 16.0, 0.0,   /* lit on the left */
+             y < 13 && x == 39 ? 40.0 : 120.0, y < 13 && x == 39 ? 8.0 : 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* nor are stars scattered across a black sky, glow and all */
+        FILL(y < 6 || y >= H - 6 || (y < 13 && x % 8 != 4 && x % 8 != 5), 16.0, 0.0,
+             y < 13 && x % 8 == 5 ? 40.0 : 120.0, y < 13 && x % 8 == 5 ? 8.0 : 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* nor are sparks with a glow beside a pillar: text never runs down one */
+        FILL(x < 10 || x >= W - 10 ||
+             (x >= W - 16 && !(y >= 4 && y < 41 && y % 4 < 2)), 16.0, 0.0,
+             x >= W - 16 && y % 4 == 0 ? 200.0 : (x >= W - 16 ? 40.0 : 120.0),
+             x >= W - 16 && y % 4 == 0 ? 500.0 : (x >= W - 16 ? 8.0 : 60.0))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[2] == 10 && e[3] == 10);
         /* busy subtitle text doesn't end a solid depth, so a bar holding one can
          * walk into dark picture too */
         FILL(((y < 6 || y >= H - 6) && !(y == H - 3 && x >= 20 && x < 60)) ||

@@ -431,23 +431,35 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
 /* bar lines counted inward from one edge; line k starts at i0 + k * lstep.
  * *solid gets the lines before the first that is partly picture: matte
  * beside blocks quiet enough to be dark picture, where text would be busy.
- * A quiet block next to a busy one is a glyph's soft edge, not picture. */
+ * On a text line (a row, its non-matte blocks one compact run clear of both
+ * ends) a quiet block next to a busy one is a glyph's soft edge, not picture;
+ * a lit edge of the picture runs to the frame's side, and text never runs
+ * down a pillar. */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                      int step, int n, int maxl, double color, double vmax,
-                     double vbusy, double tol, double drift, int *solid)
+                     double vbusy, double tol, double drift, int text, int *solid)
 {
     int lines = 0;
     *solid = -1;
     for (; lines < maxl; lines++) {
         int matte = 0, quiet = 0, line = i0 + lines * lstep;
+        int first = -1, last = -1, pic = 0;
         double sum = 0;
+        for (int t = 0; t < n; t++) {
+            int i = line + t * step;
+            if (var[i] >= vmax || fabs(mean[i] - color) >= tol) {
+                if (first < 0) first = t;
+                last = t; pic++;
+            }
+        }
+        int glyph = text && first > 0 && last < n - 1 && 2 * pic >= last - first + 1;
         for (int t = 0; t < n; t++) {
             int i = line + t * step;
             if (var[i] < vmax && fabs(mean[i] - color) < tol) {
                 matte++; sum += mean[i];
             } else if (var[i] < vbusy &&
-                       !(t > 0 && var[i - step] >= vbusy) &&
-                       !(t + 1 < n && var[i + step] >= vbusy)) {
+                       !(glyph && t > 0 && var[i - step] >= vbusy) &&
+                       !(glyph && t + 1 < n && var[i + step] >= vbusy)) {
                 quiet++;
             }
         }
@@ -468,12 +480,13 @@ static int pair(int a, int b, double ca, double cb, double drift)
 }
 /* the half-matte lines a subtitle needs can also walk a side into flat dark
  * picture beside the bar, so solid depths pair first, within a block of
- * rounding, or two when lean is set and b is deeper (rows: the bottom carries
- * the coded frame's padding). Wider slack there would let an off-center
- * subject in a black void pass. Full depths pair next, with the off-center
- * slack, then a full depth with a solid one, held to the solid limit. Both
- * walks past the cap are dark picture, not a matte; one past it is a fade
- * into a black sky, so both pair at the other side's solid depth. */
+ * rounding, or two when lean is set, b is deeper and the shallower is three
+ * or more (rows: the bottom carries the coded frame's padding). Wider slack
+ * there would let an off-center subject in a black void pass. Full depths
+ * pair next, with the off-center slack, then a full depth with a solid one,
+ * held to the solid limit. Both walks past the cap are dark picture, not a
+ * matte; one past it is a fade into a black sky, so both pair at the other
+ * side's solid depth. */
 static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
                        double drift, int maxl, int lean)
 {
@@ -503,9 +516,9 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
         double ca = bar_color(mean, var, 0, 1, wmb, vmax, sc);
         double cb = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax, sc);
         top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, ca, vmax, vbusy, tol,
-                        drift, &sa);
+                        drift, 1, &sa);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
-                           vbusy, tol, drift, &sb);
+                           vbusy, tol, drift, 1, &sb);
         pair_sides(&top, &bottom, sa, sb, ca, cb, drift, maxr, 1);
     }
     /* side bars between any top and bottom ones: a windowbox has both */
@@ -514,9 +527,9 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
         double ca = bar_color(mean, var, i0, wmb, rows, vmax, sc);
         double cb = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax, sc);
         left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, ca, vmax, vbusy, tol,
-                         drift, &sa);
+                         drift, 0, &sa);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, cb, vmax,
-                          vbusy, tol, drift, &sb);
+                          vbusy, tol, drift, 0, &sb);
         pair_sides(&left, &right, sa, sb, ca, cb, drift, maxc, 0);
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
