@@ -253,11 +253,17 @@ int main(void)
              x == 40 && y == H - 3 ? 0.0 : 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
-        /* pillars beside a picture whose own top and bottom are black stay pillars */
+        /* a letterbox beside thin black picture edges stays a letterbox, and so,
+         * the commoner matte winning, does a pillarbox whose picture's own top
+         * and bottom are black */
+        FILL(y < 6 || y >= H - 6 || (y < 12 && x % 10 < 6) || x < 3 || x >= W - 3, 16.0, 0.0,
+             x % 3 ? 24.0 : 120.0, x % 3 ? 3.0 : 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6 && e[2] == 0 && e[3] == 0);
         FILL(x < 10 || x >= W - 10 || y < 4 || y >= H - 4 || (y < 14 && x % 10 < 4) ||
              (y >= 37 && x % 10 < 4), 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
-        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 10 && e[3] == 10);
+        CHECK(e[0] == 4 && e[1] == 4 && e[2] == 0 && e[3] == 0);
         /* a dark subject in a black void isn't letterboxed: both walks pass the cap */
         FILL(!(x >= 20 && x < 60 && y >= 12 && y < 33), 16.0, 0.0, 30.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
