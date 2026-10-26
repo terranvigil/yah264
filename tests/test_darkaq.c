@@ -252,12 +252,40 @@ int main(void)
              x >= W - 16 && y % 4 == 0 ? 500.0 : (x >= W - 16 ? 8.0 : 60.0))
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 10 && e[3] == 10);
+        FILL(x < 10 || x >= W - 10 || (x < 16 && !(y >= 4 && y < 41 && y % 4 < 2)), 16.0,
+             0.0, x < 16 && y % 4 == 0 ? 200.0 : (x < 16 ? 40.0 : 120.0),
+             x < 16 && y % 4 == 0 ? 500.0 : (x < 16 ? 8.0 : 60.0))
+        y264_aq_bars(m, v, W, H, e);   /* on the left */
+        CHECK(e[2] == 10 && e[3] == 10);
+        FILL(y < 6 || y >= H - 6 || (y < 13 && x < 40) || (y >= H - 13 && x > 39), 16.0, 0.0,
+             x == 39 || x == 40 ? 40.0 : 120.0, x == 39 || x == 40 ? 8.0 : 60.0)
+        y264_aq_bars(m, v, W, H, e);   /* lit edges under both bars */
+        CHECK(e[0] == 6 && e[1] == 6);
+        FILL(y < 6 || y >= H - 6 || ((y < 13 || y >= H - 13) && x % 8 != 4 && x % 8 != 5),
+             16.0, 0.0, x % 8 == 5 ? 40.0 : 120.0, x % 8 == 5 ? 8.0 : 60.0)
+        y264_aq_bars(m, v, W, H, e);   /* stars under both bars */
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* a lit subject clear of both sides passes as text, but nothing pairs
+         * at the depth it reads, so every quiet block counts as picture */
+        FILL(y < 6 || y >= H - 6 || (y < 13 && (x < 29 || x > 50)), 16.0, 0.0,
+             y < 13 && (x == 29 || x == 50) ? 40.0 : (y < 13 ? 120.0 : 24.0),
+             y < 13 && (x == 29 || x == 50) ? 8.0 : (y < 13 ? 60.0 : 3.0))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
         /* busy subtitle text doesn't end a solid depth, so a bar holding one can
          * walk into dark picture too */
         FILL(((y < 6 || y >= H - 6) && !(y == H - 3 && x >= 20 && x < 60)) ||
              (y >= H - 13 && y < H - 6 && x % 10 < 7), 16.0, 0.0,
              y == H - 3 ? 200.0 : (y >= H - 13 ? 24.0 : 120.0),
              y == H - 3 ? 500.0 : (y >= H - 13 ? 3.0 : 60.0))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* subtitles in both bars, both walking into dark picture */
+        FILL(((y < 6 || y >= H - 6) && !((y == 1 || y == H - 2) && x >= 20 && x < 61 &&
+                                         x % 4 != 2)) ||
+             (y >= 6 && y < H - 6 && (y < 13 || y >= H - 13) && x % 10 < 7), 16.0, 0.0,
+             y < 6 || y >= H - 6 ? (x % 4 ? 40.0 : 200.0) : 24.0,
+             y < 6 || y >= H - 6 ? (x % 4 ? 8.0 : 500.0) : 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
         /* one walk past the cap still pairs at its solid depth */
