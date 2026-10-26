@@ -59,7 +59,7 @@ option('sve', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
 # The Y264_* environment knobs (docs/knobs.md): tuning and measurement
 # switches read from the environment. Off, the library reads only the 16 the
 # CLI uses to carry its own options (src/common/env.h); no other variable
-# changes a release library's output. The harness, the tests and CI build with
-# it on.
+# changes a release library's output, and the release CLI refuses to encode
+# when another is set. The harness, the tests and CI build with it on.
 option('dev_knobs', type : 'boolean', value : false,
   description : 'Read the Y264_* tuning and measurement knobs from the environment.')

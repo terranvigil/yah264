@@ -26,9 +26,11 @@ bd.MODELS = os.environ.get("VMAF_MODELS", "neg")
 
 
 def enc(tmpl, q, src, out):
-    subprocess.run(tmpl.format(q=f"{q:.4f}", src=src, out=out),
-                   shell=True, capture_output=True)
-    return os.path.getsize(out) if os.path.exists(out) else 0
+    cmd = tmpl.format(q=f"{q:.4f}", src=src, out=out)
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if r.returncode or not os.path.exists(out):
+        sys.exit(f"bd_at_rate: encode failed ({r.returncode}): {cmd}\n{r.stderr[-400:]}")
+    return os.path.getsize(out)
 
 
 def solve(tmpl, src, target, out, lo=10.0, hi=48.0, iters=10):
@@ -85,7 +87,7 @@ def main():
     a = curve(args.a, src, targets, work, args.label_a)
     b = curve(args.b, src, targets, work, args.label_b)
     if not a or not b:
-        print(f"{args.clip}: encode/VMAF failed"); return
+        sys.exit(f"{args.clip}: VMAF failed")
     ra, ma = [p[0] for p in a], [p[1] for p in a]
     rb, mb = [p[0] for p in b], [p[1] for p in b]
     r = bd.bd_rate(rb, mb, ra, ma)

@@ -12,7 +12,8 @@
 #   scripts/san_matrix.sh            # builds build-san/ (once), runs 26 cases
 #   FF=/path/to/ffmpeg scripts/san_matrix.sh
 #
-# Exit status is the number of cases with a sanitiser report. ~3 min.
+# Exit status is the number of cases with a sanitiser report or a failed
+# encode. ~3 min.
 cd "$(dirname "$0")/.." || exit 1
 S=${SAN_WORK:-build-san/work}; mkdir -p "$S/a6wd"
 B=build-san
@@ -25,7 +26,8 @@ run() { # label, args...
   local label=$1; shift
   out=$( "$@" 2>&1 >/dev/null ); rc=$?
   errs=$(echo "$out" | grep -cE "ERROR: AddressSanitizer|runtime error:|SUMMARY:")
-  echo "$label rc=$rc san=$errs"; [ "$errs" -gt 0 ] && BAD=$((BAD+1))
+  echo "$label rc=$rc san=$errs"; { [ "$errs" -gt 0 ] || [ "$rc" -ne 0 ]; } && BAD=$((BAD+1))
+  [ "$errs" -eq 0 ] && [ "$rc" -ne 0 ] && echo "$out" | grep -m1 . | sed 's/^/    /'
   [ $errs -gt 0 ] && echo "$out" | grep -E "runtime error|ERROR: AddressSanitizer|#[0-3] " | head -12 | sed 's/^/    /'
 }
 # synthetic odd inputs

@@ -61,9 +61,6 @@ ARM = os.environ.get("ARM", "")
 # ARM_ARGS: extra CLI flags for the arm side, for knobs that are CLI
 # options rather than env vars (--aq-strength, --psy-rd, ...).
 ARM_ARGS = os.environ.get("ARM_ARGS", "")
-sys.path.insert(0, HERE)
-import bdcompare                                                # noqa: E402
-bdcompare.require_dev_knobs(N if os.path.isabs(N) else os.path.join(ROOT, N), ARM, ARM_ARGS)
 
 # VMAF_MODELS=neg (the default) scores VMAF-NEG alone, the only number the band
 # gates on, for a little over half the scoring cost of both models; the per-rung
@@ -142,6 +139,9 @@ def run(clip, points, mode):
            "--jobs", os.environ.get("JOBS", "8"), "--points", ",".join(str(x) for x in points),
            "--a", a, "--b", b]
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    if r.returncode:
+        failed.append(clip)
+        return [f"{clip}: FAILED, bdcompare exited {r.returncode}"] + r.stderr.splitlines()[-5:]
     out = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith(clip)]
     return out + per_rung(clip, out)
 
@@ -207,6 +207,7 @@ print()
 # arms on the CRF band (the ABR band's per-clip noise floor spans 0.2 to 11
 # points), so a gating round only needs that half and pays half the wall.
 _bands = os.environ.get("BANDS", "abr,crf").split(",")
+failed = []
 for mode in [m for m in ("abr", "crf") if m in _bands]:
     print(f"############ {mode.upper()} on the band-calibrated ladder ############")
     reads, refused = {}, None
@@ -231,3 +232,5 @@ for mode in [m for m in ("abr", "crf") if m in _bands]:
                 if refused:
                     print(f"EARLY STOP: CRF band refused on {refused}")
     print()
+if failed:
+    sys.exit(f"run_band: {len(failed)} cell(s) failed: {', '.join(failed)}")

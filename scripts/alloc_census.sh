@@ -22,8 +22,9 @@ for a in "$@"; do
 done
 [ "$1" = env ] && shift
 set -- env DYLD_INSERT_LIBRARIES="$lib" MSHIM_OUT="$raw" "$@"
-"$@" || true
+rc=0; "$@" || rc=$?
 rm -f "$lib"
+[ "$rc" -eq 0 ] || { echo "alloc_census: the command exited $rc" >&2; rm -f "$raw"; exit "$rc"; }
 {
   head -2 "$raw"
   tail -n +3 "$raw" | while read -r a b sz n pk ch; do

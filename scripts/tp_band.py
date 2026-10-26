@@ -74,8 +74,6 @@ ARMS = parse_arms(os.environ.get("ARMS", ""))
 if not ARMS:
     sys.exit("tp_band: set ARMS='name=@/path/to/yah264 [ENV=v ...];...'")
 ALL = [("base", ANCHOR, [])] + ARMS
-for _, _b, _env in ALL:
-    bdcompare.require_dev_knobs(_b, " ".join(_env))
 
 cache = scratch.cache_dir("tpband")
 os.makedirs(cache, exist_ok=True)
@@ -177,6 +175,8 @@ def instr_of(clip, binp, env, rate, st):
         b.write(a.read())
     r = run(["/usr/bin/time", "-l"] + common(clip, binp) +
             ["--pass", "2", "--bitrate", str(rate), "--stats", stc, "-o", os.devnull], env)
+    if r.returncode != 0:
+        sys.exit(f"tp_band: instruction run failed {clip} {binp} {rate}: {r.stderr[-400:]}")
     v = None
     for line in r.stderr.splitlines():
         if "instructions retired" in line:

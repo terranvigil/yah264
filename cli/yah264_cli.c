@@ -4018,24 +4018,31 @@ static const char *rc_arg_mode_name(int m)
 #if !Y264_DEV_KNOBS
 #include "knob_names.h"
 extern char **environ;
-/* A release build ignores most Y264_* knobs; name each one set, so an A/B run
- * against it can't read two identical arms as "no effect". */
-static void warn_ignored_knobs(void)
+/* A release build would ignore most Y264_* knobs, and an A/B run against it
+ * would then measure the default under the arm's name; refuse instead. The two
+ * memory bounds are read by the CLI in every build. */
+static int refuse_ignored_knobs(void)
 {
+    int n = 0;
     for (char **e = environ; *e; e++) {
         const char *eq = strchr(*e, '=');
-        size_t n = eq ? (size_t)(eq - *e) : strlen(*e);
+        size_t len = eq ? (size_t)(eq - *e) : strlen(*e);
         for (size_t k = 0; k < sizeof y264_knob_names / sizeof *y264_knob_names; k++) {
             const char *name = y264_knob_names[k];
-            if (strlen(name) != n || strncmp(*e, name, n))
+            if (strlen(name) != len || strncmp(*e, name, len))
                 continue;
             if (!y264_env(name) && strcmp(name, "Y264_MAX_INPUT_MB") &&
-                strcmp(name, "Y264_STREAM_WINDOW"))
-                LOGF(LOG_WARN, "yah264: warning: %s is ignored: this build was configured "
-                     "without -Ddev_knobs=true\n", name);
+                strcmp(name, "Y264_STREAM_WINDOW")) {
+                fprintf(stderr, "yah264: %s is set, and this build ignores it\n", name);
+                n++;
+            }
             break;
         }
     }
+    if (n)
+        fprintf(stderr, "yah264: unset %s, or use a -Ddev_knobs=true build\n",
+                n > 1 ? "them" : "it");
+    return n;
 }
 #endif
 
@@ -4762,7 +4769,8 @@ int main(int argc, char **argv)
         return 2;
     }
 #if !Y264_DEV_KNOBS
-    warn_ignored_knobs();
+    if (refuse_ignored_knobs())
+        return 2;
 #endif
     /* Both write the one zone list, and which of two overlapping sources should
      * win has no answer worth guessing. */

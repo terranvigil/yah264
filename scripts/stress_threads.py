@@ -12,12 +12,14 @@ concurrent encodes; post-fix it must be 0. Run it after any change to the thread
 or the wavefront analysis path.
 
 Usage: scripts/stress_threads.py [--rounds N] [--per-round-timeout S]
-Exit 0 = no hang; exit 1 = a hang was caught (a /tmp/stress_hang.sample is written).
+Exit 0 = no hang; exit 1 = a hang was caught (a /tmp/stress_hang.sample is written)
+or an encode failed.
 """
 import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,11 +64,14 @@ BITRATES = [1500, 2500, 4000]
 def enc(clip, q):
     src = os.path.join(CORPUS, clip + ".y4m")
     rate = ["--bitrate", str(q)] if ABR else ["--crf", str(q)]
-    return subprocess.Popen(
+    err = tempfile.TemporaryFile()
+    p = subprocess.Popen(
         [BIN, "--input-y4m", src, "-o", os.devnull, *rate,
          "--cabac", "--transform-8x8", "--bframes", "2", "--threads", "8",
          *EXTRA],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=err)
+    p.err, p.clip = err, clip
+    return p
 
 
 def main():
@@ -79,7 +84,7 @@ def main():
     if not clips:
         sys.exit("stress_threads: no corpus clips (run scripts/fetch_corpus.sh)")
 
-    hangs = 0
+    hangs = fails = 0
     for r in range(args.rounds):
         procs = [enc(c, q) for c in clips for q in (BITRATES if ABR else CRFS)]
         zero, t0 = {}, time.time()
@@ -104,7 +109,13 @@ def main():
         for p in procs:
             if p.poll() is None:
                 p.kill(); p.wait()
-        if hangs:
+            elif p.returncode:
+                fails += 1
+                p.err.seek(0)
+                print(f"FAILED round {r}: {p.clip} exited {p.returncode}: "
+                      f"{p.err.read().decode(errors='replace')[-400:].strip()}")
+            p.err.close()
+        if hangs or fails:
             break
         if (r + 1) % 10 == 0:
             print(f"  {r + 1}/{args.rounds} rounds clean")
@@ -114,9 +125,9 @@ def main():
     # (the CLI takes the last one), and a result line that says 8 when the run
     # used 3 is a gate lying about what it gated.
     cfg = " ".join(EXTRA) if EXTRA else "(defaults)"
-    print(f"RESULT: {hangs} hang(s) in up to {n} concurrent encodes, "
-          f"--threads 8 {cfg}")
-    sys.exit(1 if hangs else 0)
+    print(f"RESULT: {hangs} hang(s) and {fails} failed encode(s) in up to {n} "
+          f"concurrent encodes, --threads 8 {cfg}")
+    sys.exit(1 if hangs or fails else 0)
 
 
 if __name__ == "__main__":

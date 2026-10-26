@@ -35,14 +35,17 @@ ffmpeg -v error -f lavfi -i testsrc2=size=192x144:rate=30 -frames:v "$NF" \
 fail=0
 for t in 1 2 4; do
     perl -e 'alarm 60; exec @ARGV' "$Y" --input-y4m - --threads "$t" --keyint 100 \
-        -o "$work/pipe.264" --quiet --no-progress < <(cat "$clip") >/dev/null 2>&1
+        -o "$work/pipe.264" --quiet --no-progress < <(cat "$clip") >/dev/null 2>"$work/err"
     rc=$?
     "$Y" --input-y4m "$clip" --threads "$t" --keyint 100 \
-        -o "$work/file.264" --quiet --no-progress >/dev/null 2>&1
+        -o "$work/file.264" --quiet --no-progress >/dev/null 2>"$work/ferr"
+    frc=$?
     if [ $rc -eq 142 ]; then
         echo "FAIL threads $t: the piped encode hung"; fail=1
     elif [ $rc -ne 0 ] || [ ! -s "$work/pipe.264" ]; then
-        echo "FAIL threads $t: the piped encode exited $rc"; fail=1
+        echo "FAIL threads $t: the piped encode exited $rc: $(head -1 "$work/err")"; fail=1
+    elif [ $frc -ne 0 ] || [ ! -s "$work/file.264" ]; then
+        echo "FAIL threads $t: the file encode exited $frc: $(head -1 "$work/ferr")"; fail=1
     else
         nf=$(ffprobe -v error -count_frames -select_streams v:0 \
             -show_entries stream=nb_read_frames -of csv=p=0 "$work/pipe.264" 2>/dev/null)
@@ -77,12 +80,12 @@ for spec in "1 30" "1 1" "4 30 Y264_GOP_FORCE_G=4"; do
     t=$1 w=$2 extra=${3:-}
     perl -e 'alarm 60; exec @ARGV' env Y264_STREAM_WINDOW="$w" $extra "$Y" --input-y4m - \
         --threads "$t" --keyint 100 -o "$work/pipe.264" --quiet --no-progress \
-        < <(cat "$clip") >/dev/null 2>&1
+        < <(cat "$clip") >/dev/null 2>"$work/err"
     rc=$?
     if [ $rc -eq 142 ]; then
         echo "FAIL threads $t window $w ${extra}: the piped encode hung"; fail=1
     elif [ $rc -ne 0 ] || [ ! -s "$work/pipe.264" ]; then
-        echo "FAIL threads $t window $w ${extra}: the piped encode exited $rc"; fail=1
+        echo "FAIL threads $t window $w ${extra}: the piped encode exited $rc: $(head -1 "$work/err")"; fail=1
     fi
     rm -f "$work/pipe.264"
 done
@@ -105,10 +108,10 @@ else
     ffmpeg -v error -f lavfi -i testsrc2=size=3840x2160:rate=30 -frames:v 12 \
         -pix_fmt yuv420p "$uhd" || { echo "pipe window check: 2160p clip generation failed"; exit 1; }
     perl -e 'alarm 120; exec @ARGV' env -u Y264_MAX_INPUT_MB "$Y" --input-y4m - \
-        --threads 0 -o "$work/uhd.264" --quiet --no-progress < <(cat "$uhd") >/dev/null 2>&1
+        --threads 0 -o "$work/uhd.264" --quiet --no-progress < <(cat "$uhd") >/dev/null 2>"$work/err"
     rc=$?
     if [ $rc -ne 0 ] || [ ! -s "$work/uhd.264" ]; then
-        echo "FAIL 2160p piped at --threads 0: exited $rc"; fail=1
+        echo "FAIL 2160p piped at --threads 0: exited $rc: $(head -1 "$work/err")"; fail=1
     fi
 fi
 [ $fail -eq 0 ] || exit 1

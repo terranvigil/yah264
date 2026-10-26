@@ -2,7 +2,7 @@
 
 Regenerate: `python3 scripts/knob_census.py`. CI check: `--check`.
 
-These are read only in a build configured with `-Ddev_knobs=true`; a default build reads just the ones the CLI uses to carry its own options (src/common/env.h).
+These are read only in a build configured with `-Ddev_knobs=true`; a default build reads just the ones the CLI uses to carry its own options (src/common/env.h), and its CLI refuses to encode when another is set.
 
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
@@ -10,7 +10,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 
 | knob | default | reader |
 |---|---|---|
-| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5506 |
+| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5514 |
 | `Y264_ABR_QCOMP` | 0.6 | src/encoder/rate.c:2497 |
 | `Y264_ABR_TOL` | = param | src/encoder/encoder.c:4840 |
 | `Y264_ABR_VBVOV` | 0.25 | src/encoder/rate.c:2518 |

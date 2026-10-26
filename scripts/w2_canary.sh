@@ -21,9 +21,6 @@ REF="${2:?reference binary}"
 CENV="${3:-}"                          # e.g. "Y264_W2=1" applied to the candidate only
 CORPUS="$root/tests/corpus"
 . "$root/scripts/scratch.sh"
-. "$root/scripts/devknobs.sh"
-y264_require_dev_knobs "$CAND" "$CENV"
-y264_require_dev_knobs "$REF"
 y264_scratch_dir w2canary work
 md5f() { md5 -q "$1" 2>/dev/null || md5sum "$1" | awk '{print $1}'; }
 
@@ -49,10 +46,16 @@ for th in 1 4; do
     read -r clip frames extra <<<"$cfg"
     cp="$CORPUS/$clip.y4m"; [ -f "$cp" ] || continue
     args="--input-y4m $cp --qp 26 --keyint 1000 --frames $frames --threads $th $extra"
-    env $CENV "$CAND" $args -o "$work/c.264" >/dev/null 2>&1
-    "$REF"                  $args -o "$work/r.264" >/dev/null 2>&1
-    mc=$(md5f "$work/c.264"); mr=$(md5f "$work/r.264")
+    rm -f "$work/c.264" "$work/r.264"
     total=$((total+1))
+    err=""
+    env $CENV "$CAND" $args -o "$work/c.264" >/dev/null 2>"$work/c.err" || err="$work/c.err"
+    "$REF"            $args -o "$work/r.264" >/dev/null 2>"$work/r.err" || err="${err:-$work/r.err}"
+    if [ -n "$err" ]; then
+      echo "FAIL  t$th  $clip.f$frames $extra   encode failed: $(head -1 "$err")"
+      fail=$((fail+1)); continue
+    fi
+    mc=$(md5f "$work/c.264"); mr=$(md5f "$work/r.264")
     if [ -n "$mc" ] && [ "$mc" = "$mr" ]; then :; else
       echo "DIFF  t$th  $clip.f$frames $extra   cand=$mc ref=$mr"; fail=$((fail+1))
     fi

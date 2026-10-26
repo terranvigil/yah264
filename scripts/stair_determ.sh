@@ -5,7 +5,7 @@
 # each compared to the SERIALIZED (gate-off) output, not merely to each other.
 # A DIAGNOSTIC, NOT A GATE: byte-exact repeatable output is not a requirement
 # (owner, 2026-09-25), so the DIFF lines are informational and the exit status
-# is 0 unless an encode produced nothing (exit 2). STRICT=1 makes any DIFF exit
+# is 0 unless an encode failed (exit 2). STRICT=1 makes any DIFF exit
 # 1, for when the question is whether the wide schedule changes the bits.
 # Usage: scripts/stair_determ.sh <bin> <threads> <reps> [extra-env...]
 #   extra-env are KEY=VALUE pairs handed to env(1). Encoder FLAGS go in
@@ -17,8 +17,6 @@ BIN="${1:?bin}"; TH="${2:-18}"; REPS="${3:-12}"; shift 3 2>/dev/null || shift $#
 EXTRA=("$@")
 C="$root/tests/corpus"
 . "$root/scripts/scratch.sh"
-. "$root/scripts/devknobs.sh"
-y264_require_dev_knobs "$BIN" Y264_STAIR_WIDE ${EXTRA[@]+"${EXTRA[@]}"}
 y264_scratch_dir stairdeterm work
 md5f() { md5 -q "$1" 2>/dev/null || md5sum "$1" | awk '{print $1}'; }
 
@@ -40,20 +38,25 @@ for s in "${shapes[@]}"; do
   args=(--input-y4m "$C/$clip.y4m" --frames "$frames" --keyint "$keyint" --ref 1 $extra --threads "$TH")
   # shellcheck disable=SC2206
   [ -n "${STAIR_DETERM_ARGS:-}" ] && args+=($STAIR_DETERM_ARGS)
-  env "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/ser.264" >/dev/null 2>&1
+  rm -f "$work/ser.264"
   # Guard the PRODUCER. Two missing files have equal md5s, so without this the
   # script reports a clean sweep for a command that never ran -- which it did,
   # on 2026-09-01, for an invocation that put encoder flags in the env slot.
-  if [ ! -s "$work/ser.264" ]; then
-    echo "FAIL $clip: serialized reference is empty -- the encode did not run"
+  if ! env "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/ser.264" >/dev/null 2>"$work/err" ||
+     [ ! -s "$work/ser.264" ]; then
+    echo "FAIL $clip: the serialized encode failed: $(head -1 "$work/err")"
     exit 2
   fi
   ref=$(md5f "$work/ser.264")
   for r in $(seq 1 "$REPS"); do
-    env Y264_STAIR_WIDE=1 "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/w.264" >/dev/null 2>&1
+    rm -f "$work/w.264"
+    if ! env Y264_STAIR_WIDE=1 "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/w.264" >/dev/null 2>"$work/err" ||
+       [ ! -s "$work/w.264" ]; then
+      echo "FAIL $clip k$keyint $extra rep$r: the wide encode failed: $(head -1 "$work/err")"
+      exit 2
+    fi
     tot=$((tot+1))
-    if [ ! -s "$work/w.264" ]; then echo "DIFF $clip k$keyint $extra rep$r (EMPTY)"
-    elif [ "$(md5f "$work/w.264")" = "$ref" ]; then pass=$((pass+1))
+    if [ "$(md5f "$work/w.264")" = "$ref" ]; then pass=$((pass+1))
     else echo "DIFF $clip k$keyint $extra rep$r"; fi
   done
 done

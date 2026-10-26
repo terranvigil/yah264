@@ -256,10 +256,15 @@ st_identity() {
             [ -f "$src" ] || continue
             for t in 1 "$TN"; do
                 for mode in "--crf 23" "--qp 26" "--bitrate $rate"; do
+                    rm -f "$RES/.x.264"
                     # shellcheck disable=SC2086
-                    Y264_SIMD_FORCE="$tier" "$Y264" --input-y4m "$src" \
+                    if ! Y264_SIMD_FORCE="$tier" "$Y264" --input-y4m "$src" \
                         --frames "$frames" $mode --threads "$t" \
-                        -o "$RES/.x.264" >/dev/null 2>&1
+                        -o "$RES/.x.264" >/dev/null 2>"$RES/.x.err"; then
+                        echo "$tier $clip t$t $mode: ENCODE FAILED: $(head -1 "$RES/.x.err")" >> "$out"
+                        rc=1
+                        continue
+                    fi
                     printf '%s  %s t%s %s\n' \
                         "$(c_sha256 "$RES/.x.264" | cut -c1-32)" "$clip" "$t" "$mode" \
                         >> "$RES/.md5.$tier"
@@ -267,7 +272,7 @@ st_identity() {
             done
         done
     done
-    rm -f "$RES/.x.264"
+    rm -f "$RES/.x.264" "$RES/.x.err"
     for tier in $tiers; do
         [ "$tier" = none ] && continue
         if diff -q "$RES/.md5.none" "$RES/.md5.$tier" >/dev/null 2>&1; then
@@ -486,9 +491,9 @@ st_avx512_ab() {
         clip="${spec%%:*}"
         src="$C_SRC/tests/corpus/$clip.y4m"
         [ -f "$src" ] || continue
-        t_c=$(ab_time YAH264_NO_ASM=1  "$src" "$frames")
-        t_2=$(ab_time Y264_SIMD_FORCE=avx2   "$src" "$frames")
-        t_5=$(ab_time Y264_SIMD_FORCE=avx512 "$src" "$frames")
+        t_c=$(ab_time YAH264_NO_ASM=1  "$src" "$frames") || return 1
+        t_2=$(ab_time Y264_SIMD_FORCE=avx2   "$src" "$frames") || return 1
+        t_5=$(ab_time Y264_SIMD_FORCE=avx512 "$src" "$frames") || return 1
         awk -v c="$clip" -v a="$t_c" -v b="$t_2" -v d="$t_5" \
             'BEGIN{printf "%-22s %10.3f %10.3f %10.3f %8.2fx\n", c, a, b, d, (d>0)? b/d : 0}' >> "$out"
     done
@@ -514,8 +519,10 @@ cmd = (pin.split() if pin else []) + [
 ts = []
 for _ in range(3):
     t0 = time.monotonic()
-    subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    r = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     ts.append(time.monotonic() - t0)
+    if r.returncode != 0:
+        sys.exit(f"ab_time: {assign} encode failed: {r.stderr.decode(errors='replace')[:400]}")
 print(f"{statistics.median(ts):.3f}")
 PY
 }

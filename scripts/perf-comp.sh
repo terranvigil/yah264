@@ -143,10 +143,6 @@ done
 [ -f "$clip" ] || { echo "perf-comp: clip not found: $clip" >&2; exit 2; }
 
 . "$root/scripts/scratch.sh"
-# a Y264_* knob reaches yah264 only through this environment (perf-comp-set,
-# -modes and -crf-set run through here too)
-. "$root/scripts/devknobs.sh"
-y264_require_dev_knobs "$YAH264"
 y264_scratch_dir perfcomp wd
 
 # Clip fps as a rational -> a plain number, for the VMAF subsample factor.
@@ -483,9 +479,9 @@ if [ -n "$xkey" ] && [ -f "$cachedir/$xkey" ]; then
     x_cached=1
     echo ">> x264 baseline: cached (tests/.perfcache/$xkey; Y264_REFENC_CACHE=0 to re-measure)"
 else
-    read -r n_sec x_sec <<EOF
-$(timed2 "$n_cmd" "$x_cmd")
-EOF
+    # a status inside a here-document is lost; an assignment keeps it for set -e
+    secs=$(timed2 "$n_cmd" "$x_cmd")
+    read -r n_sec x_sec <<< "$secs"
 fi
 
 # passthrough, so the decoder's frames reach libvmaf one for one: never dropped,

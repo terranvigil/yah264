@@ -75,11 +75,11 @@ fi
 printf '%-22s %10s %10s %8s %9s\n' clip "time" "VMAF" "size" "PSNR-Y"
 printf '%-22s %10s %10s %8s %9s\n' "" "ours/x264" "ours-x264" "vs x264" "ours-x264"
 printf '%-22s %10s %10s %8s %9s\n' ---------------------- ---------- ---------- -------- ---------
-xs=""; qs=""; ps=""; n=0
+xs=""; qs=""; ps=""; n=0; failed=0
 for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
     path="$root/tests/corpus/$clip.y4m"
-    [ -f "$path" ] || { printf '%-22s %10s\n' "$clip" "(missing)"; continue; }
+    [ -f "$path" ] || { printf '%-22s %10s\n' "$clip" "(missing)"; failed=$((failed + 1)); continue; }
     if [ "$SET_RC" = crf ]; then
         yargs="--preset $PRESET --cabac --transform-8x8"; xargs="--preset $PRESET"
     else
@@ -88,10 +88,12 @@ for entry in $CLIPS; do
     out=$(THREADS="${SET_THREADS:-1}" YAH264="${YAH264:-$root/build/cli/yah264}" \
         RC_MODE="$SET_RC" YAH264_ARGS="$yargs" X264_ARGS="$xargs" \
         bash "$script" "$path" "$CRF" "$SECONDS_PER" 2>&1)
+    rc=$?
     line=$(printf '%s\n' "$out" | grep 'speed: x264 is' || true)
-    if [ -z "$line" ]; then
+    if [ "$rc" -ne 0 ] || [ -z "$line" ]; then
         printf '%-22s %10s\n' "$clip" "FAILED"
         printf '%s\n' "$out" | tail -3 >&2
+        failed=$((failed + 1))
         continue
     fi
     x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
@@ -138,3 +140,7 @@ AGG
 # bytes" is actually true. The column is printed here anyway because a floor
 # that only exists on one board is a floor people forget to look at.
 [ "$n" -gt 0 ] && python3 "$root/scripts/psnr_leg.py" 22 $ps
+if [ "$failed" -gt 0 ]; then
+    echo "perf-comp-set: $failed clip(s) failed or missing; the table above is partial" >&2
+    exit 1
+fi

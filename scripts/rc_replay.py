@@ -34,8 +34,6 @@ KEEP (directory to keep recordings in).
 import os, re, shlex, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "scripts"))
-import devknobs                                                 # noqa: E402
 BIN = os.environ.get("BIN", os.path.join(ROOT, "build-rel/cli/yah264"))
 PLAY_BIN = os.environ.get("PLAY_BIN", BIN)
 PLAY_ENV = os.environ.get("PLAY_ENV", "")
@@ -94,10 +92,6 @@ def main():
             sys.exit(f"rc_replay: no binary {b}")
     if not os.path.exists(CLIP):
         sys.exit(f"rc_replay: no clip {CLIP}")
-    # the record and play hooks are knobs, and run() drops any Y264_RC_* the caller set
-    inherited = " ".join(k for k in os.environ if not k.startswith("Y264_RC_"))
-    devknobs.require(BIN, "Y264_RC_REC", inherited, environ=False)
-    devknobs.require(PLAY_BIN, "Y264_RC_PLAY", PLAY_ENV, inherited, environ=False)
     selftest = PLAY_BIN == BIN and not PLAY_ENV
     work = KEEP or tempfile.mkdtemp(prefix="yah264-rcreplay.")
     os.makedirs(work, exist_ok=True)
@@ -106,7 +100,7 @@ def main():
           f"{'self-test' if selftest else 'replay with ' + (PLAY_BIN if PLAY_BIN != BIN else '') + ' ' + PLAY_ENV}")
     print(f"{'config':12} {'rec s':>7} {'play s':>7} {'x':>6}  {'result':8} {'slices':>6} "
           f"{'modelled':>8} {'bits play/rec':>13} {'vbv under rec/play':>18}")
-    bad = 0
+    bad = failed = 0
     for name, args in CONFIGS:
         if ONLY and not re.search(ONLY, name):
             continue
@@ -117,11 +111,11 @@ def main():
         if "PASS2" in args:
             _, p = run(base.format(bin=shlex.quote(BIN)) + f" {a} --pass 1 --stats {stats} -o /dev/null", {})
             if p.returncode:
-                print(f"{name:12} pass 1 failed: {p.stderr.strip()[-120:]}"); bad += 1; continue
+                print(f"{name:12} pass 1 failed: {p.stderr.strip()[-120:]}"); failed += 1; continue
             a += f" --pass 2 --stats {stats}"
         trec, p = run(base.format(bin=shlex.quote(BIN)) + f" {a} -o /dev/null", {"Y264_RC_REC": log})
         if p.returncode:
-            print(f"{name:12} record failed: {p.stderr.strip()[-160:]}"); bad += 1; continue
+            print(f"{name:12} record failed: {p.stderr.strip()[-160:]}"); failed += 1; continue
         rec = p.stderr
         tplay, q = run(base.format(bin=shlex.quote(PLAY_BIN)) + f" {a} -o /dev/null",
                        dict(penv, Y264_RC_PLAY=log))
@@ -129,7 +123,7 @@ def main():
         m = re.search(r"RCREPLAY slices=(\d+) qp_match=(\d+) qp_diff=(\d+) modelled=(\d+) "
                       r"order_errors=(\d+) unread=(\d+) bits_rec=(\d+) bits_play=(\d+) (\w+)", out)
         if q.returncode or not m:
-            print(f"{name:12} replay failed: {(out or '').strip()[-160:]}"); bad += 1; continue
+            print(f"{name:12} replay failed: {(out or '').strip()[-160:]}"); failed += 1; continue
         sl, qm, qd, mo, oe, un, br, bp, verdict = m.groups()
         ur = re.search(r"RCREPLAY vbv: underflows=(\d+)", rec)
         up = re.search(r"RCREPLAY vbv: underflows=(\d+)", out)
@@ -147,10 +141,12 @@ def main():
         for f in os.listdir(work):
             os.remove(os.path.join(work, f))
         os.rmdir(work)
-    if selftest:
+    if failed:
+        print(f"rc_replay: FAIL ({failed} config(s) failed to run)")
+    elif selftest:
         print("rc_replay: " + ("PASS (every replay reproduced its recording)" if not bad
                                 else f"FAIL ({bad} config(s) did not reproduce)"))
-    sys.exit(1 if bad and selftest else 0)
+    sys.exit(1 if failed or (bad and selftest) else 0)
 
 
 main()

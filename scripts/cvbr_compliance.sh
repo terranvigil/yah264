@@ -160,7 +160,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             "$vbin" --input-y4m "$ref" \
                 --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                 --vbv-maxrate "$cap" --vbv-bufsize "$cap" \
-                --threads "$athr" -o "$out" >/dev/null 2>&1
+                --threads "$athr" -o "$out" >/dev/null 2>"$wd/err"
             enc=$?
             line=$(python3 "$root/scripts/vbv_check.py" "$out" --maxrate "$cap" \
                      --bufsize "$cap" --y4m "$ref" --quiet 2>/dev/null)
@@ -170,6 +170,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             n_total=$((n_total+1)); [ "$rc" = 0 ] && n_clean=$((n_clean+1))
             det=$(printf '%s' "$line" | sed -n 's/.*header\], \([0-9.]*\) kbps.*min-fill [-0-9.]* kbit (\([-0-9.]*\)%).*, \([0-9]*\) underflow.*/\1 kbps  fill \2%  \3 under/p')
             vbv_verdict=$([ "$rc" = 0 ] && echo ok || echo UNDERFLOW)
+            [ "$enc" = 0 ] || { vbv_verdict=ENCFAIL; det=$(head -1 "$wd/err"); }
             if [ -z "$HRD" ]; then
                 printf '%-16s %6s %6s %4s  %-9s %s\n' "$clip" "$cap" "$arm" y264 \
                        "$vbv_verdict" "$det"
@@ -186,7 +187,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
                 "$YAH264" --input-y4m "$ref" \
                     --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                     --vbv-maxrate "$cap" --vbv-bufsize "$cap" --nal-hrd "$mode" \
-                    --threads "$athr" -o "$hout" >/dev/null 2>&1
+                    --threads "$athr" -o "$hout" >/dev/null 2>"$wd/err"
                 henc=$?
                 hline=$(python3 "$root/scripts/hrd_check.py" "$hout" 2>&1)
                 hrc=$?
@@ -194,6 +195,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
                 # Exit 3 is "the stream carries no HRD", which in THIS leg is a
                 # failure of the thing under test, not a vacuous pass.
                 v=$([ "$hrc" = 0 ] && echo ok || { [ "$hrc" = 3 ] && echo NO-HRD || echo FAIL; })
+                [ "$henc" = 0 ] || { v=ENCFAIL; hdet="$hdet $(head -1 "$wd/err")"; }
                 pk=$(printf '%s' "$hline" | sed -n 's/.*peak fullness [0-9]* bit (\([0-9.]*\)% of CpbSize).*/\1/p' | head -1)
                 f1=$(printf '%s' "$hline" | sed -n 's/.*FAIL \([A-Z]*\) nal sched 0 au \([0-9]*\).*/\1@\2/p' | head -1)
                 if [ "$mode" = vbr ]; then hv="$v"; else hc="$v"; fi

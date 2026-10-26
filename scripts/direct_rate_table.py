@@ -66,9 +66,11 @@ if ONLY:
 
 
 def enc(tmpl, q, src, out, n):
-    subprocess.run(tmpl.format(q=f"{q:.4f}", src=src, out=out, n=n),
-                   shell=True, capture_output=True)
-    return os.path.getsize(out) if os.path.exists(out) else 0
+    cmd = tmpl.format(q=f"{q:.4f}", src=src, out=out, n=n)
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if r.returncode or not os.path.exists(out):
+        sys.exit(f"direct_rate_table: encode failed ({r.returncode}): {cmd}\n{r.stderr[-400:]}")
+    return os.path.getsize(out)
 
 
 def solve(tmpl, src, target, out, n, iters=10):
@@ -105,7 +107,6 @@ def main():
                     help="draws per clip; >1 prints the spread, which is what a "
                          "large headline number has to survive")
     args = ap.parse_args()
-    bd.require_dev_knobs(bd.template_binary(Y), *(t for _, t in ARMS))
 
     rows = {}
     for clip in args.clips.split(","):

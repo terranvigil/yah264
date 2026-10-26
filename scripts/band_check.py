@@ -220,10 +220,6 @@ def _solve(src, target, out, lo, hi, crf, keep, stats):
 
 
 def main():
-    try:
-        bdcompare.require_dev_knobs(YAH264, " ".join(ARGS))
-    except SystemExit as e:
-        die(str(e.code) if e.code not in (None, 0, 1, 2) else "band_check: binary refused")
     d = os.environ.get("OUT") or tempfile.mkdtemp(prefix="y264bandchk.")
     os.makedirs(d, exist_ok=True)
     print(f"# scratch {d}; margins flat +{FLAT_MARGIN}, cambi +{CAMBI_MARGIN}; args {' '.join(ARGS) or '(default)'}")

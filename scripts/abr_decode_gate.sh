@@ -33,8 +33,6 @@ ARM="${ARM:-}"
 # every arm then produces nothing, whose PSNRs match.
 #   ARGS='--tff --bframes 0' scripts/abr_decode_gate.sh   # the field ABR path
 ARGS="${ARGS:-}"
-. "$ROOT/scripts/devknobs.sh"
-y264_require_dev_knobs "$ENC" "$ARM"
 
 # A caller-named WORK is the caller's to keep; an unnamed one is per-run
 # scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).
@@ -46,11 +44,14 @@ for spec in $CLIPS; do
     src="$ROOT/tests/corpus/$clip.y4m"
     [ -f "$src" ] || { echo "skip $clip (no corpus file)"; continue; }
     ran=$((${ran:-0}+1))
-    out="$WORK/$clip.264"
+    out="$WORK/$clip.264"; rm -f "$out"
     # shellcheck disable=SC2086
-    env $ARM "$ENC" --input-y4m "$src" --bitrate "$kbps" --preset medium \
+    if ! env $ARM "$ENC" --input-y4m "$src" --bitrate "$kbps" --preset medium \
         --cabac --transform-8x8 --ref 3 --bframes 3 --threads "$THREADS" \
-        $ARGS -o "$out" 2>/dev/null
+        $ARGS -o "$out" 2>"$WORK/err"; then
+        printf '  %-16s t%-3s ENCFAIL: %s\n' "$clip" "$THREADS" "$(head -1 "$WORK/err")"
+        fails=$((fails+1)); continue
+    fi
     want=$(ffprobe -v error -count_frames -select_streams v \
            -show_entries stream=nb_read_frames -of csv=p=0 "$src" 2>/dev/null)
     got=$(ffprobe -v error -count_frames -select_streams v \

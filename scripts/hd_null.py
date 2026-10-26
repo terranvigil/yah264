@@ -116,9 +116,11 @@ def anchor_bytes(ref, clip, rungs, args):
 
     def one(q):
         o = f"{out}.{q:g}"
-        subprocess.run(f"{shlex.quote(ref)} --input-y4m {shlex.quote(src)} --frames {args.frames} "
-                       f"--preset {args.preset} {tools}--crf {q:.4f} --threads {args.threads} "
-                       f"-o {shlex.quote(o)}", shell=True, capture_output=True, cwd=ROOT)
+        r = subprocess.run(f"{shlex.quote(ref)} --input-y4m {shlex.quote(src)} --frames {args.frames} "
+                           f"--preset {args.preset} {tools}--crf {q:.4f} --threads {args.threads} "
+                           f"-o {shlex.quote(o)}", shell=True, capture_output=True, text=True, cwd=ROOT)
+        if r.returncode:
+            sys.exit(f"hd_null: {clip} crf {q:g} encode failed:\n{r.stderr[-400:]}")
         return os.path.getsize(o) if os.path.exists(o) else 0
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         sizes = list(ex.map(one, rungs))
@@ -170,10 +172,6 @@ def main():
     ref = args.ref or os.environ.get("YAH264", "build/cli/yah264")
     ref = ref if os.path.isabs(ref) else os.path.join(ROOT, ref)
     ref_lib = sha12(ref)
-    # the null envs are only read back from the cache; what can reach an encode
-    # here is a knob the anchor inherits
-    if not args.no_encode:
-        bd.require_dev_knobs(ref)
     points = json.load(open(os.path.join(cache, "points.json")))
     reads = fit(points, pkey, args.frames, rungs, NULL_ENVS, args.min_rungs)
 

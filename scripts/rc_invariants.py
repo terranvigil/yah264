@@ -43,8 +43,6 @@ point is to change behaviour).
 import hashlib, os, re, shlex, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "scripts"))
-import devknobs                                                 # noqa: E402
 REF = os.environ.get("REF", os.path.join(ROOT, "build-rel/cli/yah264"))
 CAND = os.environ.get("CAND", REF)
 CAND_ENV = os.environ.get("CAND_ENV", "")
@@ -103,10 +101,6 @@ def main():
     for b in (REF, CAND):
         if not os.access(b, os.X_OK):
             sys.exit(f"rc_invariants: no binary {b}")
-    # the record and play hooks are knobs, and run() drops any Y264_RC_* the caller set
-    inherited = " ".join(k for k in os.environ if not k.startswith("Y264_RC_"))
-    devknobs.require(REF, "Y264_RC_REC", inherited, environ=False)
-    devknobs.require(CAND, "Y264_RC_PLAY", CAND_ENV, inherited, environ=False)
     cenv = {}
     for w in CAND_ENV.split():
         k, _, v = w.partition("=")
@@ -139,7 +133,7 @@ def main():
         if not os.path.exists(log):
             p = run(base.format(b=shlex.quote(REF)), {"Y264_RC_REC": log + ".tmp"})
             if p.returncode or not os.path.exists(log + ".tmp"):
-                print(f"{name:28} record failed"); nbad += 1; continue
+                print(f"{name:28} record failed: {p.stderr.strip()[-120:]}"); nbad += 1; continue
             os.replace(log + ".tmp", log)
         q = run(base.format(b=shlex.quote(CAND)), dict(cenv, Y264_RC_PLAY=log))
         m = re.search(r"RCREPLAY slices=(\d+) qp_match=(\d+) qp_diff=(\d+) modelled=(\d+) "

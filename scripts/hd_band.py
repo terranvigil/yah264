@@ -175,21 +175,6 @@ if live and live[0][1] in _seen:
     live = []
 
 
-def _arm_binary(env):
-    """(full binary path, the rest of the env) for an arm, as split_bin reads it."""
-    if not env.startswith("@"):
-        return (N if os.path.isabs(N) else os.path.join(ROOT, N)), env
-    path, _, rest = env[1:].partition(" ")
-    return (path if os.path.isabs(path) else os.path.join(ROOT, path)), rest
-
-
-# the anchor always runs and inherits the environment; each arm and control is
-# checked against the binary it runs, so a release anchor can band a dev @-build
-bd.require_dev_knobs(_arm_binary("")[0])
-for _, _env in allarms + live:
-    bd.require_dev_knobs(*_arm_binary(_env))
-
-
 # ---------------------------------------------------------------- identity ---
 # The measurement cache survives between bands and between weeks, which is what
 # makes it worth having and what makes it dangerous: ffboard's solve cache once
@@ -302,7 +287,9 @@ def enc(env, q, src, out):
         cmd = cmd + " " + flags
     if env:
         cmd = env + " " + cmd
-    subprocess.run(cmd, shell=True, capture_output=True, cwd=ROOT)
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=ROOT)
+    if r.returncode:
+        sys.exit(f"hd_band: encode failed: {cmd}\n{r.stderr[-400:]}")
     return os.path.getsize(out) if os.path.exists(out) else 0
 
 

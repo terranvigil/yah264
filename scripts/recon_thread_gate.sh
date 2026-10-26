@@ -27,10 +27,15 @@ BITRATE="${BITRATE:-400}"
 . "$root/scripts/scratch.sh"
 y264_scratch_dir reconthread WORK
 [ -x "$BIN" ] || { echo "recon_thread_gate: build tools/reconcmp first" >&2; exit 2; }
-# reconcmp links the library of its build directory, whose CLI says whether
-# that library reads the knobs an armed run exports
-. "$root/scripts/devknobs.sh"
-y264_require_dev_knobs "$(dirname "$BIN")/../../cli/yah264"
+# reconcmp reads knobs through its build's library and, unlike the CLI, can't
+# refuse the ones a release library ignores
+if ! "$(dirname "$BIN")/../../cli/yah264" --version 2>/dev/null | grep -q "(dev knobs)"; then
+  knobs=$(env | sed -n 's/^\(Y264_[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
+  if [ -n "$knobs" ]; then
+    echo "recon_thread_gate: ${knobs}set, and $BIN is a release build; use a -Ddev_knobs=true build" >&2
+    exit 2
+  fi
+fi
 
 fail=0
 for clip in $CLIPS; do
