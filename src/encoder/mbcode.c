@@ -492,9 +492,9 @@ static int pair(int a, int b, double ca, double cb, double drift)
  * pair next, with the off-center slack, then a full depth with a solid one,
  * held to the solid limit. Both walks past the cap are dark picture, not a
  * matte; one past it is a fade into a black sky, so both pair at the other
- * side's solid depth, when fade is set. */
+ * side's solid depth. */
 static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
-                       double drift, int maxl, int lean, int fade)
+                       double drift, int maxl, int lean)
 {
     int fa = *a, fb = *b;
     int ta[4] = { sa, fa, sa, fa }, tb[4] = { sb, fb, fb, sb };
@@ -507,7 +507,7 @@ static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
         *a = p; *b = q;
         return;
     }
-    if (!fade || fabs(ca - cb) >= drift) return;
+    if (fabs(ca - cb) >= drift) return;
     if (sa && fb > maxl && sb >= sa) *a = *b = sa;
     else if (sb && fa > maxl && sa >= sb) *a = *b = sb;
 }
@@ -526,14 +526,13 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
                            vbusy, tol, drift, 1, sb);
         int t = top, b = bottom;
-        pair_sides(&top, &bottom, sa[0], sb[0], ca, cb, drift, maxr, 1, 1);
+        pair_sides(&top, &bottom, sa[0], sb[0], ca, cb, drift, maxr, 1);
         /* a lit subject clear of both sides, against a black sky at the bar's
          * inner edge, can read as text and carry a solid depth into the
-         * picture; when nothing pairs, try again without the glyph edges.
-         * A fade was already tried at the glyph-edge depths. */
+         * picture; when nothing pairs, try again without the glyph edges */
         if (!top) {
             top = t; bottom = b;
-            pair_sides(&top, &bottom, sa[1], sb[1], ca, cb, drift, maxr, 1, 0);
+            pair_sides(&top, &bottom, sa[1], sb[1], ca, cb, drift, maxr, 1);
         }
     }
     /* side bars between any top and bottom ones: a windowbox has both */
@@ -545,7 +544,7 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
                          drift, 0, sa);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, cb, vmax,
                           vbusy, tol, drift, 0, sb);
-        pair_sides(&left, &right, sa[0], sb[0], ca, cb, drift, maxc, 0, 1);
+        pair_sides(&left, &right, sa[0], sb[0], ca, cb, drift, maxc, 0);
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
 }

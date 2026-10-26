@@ -365,18 +365,21 @@ int main(void)
         FILL(x < 35 || x >= W - 8, 16.0, 0.0, 24.0, 3.0)   /* and beside a pillar */
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 8 && e[3] == 8);
+        /* a starry sky past the cap over a bar whose subtitle stops its strict
+         * depth: the retry still pairs the fade, at the subtitle */
+        FILL(!((y >= 8 && y < 31 && x % 5 == 3) || (y >= 31 && y < H - 12) ||
+               (y >= H - 12 && y < H - 8 && x % 10 == 3) || (y == H - 7 && x >= 25 && x < 55)),
+             16.0, 0.0,
+             y == H - 7 ? (x % 2 ? 40.0 : 200.0) : (y < 31 ? 24.0 : (y < H - 12 ? 40.0 : 120.0)),
+             y == H - 7 ? (x % 2 ? 8.0 : 500.0) : (y < 31 ? 3.0 : (y < H - 12 ? 30.0 : 60.0)))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
         /* a fade beside a bar that walks into dark picture pairs at its solid depth */
         FILL(y < 6 || y >= 20 || (y < 10 && x % 10 < 6), 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
         /* but not when the fading side's own solid depth is the shallower */
         FILL(y < 8 || (y >= 14 && !(y == H - 6 && x % 10 >= 7)), 16.0, 0.0, 24.0, 3.0)
-        y264_aq_bars(m, v, W, H, e);
-        CHECK(e[0] == 0 && e[1] == 0);
-        /* a subtitle in the top bar doesn't change that */
-        FILL((y < 8 && !(y == 1 && x >= 20 && x < 61 && x % 4 != 2)) ||
-             (y >= 14 && !(y == H - 6 && x % 10 >= 7)), 16.0, 0.0,
-             y == 1 ? (x % 4 ? 40.0 : 200.0) : 24.0, y == 1 ? (x % 4 ? 8.0 : 500.0) : 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
         FILL(y < 31 || y >= H - 8, y < 31 ? 16.0 : 20.0, 0.0, 24.0, 3.0)   /* two colors */
