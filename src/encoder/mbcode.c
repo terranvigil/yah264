@@ -407,15 +407,14 @@ int y264_aq_grain(double mean, double var)
 #define AQ_BAR_TOL       1.0
 #define AQ_BAR_DRIFT     0.5
 #define AQ_BAR_PAIR      2.0
-/* the mean of one line's low-variance blocks; *ok when they're at least half */
+/* the mean of one line's low-variance blocks */
 static double bar_color(const float *mean, const float *var, int i0, int step,
-                        int n, double vmax, int *ok)
+                        int n, double vmax)
 {
     double sum = 0;
     int flat = 0;
     for (int t = 0; t < n; t++)
         if (var[i0 + t * step] < vmax) { sum += mean[i0 + t * step]; flat++; }
-    *ok = 2 * flat >= n;
     return flat ? sum / flat : 0.0;
 }
 /* bar lines counted inward from one edge; line k starts at i0 + k * lstep */
@@ -451,11 +450,11 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
     double vmax = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc;
     double ptol = AQ_BAR_PAIR * sc, drift = AQ_BAR_DRIFT * sc;
-    int top = 0, bottom = 0, left = 0, right = 0, ok_a, ok_b;
+    int top = 0, bottom = 0, left = 0, right = 0;
     int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
-    double color_a = bar_color(mean, var, 0, 1, wmb, vmax, &ok_a);
-    double color_b = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax, &ok_b);
-    if (ok_a && ok_b && fabs(color_a - color_b) < ptol && maxr > 0) {
+    double color_a = bar_color(mean, var, 0, 1, wmb, vmax);
+    double color_b = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax);
+    if (fabs(color_a - color_b) < ptol && maxr > 0) {
         top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, color_a, vmax,
                         tol, drift);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, color_b,
@@ -465,9 +464,9 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
     }
     /* side bars only without top and bottom ones */
     int rows = hmb - top - bottom, i0 = top * wmb;
-    color_a = bar_color(mean, var, i0, wmb, rows, vmax, &ok_a);
-    color_b = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax, &ok_b);
-    if (!top && ok_a && ok_b && fabs(color_a - color_b) < ptol && maxc > 0) {
+    color_a = bar_color(mean, var, i0, wmb, rows, vmax);
+    color_b = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax);
+    if (!top && fabs(color_a - color_b) < ptol && maxc > 0) {
         left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, color_a, vmax,
                          tol, drift);
         right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, color_b,

@@ -55,6 +55,7 @@ int main(void)
     CHECK(y264_aq_dark_gate(0.0, 0.35) == 0.0);
     CHECK(y264_aq_dark_gate(0.14, 0.0) > 0.4 && y264_aq_dark_gate(0.14, 0.0) < 0.6);
     CHECK(y264_aq_dark_gate(0.14, 0.50) == 1.0);
+    CHECK(fabs(y264_aq_dark_gate(0.14, 0.425) - 0.5) < 1e-9);    /* the larger, not the sum */
     /* grain counts dark, smooth blocks that aren't flat */
     CHECK(y264_aq_grain(M(30.0), V(2.0)) == 1);
     CHECK(y264_aq_grain(M(30.0), V(0.1)) == 0);     /* a flat fill can't band */
@@ -149,6 +150,22 @@ int main(void)
         FILL(y < 1 || (y == H - 1 && x < 50), 16.0, 0.0, 120.0, 60.0)  /* bottom edge part matte */
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
+        /* pillars of two colors aren't a matte */
+        FILL(x < 4 || x >= W - 4, x < 4 ? 128.0 : 131.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[2] == 0 && e[3] == 0);
+        /* grain at the bar's own level is picture: the bar ends there */
+        FILL(y < 4 || y >= H - 4, 16.0, 0.0, y < 10 || y >= H - 10 ? 16.0 : 120.0,
+             y < 10 || y >= H - 10 ? 2.0 : 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 4 && e[1] == 4);
+        /* the pairing allows a row of rounding and a third of the shallower side */
+        FILL(x < 6 || x >= W - 9, 16.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[2] == 6 && e[3] == 9);
+        FILL(x < 6 || x >= W - 10, 16.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[2] == 0 && e[3] == 0);
         /* sides a few blocks apart pair (a crop off center): 8 and 6 deep */
         FILL(x < 8 || x >= W - 6, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
