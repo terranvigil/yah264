@@ -506,11 +506,9 @@ static int mb_flat(const y264_frame_t *f, int mbx, int mby)
     return v2[1] / 256.0 - mean * mean < AQ_BAR_VAR * sc * sc;
 }
 
-/* inside the bars and flat with its four neighbors, so a subtitle or logo in
- * a bar, and the blocks around it, are coded as picture. Only in I slices and
- * unweighted P slices: an explicit luma weight shifts the bars too, and a B
- * slice inherits that from its references; at the frame QP the residual that
- * would put them back quantizes to zero, so black pumps */
+/* inside the bars and flat with its four neighbors, so a subtitle or logo in a
+ * bar stays picture. Not in B or weighted P slices: there the floor made black
+ * bars drift further from black (measured on sintel) */
 int y264_mb_bar_floored(const y264_frame_t *f, int mbx, int mby)
 {
     if (mby >= f->bar[0] && mby < f->hmb - f->bar[1] &&

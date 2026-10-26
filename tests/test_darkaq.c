@@ -221,6 +221,13 @@ int main(void)
               !y264_mb_bar_floored(&f, 3, 1));          /* its neighbors */
         CHECK(y264_mb_bar_floored(&f, 0, 0) && y264_mb_bar_floored(&f, 6, 7));
         CHECK(!y264_mb_bar_floored(&f, 3, 4));          /* picture */
+        /* only in I and unweighted P slices */
+        f.slice_type = 2;
+        CHECK(!y264_mb_bar_floored(&f, 0, 0));
+        f.slice_type = 1;
+        CHECK(y264_mb_bar_floored(&f, 0, 0));
+        f.wp_luma[5] = 1;
+        CHECK(!y264_mb_bar_floored(&f, 0, 0));
     }
 
     if (fails) fprintf(stderr, "%d failure(s)\n", fails);
