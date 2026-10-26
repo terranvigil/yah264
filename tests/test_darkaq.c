@@ -235,6 +235,15 @@ int main(void)
         FILL(!(x >= 20 && x < 60 && y >= 12 && y < 33), 16.0, 0.0, 30.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        /* nor is one off center, where one walk passes the cap and the other doesn't */
+        FILL(!((x >= 20 && x < 32 && y >= 15 && y < 30) || (x >= 32 && x < 58 && y >= 5 && y < 40)),
+             16.0, 0.0, 26.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        FILL(!((y >= 10 && y < 18 && x >= 40 && x < 60) || (y >= 18 && y < 37 && x >= 10 && x < 55)),
+             16.0, 0.0, 26.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
         /* nor are bars past the cap rescued at a partly matte line inside them */
         FILL((y < 18 || y >= H - 18) && !((y == 3 || y == H - 4) && x < 30), 16.0, 0.0,
              120.0, 60.0)

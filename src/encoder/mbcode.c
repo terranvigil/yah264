@@ -453,7 +453,9 @@ static int pair(int a, int b, double ca, double cb, double drift)
 }
 /* the half-matte lines a subtitle needs can also walk a side into flat dark
  * picture beside the bar, so a side may pair at its solid depth instead, full
- * depths first. Both walks past the cap are dark picture, not a matte. */
+ * depths first. A solid depth pairs only within a block of rounding: with the
+ * off-center slack too, an off-center subject in a black void would pass.
+ * Both walks past the cap are dark picture, not a matte. */
 static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
                        double drift, int maxl)
 {
@@ -462,7 +464,8 @@ static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
     *a = *b = 0;
     for (int k = 0; ok && k < 4; k++) {
         int da = ta[k & 1], db = tb[k >> 1];
-        if (da && db && da <= maxl && db <= maxl && pair(da, db, ca, cb, drift)) {
+        if (da && db && da <= maxl && db <= maxl && pair(da, db, ca, cb, drift) &&
+            (!k || abs(da - db) <= 1)) {
             *a = da; *b = db;
             return;
         }
