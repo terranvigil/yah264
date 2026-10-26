@@ -416,12 +416,14 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
         if (var[i0 + t * step] < vmax) { sum += mean[i0 + t * step]; flat++; }
     return flat ? sum / flat : 0.0;
 }
-/* bar lines counted inward from one edge; line k starts at i0 + k * lstep */
+/* bar lines counted inward from one edge; line k starts at i0 + k * lstep.
+ * *solid gets the lines before the first that is only partly matte */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                      int step, int n, int maxl, double color, double vmax,
-                     double tol, double drift)
+                     double tol, double drift, int *solid)
 {
     int lines = 0;
+    *solid = -1;
     for (; lines < maxl; lines++) {
         int matte = 0, line = i0 + lines * lstep;
         double sum = 0;
@@ -434,7 +436,9 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
         /* subtitles: the outermost line must be nearly all matte, inner ones half */
         if (lines ? 2 * matte < n : 10 * matte < 9 * n) break;
         if (fabs(sum / matte - color) >= drift) break;
+        if (*solid < 0 && 10 * matte < 9 * n) *solid = lines;
     }
+    if (*solid < 0) *solid = lines;
     return lines;
 }
 /* a matte's two sides: one color (an unrelated sky and ground rarely are),
@@ -444,34 +448,41 @@ static int pair(int a, int b, double ca, double cb, double drift)
     int lo = a < b ? a : b;
     return fabs(ca - cb) < drift && abs(a - b) <= 1 + lo / 3;
 }
+/* the half-matte lines a subtitle needs can also walk one side into flat dark
+ * picture beside the bar; when the full depths don't pair, the solid ones may */
+static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
+                       double drift, int maxl)
+{
+    if (*a && *b && *a <= maxl && *b <= maxl && pair(*a, *b, ca, cb, drift)) return;
+    if (sa && sb && sa <= maxl && sb <= maxl && pair(sa, sb, ca, cb, drift)) {
+        *a = sa; *b = sb;
+        return;
+    }
+    *a = *b = 0;
+}
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
     double vmax = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc;
     double drift = AQ_BAR_DRIFT * sc;
-    int top = 0, bottom = 0, left = 0, right = 0;
+    int top = 0, bottom = 0, left = 0, right = 0, sa, sb;
     int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
-    double color_a = bar_color(mean, var, 0, 1, wmb, vmax);
-    double color_b = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax);
     if (maxr > 0) {
-        top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, color_a, vmax,
-                        tol, drift);
-        bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, color_b,
-                           vmax, tol, drift);
-        if (!top || !bottom || !pair(top, bottom, color_a, color_b, drift) || top > maxr || bottom > maxr)
-            top = bottom = 0;
+        double ca = bar_color(mean, var, 0, 1, wmb, vmax);
+        double cb = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax);
+        top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, ca, vmax, tol, drift, &sa);
+        bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
+                           tol, drift, &sb);
+        pair_sides(&top, &bottom, sa, sb, ca, cb, drift, maxr);
     }
     /* side bars only without top and bottom ones */
-    int rows = hmb - top - bottom, i0 = top * wmb;
-    color_a = bar_color(mean, var, i0, wmb, rows, vmax);
-    color_b = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax);
     if (!top && maxc > 0) {
-        left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, color_a, vmax,
-                         tol, drift);
-        right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, color_b,
-                          vmax, tol, drift);
-        if (!left || !right || !pair(left, right, color_a, color_b, drift) || left > maxc || right > maxc)
-            left = right = 0;
+        double ca = bar_color(mean, var, 0, wmb, hmb, vmax);
+        double cb = bar_color(mean, var, wmb - 1, wmb, hmb, vmax);
+        left = bar_depth(mean, var, 0, 1, wmb, hmb, maxc + 1, ca, vmax, tol, drift, &sa);
+        right = bar_depth(mean, var, wmb - 1, -1, wmb, hmb, maxc + 1, cb, vmax, tol,
+                          drift, &sb);
+        pair_sides(&left, &right, sa, sb, ca, cb, drift, maxc);
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
 }
