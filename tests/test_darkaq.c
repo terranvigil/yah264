@@ -105,10 +105,10 @@ int main(void)
         for (int x = 0; x < 4; x++) { m[x] = M(120.0); v[x] = V(60.0); }
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
-        /* a windowbox keeps its top and bottom bars alone */
+        /* a windowbox has both pairs */
         FILL(y < 3 || y >= H - 3 || x < 2 || x >= W - 2, 16.0, 0.0, 90.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
-        CHECK(e[0] == 3 && e[1] == 3 && e[2] == 0 && e[3] == 0);
+        CHECK(e[0] == 3 && e[1] == 3 && e[2] == 2 && e[3] == 2);
         FILL(x < 2 || x >= W - 2, 128.0, 0.0, 90.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 2 && e[3] == 2);
@@ -204,6 +204,11 @@ int main(void)
         FILL(y < 6 || y >= H - 6, 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
+        /* a flat logo block on a bar's edge row doesn't move its matte color */
+        FILL((y < 6 || y >= H - 6) && !(y == H - 1 && x == 70), 16.0, 0.0,
+             y == H - 1 ? 235.0 : 24.0, y == H - 1 ? 0.0 : 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
         /* a pillar that walks into flat, mostly black picture still pairs at
          * its solid depth */
         FILL(x < 15 || x >= W - 15 || (x >= W - 22 && y % 10 < 7), 16.0, 0.0,
@@ -253,17 +258,41 @@ int main(void)
              x == 40 && y == H - 3 ? 0.0 : 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
-        /* a letterbox beside thin black picture edges stays a letterbox, and so,
-         * the commoner matte winning, does a pillarbox whose picture's own top
-         * and bottom are black */
+        /* thin black picture edges inside a letterbox read as pillars too, and a
+         * pillarbox whose picture's own top and bottom are black loses those
+         * rows: flat blocks either way, not grain */
         FILL(y < 6 || y >= H - 6 || (y < 12 && x % 10 < 6) || x < 3 || x >= W - 3, 16.0, 0.0,
              x % 3 ? 24.0 : 120.0, x % 3 ? 3.0 : 60.0)
         y264_aq_bars(m, v, W, H, e);
-        CHECK(e[0] == 6 && e[1] == 6 && e[2] == 0 && e[3] == 0);
+        CHECK(e[0] == 6 && e[1] == 6 && e[2] == 3 && e[3] == 3);
         FILL(x < 10 || x >= W - 10 || y < 4 || y >= H - 4 || (y < 14 && x % 10 < 4) ||
              (y >= 37 && x % 10 < 4), 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
-        CHECK(e[0] == 4 && e[1] == 4 && e[2] == 0 && e[3] == 0);
+        CHECK(e[0] == 4 && e[1] == 4 && e[2] == 10 && e[3] == 10);
+        /* a fade into a black sky walks one bar past the cap: both pair at the
+         * clean bar's depth */
+        FILL(y < 31 || y >= H - 8, 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 8 && e[1] == 8);
+        FILL(y < 8 || y >= 14, 16.0, 0.0, 24.0, 3.0)   /* black ground below */
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 8 && e[1] == 8);
+        FILL(y < 31 || y >= H - 8, y < 31 ? 16.0 : 20.0, 0.0, 24.0, 3.0)   /* two colors */
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
+        /* 1080 is coded as 1088, so an off-center letterbox's bottom solid depth
+         * may run two deeper; the top may not */
+        FILL(y < 7 || y >= H - 9 || (y >= H - 16 && x % 10 < 7), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 7 && e[1] == 9);
+        FILL(y < 9 || y >= H - 7 || (y < 16 && x % 10 < 7), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
+        /* black picture across half of each line beside the bars: the solid
+         * depths win over the walks */
+        FILL(y < 8 || y >= H - 8 || (x < 40 && (y < 14 || y >= H - 14)), 16.0, 0.0, 24.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 8 && e[1] == 8);
         /* a dark subject in a black void isn't letterboxed: both walks pass the cap */
         FILL(!(x >= 20 && x < 60 && y >= 12 && y < 33), 16.0, 0.0, 30.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
@@ -273,10 +302,12 @@ int main(void)
              16.0, 0.0, 26.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        /* but one whose walk passes the cap beside a clean edge keeps that edge's
+         * depth, as a fade into a black sky does */
         FILL(!((y >= 10 && y < 18 && x >= 40 && x < 60) || (y >= 18 && y < 37 && x >= 10 && x < 55)),
              16.0, 0.0, 26.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
-        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        CHECK(e[0] == 8 && e[1] == 8 && e[2] == 0 && e[3] == 0);
         /* nor are bars past the cap rescued at a partly matte line inside them */
         FILL((y < 18 || y >= H - 18) && !((y == 3 || y == H - 4) && x < 30), 16.0, 0.0,
              24.0, 3.0)

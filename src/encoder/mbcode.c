@@ -406,14 +406,26 @@ int y264_aq_grain(double mean, double var)
 #define AQ_BAR_VAR       AQ_GRAIN_VMIN
 #define AQ_BAR_TOL       1.0
 #define AQ_BAR_DRIFT     0.5
-/* the mean of one line's low-variance blocks */
+/* one line's matte color: the mean of its flat blocks near the commonest
+ * level, so a flat logo on the edge doesn't move it off the matte */
 static double bar_color(const float *mean, const float *var, int i0, int step,
-                        int n, double vmax)
+                        int n, double vmax, double sc)
 {
-    double sum = 0;
-    int flat = 0;
-    for (int t = 0; t < n; t++)
-        if (var[i0 + t * step] < vmax) { sum += mean[i0 + t * step]; flat++; }
+    int h[258] = { 0 }, best = 1, flat = 0;
+    for (int t = 0; t < n; t++) {
+        int i = i0 + t * step;
+        if (var[i] < vmax) {
+            int b = (int)(mean[i] / sc);
+            h[1 + (b < 0 ? 0 : (b > 255 ? 255 : b))]++;
+        }
+    }
+    for (int b = 2; b <= 256; b++)
+        if (h[b - 1] + h[b] + h[b + 1] > h[best - 1] + h[best] + h[best + 1]) best = b;
+    double c = (best - 0.5) * sc, sum = 0;
+    for (int t = 0; t < n; t++) {
+        int i = i0 + t * step;
+        if (var[i] < vmax && fabs(mean[i] - c) < 1.5 * sc) { sum += mean[i]; flat++; }
+    }
     return flat ? sum / flat : 0.0;
 }
 /* bar lines counted inward from one edge; line k starts at i0 + k * lstep.
@@ -452,24 +464,30 @@ static int pair(int a, int b, double ca, double cb, double drift)
     return fabs(ca - cb) < drift && abs(a - b) <= 1 + lo / 3;
 }
 /* the half-matte lines a subtitle needs can also walk a side into flat dark
- * picture beside the bar, so a side may pair at its solid depth instead, full
- * depths first. A solid depth pairs only within a block of rounding: with the
- * off-center slack too, an off-center subject in a black void would pass.
- * Both walks past the cap are dark picture, not a matte. */
+ * picture beside the bar, so solid depths pair first, within a block of
+ * rounding (two when b, the bottom, is deeper: it carries the coded frame's
+ * padding rows). Wider slack there would let an off-center subject in a black
+ * void pass. Full depths pair next, with the off-center slack, then a full
+ * depth with a solid one. Both walks past the cap are dark picture, not a
+ * matte; one past it beside a clean side is a fade into a black sky, so both
+ * pair at the clean depth. */
 static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
-                       double drift, int maxl)
+                       double drift, int maxl, int lean)
 {
-    int ta[2] = { *a, sa }, tb[2] = { *b, sb };
-    int ok = *a <= maxl || *b <= maxl;
+    int fa = *a, fb = *b;
+    int ta[4] = { sa, fa, sa, fa }, tb[4] = { sb, fb, fb, sb };
     *a = *b = 0;
-    for (int k = 0; ok && k < 4; k++) {
-        int da = ta[k & 1], db = tb[k >> 1];
-        if (da && db && da <= maxl && db <= maxl && pair(da, db, ca, cb, drift) &&
-            (!k || abs(da - db) <= 1)) {
-            *a = da; *b = db;
-            return;
-        }
+    if (fa > maxl && fb > maxl) return;
+    for (int k = 0; k < 4; k++) {
+        int p = ta[k], q = tb[k];
+        if (!p || !q || p > maxl || q > maxl || !pair(p, q, ca, cb, drift)) continue;
+        if (k != 1 && (q - p < -1 || q - p > 1 + lean)) continue;
+        *a = p; *b = q;
+        return;
     }
+    if (fabs(ca - cb) >= drift) return;
+    if (fa && fa == sa && fb > maxl && sb >= fa) *a = *b = fa;
+    else if (fb && fb == sb && fa > maxl && sa >= fb) *a = *b = fb;
 }
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
@@ -479,25 +497,24 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
     int top = 0, bottom = 0, left = 0, right = 0, sa, sb;
     int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
     if (maxr > 0) {
-        double ca = bar_color(mean, var, 0, 1, wmb, vmax);
-        double cb = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax);
+        double ca = bar_color(mean, var, 0, 1, wmb, vmax, sc);
+        double cb = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax, sc);
         top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, ca, vmax, vbusy, tol,
                         drift, &sa);
         bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
                            vbusy, tol, drift, &sb);
-        pair_sides(&top, &bottom, sa, sb, ca, cb, drift, maxr);
+        pair_sides(&top, &bottom, sa, sb, ca, cb, drift, maxr, 1);
     }
-    /* side bars only without top and bottom ones: a letterbox is the commoner
-     * matte, so it wins when a pillarboxed picture's own black top and bottom
-     * pair too */
-    if (!top && maxc > 0) {
-        double ca = bar_color(mean, var, 0, wmb, hmb, vmax);
-        double cb = bar_color(mean, var, wmb - 1, wmb, hmb, vmax);
-        left = bar_depth(mean, var, 0, 1, wmb, hmb, maxc + 1, ca, vmax, vbusy, tol,
+    /* side bars between any top and bottom ones: a windowbox has both */
+    int rows = hmb - top - bottom, i0 = top * wmb;
+    if (maxc > 0 && rows > 0) {
+        double ca = bar_color(mean, var, i0, wmb, rows, vmax, sc);
+        double cb = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax, sc);
+        left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, ca, vmax, vbusy, tol,
                          drift, &sa);
-        right = bar_depth(mean, var, wmb - 1, -1, wmb, hmb, maxc + 1, cb, vmax, vbusy,
-                          tol, drift, &sb);
-        pair_sides(&left, &right, sa, sb, ca, cb, drift, maxc);
+        right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, cb, vmax,
+                          vbusy, tol, drift, &sb);
+        pair_sides(&left, &right, sa, sb, ca, cb, drift, maxc, 0);
     }
     bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
 }
@@ -647,10 +664,13 @@ static void aq_analyze(y264_frame_t *f)
     double sd = sd2 > 0 ? sqrt(sd2) : 0;
     float strength = (float)(f->aq_strength * y264_aq_gain(avg, sd, 1, f->aq_abr));
     float center = (float)(avg - f->aq_pull * (avg - f->aq_anchor));
-    float dg = (float)y264_aq_dark_gate((double)nbright / n,
-                                        y264_aq_grain_share(means, vars, f->wmb, f->hmb));
+    /* the bar walk matters only with the dark term on and brightness alone not
+     * already opening the gate */
+    double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
+    if (aq_dark_env(0) > 0 && dg < 1.0)
+        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb));
     for (int i = 0; i < n; i++) {
-        int off = (int)lroundf(strength * (lv[i] - center) + dg * dk[i]);
+        int off = (int)lroundf(strength * (lv[i] - center) + (float)dg * dk[i]);
         if (off < -8) off = -8;
         if (off > 8) off = 8;
         f->aq_off[i] = (int8_t)off;
