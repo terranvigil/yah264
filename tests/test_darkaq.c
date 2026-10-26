@@ -210,6 +210,21 @@ int main(void)
              x >= W - 22 ? 24.0 : 120.0, x >= W - 22 ? 3.0 : 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 15 && e[3] == 15);
+        /* and pairs with a bar holding a subtitle, whose own solid depth is 1 */
+        FILL(((y < 6 || y >= H - 6) && !(y == H - 2 && x >= 20 && x < 60)) ||
+             (y >= 6 && y < 13 && x % 10 < 7), 16.0, 0.0,
+             y == H - 2 ? 200.0 : (y < 13 ? 24.0 : 120.0),
+             y == H - 2 ? 500.0 : (y < 13 ? 3.0 : 60.0))
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 6 && e[1] == 6);
+        /* a dark subject in a black void isn't letterboxed: both walks pass the cap */
+        FILL(!(x >= 20 && x < 60 && y >= 12 && y < 33), 16.0, 0.0, 30.0, 3.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        FILL((y < 18 || y >= H - 18) && !((y == 3 || y == H - 4) && x < 30), 16.0, 0.0,
+             120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
         /* 2.39:1 inside 4:3, and a 9:16 video pillarboxed in 16:9 */
         FILL(y < 10 || y >= H - 10, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);

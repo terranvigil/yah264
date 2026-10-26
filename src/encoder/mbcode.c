@@ -448,17 +448,22 @@ static int pair(int a, int b, double ca, double cb, double drift)
     int lo = a < b ? a : b;
     return fabs(ca - cb) < drift && abs(a - b) <= 1 + lo / 3;
 }
-/* the half-matte lines a subtitle needs can also walk one side into flat dark
- * picture beside the bar; when the full depths don't pair, the solid ones may */
+/* the half-matte lines a subtitle needs can also walk a side into flat dark
+ * picture beside the bar, so a side may pair at its solid depth instead, full
+ * depths first. Both walks past the cap are dark picture, not a matte. */
 static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
                        double drift, int maxl)
 {
-    if (*a && *b && *a <= maxl && *b <= maxl && pair(*a, *b, ca, cb, drift)) return;
-    if (sa && sb && sa <= maxl && sb <= maxl && pair(sa, sb, ca, cb, drift)) {
-        *a = sa; *b = sb;
-        return;
-    }
+    int ta[2] = { *a, sa }, tb[2] = { *b, sb };
+    int ok = *a <= maxl || *b <= maxl;
     *a = *b = 0;
+    for (int k = 0; ok && k < 4; k++) {
+        int x = ta[k & 1], y = tb[k >> 1];
+        if (x && y && x <= maxl && y <= maxl && pair(x, y, ca, cb, drift)) {
+            *a = x; *b = y;
+            return;
+        }
+    }
 }
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
