@@ -59,7 +59,9 @@ if [ -n "$WORK" ]; then mkdir -p "$WORK"; else y264_scratch_dir determrepeat WOR
 fails=0; warns=0; total=0
 for clip in $CLIPS; do
     src="$ROOT/tests/corpus/$clip.y4m"
-    [ -f "$src" ] || { echo "  skip $clip (no clip)"; continue; }
+    if [ ! -f "$src" ]; then
+        echo "  FAIL $clip: no clip at $src" >&2; total=$((total + 1)); fails=$((fails + 1)); continue
+    fi
     for r in $REFS; do
         for t in $THREADS; do
             total=$((total + 1))
