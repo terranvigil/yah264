@@ -97,9 +97,9 @@ aren't flat, counted over the picture leaving out any letterbox bars, none at
 the variance offset.
 
 **Letterbox and pillarbox bars.** The grain share leaves out bars of any matte
-color: matched pairs of flat edge rows (or columns) of one color, of about the
-same depth, that don't drift line to line, up to three eighths of the height or
-width a side. Only flat blocks count, so a grainy sky is never a bar; grainy
+color, and the line each bar's edge cuts through: matched pairs of flat edge
+rows (or columns) of one color, of about the same depth, that don't drift line
+to line, up to three eighths of the height or width a side. Only flat blocks count, so a grainy sky is never a bar; grainy
 film-scan bars count as picture. Without this, the bars of a letterboxed night
 scene would dilute its share and keep the gate shut.
 

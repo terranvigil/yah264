@@ -137,8 +137,13 @@ int main(void)
         FILL(y < 18 || y >= H - 18, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
-        /* bars of unequal depth, and a bar on one edge only, aren't a letterbox */
+        /* a letterbox a few rows off center pairs (3 and 5 rows: 62 and 86 px
+         * around a 572-row picture), bars of clearly unequal depth don't, and a
+         * bar on one edge only isn't a letterbox */
         FILL(y < 3 || y >= H - 5, 16.0, 0.0, 120.0, 60.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 3 && e[1] == 5);
+        FILL(y < 2 || y >= H - 5, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
         FILL(y < 1 || (y == H - 1 && x < 50), 16.0, 0.0, 120.0, 60.0)  /* bottom edge part matte */
@@ -148,7 +153,7 @@ int main(void)
         FILL(x < 8 || x >= W - 6, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 8 && e[3] == 6);
-        FILL(x < 3 || x >= W - 5, 16.0, 0.0, 120.0, 60.0)
+        FILL(x < 2 || x >= W - 5, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 0 && e[3] == 0);
         /* a flat dark gradient across the line isn't uniform along it */
@@ -163,7 +168,8 @@ int main(void)
         FILL(y < 6 || y >= H - 6, 16.0, 0.0, y < 22 ? 16.9 : 150.0, y < 22 ? 0.5 : 90.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - 16.0 / 33.0) < 1e-9);
+        /* the share leaves out the bars and the line past each */
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - 15.0 / 31.0) < 1e-9);
         /* black bars beside dark grain */
         FILL(y < 6 || y >= H - 6, 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);

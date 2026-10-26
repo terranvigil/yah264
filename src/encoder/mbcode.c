@@ -439,11 +439,12 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
     }
     return lines;
 }
-/* a matte's two sides, which a crop off center can leave a few blocks apart */
+/* a matte's two sides, which a crop off center can leave a few blocks apart,
+ * on top of a block of rounding to whole rows */
 static int depths_pair(int a, int b)
 {
     int lo = a < b ? a : b;
-    return abs(a - b) <= (lo / 3 > 1 ? lo / 3 : 1);
+    return abs(a - b) <= 1 + lo / 3;
 }
 void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
@@ -478,11 +479,14 @@ void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bar
 }
 
 /* the share of dark grain macroblocks, bars left out: counted in, they'd
- * dilute a letterboxed night scene's share */
+ * dilute a letterboxed night scene's share. The line a bar's edge cuts through
+ * goes too, since a bar rarely ends on a block boundary */
 double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb)
 {
     int bars[4];
     y264_aq_bars(mean, var, wmb, hmb, bars);
+    for (int k = 0; k < 4; k++)
+        if (bars[k]) bars[k]++;
     int n = 0, g = 0;
     for (int y = bars[0]; y < hmb - bars[1]; y++)
         for (int x = bars[2]; x < wmb - bars[3]; x++) {
