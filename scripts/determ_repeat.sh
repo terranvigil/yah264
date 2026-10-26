@@ -109,5 +109,6 @@ for clip in $CLIPS; do
 done
 echo "DETERM-REPEAT $((total - fails - warns))/$total configs repeat byte-identically over $RUNS runs each, $fails failures  arm='${ARM:-<default>}' args='${ARGS:-<default>}'"
 [ "$fails" -eq 0 ] || exit 1
+[ "$total" -gt 0 ] || { echo "  FAIL nothing ran (empty CLIPS, REFS or THREADS)"; exit 1; }
 [ "${STRICT:-0}" = 1 ] && [ "$warns" -gt 0 ] && exit 1
 exit 0

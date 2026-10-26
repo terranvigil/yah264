@@ -345,8 +345,13 @@ def main():
                 continue
             clip = a.clip or synth_clip(work, max(nframes, 150), fmt)
             ok &= run_cell(i, args, clip, nframes, work, record, a.keep)
-    print("regress: ALL PASS" if ok else "regress: FAILURES (replay with "
-          f"--seed {SEED} --cell N)")
+    # the cell numbers belong to this tier, product count and clip, so the
+    # replay names them all
+    replay = f"--seed {SEED} --tier {a.tier}"
+    replay += f" --products {a.products}" if a.products else ""
+    replay += f" --frames {a.frames}" if a.frames else ""
+    replay += f" --clip {a.clip}" if a.clip else ""
+    print("regress: ALL PASS" if ok else f"regress: FAILURES (replay with {replay} --cell N)")
     sys.exit(0 if ok else 1)
 
 
