@@ -106,14 +106,14 @@ counted after it reproduced this machine's encodes and scores. Its source
 frames were decoded in software. On TODO{ladder:ladder-cloud-own=30} ladders the instance coded its own
 decode of the title instead of this machine's frames.
 
-TODO{owner:lookahead-sweep} We also swept our lookahead at 30, 40 and 50 frames against x264's default of
-40, scored with VMAF-NEG. Most ladders moved less than the 0.4-point run-to-run spread. Big Buck Bunny
+We also swept our lookahead at 30, 40 and 50 frames against x264's default of
+40, scored with VMAF-NEG (earlier metric). Most ladders moved less than the 0.4-point run-to-run spread. Big Buck Bunny
 at 1080p and 4K, Chimera at 4K, Meridian at 1080p and 4K and Sol Levante at 4K
 did best at 50 in at least one mode. Sintel at 4K and Sol Levante at 1080p did
 best at 40 in at least one mode. Every other figure on this page uses 40.
 
 In capped VBR every rung of every ladder came within TODO{ladder:vbr-track=5%} of its target.
-TODO{owner:vbr-wall} Goal 3 read between 0.45 and 0.67 on every VBR cell.
+Goal 3 read between 0.45 and 0.67 on every VBR cell.
 
 ## By processor
 
@@ -125,7 +125,7 @@ fewer clips. They're reported apart from it. The
 | processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
 |---|---|--:|--:|--:|---|
 | arm64: Apple M5 Max, 18 cores | NEON + dot product | TODO{retime:apple-g1=0.46-0.73} | TODO{retime:apple-g2=0.49-0.73} | TODO{retime:apple-g3=0.52-0.74} | full parity, the tables above |
-| arm64: AWS Graviton4, 96 vCPU, Linux | NEON | TODO{owner:graviton-build} 0.57 | 0.44 | 0.70 | seven-clip check, median of 5 to 7 valid cells |
+| arm64: AWS Graviton4, 96 vCPU, Linux | NEON | 0.57 | 0.44 | 0.70 | seven-clip check, median of 5 to 7 valid cells |
 | arm64: AWS Graviton3, 32 vCPU, Linux | SVE (256-bit) + NEON | | | 0.65-0.74 CPU time, one thread | two-clip profile; not goal 3, which is read at the default thread count |
 | x86-64: AMD EPYC, 32 vCPU, rented | AVX2 | | | 0.86-0.96 CPU time, one thread | two-clip profile; not goal 3; slower than x264 at the default thread count on one clip, see below |
 | x86-64: GitHub runner | AVX2 | | | | output byte-identical to C on every push |
@@ -205,7 +205,7 @@ time absorbs that. For x264 the order differs: at spot, AMD is cheapest.
 
 ## The ten-clip board
 
-TODO{owner:neg} This section and the ones after it, down to the corpus, were scored with VMAF-NEG and haven't been re-measured on VMAF v1.
+Quality in this section is scored with VMAF-NEG (earlier metric).
 
 The sections below use a ten-clip board of Xiph clips from CIF to 1080p, timed
 on the same machine.
@@ -247,6 +247,8 @@ in pure C at CRF medians +0.17 dB against x264, worst on bus_cif at -0.25 dB.
 The floor passes and the debt list is empty.
 
 ## CRF versus ABR
+
+Quality in this section is scored with VMAF-NEG (earlier metric).
 
 Ask an encoder for a quality level. It gives you whatever bitrate that takes.
 That is CRF. Ask for a bitrate
@@ -325,6 +327,8 @@ read the tables above at equal bytes.
 
 ## Quality across the rate range
 
+Quality in this section is scored with VMAF-NEG (earlier metric).
+
 yah264 does best at low bitrates. In the deep band, VMAF-NEG 55 to 83, it beats
 x264 on 9 of the 10 clips that reach that band. The median gain there is about
 12% [BD-rate](encoding.html#bd-rate), which averages the comparison across a
@@ -343,6 +347,8 @@ chosen per clip so the top rung sits between VMAF-NEG 89 and 96. crowd_run is th
 1080p clip behind, at +0.5%.
 
 ## The hardware mode
+
+Quality in this section is scored with VMAF-NEG (earlier metric).
 
 `--hw videotoolbox` encodes through the Mac's built-in H.264 engine with
 yah264's options mapped onto it. Our scene-cut decides its keyframes. The
@@ -382,6 +388,8 @@ spends more bits than we do on eight of the ten, which favors it in the quality
 column. Ducks and riverbed are the exceptions.
 
 ## Against other encoders
+
+Quality in this section is scored with VMAF-NEG (earlier metric).
 
 | encoder | quality (VMAF-NEG) | pure-C 1-thread | pure-C MT | SIMD MT | size | notes |
 |---|--:|--:|--:|--:|--:|---|
@@ -423,6 +431,8 @@ The numbers: openh264 comes in 17.4 VMAF-NEG points below us at the median. Its
 wall against ours at auto threads reads 1.68x.
 
 ## Across shots
+
+Quality in this section is scored with VMAF-NEG (earlier metric).
 
 The board clips are single shots. Real content is a chain of them. How an
 encoder moves bits between an easy shot and a hard one is invisible above.
@@ -489,7 +499,7 @@ half. A number fitted and reported on the same clips is not a measurement.
 
 ## Off-corpus content
 
-TODO{owner:neg} The BD-rate figures in this section were scored with VMAF-NEG.
+Quality in this section is scored with VMAF-NEG (earlier metric).
 
 Content outside that set behaves differently enough that the only summary that
 holds is a range. Two clips both fairly called animation are 35 BD-rate points

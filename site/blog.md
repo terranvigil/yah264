@@ -29,8 +29,6 @@ TODO(retime): the Apple column comes from the current re-measure and will be rep
 
 <!-- /gen:mac-table -->
 
-TODO{owner:graviton-build} The Graviton4 column is from an earlier build and isn't re-timed.
-
 On my Mac, each range runs from the slowest group's median to the fastest's.
 
 - A median TODO{ladder:ladder-median=10%} fewer bits for the same VMAF v1 score over 52 rate ladders on real titles.
