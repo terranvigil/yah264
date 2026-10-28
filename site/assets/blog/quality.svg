@@ -1,52 +1,57 @@
 <svg xmlns='http://www.w3.org/2000/svg' width='900' height='560' viewBox='0 0 900 560'><rect width='100%' height='100%' fill='#fcfcfb'/>
 <text x='24' y='40' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='22' fill='#0b0b0b' text-anchor='start' font-weight='600'>Same file size, same or better quality</text>
-<text x='24' y='64' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='14' fill='#52514e' text-anchor='start' font-weight='normal'>VMAF-NEG points ahead of x264 at the same bytes, median per group</text>
+<text x='24' y='64' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='14' fill='#52514e' text-anchor='start' font-weight='normal'>VMAF v1 points ahead of x264 at the same bytes, median per group</text>
+<text x='876' y='40' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#c0392b' text-anchor='end' font-weight='normal'>DRAFT: re-time pending</text>
 <line x1='210.0' y1='82' x2='210.0' y2='500' stroke='#e6e5e1' stroke-width='1'/>
 <text x='210.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>-0.5</text>
-<line x1='315.0' y1='82' x2='315.0' y2='500' stroke='#8a8984' stroke-width='1.5'/>
-<text x='315.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>0 (x264)</text>
-<line x1='420.0' y1='82' x2='420.0' y2='500' stroke='#e6e5e1' stroke-width='1'/>
-<text x='420.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+0.5</text>
+<line x1='288.75' y1='82' x2='288.75' y2='500' stroke='#8a8984' stroke-width='1.5'/>
+<text x='288.75' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>0 (x264)</text>
+<line x1='367.5' y1='82' x2='367.5' y2='500' stroke='#e6e5e1' stroke-width='1'/>
+<text x='367.5' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+0.5</text>
+<line x1='446.25' y1='82' x2='446.25' y2='500' stroke='#e6e5e1' stroke-width='1'/>
+<text x='446.25' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+1.0</text>
 <line x1='525.0' y1='82' x2='525.0' y2='500' stroke='#e6e5e1' stroke-width='1'/>
-<text x='525.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+1.0</text>
-<line x1='630.0' y1='82' x2='630.0' y2='500' stroke='#e6e5e1' stroke-width='1'/>
-<text x='630.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+1.5</text>
-<line x1='735.0' y1='82' x2='735.0' y2='500' stroke='#e6e5e1' stroke-width='1'/>
-<text x='735.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+2.0</text>
+<text x='525.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+1.5</text>
+<line x1='603.75' y1='82' x2='603.75' y2='500' stroke='#e6e5e1' stroke-width='1'/>
+<text x='603.75' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+2.0</text>
+<line x1='682.5' y1='82' x2='682.5' y2='500' stroke='#e6e5e1' stroke-width='1'/>
+<text x='682.5' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+2.5</text>
+<line x1='761.25' y1='82' x2='761.25' y2='500' stroke='#e6e5e1' stroke-width='1'/>
+<text x='761.25' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+3.0</text>
 <line x1='840.0' y1='82' x2='840.0' y2='500' stroke='#e6e5e1' stroke-width='1'/>
-<text x='840.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+2.5</text>
-<text x='525.0' y='548' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='middle' font-weight='normal'>VMAF-NEG difference (higher is better for yah264)</text>
+<text x='840.0' y='520' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='middle' font-weight='normal'>+3.5</text>
+<text x='525.0' y='548' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#52514e' text-anchor='middle' font-weight='normal'>VMAF v1 difference (higher is better for yah264)</text>
 <text x='198' y='112.63636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>CIF short clips</text>
-<rect x='304.5' y='98.4' width='10.5' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='298.5' y='112.63636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='end' font-weight='normal'>-0.05</text>
+<rect x='288.8' y='98.4' width='425.2' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='720.0' y='112.63636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+2.70</text>
 <text x='198' y='149.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p short clips</text>
-<rect x='315.0' y='135.7' width='39.9' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='360.9' y='149.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.19</text>
+<rect x='288.8' y='135.7' width='75.6' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='370.35' y='149.9090909090909' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.48</text>
 <text x='198' y='187.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p 10-min films</text>
-<rect x='315.0' y='172.9' width='178.5' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='499.5' y='187.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.85</text>
+<rect x='288.8' y='172.9' width='185.8' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='480.59999999999997' y='187.1818181818182' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.18</text>
 <text x='198' y='224.45454545454547' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>720p content types</text>
-<rect x='315.0' y='210.2' width='432.6' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='753.6' y='224.45454545454547' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+2.06</text>
+<rect x='288.8' y='210.2' width='212.6' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='507.375' y='224.45454545454547' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.35</text>
 <text x='198' y='261.72727272727275' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p short clips</text>
-<rect x='315.0' y='247.5' width='100.8' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='421.79999999999995' y='261.72727272727275' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.48</text>
+<rect x='288.8' y='247.5' width='119.7' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='414.45' y='261.72727272727275' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.76</text>
 <text x='198' y='299.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p 2-min segments</text>
-<rect x='315.0' y='284.8' width='151.2' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='472.2' y='299.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.72</text>
+<rect x='288.8' y='284.8' width='83.5' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='378.225' y='299.0' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.53</text>
 <text x='198' y='336.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p 10-min films</text>
-<rect x='315.0' y='322.0' width='205.8' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='526.8' y='336.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.98</text>
+<rect x='288.8' y='322.0' width='81.9' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='376.65' y='336.27272727272725' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.52</text>
 <text x='198' y='373.54545454545456' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>1080p content types</text>
-<rect x='315.0' y='359.3' width='237.3' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='558.3' y='373.54545454545456' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.13</text>
+<rect x='288.8' y='359.3' width='252.0' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='546.75' y='373.54545454545456' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.60</text>
 <text x='198' y='410.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p short clips</text>
-<rect x='315.0' y='396.6' width='333.9' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='654.9' y='410.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.59</text>
+<rect x='288.8' y='396.6' width='38.6' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='333.3375' y='410.8181818181818' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.24</text>
 <text x='198' y='448.0909090909091' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 2-min segments</text>
-<rect x='315.0' y='433.8' width='252.0' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='573.0' y='448.0909090909091' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.20</text>
+<rect x='288.8' y='433.8' width='74.0' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='368.775' y='448.0909090909091' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+0.47</text>
 <text x='198' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='13' fill='#0b0b0b' text-anchor='end' font-weight='normal'>2160p 10-min films</text>
-<rect x='315.0' y='471.1' width='375.9' height='20.5' rx='3' fill='#2a78d6'/>
-<text x='696.9' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.79</text>
+<rect x='288.8' y='471.1' width='187.4' height='20.5' rx='3' fill='#2a78d6'/>
+<text x='482.175' y='485.3636363636364' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='12' fill='#52514e' text-anchor='start' font-weight='normal'>+1.19</text>
 </svg>
