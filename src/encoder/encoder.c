@@ -4927,8 +4927,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * occupancy through yah264_encoder_rc_import; a parallel one pairs it with
  * yah264_encoder_vbv_handoff on the segment before. 2-pass plans against
  * real pass-1 bits and keeps what it had. */
-        if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS)
+        if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS) {
             e->vbv.fill = e->vbv_seg_h;             /* assume only the handoff */
+            e->vbv_joined = 1;
+        }
         /* The first coded frame of ANY instance escapes the VBV clip -- the bits
  * model needs one coded frame before a prediction exists. Under a
  * bitrate target the seeded ABR scale covers it; under CRF/CQP nothing
@@ -5453,6 +5455,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
  * path, with its own strength scale and B-frame floor; y264_aq_gain). */
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
+    /* Capped VBR takes the CRF constants instead. The bitrate-target set was
+ * swept on short band clips with no cap; on 7-10 minute titles at a 1.5x cap
+ * it read 0.4-0.6% BD-VMAF behind the CRF set on every cell measured. */
+    if (e->aq_rabr == 1 && e->vbv_on && !e->vbv_cbr)
+        e->aq_rabr = 0;
     e->aq_anchor = aq_anchor_default();
     /* The frame-level (DC) AQ strength: see crf_frame_dc. Fitted by sweep at
  * matched rate (Y264_AQ_DC). The 1.3 sweep was uncapped CRF only. A bitrate
@@ -11199,7 +11206,11 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * scale yet -- and 0.9 of the buffer let an IDR three frames after a cut
  * take 45% of it into a stretch that does not fit at QP 51 (Big Buck
  * Bunny 720p at 503 kbit/s, one thread: the cell's one underflow). */
-        if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass) {
+        /* Not in a segment that assumed the handoff occupancy: its fill is
+ * already the reserve the exit corridor guarantees, and taking the reserve
+ * again off it cut every GOP's opening intra to about 0.8 of its
+ * sequential size. */
+        if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass && !e->vbv_joined) {
             double l2 = fill - 0.5 * e->rck.vbv_plan_t * e->vbv.size;
             if (l2 < 0.5 * fill) l2 = 0.5 * fill;
             if (l2 < limit) limit = l2;

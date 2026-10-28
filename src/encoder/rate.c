@@ -550,6 +550,14 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->rf2_seed_c     = -1.315;
     k->vbv_plan_h     = 32.0;
     k->vbv_plan_t     = 0.5;
+    /* A segment of a parallel split assumes the handoff occupancy, half the
+ * buffer, where a sequential encode measures a buffer that is usually full
+ * there (median 1.00 at the joins of 7-10 minute titles at the 1.5x cap).
+ * Held at the 0.5 target, that segment's opening burst read as a deficit and
+ * coded its first P and B frames at about 0.6 of their sequential size,
+ * every GOP; the exit corridor and the fit test still bound it. 0.25 vs 0
+ * on 7-10 minute titles: 0 underflowed, 0.25 did not. */
+    k->vbv_plan_tj    = 0.25;
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25);
     k->vbv_cbr_dive   = 2.0;
@@ -1255,7 +1263,7 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
         return 0.0;
     if (vb <= 0.0) vb = va;
     double H = e->rck.vbv_plan_h;
-    double T = e->rck.vbv_plan_t * e->vbv.size;
+    double T = (e->vbv_joined ? e->rck.vbv_plan_tj : e->rck.vbv_plan_t) * e->vbv.size;
     int nb = e->nbuf;
     int n = nb + 1;
     double end_need = fill >= T ? T : fill + (T - fill) * (n / (H > 1 ? H : 1));
@@ -2656,6 +2664,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         if (f > e->vbv.size) f = e->vbv.size;
         if (f < 0) f = 0;
         e->vbv.fill = f;
+        e->vbv_joined = 0;
     }
     return 0;
 }
