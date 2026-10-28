@@ -205,6 +205,7 @@ struct rc_knobs {
     double abr_vbvov_vbr;      /* capped VBR's overflow window, as a fraction of the buffer */
     double rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
+    double vbv_plan_tj;        /* the plan's target level in a segment that assumed the handoff occupancy */
     int    vbv_posti;          /* Y264_VBV_POSTI (default 1): under capped VBR the anchor after an intra frame, or after one the buffer raised, takes the serial schedule */
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
@@ -1075,6 +1076,7 @@ struct yah264_encoder {
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
     int      rfm_open_fb;       /* the opening came from the intra fit (no lookahead fit) */
+    int      vbv_joined;        /* capped segment that assumed the handoff occupancy at its start, not a measured one */
     double   rfm_open_ioff;     /* the opening I's offset under the intra fit's level */
     /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
  * per-GOP instances of one encode (NULL = this instance's own). */
