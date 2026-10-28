@@ -6,7 +6,7 @@ These are read only in a build configured with `-Ddev_knobs=true`; a default bui
 
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (55)
+## default (56)
 
 | knob | default | reader |
 |---|---|---|
@@ -51,6 +51,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_QPEL_SKIPQ` | 96 | src/encoder/motion.c:245 |
 | `Y264_RCP_LAG` | 1 | src/encoder/encoder.c:456 |
 | `Y264_RC_CARRY` | 1 | cli/yah264_cli.c:1314 |
+| `Y264_SKIP_CLIFT` | 2 | src/encoder/mbcode.c:11006 |
 | `Y264_STAIR_BDEPTH` | 1 | src/encoder/encoder.c:361 |
 | `Y264_STAIR_TDIR` | 1 | src/encoder/encoder.c:588 |
 | `Y264_STAIR_WIDE` | 1 | src/encoder/encoder.c:398 |
