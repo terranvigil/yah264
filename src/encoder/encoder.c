@@ -5443,6 +5443,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
  * path, with its own strength scale and B-frame floor; y264_aq_gain). */
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
+    /* Capped VBR takes the CRF constants instead. The bitrate-target set was
+ * swept on short band clips with no cap; on 7-10 minute titles at a 1.5x cap
+ * it read 0.4-0.6% BD-VMAF behind the CRF set on every cell measured. */
+    if (e->aq_rabr == 1 && e->vbv_on && !e->vbv_cbr)
+        e->aq_rabr = 0;
     e->aq_anchor = aq_anchor_default();
     /* The frame-level (DC) AQ strength: see crf_frame_dc. Fitted by sweep at
  * matched rate (Y264_AQ_DC). The 1.3 sweep was uncapped CRF only. A bitrate
