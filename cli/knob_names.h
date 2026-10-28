@@ -98,6 +98,7 @@ static const char *const y264_knob_names[] = {
     "Y264_RC_PLAY_K",
     "Y264_RC_REC",
     "Y264_SIMD_FORCE",
+    "Y264_SKIP_CLIFT",
     "Y264_SKIP_ORACLE",
     "Y264_SKIP_ORACLE_AT",
     "Y264_SKIP_ORACLE_SIDE",

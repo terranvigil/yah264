@@ -10987,11 +10987,60 @@ static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
     *cskip_out = cskip;
 }
 
+/* The early skip probes read chroma at the QP a chroma offset of 0 would
+ * give, where the coded offset is negative by Y264_SKIP_CLIFT or less (2 by
+ * default, so the 720p class's -2). That offset is there for the chroma VMAF
+ * v1 reads in coded macroblocks, but in the probes it fails faint chroma
+ * residual on dark content: on a dark 720p title 10-15% more macroblocks ran
+ * the whole tournament and nearly all still ended as a skip. Coded
+ * macroblocks keep the offset. On ten 720p clips (six live action, four dark)
+ * it reads BD-VMAF v1 median -0.34%, worst +0.14%, inside the band's control
+ * spread, and the dark-block flat share and CAMBI hold, for 4.9% fewer
+ * instructions on the dark title and 0.2-1.1% on the others. Below 720p
+ * (offset -4) the CIF clips read up to +0.5% with the probes lifted, so that
+ * class keeps them. Y264_SKIP_CLIFT=0 turns it off (the previous output). */
+static int skip_clift_env(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = y264_env("Y264_SKIP_CLIFT");
+        int x = e ? atoi(e) : 2;
+        v = x > 0 ? x : 0;
+    }
+    return v;
+}
+
+struct cqp_save { int qp, qps; };
+static void skip_clift_on(y264_frame_t *f, struct cqp_save *sv)
+{
+    sv->qp = f->cur_chroma_qp; sv->qps = f->cur_chroma_qp_scaled;
+    int off = f->chroma_qp_off;
+    if (off >= 0 || -off > skip_clift_env()) return;
+    f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, 0);
+    f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
+}
+static void skip_clift_off(y264_frame_t *f, const struct cqp_save *sv)
+{
+    f->cur_chroma_qp = sv->qp; f->cur_chroma_qp_scaled = sv->qps;
+}
+
+static int probe_bskip_strict_in(y264_frame_t *f, int mbx, int mby,
+                                 const struct skip_stats *st);
 /* The strict B skip probe with the screen in front. `pl` = the skip
  * candidate's per-plane SSD and `e4` its luma per-4x4 map (dist_mb_pl), both
  * taken on the prediction the probe reads out of rec. */
 static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
                               const struct skip_stats *st)
+{
+    struct cqp_save sv;
+    skip_clift_on(f, &sv);
+    int r = probe_bskip_strict_in(f, mbx, mby, st);
+    skip_clift_off(f, &sv);
+    return r;
+}
+
+static int probe_bskip_strict_in(y264_frame_t *f, int mbx, int mby,
+                                 const struct skip_stats *st)
 {
     int mode = f->bskip_screen;
     if (!mode || !st || f->cqm || f->cf_idc == 0) return probe_skip(f, mbx, mby, 1, 0);
@@ -11067,10 +11116,14 @@ static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
     unsigned lskip = 0;
     int cskip = 0;
     int s64 = rdoq_seed64();
+    struct cqp_save sv;
+    skip_clift_on(f, &sv);
     if (f->bskip_screen && st && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
         bss_screen(f, st, &lskip, &cskip);
-    return probe_skip_gs(f, mbx, mby, 0, 0, NULL, lskip, cskip,
-                         probe_first_block(e4, lskip));
+    int r = probe_skip_gs(f, mbx, mby, 0, 0, NULL, lskip, cskip,
+                          probe_first_block(e4, lskip));
+    skip_clift_off(f, &sv);
+    return r;
 }
 
 /* Snapshot the LIVE half of the est context array for one pricing trial.
@@ -12785,6 +12838,7 @@ void y264_mb_warm_statics(void)
     (void)cdc_rd_on(); (void)cdc_lam_x256();
     (void)trel_smooth_v();
     (void)aq_dark_env(0);
+    (void)skip_clift_env();
     (void)psy_dark_env();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
