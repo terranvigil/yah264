@@ -2711,6 +2711,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.b_preme_bits = e->b_preme_bits;
     f.p_part_gate = e->p_part_gate;
     f.rd_surv_rank = e->rd_surv_rank;
+    f.dark_iadmit = e->dark_iadmit;
+    f.dark_surv = e->dark_surv;
     f.qp = fqp;
     f.chroma_qp = fcqp;
     f.cur_qp = fqp;
@@ -4422,6 +4424,16 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * by rank. 0 keeps the score threshold alone, which is byte-identical. */
         e->rd_surv_rank = param->rd_surv_rank;
         if (e->rd_surv_rank < 0) e->rd_surv_rank = 0;
+        /* Dark blocks: an intra admission margin of 12/16 (the B side's own)
+ * and one B survivor, on macroblocks inside the dark cut's region only.
+ * Pure-C one-thread instructions at a fixed CRF: nocturne 720p -12.8%,
+ * meridian 1080p -11.3%, tears 720p -3.8%. HD band on v1 inside the bar on
+ * every clip; band_check passes with nocturne's CAMBI lower. 0 turns each
+ * off (dev builds). */
+        { const char *v = y264_env("Y264_DARK_IADMIT"); e->dark_iadmit = v ? atoi(v) : 12; }
+        { const char *v = y264_env("Y264_DARK_SURV"); e->dark_surv = v ? atoi(v) : 1; }
+        if (e->dark_iadmit < 0) e->dark_iadmit = 0;
+        if (e->dark_surv < 0) e->dark_surv = 0;
         /* the two lowres-search thresholds, in SAD and SATD per lowres pixel */
         e->lr_settle = param->lr_settle;
         if (e->lr_settle < 0) e->lr_settle = 0;

@@ -233,6 +233,10 @@ typedef struct {
  * candidate set in the B tournament, by rank instead of by score. 0 = off,
  * i.e. every candidate inside the score threshold is RD'd. */
     int rd_surv_rank;
+    /* On macroblocks inside the dark cut's region: the intra admission margin
+ * (1/16 units; 0 = the shared one) and the B survivor rank (0 = the frame's
+ * rd_surv_rank). See mb_dark_smooth. */
+    int dark_iadmit, dark_surv;
     /* Band-level decisions, stage 4. band_c is the frame's [3*band] lookahead
  * aggregate array -- mean pair-leg cost, its CoV^2 x100, mean lowres intra
  * cost -- summarised at stash time and carried per buffered B. NULL when the

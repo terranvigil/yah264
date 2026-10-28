@@ -3301,6 +3301,20 @@ static int intra_admit_m16_b(void)
     return 12;
 }
 
+/* 1 for a macroblock inside the dark cut's region (y264_aq_dark < 0). Its
+ * lower QP keeps residual the skip probe would otherwise have zeroed, so
+ * these blocks reach the full tournament and still end as skip most of the
+ * time: on a dark title they are most of the analysis the cut added. The two
+ * trims below (dark_iadmit, dark_surv) narrow that analysis on them only. */
+static int mb_dark_smooth(const y264_frame_t *f, int mbx, int mby)
+{
+    uint32_t v2[2];
+    int ss = f->src_stride[0];
+    y264_dsp.var16x16(f->src[0] + (mby * 16) * ss + mbx * 16, ss, v2);
+    double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+    return y264_aq_dark(mean, var < 0 ? 0 : var) < 0.0;
+}
+
 static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
 {
     if (!intra_screen_on(f->subme) || inter_satd < 0) return 1;
@@ -3315,6 +3329,8 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
     int m16 = isb ? intra_admit_m16_b() : intra_admit_m16();
     if (f->uhdlite)                 /* the 2160p tier's margins */
         m16 = isb ? 8 : 16;
+    if (f->dark_iadmit > 0 && m16 > f->dark_iadmit && mb_dark_smooth(f, mbx, mby))
+        m16 = f->dark_iadmit;
     int hit = i16 < inter_satd * m16 / 16;
     if (hit) {                      /* the analysis next door re-asks this */
         f->i16s_mbx = mbx; f->i16s_mby = mby;
@@ -8693,7 +8709,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * Off (rank 0) the loop below is the shipped one, in its shipped order, so
  * the default is byte-identical. */
         int rdord[3] = { 0, 1, 2 };
-        if (f->rd_surv_rank)                     /* ascending screening cost */
+        int surv_rank = f->rd_surv_rank;
+        if (f->dark_surv > 0 && (!surv_rank || f->dark_surv < surv_rank) &&
+            mb_dark_smooth(f, mbx, mby))
+            surv_rank = f->dark_surv;
+        if (surv_rank)                           /* ascending screening cost */
             for (int a = 1; a < 3; a++)
                 for (int b = a; b > 0 && satd16[rdord[b]] < satd16[rdord[b - 1]]; b--) {
                     int t = rdord[b]; rdord[b] = rdord[b - 1]; rdord[b - 1] = t;
@@ -8711,7 +8731,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         for (int k = 0, nrd = 0; k < 3; k++) {
             int bm = rdord[k];
             if (satd16[bm] >= thresh16) continue;
-            if (f->rd_surv_rank && nrd >= f->rd_surv_rank) break;
+            if (surv_rank && nrd >= surv_rank) break;
             nrd++;
             /* the screen above already took this prediction's luma SATD */
             f->c4_pred = p16[bm]; f->c4_val = bd_d[bm];
@@ -8859,11 +8879,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * way the three directions above are, so rank 1 keeps the better of them
  * and drops the other. Rank 0 is the shipped loop in its shipped order. */
         int rectord[2] = { 1, 2 };
-        if (f->rd_surv_rank && ptsatd[2] < ptsatd[1]) { rectord[0] = 2; rectord[1] = 1; }
+        if (surv_rank && ptsatd[2] < ptsatd[1]) { rectord[0] = 2; rectord[1] = 1; }
         for (int k = 0, nrd = 0; k < 2; k++) {
             int bp = rectord[k];
             if (ptsatd[bp] >= thresh) continue;
-            if (f->rd_surv_rank && nrd >= f->rd_surv_rank) break;
+            if (surv_rank && nrd >= surv_rank) break;
             nrd++;
             j = rd_b_part(f, mbx, mby, bp, ptcombo[bp], &mo_s[bp],
                           ppt[bp], cpt[bp], lam, &tmp);

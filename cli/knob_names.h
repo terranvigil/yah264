@@ -34,6 +34,8 @@ static const char *const y264_knob_names[] = {
     "Y264_CDC_RD",
     "Y264_CRF_CPLX",
     "Y264_CRF_LEVEL",
+    "Y264_DARK_IADMIT",
+    "Y264_DARK_SURV",
     "Y264_DCTDEC",
     "Y264_DIAG_COLWATCH",
     "Y264_DIAG_DIRECTOK",
