@@ -556,6 +556,7 @@ struct yah264_encoder {
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
     int      dark_iadmit, dark_surv;        /* see y264_frame_t */
+    int      dark_lift, dark_lift_p;        /* see y264_frame_t */
     int      lr_settle, lr_subgate;         /* HD parity stage 3, candidates 1 and 2 */
     int      mbt_depfloor;                  /* HD parity stage 3, candidate 3 */
     int      b_intra_band;                  /* band-level B intra-screen refusal (stage 4) */

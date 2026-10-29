@@ -665,6 +665,8 @@ static void aq_mb_stats(const y264_frame_t *f, float *means, float *vars,
  * for frames that carry no mb-tree field of their own). */
 static void aq_analyze(y264_frame_t *f)
 {
+    f->dark_dg = 0.f;
+    f->dl_mbx = -1;
     if (!f->aq_off) return;
     int n = f->wmb * f->hmb;
     if (f->aq_strength <= 0.f) {
@@ -699,6 +701,7 @@ static void aq_analyze(y264_frame_t *f)
     double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
     if (aq_dark_env(0) > 0 && dg < 1.0)
         dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb));
+    if (aq_dark_env(0) > 0) f->dark_dg = (float)dg;
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center) + (float)dg * dk[i]);
         if (off < -8) off = -8;
@@ -11010,10 +11013,48 @@ static int skip_clift_env(void)
     return v;
 }
 
-struct cqp_save { int qp, qps; };
-static void skip_clift_on(y264_frame_t *f, struct cqp_save *sv)
+/* How many QP steps the skip probes add back on a macroblock the dark cut
+ * lowered: dark_lift/16 of the cut the frame's gate applied, rounded (all of
+ * it on B pictures and half on P by default; encoder_open says why). The cut
+ * keeps faint residual the probe would have zeroed, so on a dark title most
+ * of those macroblocks ran the whole tournament and still ended as a skip.
+ * Probing at the QP the block would have had without the cut lets them leave
+ * early; a block that codes residual at that QP still fails the probe, and
+ * coded blocks keep the lower QP. */
+static int dark_skip_lift(y264_frame_t *f, int mbx, int mby)
 {
-    sv->qp = f->cur_chroma_qp; sv->qps = f->cur_chroma_qp_scaled;
+    if (!f->dark_lift || f->dark_dg <= 0.f) return 0;
+    if (f->dl_mbx == mbx && f->dl_mby == mby) return f->dl_l;
+    uint32_t s1, s2;
+    int i = mby * f->wmb + mbx;
+    if (f->mbvar && *f->mbvar_src == f->src[0]) {
+        s1 = f->mbvar[2 * i]; s2 = f->mbvar[2 * i + 1];
+    } else {
+        uint32_t v2[2];
+        int ss = f->src_stride[0];
+        y264_dsp.var16x16(f->src[0] + (mby * 16) * ss + mbx * 16, ss, v2);
+        s1 = v2[0]; s2 = v2[1];
+    }
+    double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
+    double cut = f->dark_dg * y264_aq_dark(mean, var < 0 ? 0 : var);
+    int l = (int)lround(-cut * f->dark_lift / 16.0);
+    if (l > 51 - f->cur_qp) l = 51 - f->cur_qp;
+    if (l < 0) l = 0;
+    f->dl_mbx = mbx; f->dl_mby = mby; f->dl_l = l;
+    return l;
+}
+
+struct cqp_save { int qp, qps, cqp, cqps; };
+static void skip_clift_on(y264_frame_t *f, int mbx, int mby, struct cqp_save *sv)
+{
+    sv->qp = f->cur_qp; sv->qps = f->cur_qp_scaled;
+    sv->cqp = f->cur_chroma_qp; sv->cqps = f->cur_chroma_qp_scaled;
+    int l = dark_skip_lift(f, mbx, mby);
+    if (l) {
+        f->cur_qp += l; f->cur_qp_scaled += l;
+        f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, f->chroma_qp_off);
+        f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
+    }
     int off = f->chroma_qp_off;
     if (off >= 0 || -off > skip_clift_env()) return;
     f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, 0);
@@ -11021,7 +11062,8 @@ static void skip_clift_on(y264_frame_t *f, struct cqp_save *sv)
 }
 static void skip_clift_off(y264_frame_t *f, const struct cqp_save *sv)
 {
-    f->cur_chroma_qp = sv->qp; f->cur_chroma_qp_scaled = sv->qps;
+    f->cur_qp = sv->qp; f->cur_qp_scaled = sv->qps;
+    f->cur_chroma_qp = sv->cqp; f->cur_chroma_qp_scaled = sv->cqps;
 }
 
 static int probe_bskip_strict_in(y264_frame_t *f, int mbx, int mby,
@@ -11033,7 +11075,7 @@ static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
                               const struct skip_stats *st)
 {
     struct cqp_save sv;
-    skip_clift_on(f, &sv);
+    skip_clift_on(f, mbx, mby, &sv);
     int r = probe_bskip_strict_in(f, mbx, mby, st);
     skip_clift_off(f, &sv);
     return r;
@@ -11117,7 +11159,7 @@ static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
     int cskip = 0;
     int s64 = rdoq_seed64();
     struct cqp_save sv;
-    skip_clift_on(f, &sv);
+    skip_clift_on(f, mbx, mby, &sv);
     if (f->bskip_screen && st && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
         bss_screen(f, st, &lskip, &cskip);
     int r = probe_skip_gs(f, mbx, mby, 0, 0, NULL, lskip, cskip,

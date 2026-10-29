@@ -237,6 +237,12 @@ typedef struct {
  * (1/16 units; 0 = the shared one) and the B survivor rank (0 = the frame's
  * rd_surv_rank). See mb_dark_smooth. */
     int dark_iadmit, dark_surv;
+    /* The early skip probes on those macroblocks run at the QP the dark cut
+ * would have left them (dark_lift, in 1/16 of the cut; 0 = off). dark_dg is
+ * the frame's gate on the cut, set by aq_analyze. See dark_skip_lift. */
+    int dark_lift;
+    float dark_dg;
+    int dl_mbx, dl_mby, dl_l;       /* dark_skip_lift's last answer */
     /* Band-level decisions, stage 4. band_c is the frame's [3*band] lookahead
  * aggregate array -- mean pair-leg cost, its CoV^2 x100, mean lowres intra
  * cost -- summarised at stash time and carried per buffered B. NULL when the
