@@ -968,6 +968,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * drain the model read 30 kbit of occupancy the stream did not have
  * (sintel, CBR). */
             e->vbv.fill = rcbuf_step(&e->vbv, e->vbv.fill, p->bits + p->framing, &empty);
+            if (e->vbv_joined && e->vbv.fill > e->vbv_jpk) e->vbv_jpk = e->vbv.fill;
         }
     }
     if (e->abr_on) {
@@ -1263,7 +1264,20 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
         return 0.0;
     if (vb <= 0.0) vb = va;
     double H = e->rck.vbv_plan_h;
-    double T = (e->vbv_joined ? e->rck.vbv_plan_tj : e->rck.vbv_plan_t) * e->vbv.size;
+    /* A joined segment keeps the low target only until it has seen its
+ * buffer: the target follows the highest occupancy the model has reached,
+ * half a buffer below it, up to the sequential target. Held low for the
+ * whole segment, it drained the buffer long after the opening and cost the
+ * frames there on titles whose buffer was full at the join; stepped up
+ * after a fixed count of frames, it forced a climb where the model had not
+ * caught up yet. */
+    double tf = e->rck.vbv_plan_t;
+    if (e->vbv_joined) {
+        tf = (e->vbv_jpk > 0 ? e->vbv_jpk : e->vbv.fill) / e->vbv.size - 0.5;
+        if (tf < e->rck.vbv_plan_tj) tf = e->rck.vbv_plan_tj;
+        if (tf > e->rck.vbv_plan_t) tf = e->rck.vbv_plan_t;
+    }
+    double T = tf * e->vbv.size;
     int nb = e->nbuf;
     int n = nb + 1;
     double end_need = fill >= T ? T : fill + (T - fill) * (n / (H > 1 ? H : 1));

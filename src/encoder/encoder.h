@@ -1079,6 +1079,7 @@ struct yah264_encoder {
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
     int      rfm_open_fb;       /* the opening came from the intra fit (no lookahead fit) */
     int      vbv_joined;        /* capped segment that assumed the handoff occupancy at its start, not a measured one */
+    double   vbv_jpk;           /* a joined segment's highest modeled occupancy so far, bits */
     double   rfm_open_ioff;     /* the opening I's offset under the intra fit's level */
     /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
  * per-GOP instances of one encode (NULL = this instance's own). */
