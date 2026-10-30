@@ -555,8 +555,10 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  * there (median 1.00 at the joins of 7-10 minute titles at the 1.5x cap).
  * Held at the 0.5 target, that segment's opening burst read as a deficit and
  * coded its first P and B frames at about 0.6 of their sequential size,
- * every GOP; the exit corridor and the fit test still bound it. 0.25 vs 0
- * on 7-10 minute titles: 0 underflowed, 0.25 did not. */
+ * every GOP; the exit corridor and the fit test still bound it. The target
+ * there follows the highest occupancy the segment has reached, half a buffer
+ * below it, and this is its floor. 0.25 vs 0 on 7-10 minute titles: 0
+ * underflowed, 0.25 did not. */
     k->vbv_plan_tj    = 0.25;
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25);
@@ -638,7 +640,9 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
  * over its target than the baseline, and with dcfloor 1/256 it runs 1-10
  * points under it. Under CRF that floor costs akiyo and stefan 0.3-2%
  * (three ladder shifts each), so CRF keeps the field's. */
-    double dfl = e->aq_rabr ? e->aq_dcfloor : y264_aq_afloor();
+    /* keyed on the rate mode, not aq_rabr: capped VBR takes the CRF AQ
+ * constants but is still a bitrate target, so it keeps dcfloor */
+    double dfl = e->crf_on ? y264_aq_afloor() : e->aq_dcfloor;
     double sum = 0, sum2 = 0;
     for (int mby = 0; mby < hmb; mby++)
         for (int mbx = 0; mbx < wmb; mbx++) {
