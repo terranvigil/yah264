@@ -126,10 +126,15 @@ ADOPTED_META = {
 }
 
 
-def head_meta(title, description):
-    """The social card and the favicon, the same on every page."""
+def canonical_url(target):
+    return SITE_URL if target == "index.html" else SITE_URL + target
+
+
+def head_meta(title, description, target):
+    """The canonical link, the social card and the favicon, the same on every page."""
     t, d = html.escape(title), html.escape(description)
     return (
+        f'<link rel="canonical" href="{canonical_url(target)}">'
         f'<meta property="og:type" content="website">'
         f'<meta property="og:site_name" content="yah264">'
         f'<meta property="og:title" content="{t}">'
@@ -292,7 +297,11 @@ def readme_page(text):
         return f"[{label}]({href})"
 
     body = re.sub(r"\[([^\]]*)\]\(([^)\s]+)\)", link, body)
-    return {"title": "yah264", "description": "An H.264/AVC encoder."}, body
+    return {
+        "title": "yah264 - a fast, open-source H.264/AVC encoder",
+        "description": "yah264 is a free, open-source H.264/AVC video encoder written from "
+                       "scratch in C, built to match x264 on speed and quality.",
+    }, body
 
 
 def card_image(meta, target):
@@ -443,7 +452,7 @@ def adopt(text, target):
     title = raw_title if raw_title.endswith("yah264") else f"{raw_title} - yah264"
     text = text.replace(f"<title>{raw_title}</title>", f"<title>{title}</title>", 1)
     desc = ADOPTED_META.get(target, "")
-    meta = head_meta(title, desc)
+    meta = head_meta(title, desc, target)
     if desc and "<meta name=\"description\"" not in text:
         meta = f'<meta name="description" content="{html.escape(desc)}">' + meta
 
@@ -536,12 +545,25 @@ def build():
             .replace("{{og_type}}", meta.get("type", "website"))
             .replace("{{twitter_card}}", "summary_large_image" if "image" in meta else "summary")
             .replace("{{og_image}}", card_image(meta, target))
+            .replace("{{canonical}}", canonical_url(target))
             .replace("{{root}}", "")
         )
         # Links written as page.md in source resolve to page.html when built.
         page = re.sub(r'href="([^"#:]+)\.md((?:#[^"]*)?)"', r'href="\1.html\2"', page)
         (OUT / target).write_text(page)
         pages += 1
+
+    # Search engines find a new site faster from a sitemap than from links alone.
+    # It's submitted by hand in Search Console, since a project site has no
+    # robots.txt of its own to point at it.
+    urls = "".join(
+        f"  <url><loc>{canonical_url(f.name)}</loc></url>\n"
+        for f in sorted(OUT.glob("*.html"), key=lambda f: (f.name != "index.html", f.name))
+    )
+    (OUT / "sitemap.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + urls + "</urlset>\n"
+    )
 
     print(f"built {pages} pages + {len(ADOPTED)} adopted -> {OUT}")
 
