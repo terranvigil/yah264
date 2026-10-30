@@ -108,6 +108,7 @@ DEFAULT_OVERRIDES = {
     "Y264_AQ_DARK_S1": "0.50",
     # overrides of a public param or CLI flag: unset follows the param
     "Y264_MBT_DEPFLOOR": "= param", "Y264_ABR_TOL": "= param",
+    "Y264_DARK_SKIPLIFT_P": "= Y264_DARK_SKIPLIFT / 2",
 }
 
 OVERRIDES = {
@@ -122,6 +123,7 @@ OVERRIDES = {
     "Y264_BSKIP_SCREEN": "default",
     # a shipped constant read through rc_tunable of a #define
     "Y264_CRF_LEVEL": "default",
+    "Y264_DARK_SKIPLIFT_P": "default",
 }
 
 # knobs whose nearest default-claim is correct but beyond the detector

@@ -205,6 +205,7 @@ struct rc_knobs {
     double abr_vbvov_vbr;      /* capped VBR's overflow window, as a fraction of the buffer */
     double rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
+    double vbv_plan_tj;        /* the plan's target level in a segment that assumed the handoff occupancy */
     int    vbv_posti;          /* Y264_VBV_POSTI (default 1): under capped VBR the anchor after an intra frame, or after one the buffer raised, takes the serial schedule */
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
@@ -554,6 +555,8 @@ struct yah264_encoder {
     int      bskip_screen;                  /* exact zero-block screen, see y264_frame_t */
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
+    int      dark_iadmit, dark_surv;        /* see y264_frame_t */
+    int      dark_lift, dark_lift_p;        /* see y264_frame_t */
     int      lr_settle, lr_subgate;         /* HD parity stage 3, candidates 1 and 2 */
     int      mbt_depfloor;                  /* HD parity stage 3, candidate 3 */
     int      b_intra_band;                  /* band-level B intra-screen refusal (stage 4) */
@@ -1075,6 +1078,8 @@ struct yah264_encoder {
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
     int      rfm_open_fb;       /* the opening came from the intra fit (no lookahead fit) */
+    int      vbv_joined;        /* capped segment that assumed the handoff occupancy at its start, not a measured one */
+    double   vbv_jpk;           /* a joined segment's highest modeled occupancy so far, bits */
     double   rfm_open_ioff;     /* the opening I's offset under the intra fit's level */
     /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
  * per-GOP instances of one encode (NULL = this instance's own). */

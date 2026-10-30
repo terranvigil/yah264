@@ -550,6 +550,14 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->rf2_seed_c     = -1.315;
     k->vbv_plan_h     = 32.0;
     k->vbv_plan_t     = 0.5;
+    /* A segment of a parallel split assumes the handoff occupancy, half the
+ * buffer, where a sequential encode measures a buffer that is usually full
+ * there (median 1.00 at the joins of 7-10 minute titles at the 1.5x cap).
+ * Held at the 0.5 target, that segment's opening burst read as a deficit and
+ * coded its first P and B frames at about 0.6 of their sequential size,
+ * every GOP; the exit corridor and the fit test still bound it. 0.25 vs 0
+ * on 7-10 minute titles: 0 underflowed, 0.25 did not. */
+    k->vbv_plan_tj    = 0.25;
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25);
     k->vbv_cbr_dive   = 2.0;
@@ -960,6 +968,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * drain the model read 30 kbit of occupancy the stream did not have
  * (sintel, CBR). */
             e->vbv.fill = rcbuf_step(&e->vbv, e->vbv.fill, p->bits + p->framing, &empty);
+            if (e->vbv_joined && e->vbv.fill > e->vbv_jpk) e->vbv_jpk = e->vbv.fill;
         }
     }
     if (e->abr_on) {
@@ -1255,7 +1264,20 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
         return 0.0;
     if (vb <= 0.0) vb = va;
     double H = e->rck.vbv_plan_h;
-    double T = e->rck.vbv_plan_t * e->vbv.size;
+    /* A joined segment keeps the low target only until it has seen its
+ * buffer: the target follows the highest occupancy the model has reached,
+ * half a buffer below it, up to the sequential target. Held low for the
+ * whole segment, it drained the buffer long after the opening and cost the
+ * frames there on titles whose buffer was full at the join; stepped up
+ * after a fixed count of frames, it forced a climb where the model had not
+ * caught up yet. */
+    double tf = e->rck.vbv_plan_t;
+    if (e->vbv_joined) {
+        tf = (e->vbv_jpk > 0 ? e->vbv_jpk : e->vbv.fill) / e->vbv.size - 0.5;
+        if (tf < e->rck.vbv_plan_tj) tf = e->rck.vbv_plan_tj;
+        if (tf > e->rck.vbv_plan_t) tf = e->rck.vbv_plan_t;
+    }
+    double T = tf * e->vbv.size;
     int nb = e->nbuf;
     int n = nb + 1;
     double end_need = fill >= T ? T : fill + (T - fill) * (n / (H > 1 ? H : 1));
@@ -2656,6 +2678,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         if (f > e->vbv.size) f = e->vbv.size;
         if (f < 0) f = 0;
         e->vbv.fill = f;
+        e->vbv_joined = 0;
     }
     return 0;
 }

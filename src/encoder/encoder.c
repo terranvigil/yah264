@@ -2711,6 +2711,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.b_preme_bits = e->b_preme_bits;
     f.p_part_gate = e->p_part_gate;
     f.rd_surv_rank = e->rd_surv_rank;
+    f.dark_iadmit = e->dark_iadmit;
+    f.dark_surv = e->dark_surv;
+    f.dark_lift = type == 1 ? e->dark_lift_p : e->dark_lift;
+    f.dark_dg = 0.f;
     f.qp = fqp;
     f.chroma_qp = fcqp;
     f.cur_qp = fqp;
@@ -4422,6 +4426,34 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * by rank. 0 keeps the score threshold alone, which is byte-identical. */
         e->rd_surv_rank = param->rd_surv_rank;
         if (e->rd_surv_rank < 0) e->rd_surv_rank = 0;
+        /* Dark blocks: an intra admission margin of 12/16 (the B side's own)
+ * and one B survivor, on macroblocks inside the dark cut's region only.
+ * Pure-C one-thread instructions at a fixed CRF: nocturne 720p -12.8%,
+ * meridian 1080p -11.3%, tears 720p -3.8%. HD band on v1 inside the bar on
+ * every clip; band_check passes with nocturne's CAMBI lower. 0 turns each
+ * off (dev builds). */
+        { const char *v = y264_env("Y264_DARK_IADMIT"); e->dark_iadmit = v ? atoi(v) : 12; }
+        { const char *v = y264_env("Y264_DARK_SURV"); e->dark_surv = v ? atoi(v) : 1; }
+        if (e->dark_iadmit < 0) e->dark_iadmit = 0;
+        if (e->dark_surv < 0) e->dark_surv = 0;
+        /* The early skip probes on those macroblocks run at the QP the dark
+ * cut would have left them: the whole cut on B pictures, half of it on P
+ * (dark_skip_lift). The whole cut on P as well lost 1.1-1.7% BD-VMAF v1 on
+ * a grainy black-and-white title, where a P skip carries into every
+ * picture after it; half of it on P and the whole on B read -0.25%
+ * median, worst +0.24%, on nine dark and HD clips, and at or below 0 on
+ * every clip on a ladder shifted by 1.5 CRF; band_check reads the same.
+ * Pure-C one-thread instructions at a fixed CRF, two 240-frame windows per
+ * title: 1-8% fewer on six titles at 720p and 1080p (up to 14% on one
+ * window), unchanged where the gate stays closed.
+ * Y264_DARK_SKIPLIFT (B, 1/16 of the cut) and Y264_DARK_SKIPLIFT_P (P,
+ * defaulting to half the B value); 0 turns it off (dev builds). */
+        { const char *v = y264_env("Y264_DARK_SKIPLIFT"); e->dark_lift = v ? atoi(v) : 16; }
+        if (e->dark_lift < 0) e->dark_lift = 0;
+        if (e->dark_lift > 16) e->dark_lift = 16;
+        { const char *v = y264_env("Y264_DARK_SKIPLIFT_P"); e->dark_lift_p = v ? atoi(v) : e->dark_lift / 2; }
+        if (e->dark_lift_p < 0) e->dark_lift_p = 0;
+        if (e->dark_lift_p > 16) e->dark_lift_p = 16;
         /* the two lowres-search thresholds, in SAD and SATD per lowres pixel */
         e->lr_settle = param->lr_settle;
         if (e->lr_settle < 0) e->lr_settle = 0;
@@ -4915,8 +4947,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * occupancy through yah264_encoder_rc_import; a parallel one pairs it with
  * yah264_encoder_vbv_handoff on the segment before. 2-pass plans against
  * real pass-1 bits and keeps what it had. */
-        if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS)
+        if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS) {
             e->vbv.fill = e->vbv_seg_h;             /* assume only the handoff */
+            e->vbv_joined = 1;
+        }
         /* The first coded frame of ANY instance escapes the VBV clip -- the bits
  * model needs one coded frame before a prediction exists. Under a
  * bitrate target the seeded ABR scale covers it; under CRF/CQP nothing
@@ -5441,6 +5475,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
  * path, with its own strength scale and B-frame floor; y264_aq_gain). */
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
+    /* Capped VBR takes the CRF constants instead. The bitrate-target set was
+ * swept on short band clips with no cap; on 7-10 minute titles at a 1.5x cap
+ * it read 0.4-0.6% BD-VMAF behind the CRF set on every cell measured. */
+    if (e->aq_rabr == 1 && e->vbv_on && !e->vbv_cbr)
+        e->aq_rabr = 0;
     e->aq_anchor = aq_anchor_default();
     /* The frame-level (DC) AQ strength: see crf_frame_dc. Fitted by sweep at
  * matched rate (Y264_AQ_DC). The 1.3 sweep was uncapped CRF only. A bitrate
@@ -11187,7 +11226,11 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * scale yet -- and 0.9 of the buffer let an IDR three frames after a cut
  * take 45% of it into a stretch that does not fit at QP 51 (Big Buck
  * Bunny 720p at 503 kbit/s, one thread: the cell's one underflow). */
-        if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass) {
+        /* Not in a segment that assumed the handoff occupancy: its fill is
+ * already the reserve the exit corridor guarantees, and taking the reserve
+ * again off it cut every GOP's opening intra to about 0.8 of its
+ * sequential size. */
+        if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass && !e->vbv_joined) {
             double l2 = fill - 0.5 * e->rck.vbv_plan_t * e->vbv.size;
             if (l2 < 0.5 * fill) l2 = 0.5 * fill;
             if (l2 < limit) limit = l2;

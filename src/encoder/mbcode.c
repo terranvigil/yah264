@@ -665,6 +665,8 @@ static void aq_mb_stats(const y264_frame_t *f, float *means, float *vars,
  * for frames that carry no mb-tree field of their own). */
 static void aq_analyze(y264_frame_t *f)
 {
+    f->dark_dg = 0.f;
+    f->dl_mbx = -1;
     if (!f->aq_off) return;
     int n = f->wmb * f->hmb;
     if (f->aq_strength <= 0.f) {
@@ -699,6 +701,7 @@ static void aq_analyze(y264_frame_t *f)
     double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
     if (aq_dark_env(0) > 0 && dg < 1.0)
         dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb));
+    if (aq_dark_env(0) > 0) f->dark_dg = (float)dg;
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center) + (float)dg * dk[i]);
         if (off < -8) off = -8;
@@ -3301,6 +3304,20 @@ static int intra_admit_m16_b(void)
     return 12;
 }
 
+/* 1 for a macroblock inside the dark cut's region (y264_aq_dark < 0). Its
+ * lower QP keeps residual the skip probe would otherwise have zeroed, so
+ * these blocks reach the full tournament and still end as skip most of the
+ * time: on a dark title they are most of the analysis the cut added. The two
+ * trims below (dark_iadmit, dark_surv) narrow that analysis on them only. */
+static int mb_dark_smooth(const y264_frame_t *f, int mbx, int mby)
+{
+    uint32_t v2[2];
+    int ss = f->src_stride[0];
+    y264_dsp.var16x16(f->src[0] + (mby * 16) * ss + mbx * 16, ss, v2);
+    double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+    return y264_aq_dark(mean, var < 0 ? 0 : var) < 0.0;
+}
+
 static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
 {
     if (!intra_screen_on(f->subme) || inter_satd < 0) return 1;
@@ -3315,6 +3332,8 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
     int m16 = isb ? intra_admit_m16_b() : intra_admit_m16();
     if (f->uhdlite)                 /* the 2160p tier's margins */
         m16 = isb ? 8 : 16;
+    if (f->dark_iadmit > 0 && m16 > f->dark_iadmit && mb_dark_smooth(f, mbx, mby))
+        m16 = f->dark_iadmit;
     int hit = i16 < inter_satd * m16 / 16;
     if (hit) {                      /* the analysis next door re-asks this */
         f->i16s_mbx = mbx; f->i16s_mby = mby;
@@ -8693,7 +8712,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * Off (rank 0) the loop below is the shipped one, in its shipped order, so
  * the default is byte-identical. */
         int rdord[3] = { 0, 1, 2 };
-        if (f->rd_surv_rank)                     /* ascending screening cost */
+        int surv_rank = f->rd_surv_rank;
+        if (f->dark_surv > 0 && (!surv_rank || f->dark_surv < surv_rank) &&
+            mb_dark_smooth(f, mbx, mby))
+            surv_rank = f->dark_surv;
+        if (surv_rank)                           /* ascending screening cost */
             for (int a = 1; a < 3; a++)
                 for (int b = a; b > 0 && satd16[rdord[b]] < satd16[rdord[b - 1]]; b--) {
                     int t = rdord[b]; rdord[b] = rdord[b - 1]; rdord[b - 1] = t;
@@ -8711,7 +8734,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         for (int k = 0, nrd = 0; k < 3; k++) {
             int bm = rdord[k];
             if (satd16[bm] >= thresh16) continue;
-            if (f->rd_surv_rank && nrd >= f->rd_surv_rank) break;
+            if (surv_rank && nrd >= surv_rank) break;
             nrd++;
             /* the screen above already took this prediction's luma SATD */
             f->c4_pred = p16[bm]; f->c4_val = bd_d[bm];
@@ -8859,11 +8882,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * way the three directions above are, so rank 1 keeps the better of them
  * and drops the other. Rank 0 is the shipped loop in its shipped order. */
         int rectord[2] = { 1, 2 };
-        if (f->rd_surv_rank && ptsatd[2] < ptsatd[1]) { rectord[0] = 2; rectord[1] = 1; }
+        if (surv_rank && ptsatd[2] < ptsatd[1]) { rectord[0] = 2; rectord[1] = 1; }
         for (int k = 0, nrd = 0; k < 2; k++) {
             int bp = rectord[k];
             if (ptsatd[bp] >= thresh) continue;
-            if (f->rd_surv_rank && nrd >= f->rd_surv_rank) break;
+            if (surv_rank && nrd >= surv_rank) break;
             nrd++;
             j = rd_b_part(f, mbx, mby, bp, ptcombo[bp], &mo_s[bp],
                           ppt[bp], cpt[bp], lam, &tmp);
@@ -10967,11 +10990,99 @@ static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
     *cskip_out = cskip;
 }
 
+/* The early skip probes read chroma at the QP a chroma offset of 0 would
+ * give, where the coded offset is negative by Y264_SKIP_CLIFT or less (2 by
+ * default, so the 720p class's -2). That offset is there for the chroma VMAF
+ * v1 reads in coded macroblocks, but in the probes it fails faint chroma
+ * residual on dark content: on a dark 720p title 10-15% more macroblocks ran
+ * the whole tournament and nearly all still ended as a skip. Coded
+ * macroblocks keep the offset. On ten 720p clips (six live action, four dark)
+ * it reads BD-VMAF v1 median -0.34%, worst +0.14%, inside the band's control
+ * spread, and the dark-block flat share and CAMBI hold, for 4.9% fewer
+ * instructions on the dark title and 0.2-1.1% on the others. Below 720p
+ * (offset -4) the CIF clips read up to +0.5% with the probes lifted, so that
+ * class keeps them. Y264_SKIP_CLIFT=0 turns it off (the previous output). */
+static int skip_clift_env(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = y264_env("Y264_SKIP_CLIFT");
+        int x = e ? atoi(e) : 2;
+        v = x > 0 ? x : 0;
+    }
+    return v;
+}
+
+/* How many QP steps the skip probes add back on a macroblock the dark cut
+ * lowered: dark_lift/16 of the cut the frame's gate applied, rounded (all of
+ * it on B pictures and half on P by default; encoder_open says why). The cut
+ * keeps faint residual the probe would have zeroed, so on a dark title most
+ * of those macroblocks ran the whole tournament and still ended as a skip.
+ * Probing at the QP the block would have had without the cut lets them leave
+ * early; a block that codes residual at that QP still fails the probe, and
+ * coded blocks keep the lower QP. */
+static int dark_skip_lift(y264_frame_t *f, int mbx, int mby)
+{
+    if (!f->dark_lift || f->dark_dg <= 0.f) return 0;
+    if (f->dl_mbx == mbx && f->dl_mby == mby) return f->dl_l;
+    uint32_t s1, s2;
+    int i = mby * f->wmb + mbx;
+    if (f->mbvar && *f->mbvar_src == f->src[0]) {
+        s1 = f->mbvar[2 * i]; s2 = f->mbvar[2 * i + 1];
+    } else {
+        uint32_t v2[2];
+        int ss = f->src_stride[0];
+        y264_dsp.var16x16(f->src[0] + (mby * 16) * ss + mbx * 16, ss, v2);
+        s1 = v2[0]; s2 = v2[1];
+    }
+    double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
+    double cut = f->dark_dg * y264_aq_dark(mean, var < 0 ? 0 : var);
+    int l = (int)lround(-cut * f->dark_lift / 16.0);
+    if (l > 51 - f->cur_qp) l = 51 - f->cur_qp;
+    if (l < 0) l = 0;
+    f->dl_mbx = mbx; f->dl_mby = mby; f->dl_l = l;
+    return l;
+}
+
+struct cqp_save { int qp, qps, cqp, cqps; };
+static void skip_clift_on(y264_frame_t *f, int mbx, int mby, struct cqp_save *sv)
+{
+    sv->qp = f->cur_qp; sv->qps = f->cur_qp_scaled;
+    sv->cqp = f->cur_chroma_qp; sv->cqps = f->cur_chroma_qp_scaled;
+    int l = dark_skip_lift(f, mbx, mby);
+    if (l) {
+        f->cur_qp += l; f->cur_qp_scaled += l;
+        f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, f->chroma_qp_off);
+        f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
+    }
+    int off = f->chroma_qp_off;
+    if (off >= 0 || -off > skip_clift_env()) return;
+    f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, 0);
+    f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
+}
+static void skip_clift_off(y264_frame_t *f, const struct cqp_save *sv)
+{
+    f->cur_qp = sv->qp; f->cur_qp_scaled = sv->qps;
+    f->cur_chroma_qp = sv->cqp; f->cur_chroma_qp_scaled = sv->cqps;
+}
+
+static int probe_bskip_strict_in(y264_frame_t *f, int mbx, int mby,
+                                 const struct skip_stats *st);
 /* The strict B skip probe with the screen in front. `pl` = the skip
  * candidate's per-plane SSD and `e4` its luma per-4x4 map (dist_mb_pl), both
  * taken on the prediction the probe reads out of rec. */
 static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
                               const struct skip_stats *st)
+{
+    struct cqp_save sv;
+    skip_clift_on(f, mbx, mby, &sv);
+    int r = probe_bskip_strict_in(f, mbx, mby, st);
+    skip_clift_off(f, &sv);
+    return r;
+}
+
+static int probe_bskip_strict_in(y264_frame_t *f, int mbx, int mby,
+                                 const struct skip_stats *st)
 {
     int mode = f->bskip_screen;
     if (!mode || !st || f->cqm || f->cf_idc == 0) return probe_skip(f, mbx, mby, 1, 0);
@@ -11047,10 +11158,14 @@ static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
     unsigned lskip = 0;
     int cskip = 0;
     int s64 = rdoq_seed64();
+    struct cqp_save sv;
+    skip_clift_on(f, mbx, mby, &sv);
     if (f->bskip_screen && st && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
         bss_screen(f, st, &lskip, &cskip);
-    return probe_skip_gs(f, mbx, mby, 0, 0, NULL, lskip, cskip,
-                         probe_first_block(e4, lskip));
+    int r = probe_skip_gs(f, mbx, mby, 0, 0, NULL, lskip, cskip,
+                          probe_first_block(e4, lskip));
+    skip_clift_off(f, &sv);
+    return r;
 }
 
 /* Snapshot the LIVE half of the est context array for one pricing trial.
@@ -12765,6 +12880,7 @@ void y264_mb_warm_statics(void)
     (void)cdc_rd_on(); (void)cdc_lam_x256();
     (void)trel_smooth_v();
     (void)aq_dark_env(0);
+    (void)skip_clift_env();
     (void)psy_dark_env();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
