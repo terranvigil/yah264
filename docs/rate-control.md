@@ -130,7 +130,10 @@ or below `--bitrate`. On top of the ABR decide:
   whole burst (anchor plus buffered B frames) is walked through the buffer law at
   the model's predictions. The base is the lowest QP at or above the rate
   factor's that keeps every frame inside the fit test and puts the buffer on a
-  trajectory toward half full over 32 frames. Without it, a cheap opening banks
+  trajectory toward half full over 32 frames. A GOP coded in parallel starts
+  from an assumed half-full buffer, so there the target sits half a buffer
+  below the highest occupancy the segment has reached, at least a quarter
+  full and at most half. Without it, a cheap opening banks
   a surplus, the hard section drains the buffer inside a second, and the encode
   runs pinned near empty with a +-4 QP sawtooth.
 - **Serial re-coding** for bursts the model can't price (see

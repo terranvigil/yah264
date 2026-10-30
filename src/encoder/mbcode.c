@@ -702,6 +702,7 @@ static void aq_analyze(y264_frame_t *f)
     if (aq_dark_env(0) > 0 && dg < 1.0)
         dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb));
     if (aq_dark_env(0) > 0) f->dark_dg = (float)dg;
+    f->aq_s = strength; f->aq_c = center;
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center) + (float)dg * dk[i]);
         if (off < -8) off = -8;
@@ -3304,17 +3305,26 @@ static int intra_admit_m16_b(void)
     return 12;
 }
 
-/* 1 for a macroblock inside the dark cut's region (y264_aq_dark < 0). Its
- * lower QP keeps residual the skip probe would otherwise have zeroed, so
+/* 1 for a macroblock the dark cut lowered: the frame's gate is open
+ * (dark_dg > 0, so never with AQ off or under CQP) and y264_aq_dark < 0.
+ * Its lower QP keeps residual the skip probe would otherwise have zeroed, so
  * these blocks reach the full tournament and still end as skip most of the
  * time: on a dark title they are most of the analysis the cut added. The two
  * trims below (dark_iadmit, dark_surv) narrow that analysis on them only. */
 static int mb_dark_smooth(const y264_frame_t *f, int mbx, int mby)
 {
-    uint32_t v2[2];
-    int ss = f->src_stride[0];
-    y264_dsp.var16x16(f->src[0] + (mby * 16) * ss + mbx * 16, ss, v2);
-    double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+    if (f->dark_dg <= 0.f) return 0;
+    uint32_t s1, s2;
+    int i = mby * f->wmb + mbx;
+    if (f->mbvar && *f->mbvar_src == f->src[0]) {
+        s1 = f->mbvar[2 * i]; s2 = f->mbvar[2 * i + 1];
+    } else {
+        uint32_t v2[2];
+        int ss = f->src_stride[0];
+        y264_dsp.var16x16(f->src[0] + (mby * 16) * ss + mbx * 16, ss, v2);
+        s1 = v2[0]; s2 = v2[1];
+    }
+    double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
     return y264_aq_dark(mean, var < 0 ? 0 : var) < 0.0;
 }
 
@@ -11036,7 +11046,14 @@ static int dark_skip_lift(y264_frame_t *f, int mbx, int mby)
         s1 = v2[0]; s2 = v2[1];
     }
     double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
-    double cut = f->dark_dg * y264_aq_dark(mean, var < 0 ? 0 : var);
+    if (var < 0) var = 0;
+    /* the cut the offset actually carries: on the flattest, darkest blocks
+     * the variance term and the cut together pass aq_analyze's -8 clamp */
+    double v = f->aq_s * (log2f((float)(var + y264_aq_bfloor(f->aq_abr))) - f->aq_c);
+    double cut = f->dark_dg * y264_aq_dark(mean, var);
+    double lo = v + cut < -8 ? -8 : v + cut > 8 ? 8 : v + cut;
+    double hi = v < -8 ? -8 : v > 8 ? 8 : v;
+    if (lo - hi > cut) cut = lo - hi;
     int l = (int)lround(-cut * f->dark_lift / 16.0);
     if (l > 51 - f->cur_qp) l = 51 - f->cur_qp;
     if (l < 0) l = 0;
@@ -11056,7 +11073,7 @@ static void skip_clift_on(y264_frame_t *f, int mbx, int mby, struct cqp_save *sv
         f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
     }
     int off = f->chroma_qp_off;
-    if (off >= 0 || -off > skip_clift_env()) return;
+    if (!f->clift_720 || off >= 0 || -off > skip_clift_env()) return;
     f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, 0);
     f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
 }

@@ -242,7 +242,9 @@ typedef struct {
  * the frame's gate on the cut, set by aq_analyze. See dark_skip_lift. */
     int dark_lift;
     float dark_dg;
+    float aq_s, aq_c;               /* aq_analyze's strength and centre, for the lift's cap */
     int dl_mbx, dl_mby, dl_l;       /* dark_skip_lift's last answer */
+    int clift_720;                  /* the 720p class, where the chroma probe lift applies */
     /* Band-level decisions, stage 4. band_c is the frame's [3*band] lookahead
  * aggregate array -- mean pair-leg cost, its CoV^2 x100, mean lowres intra
  * cost -- summarised at stash time and carried per buffered B. NULL when the
