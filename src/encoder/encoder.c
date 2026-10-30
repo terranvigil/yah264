@@ -2620,6 +2620,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.deblock_a = e->param.deblock_alpha;
     f.deblock_b = e->param.deblock_beta;
     f.chroma_qp_off = e->param.chroma_qp_index_offset;
+    f.clift_720 = y264_size_class(e->param.width, e->param.height) == 1;
     f.cqm = e->cqm_on ? &e->cqm : NULL;
     f.no_mixed_refs = e->param.no_mixed_refs ? 1 : 0;
     f.transform8x8 = e->pps.transform_8x8_mode_flag;
