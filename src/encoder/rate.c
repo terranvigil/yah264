@@ -640,9 +640,10 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
  * over its target than the baseline, and with dcfloor 1/256 it runs 1-10
  * points under it. Under CRF that floor costs akiyo and stefan 0.3-2%
  * (three ladder shifts each), so CRF keeps the field's. */
-    /* keyed on the rate mode, not aq_rabr: capped VBR takes the CRF AQ
- * constants but is still a bitrate target, so it keeps dcfloor */
-    double dfl = e->crf_on ? y264_aq_afloor() : e->aq_dcfloor;
+    /* capped VBR takes the CRF AQ constants and the field's floor with them:
+ * on dcfloor bbb-x10_2160p lost about a point of BD-VMAF v1, and the VBV
+ * cap already bounds the black-frame overshoot the low floor was for */
+    double dfl = e->aq_rabr ? e->aq_dcfloor : y264_aq_afloor();
     double sum = 0, sum2 = 0;
     for (int mby = 0; mby < hmb; mby++)
         for (int mbx = 0; mbx < wmb; mbx++) {
