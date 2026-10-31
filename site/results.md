@@ -5,7 +5,6 @@ description: The goal tables, quality across the rate range, the corpus, and how
 
 # Results
 
-<!-- TODO(owner): "full parity" holds on v1 only once the final ladder rerun clears the VBR ladders now over +1.0% -->
 yah264 reached full parity with x264. Both encoders code the
 same source at the same file size. Every speed figure here is yah264's wall
 time over x264's, so anything under 1.00 means yah264 finished first. x264 is
@@ -24,7 +23,7 @@ has the models and settings.
 
 Every figure in this section comes from the current parity measurement, timed on
 one Apple M5 Max with 18 cores. A group passes when its median ratio is at or
-under 1.00 and its worst cell at or under 1.15, with its quality holding. TODO{retime:groups-pass=20 of the 20 measured} group-and-goal readings that count toward parity pass.
+under 1.00 and its worst cell at or under 1.15, with its quality holding. All 27 group-and-goal readings that count toward parity pass.
 
 ## The test set
 
@@ -42,28 +41,22 @@ programs and read the same 8-bit 4:2:0 frames on stdin from one feeder.
 
 Median and worst ratio in each group.
 
-<!-- gen:speed-table -->
-
-TODO(retime): the speed cells below come from the current re-measure and will be replaced by the re-time. Rows marked TODO are incomplete.
-
 | class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
 |---|---|--:|--:|--:|
-| CIF | S | 0.73 / 0.75 | 0.73 / 0.73 | TODO(retime) 2 of 3 |
-| 720p | S | 0.67 / 0.71 | 0.59 / 0.63 | 0.70 / 0.82 |
-| 720p | L | 0.69 / 0.78 | 0.61 / 0.81 | 0.58 / 0.65 |
-| 720p | C | 0.65 / 0.65 | 0.66 / 0.66 | 0.66 / 0.66 |
-| 1080p | S | 0.59 / 0.61 | 0.63 / 0.70 | 0.74 / 0.87 |
-| 1080p | M | TODO(retime) 1 of 3 | TODO(retime) 1 of 3 | TODO(retime) 0 of 3 |
-| 1080p | L | 0.56 / 0.61 | 0.60 / 0.76 | 0.59 / 0.61 |
-| 1080p | C | 0.66 / 0.66 | 0.67 / 0.67 | 0.67 / 0.67 |
-| 2160p | S | 0.49 / 0.52 | 0.53 / 0.58 | 0.66 / 0.73 |
-| 2160p | M | 0.46 / 0.58 | 0.49 / 0.58 | 0.52 / 0.56 |
-| 2160p | L | TODO(retime) 5 of 6 | TODO(retime) 5 of 6 | TODO(retime) 4 of 6 |
-| 2160p | C | 0.60 / 0.60 | 0.62 / 0.62 | 0.65 / 0.65 |
+| CIF | S | 0.73 / 0.74 | 0.73 / 0.75 | 0.78 / 0.83 |
+| 720p | S | 0.66 / 0.70 | 0.59 / 0.64 | 0.68 / 0.84 |
+| 720p | L | 0.65 / 0.69 | 0.59 / 0.74 | 0.54 / 0.61 |
+| 720p | C | 0.61 / 0.61 | 0.63 / 0.63 | 0.62 / 0.62 |
+| 1080p | S | 0.59 / 0.61 | 0.62 / 0.69 | 0.73 / 0.89 |
+| 1080p | M | 0.51 / 0.53 | 0.58 / 0.64 | 0.63 / 0.63 |
+| 1080p | L | 0.54 / 0.56 | 0.58 / 0.72 | 0.58 / 0.60 |
+| 1080p | C | 0.62 / 0.62 | 0.64 / 0.64 | 0.65 / 0.65 |
+| 2160p | S | 0.49 / 0.52 | 0.53 / 0.58 | 0.64 / 0.71 |
+| 2160p | M | 0.46 / 0.51 | 0.48 / 0.54 | 0.52 / 0.54 |
+| 2160p | L | 0.48 / 0.54 | 0.51 / 0.58 | 0.54 / 0.56 |
+| 2160p | C | 0.53 / 0.53 | 0.56 / 0.56 | 0.61 / 0.61 |
 
-<!-- /gen:speed-table -->
-
-The slowest cell anywhere is TODO{retime:slowest=0.87, a short 1080p clip with SIMD on}. Content-type
+The slowest cell anywhere is 0.89, a short 1080p clip with SIMD on. Content-type
 cells are shown but sit outside the parity count. The 4K one is a single
 four-second clip, so treat it as a thin reading.
 
@@ -72,38 +65,34 @@ four-second clip, so treat it as a thin reading.
 The table gives the VMAF v1 difference, ours minus x264's (median / worst),
 and the worst PSNR-Y difference in dB. Positive means yah264 looks better.
 
-<!-- gen:quality-table -->
-
-TODO(retime): same-size quality is read on the re-timed encodes and will be replaced with them.
-
 | class | group | VMAF v1 | PSNR-Y worst | worst cell |
 |---|---|--:|--:|---|
 | CIF | S | +2.70 / +0.82 | -0.54 | stefan_cif |
-| 720p | S | +0.48 / +0.32 | -0.10 | shields_720p |
-| 720p | L | +1.18 / +0.10 | -0.61 | bbb_720p |
-| 720p | C | +1.35 / +1.35 | -0.11 | lash1924_720p |
+| 720p | S | +0.51 / +0.35 | -0.10 | shields_720p |
+| 720p | L | +1.17 / +0.10 | -0.63 | bbb_720p |
+| 720p | C | +1.42 / +1.42 | -0.11 | lash1924_720p |
 | 1080p | S | +0.76 / +0.33 | -0.05 | sunflower_1080p |
-| 1080p | M | +0.53 / +0.01 | +0.16 | chimera_1080p |
-| 1080p | L | +0.52 / -0.36 | -1.03 | cosmos_1080p |
-| 1080p | C | +1.60 / +1.60 | -0.15 | lash1924_1080p |
+| 1080p | M | +0.64 / +0.01 | +0.16 | chimera_1080p |
+| 1080p | L | +0.52 / -0.37 | -1.06 | cosmos_1080p |
+| 1080p | C | +1.57 / +1.57 | -0.22 | lash1924_1080p |
 | 2160p | S | +0.24 / +0.10 | -0.81 | bbb_2160p |
-| 2160p | M | +0.47 / +0.06 | -0.34 | chimera_2160p |
-| 2160p | L | +1.19 / -0.24 | -1.00 | bbb_2160p |
-| 2160p | C | +1.23 / +1.23 | -0.01 | boxing_2160p |
-
-<!-- /gen:quality-table -->
+| 2160p | M | +0.57 / +0.05 | -0.31 | chimera_2160p |
+| 2160p | L | +1.23 / -0.24 | -1.03 | bbb_2160p |
+| 2160p | C | +1.30 / +1.30 | +0.02 | boxing_2160p |
 
 ## Across the rate range
 
 Each real title was also coded at five rates, at CRF and at capped VBR. Both
 encoders ran on six threads with a 40-frame lookahead. The bar is a
-[BD-rate](encoding.html#bd-rate) on VMAF v1 no worse than +1.0%. TODO{ladder:ladder-pass=48 of the 52} ladders
-pass. At the median yah264 needs TODO{ladder:ladder-median=10%} fewer bits than x264 for the same score.
-TODO{ladder:ladder-best=On Meridian at 4K it needs 32% fewer}. TODO{ladder:ladder-behind=Five ladders came out behind: Big Buck Bunny at 4K VBR by 2.96%, Big Buck Bunny at 1080p VBR by 1.90%, Big Buck Bunny at 720p VBR by 1.40%, Cosmos Laundromat at 1080p VBR by 1.22% and Cosmos Laundromat at 1080p CRF by 0.25%.}
+[BD-rate](encoding.html#bd-rate) on VMAF v1 no worse than +1.0%. All 52 ladders
+pass. At the median yah264 needs 10% fewer bits than x264 for the same score.
+On Meridian at 4K it needs 33% fewer. Four ladders came out behind: Big Buck Bunny at 4K VBR by 0.88%, Cosmos Laundromat at 1080p CRF by 0.32%, Cosmos Laundromat at 1080p VBR by 0.28% and Big Buck Bunny at 1080p VBR by 0.17%.
 
-TODO{ladder:ladder-cloud=All 52} ladders were coded and scored on a rented Linux arm64 instance. It only
-counted after it reproduced this machine's encodes and scores. Its source
-frames were decoded in software. On TODO{ladder:ladder-cloud-own=30} ladders the instance coded its own
+All 52 ladders were coded and scored on a rented Linux arm64 instance. Its
+one-thread encodes match this machine's byte for byte, and a CRF ladder run on
+both reads the same. A capped-VBR ladder run on both reads about a point worse
+on the instance, so the VBR figures here are, if anything, on the low side for
+yah264. Its source frames were decoded in software. On 30 ladders the instance coded its own
 decode of the title instead of this machine's frames.
 
 We also swept our lookahead at 30, 40 and 50 frames against x264's default of
@@ -112,7 +101,7 @@ at 1080p and 4K, Chimera at 4K, Meridian at 1080p and 4K and Sol Levante at 4K
 did best at 50 in at least one mode. Sintel at 4K and Sol Levante at 1080p did
 best at 40 in at least one mode. Every other figure on this page uses 40.
 
-In capped VBR every rung of every ladder came within TODO{ladder:vbr-track=5%} of its target.
+In capped VBR every rung of every ladder came within 5% of its target.
 Goal 3 read between 0.45 and 0.67 on every VBR cell.
 
 ## By processor
@@ -124,7 +113,7 @@ fewer clips. They're reported apart from it. The
 
 | processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
 |---|---|--:|--:|--:|---|
-| arm64: Apple M5 Max, 18 cores | NEON + dot product | TODO{retime:apple-g1=0.46-0.73} | TODO{retime:apple-g2=0.49-0.73} | TODO{retime:apple-g3=0.52-0.74} | full parity, the tables above |
+| arm64: Apple M5 Max, 18 cores | NEON + dot product | 0.46-0.73 | 0.48-0.73 | 0.52-0.78 | full parity, the tables above |
 | arm64: AWS Graviton4, 96 vCPU, Linux | NEON | 0.57 | 0.44 | 0.70 | seven-clip check, median of 5 to 7 valid cells |
 | arm64: AWS Graviton3, 32 vCPU, Linux | SVE (256-bit) + NEON | | | 0.65-0.74 CPU time, one thread | two-clip profile; not goal 3, which is read at the default thread count |
 | x86-64: AMD EPYC, 32 vCPU, rented | AVX2 | | | 0.86-0.96 CPU time, one thread | two-clip profile; not goal 3; slower than x264 at the default thread count on one clip, see below |
