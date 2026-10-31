@@ -1,0 +1,68 @@
+name: release
+
+# Source releases only: a pushed tag vX.Y.Z becomes a GitHub release carrying
+# the `meson dist` tarball and its checksum. No binaries are published;
+# packagers build from the tarball against the installed header and the two
+# pkg-config files.
+#
+# `meson dist` builds the tarball from a clean clone and then configures,
+# builds and tests the unpacked tarball, so a release cannot ship a tree that
+# only builds from a developer checkout.
+#
+# Run by hand (workflow_dispatch) it is a dry run: the same tarball, kept as a
+# workflow artifact, and no tag or release is touched.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build ffmpeg
+
+      - name: Configure
+        run: meson setup build
+
+      # the tag, meson.build and the public header all state the version, and
+      # a release where they disagree would report a version it isn't
+      - name: Check the version
+        run: |
+          meson_ver=$(meson introspect --projectinfo build | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
+          hdr_ver=$(awk '/#define YAH264_VERSION_(MAJOR|MINOR|PATCH)/ {printf "%s%s", sep, $3; sep="."}' include/yah264.h)
+          echo "meson.build: $meson_ver, yah264.h: $hdr_ver"
+          test "$meson_ver" = "$hdr_ver"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "tag: $GITHUB_REF_NAME"
+            test "$GITHUB_REF_NAME" = "v$meson_ver"
+          fi
+
+      - name: Build and test the tarball
+        run: meson dist -C build --formats xztar
+
+      - name: Keep the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: build/meson-dist/*
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/meson-dist/* \
+            --verify-tag --title "yah264 ${GITHUB_REF_NAME#v}" --notes "Source release ${GITHUB_REF_NAME#v}."
