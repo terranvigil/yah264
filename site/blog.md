@@ -7,7 +7,7 @@ type: article
 
 # Introducing yah264
 
-yah264 is an H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 across a wide range of test video. It needs a median 13% fewer bits for the same quality.
+yah264 is an H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 across a wide range of test video. It needs a median 13% fewer bits for the same quality. The source is on [GitHub](https://github.com/terranvigil/yah264).
 
 I've worked on video ingestion pipelines for over 15 years. The key goals are always "lowest cost" and "highest quality" for a given bitrate. And of course speed usually matters as well. This is my attempt at all three for anyone who would like to try yah264 out.
 
@@ -30,7 +30,7 @@ On my Mac, each range runs from the slowest group's median to the fastest's.
 - CRF, ABR, capped CRF and CBR, with VBV and HRD signaling.
 - Presets from `ultrafast` to `placebo`.
 
-Every number is on the [results page](results.md). The page explains the method too. `make review` reruns a smaller HD board from the repository, so you can [check the results yourself](check-it-yourself.md).
+Every number is on the [results page](results.md). The page explains the method too. `make review` reruns a smaller HD board from the [repository](https://github.com/terranvigil/yah264), so you can [check the results yourself](check-it-yourself.md).
 
 <figure class="chart"><img src="assets/blog/speed.svg" alt="Dot plot: median speedup over x264 for each resolution and length group, at three goals. Every dot sits between 1.22x and 2.13x faster."></figure>
 
