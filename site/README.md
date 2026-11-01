@@ -27,6 +27,7 @@ Leave a note for me anywhere with an HTML comment. It won't render:
 | `../README.md` | home: the repository README, built into `index.html` |
 | `encoding.md` | how video encoding works |
 | `start.md` | getting started |
+| `hdr.md` | HDR: what's supported, how to encode it, HDR-VMAF results |
 | `design.md` | design |
 | `architectures.md` | architectures |
 | `results.md` | results |

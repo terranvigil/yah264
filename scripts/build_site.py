@@ -45,6 +45,7 @@ NAV = [
     ("encoding.html", "Encoding"),
     ("how-h264-works.html", "H.264"),
     ("start.html", "Getting started"),
+    ("hdr.html", "HDR"),
     ("design.html", "Design"),
     ("threading.html", "Threading"),
     ("architectures.html", "Architectures"),

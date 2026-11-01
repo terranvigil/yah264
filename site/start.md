@@ -216,7 +216,8 @@ One binary encodes both depths and picks from the input's own chroma tag. A
 `C420` Y4M goes to the 8-bit library. A `C420p10` one goes to High 10.
 `--output-depth 10` upshifts every sample of 8-bit input and codes it as High
 10. Raw input has no tag, so it declares its depth in the format instead:
-`--input-csp i420p10`, and likewise `i422p10` and `i444p10`.
+`--input-csp i420p10`, and likewise `i422p10` and `i444p10`. HDR10 and HLG
+need a few more options, covered on the [HDR](hdr.md) page.
 
 Both libraries install side by side. `yah264.pc` and `yah264_10.pc` each name
 their depth in `Cflags`. That's what makes a caller's `yah264_encoder_open()`
