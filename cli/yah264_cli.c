@@ -4515,8 +4515,9 @@ int main(int argc, char **argv)
             const char *v = argv[++i];
             unsigned long long g[10];
             int end = 0;
-            /* %llu takes a leading '-' and wraps it, so refuse one outright */
-            int n = strchr(v, '-') ? 0 :
+            /* %llu takes a sign and skips blanks, wrapping a '-', so refuse
+             * all three outright; --cll takes digits only too */
+            int n = strpbrk(v, "-+ \t") ? 0 :
                 sscanf(v, "G(%llu,%llu)B(%llu,%llu)R(%llu,%llu)WP(%llu,%llu)L(%llu,%llu)%n",
                        &g[0], &g[1], &g[2], &g[3], &g[4],
                        &g[5], &g[6], &g[7], &g[8], &g[9], &end);
@@ -4534,7 +4535,9 @@ int main(int argc, char **argv)
                 }
                 if (k < 6) mast_prim[k] = (unsigned)g[k];
             }
-            if (g[8] > 0xFFFFFFFFull || g[9] >= g[8]) {
+            /* min below max binds only when the peak is a real one: a peak
+             * outside the SEI's range means unknown, as in L(0,0) */
+            if (g[8] > 0xFFFFFFFFull || (g[8] >= 50000 && g[9] >= g[8])) {
                 fprintf(stderr, "yah264: --mastering-display: L(max,min) needs min below "
                         "max and max within 32 bits, in 0.0001 cd/m^2\n");
                 return 2;
@@ -4551,6 +4554,9 @@ int main(int argc, char **argv)
             if (g[8] > 100000000)
                 fprintf(stderr, "yah264: warning: --mastering-display peak is above "
                         "10000 cd/m^2\n");
+            if (g[9] > 50000)
+                fprintf(stderr, "yah264: warning: --mastering-display min is above "
+                        "5 cd/m^2; luminance is in 0.0001 cd/m^2 units\n");
             /* the SEI's semantics expect a peak of 5 cd/m^2 or more; less is
              * almost always nits typed where 0.0001 units belong */
             if (g[8] < 50000)
