@@ -91,8 +91,8 @@ Maximum Frame-Average Light Level        : 1022 cd/m2
 ```
 
 Sol Levante's light levels sit a little above the 1000-nit display it was
-graded on. Its opening shot averages about 1020 nits, so the values are the
-content's own.
+graded on. The brightest frames of its opening shot average about 1020 nits,
+so the values are the content's own.
 
 An HLG encode reads `Transfer characteristics : HLG`. The SDR-compatible form
 reads `HLG / BT.2020 (10-bit)`, and ffmpeg's decoder takes the HLG transfer from

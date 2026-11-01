@@ -18,9 +18,11 @@
 # about 45 GB in all. Every step writes under a temporary name and keeps its
 # output only when it finishes, so an interrupted run picks up where it
 # stopped, and a run over finished outputs just prints the table again.
-# Delete WORK/enc after rebuilding the encoder, or the old encodes are reused.
-# The site's numbers were made at the default THREADS=6; another thread count
-# gives slightly different streams.
+# An encode is redone when its source or light levels are newer than it.
+# Delete WORK/enc after rebuilding the encoder or changing THREADS or the
+# options below, or the old encodes are reused. The site's numbers were made
+# at the default THREADS=6; another thread count gives slightly different
+# streams.
 set -euo pipefail
 
 abs() { case $1 in /*) echo "$1" ;; */*) echo "$PWD/$1" ;; *) [ -e "$1" ] && echo "$PWD/$1" || command -v "$1" || echo "$1" ;; esac; }
@@ -52,29 +54,37 @@ python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
 
 mkdir -p "$W/sparks_tif" "$W/enc"
 cd "$W"
+# the file being written, removed if the run stops: a 4K decode is ~7 GB.
+# Paths in it are relative to WORK and hold no spaces.
+TMP=
+trap 'rm -f $TMP' EXIT
 
 # frames in a video file, counted by decoding packets
 count() { ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$1"; }
 
 fetch() {
   if [ ! -s sol_src.mov ]; then
+    TMP=sol_src.mov.tmp
     ffmpeg -v error -nostdin -ss 160 \
       -i "$NOC/SolLevante/hdr10/SolLevante_HDR10_r2020_ST2084_UHD_24fps_1000nit.mov" \
       -frames:v 240 -c:v copy -an -f mov -y sol_src.mov.tmp
     [ "$(count sol_src.mov.tmp)" = 240 ] || die "Sol Levante download came out short"
     mv sol_src.mov.tmp sol_src.mov
+    TMP=
   fi
   seq -f "%05g" 5880 6179 | xargs -P 8 -I{} sh -c '[ -s sparks_tif/{}.tif ] || {
     curl -sf --retry 3 -o sparks_tif/{}.tif.tmp "$0/sparks/HDR10_1000nit_PQ_2020_image_sequence/SPARKS_HDR10_4K_2020_PQ_1000nits_{}.tif" &&
-    mv sparks_tif/{}.tif.tmp sparks_tif/{}.tif; }' "$NOC"
+    mv sparks_tif/{}.tif.tmp sparks_tif/{}.tif; }' "$NOC" || die "Sparks download failed"
 }
 
 # write $out through a temporary name; with a clip name, check its frame count
 y4m() {
   local out=$1 clip=$2; shift 2
+  TMP=$out.tmp
   ffmpeg -v error -nostdin "$@" -strict -1 -f yuv4mpegpipe -y "$out.tmp"
   [ -z "$clip" ] || [ "$(count "$out.tmp")" = "$(frames $clip)" ] || die "$out has the wrong frame count"
   mv "$out.tmp" "$out"
+  TMP=
 }
 
 # the TIFFs are untagged RGB, and DCI-wide; crop to UHD around the center
@@ -122,36 +132,40 @@ model() {
   [ $2 = 2160 ] && echo "$M/$d/hdr_vmaf_v1.1.8${h}_1d5h_2160.json" || echo "$M/$d/hdr_vmaf_v1.1.8${h}_3d0h.json"
 }
 
+# a score file that parses and covers every frame
+scored() {
+  python3 -c 'import json, sys; sys.exit(len(json.load(open(sys.argv[1]))["frames"]) != int(sys.argv[2]))' "$1" "$2" 2> /dev/null
+}
+
 failed() { echo "hdr_check: $1 failed, from $2:" >&2; tail -5 "$2" >&2; exit 1; }
 
 one() {
   local c=$1 r=$2 q=$3 o=enc/$1_$2_crf$3
-  # an encode older than its light levels carries stale ones
-  if [ ! -s $o.264 ] || [ $c.cll -nt $o.264 ]; then
+  # an encode older than its source or its light levels is stale
+  if [ ! -s $o.264 ] || [ $c.cll -nt $o.264 ] || [ ${c}_${r}.y4m -nt $o.264 ]; then
+    TMP=$o.264.tmp
     "$Y" --input-y4m ${c}_${r}.y4m -o $o.264.tmp --crf $q --threads "$THREADS" --no-progress \
       "${COLOR[@]}" --mastering-display "$MD" --cll "$(cat $c.cll)" 2> $o.log || failed "encode $o" $o.log
+    [ "$(count $o.264.tmp)" = "$(frames $c)" ] || failed "encode $o (short stream)" $o.log
     mv $o.264.tmp $o.264
+    TMP=
   fi
   # a score older than its encode belongs to an earlier encode
   if [ ! -s $o.json ] || [ $o.264 -nt $o.json ]; then
-    # expanded now, while $o is in scope; the decode is ~7 GB at 4K. The
-    # paths are relative to WORK, which stays the working directory.
-    # shellcheck disable=SC2064
-    trap "rm -f $o.y4m.tmp $o.y4m" EXIT
     y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
+    TMP="$o.y4m $o.json.tmp"
     "$VMAF" --reference ${c}_${r}.y4m --distorted $o.y4m --threads "$THREADS" "${VCOLOR[@]}" \
       --model path="$(model $c $r)" --json --output $o.json.tmp > $o.vmaf.log 2>&1 || failed "score $o" $o.vmaf.log
-    rm -f $o.y4m
-    trap - EXIT
+    scored $o.json.tmp "$(frames $c)" || failed "score $o (bad output)" $o.vmaf.log
     mv $o.json.tmp $o.json
+    rm -f $o.y4m
+    TMP=
   fi
   python3 - "$o" "$(frames $c)" "$(fps $c)" <<'EOF'
 import json, os, sys
 from fractions import Fraction
 o, want, fps = sys.argv[1], int(sys.argv[2]), Fraction(sys.argv[3])
 j = json.load(open(o + ".json"))
-if len(j["frames"]) != want:
-    sys.exit(f"{o}: scored {len(j['frames'])} of {want} frames")
 m = j["pooled_metrics"]
 cambi = next(v for k, v in m.items() if k.startswith("cambi"))
 c, r, q = os.path.basename(o).split("_")
