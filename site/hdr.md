@@ -16,7 +16,7 @@ HDR models for VMAF v1 on two open HDR10 masters, and the results are below.
 |---|---|---|
 | HDR10 | PQ transfer with BT.2020 primaries and matrix in the VUI, plus mastering display (SMPTE ST 2086) and content light level (CTA-861.3) SEI | `--transfer smpte2084 --colorprim bt2020 --colormatrix bt2020 --mastering-display ... --cll ...` |
 | HLG | HLG transfer in the VUI | `--transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020` |
-| HLG, SDR-compatible | BT.2020 transfer in the VUI and an alternative transfer SEI that names HLG, so an SDR-only decoder still shows a picture | `--transfer bt2020 --alternative-transfer arib-std-b67` |
+| HLG, SDR-compatible | BT.2020 transfer in the VUI and an alternative transfer SEI that names HLG, so an SDR-only decoder still shows a picture | `--transfer bt2020 --alternative-transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020` |
 | 10-bit 4:2:0, 4:2:2, 4:4:4 | High 10, High 4:2:2, High 4:4:4 Predictive | picked from the input, see [Getting started](start.md#bit-depth) |
 
 Dynamic metadata isn't supported, so there's no HDR10+ (SMPTE ST 2094-40) and
@@ -47,14 +47,17 @@ line. `--colormatrix bt2020` is the non-constant-luminance matrix, H.273 code
 order the H.264 spec uses. Chromaticities are in units of 0.00002 and luminance
 in units of 0.0001 cd/m². The example is a P3 D65 display with a 1000-nit peak.
 `--cll` takes the title's MaxCLL and MaxFALL in cd/m². When the master carries
-both, `ffprobe -show_frames` prints them.
+both, `ffprobe -show_frames` prints them. Otherwise measure them on the
+master's RGB, before it goes to 4:2:0, because rebuilding RGB from subsampled
+chroma overshoots at bright edges. `scripts/hdr_check.sh` does it that way.
 
 The ffmpeg wrapper doesn't pass the color description or the HDR metadata to
 the encoder yet. Until it does, encode HDR with the command-line encoder.
 
 ## What a player reads
 
-ffprobe on one of the encodes below:
+ffprobe on one of the encodes below, with
+`ffprobe -show_streams -show_frames -read_intervals %+#1 out.264`, trimmed:
 
 ```
 profile=High 10
@@ -66,8 +69,8 @@ color_primaries=bt2020
 side_data_type=Mastering display metadata
 ...
 side_data_type=Content light level metadata
-max_content=1535
-max_average=1024
+max_content=1170
+max_average=1022
 ```
 
 MediaInfo on the same file:
@@ -81,8 +84,8 @@ Transfer characteristics                 : PQ
 Matrix coefficients                      : BT.2020 non-constant
 Mastering display color primaries        : Display P3
 Mastering display luminance              : min: 0.0001 cd/m2, max: 1000 cd/m2
-Maximum Content Light Level              : 1535 cd/m2
-Maximum Frame-Average Light Level        : 1024 cd/m2
+Maximum Content Light Level              : 1170 cd/m2
+Maximum Frame-Average Light Level        : 1022 cd/m2
 ```
 
 An HLG encode reads `Transfer characteristics : HLG`. The SDR-compatible form
@@ -105,26 +108,41 @@ reports CAMBI in its PQ mode, which measures banding.
 | Sparks | live action, a grinder throwing sparks | 300 at 59.94 fps, frames 5880 to 6179 | 16-bit PQ BT.2020 TIFF frames, 1000 nits, center-cropped to 3840x2160 |
 
 Both titles are [Netflix Open Content](https://opencontent.netflix.com/) under
-CC BY 4.0. Each was converted to 10-bit 4:2:0 PQ once, at 3840x2160 and again
-at 1920x1080, and every encode starts from those files.
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), and the stills
+below are crops of them. Each was converted to 10-bit 4:2:0 PQ once, at
+3840x2160 and again at 1920x1080, and every encode starts from those files.
+The encodes ran at the default preset with 6 threads.
 
 <figure class="chart"><img src="assets/hdr/hdr-quality.svg" alt="HDR-VMAF against bitrate for Sol Levante and Sparks at 1080p and 4K."></figure>
 
 Sol Levante at 4K reaches HDR-VMAF 87 at 13 Mbit/s, CRF 26. Sparks is a much
 harder picture, with film grain under thousands of moving sparks, and at 4K it
-needs about 100 Mbit/s for 84. CAMBI starts at 0 for no banding and climbs as
-banding gets worse. No rung of either clip goes above 1.2.
+needs about 100 Mbit/s for 84.
 
-| clip | CRF | Mbit/s | HDR-VMAF | CAMBI |
-|---|--:|--:|--:|--:|
-| Sol Levante 1080p | 22 | 6.7 | 89.7 | 0.45 |
-| Sol Levante 1080p | 26 | 3.9 | 84.1 | 0.85 |
-| Sol Levante 4K | 22 | 23.4 | 92.6 | 0.47 |
-| Sol Levante 4K | 26 | 13.4 | 87.4 | 0.98 |
-| Sparks 1080p | 22 | 50.0 | 85.8 | 0.09 |
-| Sparks 1080p | 26 | 31.4 | 76.6 | 0.19 |
-| Sparks 4K | 22 | 167.8 | 92.3 | 0.14 |
-| Sparks 4K | 26 | 101.5 | 84.5 | 0.20 |
+CAMBI starts at 0 for no banding and climbs as banding gets worse. Averaged
+over a clip it stays at or below 1.2 on every rung, but the average hides
+Sol Levante's weak spot. Its opening shot is a flat, bright underwater scene
+that scores close to 0 in the source. At CRF 26 the encode's worst frame there
+reaches about 8 at both sizes, where it smooths the shot's faint particles into
+flat patches. At CRF 22 the worst frame stays near 4, and no
+Sparks frame passes 0.5 at either CRF. Gradients like this one are where the
+encoder has the most to gain on HDR.
+
+| clip | CRF | Mbit/s | HDR-VMAF | CAMBI mean | CAMBI worst frame |
+|---|--:|--:|--:|--:|--:|
+| Sol Levante 1080p | 22 | 6.7 | 89.7 | 0.45 | 3.6 |
+| Sol Levante 1080p | 26 | 3.9 | 84.1 | 0.85 | 7.9 |
+| Sol Levante 4K | 22 | 23.4 | 92.6 | 0.47 | 4.1 |
+| Sol Levante 4K | 26 | 13.4 | 87.4 | 0.98 | 8.9 |
+| Sparks 1080p | 22 | 50.0 | 85.8 | 0.09 | 0.24 |
+| Sparks 1080p | 26 | 31.4 | 76.6 | 0.19 | 0.42 |
+| Sparks 4K | 22 | 167.8 | 92.3 | 0.14 | 0.34 |
+| Sparks 4K | 26 | 101.5 | 84.5 | 0.20 | 0.47 |
+
+At 3840x2160 the default settings need Level 6.0, because the B-pyramid keeps
+more reference frames than Level 5.1 allows at that size. Many 4K TVs decode up
+to Level 5.1 or 5.2. `--b-pyramid none` brings a 4K encode down to 5.1 at
+24 fps and 5.2 at 60 fps.
 
 ## The pictures
 
@@ -135,7 +153,8 @@ map to SDR (Hable, 1000-nit peak).
 
 <figure class="chart"><img src="assets/hdr/hdr-sol.png" alt="Sol Levante, a sunset sky over the sea: the source on the left and yah264 at CRF 26 on the right."></figure>
 
-The sky and the sun's edge come through intact. Sparks is the harder case:
+The sky and the sun's edge come through intact in this shot. Sparks is the
+harder case:
 
 <figure class="chart"><img src="assets/hdr/hdr-sparks.png" alt="Sparks, a grinder's sparks over a worker's jacket: the source on the left and yah264 at CRF 26 on the right."></figure>
 
