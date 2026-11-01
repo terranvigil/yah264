@@ -4490,15 +4490,18 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--cll") && i + 1 < argc) {
             const char *v = argv[++i]; char *sep = NULL;
             long a = strtol(v, &sep, 10);
-            long b = (sep && *sep == ',') ? strtol(sep + 1, &sep, 10) : -1;
-            if (v == sep || !sep || *sep || a < 0 || a > 65535 || b < 0 || b > 65535) {
+            long b = (sep && *sep == ',' && isdigit((unsigned char)sep[1]))
+                     ? strtol(sep + 1, &sep, 10) : -1;
+            if (!isdigit((unsigned char)v[0]) || !sep || *sep ||
+                a < 0 || a > 65535 || b < 0 || b > 65535) {
                 fprintf(stderr, "yah264: --cll expects MaxCLL,MaxFALL, each 0..65535 "
                         "(got '%s')\n", v);
                 return 2;
             }
             /* a frame's average light can't pass the brightest pixel; the
-             * usual cause is the two values swapped */
-            if (b > a) {
+             * usual cause is the two values swapped. A MaxCLL of 0 means
+             * unknown, so it leaves MaxFALL unchecked. */
+            if (a > 0 && b > a) {
                 fprintf(stderr, "yah264: --cll: MaxFALL %ld is above MaxCLL %ld; "
                         "the order is MaxCLL,MaxFALL\n", b, a);
                 return 2;
@@ -4536,6 +4539,18 @@ int main(int argc, char **argv)
                         "max and max within 32 bits, in 0.0001 cd/m^2\n");
                 return 2;
             }
+            /* the SEI's semantics keep x in 5..37000, y in 5..42000 and the
+             * peak at 10000 cd/m^2 or below; a player may ignore a value
+             * outside them, so say so but write what was asked */
+            for (int k = 0; k < 8; k++)
+                if (g[k] < 5 || g[k] > ((k & 1) ? 42000u : 37000u)) {
+                    fprintf(stderr, "yah264: warning: --mastering-display chromaticity %llu "
+                            "is outside the SEI's range (x 5..37000, y 5..42000)\n", g[k]);
+                    break;
+                }
+            if (g[8] > 100000000)
+                fprintf(stderr, "yah264: warning: --mastering-display peak is above "
+                        "10000 cd/m^2\n");
             /* the SEI's semantics expect a peak of 5 cd/m^2 or more; less is
              * almost always nits typed where 0.0001 units belong */
             if (g[8] < 50000)
