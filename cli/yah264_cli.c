@@ -4496,6 +4496,13 @@ int main(int argc, char **argv)
                         "(got '%s')\n", v);
                 return 2;
             }
+            /* a frame's average light can't pass the brightest pixel; the
+             * usual cause is the two values swapped */
+            if (b > a) {
+                fprintf(stderr, "yah264: --cll: MaxFALL %ld is above MaxCLL %ld; "
+                        "the order is MaxCLL,MaxFALL\n", b, a);
+                return 2;
+            }
             cll_max = (int)a; cll_avg = (int)b;
         }
         /* the reference encoder's spelling: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min). The chromaticity
@@ -4503,24 +4510,38 @@ int main(int argc, char **argv)
  * the G,B,R order is the SPEC's, not the R,G,B a person writes. */
         else if (!strcmp(argv[i], "--mastering-display") && i + 1 < argc) {
             const char *v = argv[++i];
-            unsigned long g[10];
-            int n = sscanf(v, "G(%lu,%lu)B(%lu,%lu)R(%lu,%lu)WP(%lu,%lu)L(%lu,%lu)",
-                           &g[0], &g[1], &g[2], &g[3], &g[4],
-                           &g[5], &g[6], &g[7], &g[8], &g[9]);
-            if (n != 10) {
+            unsigned long long g[10];
+            int end = 0;
+            /* %llu takes a leading '-' and wraps it, so refuse one outright */
+            int n = strchr(v, '-') ? 0 :
+                sscanf(v, "G(%llu,%llu)B(%llu,%llu)R(%llu,%llu)WP(%llu,%llu)L(%llu,%llu)%n",
+                       &g[0], &g[1], &g[2], &g[3], &g[4],
+                       &g[5], &g[6], &g[7], &g[8], &g[9], &end);
+            if (n != 10 || v[end]) {
                 fprintf(stderr, "yah264: --mastering-display expects "
                         "G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min) -- chromaticity in "
                         "0.00002 units, luminance in 0.0001 cd/m^2 (got '%s')\n", v);
                 return 2;
             }
-            for (int k = 0; k < 6; k++) {
+            for (int k = 0; k < 8; k++) {
                 if (g[k] > 50000) {
-                    fprintf(stderr, "yah264: --mastering-display: chromaticity %lu is "
+                    fprintf(stderr, "yah264: --mastering-display: chromaticity %llu is "
                             "above 1.0 in 0.00002 units\n", g[k]);
                     return 2;
                 }
-                mast_prim[k] = (unsigned)g[k];
+                if (k < 6) mast_prim[k] = (unsigned)g[k];
             }
+            if (g[8] > 0xFFFFFFFFull || g[9] >= g[8]) {
+                fprintf(stderr, "yah264: --mastering-display: L(max,min) needs min below "
+                        "max and max within 32 bits, in 0.0001 cd/m^2\n");
+                return 2;
+            }
+            /* the SEI's semantics expect a peak of 5 cd/m^2 or more; less is
+             * almost always nits typed where 0.0001 units belong */
+            if (g[8] < 50000)
+                fprintf(stderr, "yah264: warning: --mastering-display peak L(%llu,...) is "
+                        "%.4f cd/m^2; luminance is in 0.0001 cd/m^2 units\n",
+                        g[8], g[8] / 10000.0);
             mast_wp[0] = (unsigned)g[6]; mast_wp[1] = (unsigned)g[7];
             mast_max = (unsigned)g[8];   mast_min = (unsigned)g[9];
             mastering_set = 1;
