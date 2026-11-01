@@ -23,7 +23,7 @@
 # gives slightly different streams.
 set -euo pipefail
 
-abs() { case $1 in /*) echo "$1" ;; */*) echo "$PWD/$1" ;; *) command -v "$1" || echo "$1" ;; esac; }
+abs() { case $1 in /*) echo "$1" ;; */*) echo "$PWD/$1" ;; *) [ -e "$1" ] && echo "$PWD/$1" || command -v "$1" || echo "$1" ;; esac; }
 Y=$(abs "${YAH264:-build-rel/cli/yah264}")
 VMAF=$(abs "${VMAF_HDR_BIN:?set VMAF_HDR_BIN to a zimg-enabled libvmaf vmaf tool}")
 M=$(abs "${VMAF_HDR_MODELS:?set VMAF_HDR_MODELS to libvmaf model/ directory}")
@@ -45,8 +45,9 @@ die() { echo "hdr_check: $*" >&2; exit 1; }
 [ -x "$Y" ] || die "no encoder at $Y (set YAH264)"
 [ -x "$VMAF" ] || die "no vmaf tool at $VMAF"
 for d in hdr_vmaf_v1.1.8 hdr_vmaf_v1.1.8_hfr; do [ -d "$M/$d" ] || die "no $d under $M"; done
-command -v curl > /dev/null || die "needs curl"
-ffmpeg -hide_banner -filters 2> /dev/null | grep -q ' zscale ' || die "needs ffmpeg with zscale"
+for t in curl ffprobe; do command -v $t > /dev/null || die "needs $t"; done
+# grep reads the whole list: -q would quit early and SIGPIPE ffmpeg under pipefail
+ffmpeg -hide_banner -filters 2> /dev/null | grep ' zscale ' > /dev/null || die "needs ffmpeg with zscale"
 python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
 
 mkdir -p "$W/sparks_tif" "$W/enc"
@@ -125,16 +126,18 @@ failed() { echo "hdr_check: $1 failed, from $2:" >&2; tail -5 "$2" >&2; exit 1; 
 
 one() {
   local c=$1 r=$2 q=$3 o=enc/$1_$2_crf$3
-  if [ ! -s $o.264 ]; then
+  # an encode older than its light levels carries stale ones
+  if [ ! -s $o.264 ] || [ $c.cll -nt $o.264 ]; then
     "$Y" --input-y4m ${c}_${r}.y4m -o $o.264.tmp --crf $q --threads "$THREADS" --no-progress \
       "${COLOR[@]}" --mastering-display "$MD" --cll "$(cat $c.cll)" 2> $o.log || failed "encode $o" $o.log
     mv $o.264.tmp $o.264
   fi
   # a score older than its encode belongs to an earlier encode
   if [ ! -s $o.json ] || [ $o.264 -nt $o.json ]; then
-    # expanded now, while $o is in scope; a killed decode leaves ~7 GB at 4K
+    # expanded now, while $o is in scope; the decode is ~7 GB at 4K. The
+    # paths are relative to WORK, which stays the working directory.
     # shellcheck disable=SC2064
-    trap "rm -f '$W/$o.y4m.tmp'" EXIT
+    trap "rm -f $o.y4m.tmp $o.y4m" EXIT
     y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
     "$VMAF" --reference ${c}_${r}.y4m --distorted $o.y4m --threads "$THREADS" "${VCOLOR[@]}" \
       --model path="$(model $c $r)" --json --output $o.json.tmp > $o.vmaf.log 2>&1 || failed "score $o" $o.vmaf.log

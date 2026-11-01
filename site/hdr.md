@@ -47,7 +47,9 @@ line. `--colormatrix bt2020` is the non-constant-luminance matrix, H.273 code
 order the H.264 spec uses. Chromaticities are in units of 0.00002 and luminance
 in units of 0.0001 cd/m². The example is a P3 D65 display with a 1000-nit peak.
 `--cll` takes the title's MaxCLL and MaxFALL in cd/m². When the master carries
-both, `ffprobe -show_frames` prints them. Otherwise measure them on the
+both, ffprobe prints them: under `-show_frames` when they ride in the video
+stream, and under `-show_streams` when the container holds them. Otherwise
+measure them on the
 master's RGB, before it goes to 4:2:0, because rebuilding RGB from subsampled
 chroma overshoots at bright edges. `scripts/hdr_check.sh` does it that way.
 
@@ -88,6 +90,10 @@ Maximum Content Light Level              : 1170 cd/m2
 Maximum Frame-Average Light Level        : 1022 cd/m2
 ```
 
+Sol Levante's light levels sit a little above the 1000-nit display it was
+graded on. Its opening shot averages about 1020 nits, so the values are the
+content's own.
+
 An HLG encode reads `Transfer characteristics : HLG`. The SDR-compatible form
 reads `HLG / BT.2020 (10-bit)`, and ffmpeg's decoder takes the HLG transfer from
 the SEI.
@@ -120,10 +126,10 @@ harder picture, with film grain under thousands of moving sparks, and at 4K it
 needs about 100 Mbit/s for 84.
 
 CAMBI starts at 0 for no banding and climbs as banding gets worse. Averaged
-over a clip it stays at or below 1.2 on every rung, but the average hides
+over a clip it stays at about 1.2 or below on every rung, but the average hides
 Sol Levante's weak spot. Its opening shot is a flat, bright underwater scene
 that scores close to 0 in the source. At CRF 26 the encode's worst frame there
-reaches about 8 at both sizes, where it smooths the shot's faint particles into
+reaches about 8 at 1080p and 9 at 4K, where it smooths the shot's faint particles into
 flat patches. At CRF 22 the worst frame stays near 4, and no
 Sparks frame passes 0.5 at either CRF. Gradients like this one are where the
 encoder has the most to gain on HDR.
