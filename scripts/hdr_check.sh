@@ -48,7 +48,7 @@ die() { echo "hdr_check: $*" >&2; exit 1; }
 [ -x "$Y" ] || die "no encoder at $Y (set YAH264)"
 [ -x "$VMAF" ] || die "no vmaf tool at $VMAF"
 for d in hdr_vmaf_v1.1.8 hdr_vmaf_v1.1.8_hfr; do [ -d "$M/$d" ] || die "no $d under $M"; done
-for t in curl ffprobe; do command -v $t > /dev/null || die "needs $t"; done
+for t in curl ffprobe shasum; do command -v $t > /dev/null || die "needs $t"; done
 # grep reads the whole list: -q would quit early and SIGPIPE ffmpeg under pipefail
 ffmpeg -hide_banner -filters 2> /dev/null | grep ' zscale ' > /dev/null || die "needs ffmpeg with zscale"
 python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
@@ -59,6 +59,10 @@ cd "$W"
 # Paths in it are relative to WORK and hold no spaces.
 TMP=
 LOCKED=
+
+# the given pids still running. The walk's own subshell is listed by some
+# pgreps, and has exited by the time it's checked.
+alive() { local p; for p; do kill -0 "$p" 2> /dev/null && echo "$p"; done; return 0; }
 
 # every process below this one, deepest first
 descendants() { local p; for p in $(pgrep -P "$1"); do descendants "$p"; echo "$p"; done; }
@@ -75,7 +79,8 @@ cleanup() {
   [ -n "$LOCKED" ] || exit $rc
   # the tree is walked again on every pass, so a process started after the
   # first TERM (xargs starting the next download) is caught too
-  while kids=$(descendants $$); [ -n "$kids" ]; do
+  # shellcheck disable=SC2046 # one pid per word
+  while kids=$(alive $(descendants $$)); [ -n "$kids" ]; do
     if [ $n -lt 100 ]; then kill -TERM $kids 2> /dev/null; else kill -KILL $kids 2> /dev/null; fi
     [ $n -lt 110 ] || break
     sleep 0.1; n=$((n + 1))
@@ -214,28 +219,32 @@ one() {
   # an encode older than its source or its light levels is stale
   if stale $o.264 $c.cll ${c}_${r}.y4m; then
     TMP="$o.264.tmp $o.264.sha256.tmp"
+    # the old encode's stamp goes first, so it can never sit beside a new one
+    rm -f $o.264.sha256
     "$Y" --input-y4m ${c}_${r}.y4m -o $o.264.tmp --crf $q --threads "$THREADS" --no-progress \
       "${COLOR[@]}" --mastering-display "$MD" --cll "$(cat $c.cll)" 2> $o.log || failed "encode $o" $o.log
     intact $o.264.tmp $c 2>> $o.log || failed "encode $o (damaged or short stream)" $o.log
     sum $o.264.tmp > $o.264.sha256.tmp
-    mv $o.264.tmp $o.264
+    # stamp first: a kill between the two leaves the old encode, still stale
     mv $o.264.sha256.tmp $o.264.sha256
+    mv $o.264.tmp $o.264
     TMP=
   fi
   # a score older than its encode belongs to an earlier encode
   # a kept score is checked again, in case it was edited or cut since
   if stale $o.json $o.264 || ! scored $o.json "$(frames $c)"; then
-    # a kept encode changed since it passed its check would fail every
-    # rescore, or be scored damaged; set it aside so the next run encodes again
-    # an encode kept before stamps existed is checked in full once instead.
-    # A failed check moves nothing: a Ctrl-C that ffmpeg catches fails it too.
+    # An encode kept before stamps existed is checked in full once. A failed
+    # check moves nothing, since a Ctrl-C that ffmpeg catches fails it too.
     if [ ! -s $o.264.sha256 ]; then
       intact $o.264 $c || die "$o.264 has no stamp and its check failed (interrupted, or the file is damaged); run again, and delete it if it fails again"
-      sum $o.264 > $o.264.sha256
+      sum $o.264 > $o.264.sha256.tmp
+      mv $o.264.sha256.tmp $o.264.sha256
     fi
+    # an encode changed since it passed its check would fail every rescore,
+    # or be scored damaged; set it aside so the next run encodes again
     if [ "$(sum $o.264)" != "$(cat $o.264.sha256)" ]; then
       mv $o.264 $o.264.bad
-      die "$o.264 changed since it was checked; moved to $o.264.bad, run again to redo it"
+      die "$o.264 doesn't match its stamp; moved to $o.264.bad, run again to redo it"
     fi
     TMP="$o.y4m $o.json.tmp"
     y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
