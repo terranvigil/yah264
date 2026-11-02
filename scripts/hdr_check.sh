@@ -69,19 +69,17 @@ descendants() { local p; for p in $(pgrep -P "$1"); do descendants "$p"; echo "$
 # the lock touches nothing. errexit is off here, so no step can cut the rest
 # short, and the run keeps the exit status it had.
 cleanup() {
-  local rc=$? kids p n=0
+  local rc=$? kids n=0
   set +e
+  trap '' INT TERM HUP
   [ -n "$LOCKED" ] || exit $rc
-  kids=$(descendants $$)
-  if [ -n "$kids" ]; then
-    kill -TERM $kids 2> /dev/null
-    while [ $n -lt 100 ]; do
-      for p in $kids; do kill -0 "$p" 2> /dev/null && break; p=; done
-      [ -n "$p" ] || break
-      sleep 0.1; n=$((n + 1))
-    done
-    kill -KILL $kids 2> /dev/null
-  fi
+  # the tree is walked again on every pass, so a process started after the
+  # first TERM (xargs starting the next download) is caught too
+  while kids=$(descendants $$); [ -n "$kids" ]; do
+    if [ $n -lt 100 ]; then kill -TERM $kids 2> /dev/null; else kill -KILL $kids 2> /dev/null; fi
+    [ $n -lt 110 ] || break
+    sleep 0.1; n=$((n + 1))
+  done
   rm -f $TMP sparks_tif/*.tif.tmp 2> /dev/null
   rmdir .hdr_check.lock 2> /dev/null
   exit $rc
@@ -207,27 +205,37 @@ intact() {
   [ "$n" = "$(frames $2)" ]
 }
 
+sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
 failed() { echo "hdr_check: $1 failed, from $2:" >&2; tail -5 "$2" >&2; exit 1; }
 
 one() {
   local c=$1 r=$2 q=$3 o=enc/$1_$2_crf$3
   # an encode older than its source or its light levels is stale
   if stale $o.264 $c.cll ${c}_${r}.y4m; then
-    TMP=$o.264.tmp
+    TMP="$o.264.tmp $o.264.sha256.tmp"
     "$Y" --input-y4m ${c}_${r}.y4m -o $o.264.tmp --crf $q --threads "$THREADS" --no-progress \
       "${COLOR[@]}" --mastering-display "$MD" --cll "$(cat $c.cll)" 2> $o.log || failed "encode $o" $o.log
     intact $o.264.tmp $c 2>> $o.log || failed "encode $o (damaged or short stream)" $o.log
+    sum $o.264.tmp > $o.264.sha256.tmp
     mv $o.264.tmp $o.264
+    mv $o.264.sha256.tmp $o.264.sha256
     TMP=
   fi
   # a score older than its encode belongs to an earlier encode
   # a kept score is checked again, in case it was edited or cut since
   if stale $o.json $o.264 || ! scored $o.json "$(frames $c)"; then
-    # a kept encode damaged since would fail every rescore; set it aside so
-    # the next run encodes again, keeping it in case the check was wrong
-    if ! intact $o.264 $c 2> /dev/null; then
+    # a kept encode changed since it passed its check would fail every
+    # rescore, or be scored damaged; set it aside so the next run encodes again
+    # an encode kept before stamps existed is checked in full once instead.
+    # A failed check moves nothing: a Ctrl-C that ffmpeg catches fails it too.
+    if [ ! -s $o.264.sha256 ]; then
+      intact $o.264 $c || die "$o.264 has no stamp and its check failed (interrupted, or the file is damaged); run again, and delete it if it fails again"
+      sum $o.264 > $o.264.sha256
+    fi
+    if [ "$(sum $o.264)" != "$(cat $o.264.sha256)" ]; then
       mv $o.264 $o.264.bad
-      die "$o.264 doesn't decode cleanly; moved to $o.264.bad, run again to redo it"
+      die "$o.264 changed since it was checked; moved to $o.264.bad, run again to redo it"
     fi
     TMP="$o.y4m $o.json.tmp"
     y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
