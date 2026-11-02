@@ -18,12 +18,13 @@
 # about 45 GB in all. Every step writes under a temporary name and keeps its
 # output only when it finishes, so an interrupted run picks up where it
 # stopped, and a run over finished outputs just prints the table again.
-# An encode is redone when its source or light levels are newer than it.
+# A step is redone when an input is newer than its output, to the second.
 # Delete WORK/enc after rebuilding the encoder or changing THREADS or the
 # options below, or the old encodes are reused. The site's numbers were made
 # at the default THREADS=6; another thread count gives slightly different
 # streams.
 set -euo pipefail
+unset CDPATH
 
 abs() { case $1 in /*) echo "$1" ;; */*) echo "$PWD/$1" ;; *) [ -e "$1" ] && echo "$PWD/$1" || command -v "$1" || echo "$1" ;; esac; }
 Y=$(abs "${YAH264:-build-rel/cli/yah264}")
@@ -57,7 +58,7 @@ cd "$W"
 # the file being written, removed if the run stops: a 4K decode is ~7 GB.
 # Paths in it are relative to WORK and hold no spaces.
 TMP=
-trap 'rm -f $TMP' EXIT
+trap 'rm -f $TMP sparks_tif/*.tif.tmp' EXIT
 
 # frames in a video file, counted by decoding packets
 count() { ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$1"; }
@@ -79,35 +80,40 @@ fetch() {
 
 # write $out through a temporary name; with a clip name, check its frame count
 y4m() {
-  local out=$1 clip=$2; shift 2
-  TMP=$out.tmp
-  ffmpeg -v error -nostdin "$@" -strict -1 -f yuv4mpegpipe -y "$out.tmp"
+  local out=$1 clip=$2 prev=$TMP; shift 2
+  TMP="$prev $out.tmp"
+  ffmpeg -v error -nostdin "$@" -strict -1 -f yuv4mpegpipe -y "$out.tmp" ||
+    die "ffmpeg failed writing $out"
   [ -z "$clip" ] || [ "$(count "$out.tmp")" = "$(frames $clip)" ] || die "$out has the wrong frame count"
   mv "$out.tmp" "$out"
-  TMP=
+  TMP=$prev
 }
+
+# true when $1 is missing, empty or older than any of the rest
+stale() { local out=$1; shift; [ -s "$out" ] || return 0; for f; do [ "$f" -nt "$out" ] && return 0; done; return 1; }
 
 # the TIFFs are untagged RGB, and DCI-wide; crop to UHD around the center
 SPARKS_IN=(-framerate 60000/1001 -start_number 5880 -i sparks_tif/%05d.tif)
 SPARKS_RGB="crop=3840:2160,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=gbr:range=pc"
 
 prep() {
-  [ -s sol_2160.y4m ] || y4m sol_2160.y4m sol -i sol_src.mov -vf "zscale=f=spline36,format=yuv420p10le"
-  [ -s sparks_2160.y4m ] || y4m sparks_2160.y4m sparks "${SPARKS_IN[@]}" \
+  ! stale sol_2160.y4m sol_src.mov || y4m sol_2160.y4m sol -i sol_src.mov -vf "zscale=f=spline36,format=yuv420p10le"
+  ! stale sparks_2160.y4m sparks_tif || y4m sparks_2160.y4m sparks "${SPARKS_IN[@]}" \
     -vf "$SPARKS_RGB,zscale=m=2020_ncl:r=tv:f=spline36,format=yuv420p10le"
   for c in sol sparks; do
-    [ -s ${c}_1080.y4m ] || y4m ${c}_1080.y4m $c -i ${c}_2160.y4m -vf "zscale=w=1920:h=1080:f=spline36"
+    ! stale ${c}_1080.y4m ${c}_2160.y4m || y4m ${c}_1080.y4m $c -i ${c}_2160.y4m -vf "zscale=w=1920:h=1080:f=spline36"
   done
   # light levels come from the masters, before 4:2:0: rebuilding RGB from
   # subsampled chroma overshoots at bright edges and inflates MaxCLL
-  [ -s sol.cll ] || cll sol 3840 2160 -i sol_src.mov -vf "zscale=t=linear:npl=10000:p=bt2020,format=gbrpf32le"
-  [ -s sparks.cll ] || cll sparks 3840 2160 "${SPARKS_IN[@]}" -vf "$SPARKS_RGB,zscale=t=linear:npl=10000,format=gbrpf32le"
+  ! stale sol.cll sol_src.mov || cll sol 3840 2160 -i sol_src.mov -vf "zscale=t=linear:npl=10000:p=bt2020,format=gbrpf32le"
+  ! stale sparks.cll sparks_tif || cll sparks 3840 2160 "${SPARKS_IN[@]}" -vf "$SPARKS_RGB,zscale=t=linear:npl=10000,format=gbrpf32le"
 }
 
 # MaxCLL,MaxFALL in cd/m^2 per CTA-861.3: the brightest max(R,G,B) of any
 # pixel, and the brightest frame's mean of it
 cll() {
   local c=$1 w=$2 h=$3; shift 3
+  TMP=$c.cll.tmp
   ffmpeg -v error -nostdin "$@" -f rawvideo - | python3 -c '
 import sys, numpy as np
 n, want = int(sys.argv[1]) * int(sys.argv[2]), int(sys.argv[3])
@@ -122,8 +128,10 @@ while True:
     got += 1
 if got != want or cll <= 0:
     sys.exit(f"cll: read {got} of {want} frames, MaxCLL {cll:.0f}")
-print(f"{round(cll)},{round(fall)}")' "$w" "$h" "$(frames $c)" > $c.cll.tmp
+print(f"{round(cll)},{round(fall)}")' "$w" "$h" "$(frames $c)" > $c.cll.tmp ||
+    die "measuring the light levels of $c failed"
   mv $c.cll.tmp $c.cll
+  TMP=
 }
 
 model() {
@@ -132,9 +140,16 @@ model() {
   [ $2 = 2160 ] && echo "$M/$d/hdr_vmaf_v1.1.8${h}_1d5h_2160.json" || echo "$M/$d/hdr_vmaf_v1.1.8${h}_3d0h.json"
 }
 
-# a score file that parses and covers every frame
+# a score file that parses, covers every frame and holds finite scores
 scored() {
-  python3 -c 'import json, sys; sys.exit(len(json.load(open(sys.argv[1]))["frames"]) != int(sys.argv[2]))' "$1" "$2" 2> /dev/null
+  python3 -c '
+import json, math, sys
+j = json.load(open(sys.argv[1]))
+m = j["pooled_metrics"]
+cambi = next(v for k, v in m.items() if k.startswith("cambi"))
+ok = len(j["frames"]) == int(sys.argv[2]) and all(math.isfinite(x) for x in
+     (m["vmaf"]["mean"], cambi["mean"], cambi["max"]))
+sys.exit(not ok)' "$1" "$2" 2> /dev/null
 }
 
 failed() { echo "hdr_check: $1 failed, from $2:" >&2; tail -5 "$2" >&2; exit 1; }
@@ -142,18 +157,21 @@ failed() { echo "hdr_check: $1 failed, from $2:" >&2; tail -5 "$2" >&2; exit 1; 
 one() {
   local c=$1 r=$2 q=$3 o=enc/$1_$2_crf$3
   # an encode older than its source or its light levels is stale
-  if [ ! -s $o.264 ] || [ $c.cll -nt $o.264 ] || [ ${c}_${r}.y4m -nt $o.264 ]; then
+  if stale $o.264 $c.cll ${c}_${r}.y4m; then
     TMP=$o.264.tmp
     "$Y" --input-y4m ${c}_${r}.y4m -o $o.264.tmp --crf $q --threads "$THREADS" --no-progress \
       "${COLOR[@]}" --mastering-display "$MD" --cll "$(cat $c.cll)" 2> $o.log || failed "encode $o" $o.log
-    [ "$(count $o.264.tmp)" = "$(frames $c)" ] || failed "encode $o (short stream)" $o.log
+    # a damaged frame fails the decode instead of being concealed and scored
+    ffmpeg -v error -nostdin -xerror -err_detect +explode -i $o.264.tmp -f null - 2>> $o.log ||
+      failed "encode $o (stream doesn't decode cleanly)" $o.log
+    [ "$(count $o.264.tmp)" = "$(frames $c)" ] || failed "encode $o (wrong frame count)" $o.log
     mv $o.264.tmp $o.264
     TMP=
   fi
   # a score older than its encode belongs to an earlier encode
-  if [ ! -s $o.json ] || [ $o.264 -nt $o.json ]; then
-    y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
+  if stale $o.json $o.264; then
     TMP="$o.y4m $o.json.tmp"
+    y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
     "$VMAF" --reference ${c}_${r}.y4m --distorted $o.y4m --threads "$THREADS" "${VCOLOR[@]}" \
       --model path="$(model $c $r)" --json --output $o.json.tmp > $o.vmaf.log 2>&1 || failed "score $o" $o.vmaf.log
     scored $o.json.tmp "$(frames $c)" || failed "score $o (bad output)" $o.vmaf.log
