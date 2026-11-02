@@ -56,11 +56,17 @@ python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
 mkdir -p "$W/sparks_tif" "$W/enc" || die "can't create $W"
 cd "$W"
 # one run per WORK: two would write the same temporary names
-mkdir .hdr_check.lock 2> /dev/null || die "another hdr_check is using $W (or a killed one left $W/.hdr_check.lock)"
+if ! mkdir .hdr_check.lock 2> /dev/null; then
+  [ -d .hdr_check.lock ] || die "can't write in $W"
+  die "another hdr_check is using $W (or a killed one left $W/.hdr_check.lock)"
+fi
 # the file being written, removed if the run stops: a 4K decode is ~7 GB.
 # Paths in it are relative to WORK and hold no spaces.
 TMP=
-trap 'rm -f $TMP sparks_tif/*.tif.tmp; rmdir .hdr_check.lock' EXIT
+# a kill or hangup reaches only bash, so stop the encoder or scorer it's
+# waiting on before the lock goes. set -e still holds in the trap, so
+# nothing in it may fail.
+trap 'pkill -TERM -P $$ 2> /dev/null || true; wait || true; rm -f $TMP sparks_tif/*.tif.tmp; rmdir .hdr_check.lock 2> /dev/null || true' EXIT
 
 # frames in a video file, counted by decoding packets
 count() { ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$1"; }
@@ -94,17 +100,20 @@ y4m() {
 }
 
 # true when $1 is missing, empty or older than any of the rest. The Sparks
-# input is its frames, not their folder, whose time moves when anything
+# input is its 300 frames, not their folder, whose time moves when anything
 # (a .DS_Store) is added to it.
 stale() { local out=$1; shift; [ -s "$out" ] || return 0; for f; do [ "$f" -nt "$out" ] && return 0; done; return 1; }
 
 # the TIFFs are untagged RGB, and DCI-wide; crop to UHD around the center
+# the frames by name: a stray .tif in the folder must not count as an input
+TIFS=()
+for n in $(seq 5880 6179); do TIFS+=("sparks_tif/0$n.tif"); done
 SPARKS_IN=(-framerate 60000/1001 -start_number 5880 -i sparks_tif/%05d.tif)
 SPARKS_RGB="crop=3840:2160,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=gbr:range=pc"
 
 prep() {
   ! stale sol_2160.y4m sol_src.mov || y4m sol_2160.y4m sol -i sol_src.mov -vf "zscale=f=spline36,format=yuv420p10le"
-  ! stale sparks_2160.y4m sparks_tif/*.tif || y4m sparks_2160.y4m sparks "${SPARKS_IN[@]}" \
+  ! stale sparks_2160.y4m "${TIFS[@]}" || y4m sparks_2160.y4m sparks "${SPARKS_IN[@]}" \
     -vf "$SPARKS_RGB,zscale=m=2020_ncl:r=tv:f=spline36,format=yuv420p10le"
   for c in sol sparks; do
     ! stale ${c}_1080.y4m ${c}_2160.y4m || y4m ${c}_1080.y4m $c -i ${c}_2160.y4m -vf "zscale=w=1920:h=1080:f=spline36"
@@ -112,7 +121,7 @@ prep() {
   # light levels come from the masters, before 4:2:0: rebuilding RGB from
   # subsampled chroma overshoots at bright edges and inflates MaxCLL
   ! stale sol.cll sol_src.mov || cll sol 3840 2160 -i sol_src.mov -vf "zscale=t=linear:npl=10000:p=bt2020,format=gbrpf32le"
-  ! stale sparks.cll sparks_tif/*.tif || cll sparks 3840 2160 "${SPARKS_IN[@]}" -vf "$SPARKS_RGB,zscale=t=linear:npl=10000,format=gbrpf32le"
+  ! stale sparks.cll "${TIFS[@]}" || cll sparks 3840 2160 "${SPARKS_IN[@]}" -vf "$SPARKS_RGB,zscale=t=linear:npl=10000,format=gbrpf32le"
 }
 
 # MaxCLL,MaxFALL in cd/m^2 per CTA-861.3: the brightest max(R,G,B) of any
@@ -178,6 +187,12 @@ one() {
   # a score older than its encode belongs to an earlier encode
   # a kept score is checked again, in case it was edited or cut since
   if stale $o.json $o.264 || ! scored $o.json "$(frames $c)"; then
+    # a kept encode damaged since would fail every rescore; drop it so the
+    # next run encodes again
+    if [ "$(count $o.264)" != "$(frames $c)" ]; then
+      rm -f $o.264
+      die "$o.264 was damaged since it was made; removed, run again to redo it"
+    fi
     TMP="$o.y4m $o.json.tmp"
     y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
     "$VMAF" --reference ${c}_${r}.y4m --distorted $o.y4m --threads "$THREADS" "${VCOLOR[@]}" \
