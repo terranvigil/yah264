@@ -19,8 +19,9 @@ HDR models for VMAF v1 on two open HDR10 masters, and the results are below.
 | HLG, SDR-compatible | BT.2020 transfer in the VUI and an alternative transfer SEI that names HLG, so an SDR-only decoder still shows a picture | `--transfer bt2020 --alternative-transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020` |
 | 10-bit 4:2:0, 4:2:2, 4:4:4 | High 10, High 4:2:2, High 4:4:4 Predictive | picked from the input, see [Getting started](start.md#bit-depth) |
 
-Dynamic metadata isn't supported, so there's no HDR10+ (SMPTE ST 2094-40) and
-no Dolby Vision.
+There's no HDR10+ (SMPTE ST 2094-40) or Dolby Vision. Both are built for HEVC
+and AV1, so players don't read their dynamic metadata from H.264, and Dolby
+Vision's one H.264 profile carries an SDR picture.
 
 These options label the stream and nothing more. Rate control, adaptive
 quantization and mode decision run the same way on a PQ or HLG picture as on an
