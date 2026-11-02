@@ -60,10 +60,6 @@ cd "$W"
 TMP=
 LOCKED=
 
-# the given pids still running. The walk's own subshell is listed by some
-# pgreps, and has exited by the time it's checked.
-alive() { local p; for p; do kill -0 "$p" 2> /dev/null && echo "$p"; done; return 0; }
-
 # every process below this one, deepest first
 descendants() { local p; for p in $(pgrep -P "$1"); do descendants "$p"; echo "$p"; done; }
 
@@ -73,14 +69,15 @@ descendants() { local p; for p in $(pgrep -P "$1"); do descendants "$p"; echo "$
 # the lock touches nothing. errexit is off here, so no step can cut the rest
 # short, and the run keeps the exit status it had.
 cleanup() {
-  local rc=$? kids n=0
+  local rc=$? kids n=0 p
   set +e
   trap '' INT TERM HUP
   [ -n "$LOCKED" ] || exit $rc
   # the tree is walked again on every pass, so a process started after the
   # first TERM (xargs starting the next download) is caught too
-  # shellcheck disable=SC2046 # one pid per word
-  while kids=$(alive $(descendants $$)); [ -n "$kids" ]; do
+  # Only pids still running count: some pgreps list the walk's own subshell,
+  # which has exited by the time this shell checks it.
+  while kids=; for p in $(descendants $$); do kill -0 $p 2> /dev/null && kids="$kids $p"; done; [ -n "$kids" ]; do
     if [ $n -lt 100 ]; then kill -TERM $kids 2> /dev/null; else kill -KILL $kids 2> /dev/null; fi
     [ $n -lt 110 ] || break
     sleep 0.1; n=$((n + 1))
@@ -237,8 +234,10 @@ one() {
     # check moves nothing, since a Ctrl-C that ffmpeg catches fails it too.
     if [ ! -s $o.264.sha256 ]; then
       intact $o.264 $c || die "$o.264 has no stamp and its check failed (interrupted, or the file is damaged); run again, and delete it if it fails again"
+      TMP=$o.264.sha256.tmp
       sum $o.264 > $o.264.sha256.tmp
       mv $o.264.sha256.tmp $o.264.sha256
+      TMP=
     fi
     # an encode changed since it passed its check would fail every rescore,
     # or be scored damaged; set it aside so the next run encodes again
