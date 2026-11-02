@@ -55,18 +55,47 @@ python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
 
 mkdir -p "$W/sparks_tif" "$W/enc" || die "can't create $W"
 cd "$W"
-# one run per WORK: two would write the same temporary names
-if ! mkdir .hdr_check.lock 2> /dev/null; then
-  [ -d .hdr_check.lock ] || die "can't write in $W"
-  die "another hdr_check is using $W (or a killed one left $W/.hdr_check.lock)"
-fi
 # the file being written, removed if the run stops: a 4K decode is ~7 GB.
 # Paths in it are relative to WORK and hold no spaces.
 TMP=
-# a kill or hangup reaches only bash, so stop the encoder or scorer it's
-# waiting on before the lock goes. set -e still holds in the trap, so
-# nothing in it may fail.
-trap 'pkill -TERM -P $$ 2> /dev/null || true; wait || true; rm -f $TMP sparks_tif/*.tif.tmp; rmdir .hdr_check.lock 2> /dev/null || true' EXIT
+LOCKED=
+
+# every process below this one, deepest first
+descendants() { local p; for p in $(pgrep -P "$1"); do descendants "$p"; echo "$p"; done; }
+
+# a kill or hangup reaches only bash, and the encoder, scorer or downloads
+# it started would run on after the lock went. Stop them all, give them 10 s,
+# then remove what was being written and the lock. A run that didn't get
+# the lock touches nothing. errexit is off here, so no step can cut the rest
+# short, and the run keeps the exit status it had.
+cleanup() {
+  local rc=$? kids p n=0
+  set +e
+  [ -n "$LOCKED" ] || exit $rc
+  kids=$(descendants $$)
+  if [ -n "$kids" ]; then
+    kill -TERM $kids 2> /dev/null
+    while [ $n -lt 100 ]; do
+      for p in $kids; do kill -0 "$p" 2> /dev/null && break; p=; done
+      [ -n "$p" ] || break
+      sleep 0.1; n=$((n + 1))
+    done
+    kill -KILL $kids 2> /dev/null
+  fi
+  rm -f $TMP sparks_tif/*.tif.tmp 2> /dev/null
+  rmdir .hdr_check.lock 2> /dev/null
+  exit $rc
+}
+trap cleanup EXIT
+
+# one run per WORK: two would write the same temporary names
+if mkdir .hdr_check.lock 2> /dev/null; then
+  LOCKED=1
+elif [ -d .hdr_check.lock ]; then
+  die "another hdr_check is using $W (or a killed one left $W/.hdr_check.lock)"
+else
+  die "can't create $W/.hdr_check.lock"
+fi
 
 # frames in a video file, counted by decoding packets
 count() { ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$1"; }
@@ -108,7 +137,8 @@ stale() { local out=$1; shift; [ -s "$out" ] || return 0; for f; do [ "$f" -nt "
 # the frames by name: a stray .tif in the folder must not count as an input
 TIFS=()
 for n in $(seq 5880 6179); do TIFS+=("sparks_tif/0$n.tif"); done
-SPARKS_IN=(-framerate 60000/1001 -start_number 5880 -i sparks_tif/%05d.tif)
+# -frames:v stops the read at 06179 even if a later number sits in the folder
+SPARKS_IN=(-framerate 60000/1001 -start_number 5880 -i sparks_tif/%05d.tif -frames:v 300)
 SPARKS_RGB="crop=3840:2160,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=gbr:range=pc"
 
 prep() {
@@ -168,6 +198,15 @@ ok = len(j["frames"]) == int(sys.argv[2]) and num and 0 <= v <= 100 and 0 <= cm 
 sys.exit(not ok)' "$1" "$2" 2> /dev/null
 }
 
+# a stream decodes with no damaged frame and holds the clip's frame count.
+# Strict decoding fails a frame ffmpeg would otherwise conceal.
+intact() {
+  local n
+  ffmpeg -v error -nostdin -xerror -err_detect +explode -i "$1" -f null - || return 1
+  n=$(count "$1") || return 1
+  [ "$n" = "$(frames $2)" ]
+}
+
 failed() { echo "hdr_check: $1 failed, from $2:" >&2; tail -5 "$2" >&2; exit 1; }
 
 one() {
@@ -177,21 +216,18 @@ one() {
     TMP=$o.264.tmp
     "$Y" --input-y4m ${c}_${r}.y4m -o $o.264.tmp --crf $q --threads "$THREADS" --no-progress \
       "${COLOR[@]}" --mastering-display "$MD" --cll "$(cat $c.cll)" 2> $o.log || failed "encode $o" $o.log
-    # a damaged frame fails the decode instead of being concealed and scored
-    ffmpeg -v error -nostdin -xerror -err_detect +explode -i $o.264.tmp -f null - 2>> $o.log ||
-      failed "encode $o (stream doesn't decode cleanly)" $o.log
-    [ "$(count $o.264.tmp)" = "$(frames $c)" ] || failed "encode $o (wrong frame count)" $o.log
+    intact $o.264.tmp $c 2>> $o.log || failed "encode $o (damaged or short stream)" $o.log
     mv $o.264.tmp $o.264
     TMP=
   fi
   # a score older than its encode belongs to an earlier encode
   # a kept score is checked again, in case it was edited or cut since
   if stale $o.json $o.264 || ! scored $o.json "$(frames $c)"; then
-    # a kept encode damaged since would fail every rescore; drop it so the
-    # next run encodes again
-    if [ "$(count $o.264)" != "$(frames $c)" ]; then
-      rm -f $o.264
-      die "$o.264 was damaged since it was made; removed, run again to redo it"
+    # a kept encode damaged since would fail every rescore; set it aside so
+    # the next run encodes again, keeping it in case the check was wrong
+    if ! intact $o.264 $c 2> /dev/null; then
+      mv $o.264 $o.264.bad
+      die "$o.264 doesn't decode cleanly; moved to $o.264.bad, run again to redo it"
     fi
     TMP="$o.y4m $o.json.tmp"
     y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
