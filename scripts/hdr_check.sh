@@ -53,12 +53,14 @@ for t in curl ffprobe; do command -v $t > /dev/null || die "needs $t"; done
 ffmpeg -hide_banner -filters 2> /dev/null | grep ' zscale ' > /dev/null || die "needs ffmpeg with zscale"
 python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
 
-mkdir -p "$W/sparks_tif" "$W/enc"
+mkdir -p "$W/sparks_tif" "$W/enc" || die "can't create $W"
 cd "$W"
+# one run per WORK: two would write the same temporary names
+mkdir .hdr_check.lock 2> /dev/null || die "another hdr_check is using $W (or a killed one left $W/.hdr_check.lock)"
 # the file being written, removed if the run stops: a 4K decode is ~7 GB.
 # Paths in it are relative to WORK and hold no spaces.
 TMP=
-trap 'rm -f $TMP sparks_tif/*.tif.tmp' EXIT
+trap 'rm -f $TMP sparks_tif/*.tif.tmp; rmdir .hdr_check.lock' EXIT
 
 # frames in a video file, counted by decoding packets
 count() { ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$1"; }
@@ -68,7 +70,7 @@ fetch() {
     TMP=sol_src.mov.tmp
     ffmpeg -v error -nostdin -ss 160 \
       -i "$NOC/SolLevante/hdr10/SolLevante_HDR10_r2020_ST2084_UHD_24fps_1000nit.mov" \
-      -frames:v 240 -c:v copy -an -f mov -y sol_src.mov.tmp
+      -frames:v 240 -c:v copy -an -f mov -y sol_src.mov.tmp || die "Sol Levante download failed"
     [ "$(count sol_src.mov.tmp)" = 240 ] || die "Sol Levante download came out short"
     mv sol_src.mov.tmp sol_src.mov
     TMP=
@@ -78,18 +80,22 @@ fetch() {
     mv sparks_tif/{}.tif.tmp sparks_tif/{}.tif; }' "$NOC" || die "Sparks download failed"
 }
 
-# write $out through a temporary name; with a clip name, check its frame count
+# write $out through a temporary name; with a clip name, check its frame
+# count. -xerror stops at a frame that won't decode, which ffmpeg would
+# otherwise fill with a copy of the one before.
 y4m() {
   local out=$1 clip=$2 prev=$TMP; shift 2
   TMP="$prev $out.tmp"
-  ffmpeg -v error -nostdin "$@" -strict -1 -f yuv4mpegpipe -y "$out.tmp" ||
+  ffmpeg -v error -nostdin -xerror "$@" -strict -1 -f yuv4mpegpipe -y "$out.tmp" ||
     die "ffmpeg failed writing $out"
   [ -z "$clip" ] || [ "$(count "$out.tmp")" = "$(frames $clip)" ] || die "$out has the wrong frame count"
   mv "$out.tmp" "$out"
   TMP=$prev
 }
 
-# true when $1 is missing, empty or older than any of the rest
+# true when $1 is missing, empty or older than any of the rest. The Sparks
+# input is its frames, not their folder, whose time moves when anything
+# (a .DS_Store) is added to it.
 stale() { local out=$1; shift; [ -s "$out" ] || return 0; for f; do [ "$f" -nt "$out" ] && return 0; done; return 1; }
 
 # the TIFFs are untagged RGB, and DCI-wide; crop to UHD around the center
@@ -98,7 +104,7 @@ SPARKS_RGB="crop=3840:2160,setparams=color_primaries=bt2020:color_trc=smpte2084:
 
 prep() {
   ! stale sol_2160.y4m sol_src.mov || y4m sol_2160.y4m sol -i sol_src.mov -vf "zscale=f=spline36,format=yuv420p10le"
-  ! stale sparks_2160.y4m sparks_tif || y4m sparks_2160.y4m sparks "${SPARKS_IN[@]}" \
+  ! stale sparks_2160.y4m sparks_tif/*.tif || y4m sparks_2160.y4m sparks "${SPARKS_IN[@]}" \
     -vf "$SPARKS_RGB,zscale=m=2020_ncl:r=tv:f=spline36,format=yuv420p10le"
   for c in sol sparks; do
     ! stale ${c}_1080.y4m ${c}_2160.y4m || y4m ${c}_1080.y4m $c -i ${c}_2160.y4m -vf "zscale=w=1920:h=1080:f=spline36"
@@ -106,15 +112,15 @@ prep() {
   # light levels come from the masters, before 4:2:0: rebuilding RGB from
   # subsampled chroma overshoots at bright edges and inflates MaxCLL
   ! stale sol.cll sol_src.mov || cll sol 3840 2160 -i sol_src.mov -vf "zscale=t=linear:npl=10000:p=bt2020,format=gbrpf32le"
-  ! stale sparks.cll sparks_tif || cll sparks 3840 2160 "${SPARKS_IN[@]}" -vf "$SPARKS_RGB,zscale=t=linear:npl=10000,format=gbrpf32le"
+  ! stale sparks.cll sparks_tif/*.tif || cll sparks 3840 2160 "${SPARKS_IN[@]}" -vf "$SPARKS_RGB,zscale=t=linear:npl=10000,format=gbrpf32le"
 }
 
 # MaxCLL,MaxFALL in cd/m^2 per CTA-861.3: the brightest max(R,G,B) of any
 # pixel, and the brightest frame's mean of it
 cll() {
-  local c=$1 w=$2 h=$3; shift 3
-  TMP=$c.cll.tmp
-  ffmpeg -v error -nostdin "$@" -f rawvideo - | python3 -c '
+  local c=$1 w=$2 h=$3 prev=$TMP; shift 3
+  TMP="$prev $c.cll.tmp"
+  ffmpeg -v error -nostdin -xerror "$@" -f rawvideo - | python3 -c '
 import sys, numpy as np
 n, want = int(sys.argv[1]) * int(sys.argv[2]), int(sys.argv[3])
 cll = fall = 0.0
@@ -131,7 +137,7 @@ if got != want or cll <= 0:
 print(f"{round(cll)},{round(fall)}")' "$w" "$h" "$(frames $c)" > $c.cll.tmp ||
     die "measuring the light levels of $c failed"
   mv $c.cll.tmp $c.cll
-  TMP=
+  TMP=$prev
 }
 
 model() {
@@ -140,15 +146,16 @@ model() {
   [ $2 = 2160 ] && echo "$M/$d/hdr_vmaf_v1.1.8${h}_1d5h_2160.json" || echo "$M/$d/hdr_vmaf_v1.1.8${h}_3d0h.json"
 }
 
-# a score file that parses, covers every frame and holds finite scores
+# a score file that parses, covers every frame and holds scores in range
 scored() {
   python3 -c '
 import json, math, sys
 j = json.load(open(sys.argv[1]))
 m = j["pooled_metrics"]
 cambi = next(v for k, v in m.items() if k.startswith("cambi"))
-ok = len(j["frames"]) == int(sys.argv[2]) and all(math.isfinite(x) for x in
-     (m["vmaf"]["mean"], cambi["mean"], cambi["max"]))
+v, cm, cx = m["vmaf"]["mean"], cambi["mean"], cambi["max"]
+num = all(type(x) in (int, float) and math.isfinite(x) for x in (v, cm, cx))
+ok = len(j["frames"]) == int(sys.argv[2]) and num and 0 <= v <= 100 and 0 <= cm <= cx
 sys.exit(not ok)' "$1" "$2" 2> /dev/null
 }
 
@@ -169,7 +176,8 @@ one() {
     TMP=
   fi
   # a score older than its encode belongs to an earlier encode
-  if stale $o.json $o.264; then
+  # a kept score is checked again, in case it was edited or cut since
+  if stale $o.json $o.264 || ! scored $o.json "$(frames $c)"; then
     TMP="$o.y4m $o.json.tmp"
     y4m $o.y4m $c -i $o.264 -pix_fmt yuv420p10le
     "$VMAF" --reference ${c}_${r}.y4m --distorted $o.y4m --threads "$THREADS" "${VCOLOR[@]}" \
