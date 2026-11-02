@@ -4535,8 +4535,9 @@ int main(int argc, char **argv)
                 }
                 if (k < 6) mast_prim[k] = (unsigned)g[k];
             }
-            /* min below max binds only when the peak is a real one: a peak
-             * outside the SEI's range means unknown, as in L(0,0) */
+            /* min below max binds only on a real peak: one under 5 cd/m^2
+             * isn't (0 means unknown, as in L(0,0)), so the min isn't held
+             * below it */
             if (g[8] > 0xFFFFFFFFull || g[9] > 0xFFFFFFFFull || (g[8] >= 50000 && g[9] >= g[8])) {
                 fprintf(stderr, "yah264: --mastering-display: L(max,min) needs min below "
                         "max and both within 32 bits, in 0.0001 cd/m^2\n");
