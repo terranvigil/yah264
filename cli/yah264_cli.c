@@ -5951,7 +5951,7 @@ done:
          * input (the encoder closes a pass-1 stats file) and leave with
          * _exit: fclose(in) would wait on the input's lock, and exit() would
          * tear stdio down under a live read. That skips the atexit hooks,
-         * which only the dev_knobs dumps use. Only an error gets here: a
+         * which only the measurement dumps use. Only an error gets here: a
          * clean end leaves the reader stopped at EOF or at max_frames. */
         g_api->encoder_close(enc);
         if (out != stdout) fclose(out); else fflush(out);
