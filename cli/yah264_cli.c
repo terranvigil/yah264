@@ -3694,7 +3694,7 @@ static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
  * USB disk is a read worth hiding. The encoder copies each picture it is
  * handed, so a slot is free again once encode returns. --threads 1 keeps the
  * inline read. */
-#define SERIAL_RD_BYTES ((size_t)64 << 20)   /* the floor of 2 slots can pass it at 4K 4:4:4 */
+#define SERIAL_RD_BYTES ((size_t)64 << 20)   /* the 2-slot floor passes it above 32 MB a frame */
 
 typedef struct {
     FILE *in;
@@ -3706,6 +3706,7 @@ typedef struct {
     int status;                 /* 0 while running, 2 at EOF or max_frames, else the read's error */
     int stop;
     int reading;                /* inside a read, where a stalled pipe can hold it */
+    int file;                   /* a regular file, whose reads always finish */
     char line[512];
     pthread_mutex_t lock;
     pthread_cond_t cv_full, cv_space;
@@ -3744,8 +3745,17 @@ static void *serial_reader(void *arg)
 static int serial_rd_start(serial_rd_t *r, pthread_t *tid)
 {
     size_t frame = r->y_bytes + 2 * r->c_bytes;
-    size_t n = SERIAL_RD_BYTES / frame;
+    size_t cap = SERIAL_RD_BYTES;
+    /* an explicit --max-memory caps the ring too; one too small for two
+     * frames keeps the inline read, which holds one */
+    if (g_max_mem_mb > 0 && (uint64_t)g_max_mem_mb << 20 < cap) {
+        cap = (size_t)g_max_mem_mb << 20;
+        if (cap / frame < 2) return -1;
+    }
+    size_t n = cap / frame;
     r->nslot = n < 2 ? 2 : n > 64 ? 64 : (int)n;
+    struct stat st;
+    r->file = fstat(fileno(r->in), &st) == 0 && S_ISREG(st.st_mode);
     r->buf = calloc((size_t)r->nslot, sizeof *r->buf);
     int ok = r->buf != NULL;
     for (int i = 0; ok && i < r->nslot; i++)
@@ -3787,14 +3797,14 @@ static void serial_rd_release(serial_rd_t *r)
     pthread_mutex_unlock(&r->lock);
 }
 
-/* -1 when the reader is inside a read. The join could then wait for as long
- * as the pipe stalls, so it's skipped, the ring and the input are left alone,
- * and the caller has to leave with _exit. */
+/* -1 when the reader is inside a read on a pipe. The join could then wait
+ * for as long as the pipe stalls, so it's skipped, the ring and the input are
+ * left alone, and the caller has to leave with _exit. */
 static int serial_rd_stop(serial_rd_t *r, pthread_t tid)
 {
     pthread_mutex_lock(&r->lock);
     r->stop = 1;
-    int busy = r->reading;
+    int busy = r->reading && !r->file;
     pthread_cond_signal(&r->cv_space);
     pthread_mutex_unlock(&r->lock);
     if (busy) return -1;
@@ -5932,11 +5942,14 @@ done:
     progress_done();
     if (rd_on && serial_rd_stop(&rd, rd_tid) != 0) {
         /* An error while the reader is inside a read, which on a stalled
-         * pipe can last forever. exit() could block on the input's lock, so
-         * flush what was written and leave without closing the encoder or
-         * the files. Only an error gets here: a clean end leaves the reader
-         * stopped at EOF or at max_frames. */
-        fflush(out);
+         * pipe can last forever. Close everything that doesn't touch the
+         * input (the encoder closes a pass-1 stats file) and leave with
+         * _exit: fclose(in) would wait on the input's lock, and exit() would
+         * tear stdio down under a live read. Only an error gets here: a
+         * clean end leaves the reader stopped at EOF or at max_frames. */
+        g_api->encoder_close(enc);
+        if (out != stdout) fclose(out); else fflush(out);
+        if (recon) fclose(recon);
         fflush(stderr);
         _exit(rc ? rc : 1);
     }
