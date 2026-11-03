@@ -3694,7 +3694,7 @@ static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
  * USB disk is a read worth hiding. The encoder copies each picture it is
  * handed, so a slot is free again once encode returns. --threads 1 keeps the
  * inline read. */
-#define SERIAL_RD_BYTES ((size_t)64 << 20)
+#define SERIAL_RD_BYTES ((size_t)64 << 20)   /* the floor of 2 slots can pass it at 4K 4:4:4 */
 
 typedef struct {
     FILE *in;
@@ -3703,8 +3703,9 @@ typedef struct {
     int nslot;
     uint8_t **buf;
     long nread, ntaken;
-    int status;                 /* 0 while running, else serial_read_frame's last answer */
+    int status;                 /* 0 while running, 2 at EOF or max_frames, else the read's error */
     int stop;
+    int reading;                /* inside a read, where a stalled pipe can hold it */
     char line[512];
     pthread_mutex_t lock;
     pthread_cond_t cv_full, cv_space;
@@ -3714,17 +3715,20 @@ static void *serial_reader(void *arg)
 {
     serial_rd_t *r = arg;
     int s = 0;
+    y264_thread_name("y264-serial-rd");
     for (long i = 0; r->max_frames == 0 || i < r->max_frames; i++) {
         pthread_mutex_lock(&r->lock);
         while (!r->stop && r->nread - r->ntaken >= r->nslot)
             pthread_cond_wait(&r->cv_space, &r->lock);
         int stop = r->stop;
+        r->reading = !stop;
         pthread_mutex_unlock(&r->lock);
         if (stop) return NULL;
         uint8_t *b = r->buf[i % r->nslot];
         s = serial_read_frame(r->in, b, b + r->y_bytes, b + r->y_bytes + r->c_bytes,
                               r->y_size, r->c_size, r->line, sizeof r->line);
         pthread_mutex_lock(&r->lock);
+        r->reading = 0;
         if (s == 1) r->nread++;
         pthread_cond_signal(&r->cv_full);
         pthread_mutex_unlock(&r->lock);
@@ -3783,18 +3787,24 @@ static void serial_rd_release(serial_rd_t *r)
     pthread_mutex_unlock(&r->lock);
 }
 
-static void serial_rd_stop(serial_rd_t *r, pthread_t tid)
+/* -1 when the reader is inside a read. The join could then wait for as long
+ * as the pipe stalls, so it's skipped, the ring and the input are left alone,
+ * and the caller has to leave with _exit. */
+static int serial_rd_stop(serial_rd_t *r, pthread_t tid)
 {
     pthread_mutex_lock(&r->lock);
     r->stop = 1;
+    int busy = r->reading;
     pthread_cond_signal(&r->cv_space);
     pthread_mutex_unlock(&r->lock);
+    if (busy) return -1;
     pthread_join(tid, NULL);
     for (int i = 0; i < r->nslot; i++) free(r->buf[i]);
     free(r->buf);
     pthread_mutex_destroy(&r->lock);
     pthread_cond_destroy(&r->cv_full);
     pthread_cond_destroy(&r->cv_space);
+    return 0;
 }
 
 /* x264's one-letter spellings, each a pure alias for the long flag. Rewritten   [x264-ok]
@@ -5794,19 +5804,24 @@ int main(int argc, char **argv)
     size_t c_size = (size_t)(g_in_w / g_sub_w) * (g_in_h / g_sub_h);
     size_t y_bytes = y_size * (size_t)g_enc_sample_sz,
            c_bytes = c_size * (size_t)g_enc_sample_sz;
-    uint8_t *y = malloc(y_bytes), *u = malloc(c_bytes), *v = malloc(c_bytes);
-    if (!y || !u || !v) {
-        fprintf(stderr, "yah264: out of memory\n");
-        return 1;
+    /* With the reader on, its ring holds the frames and these stay NULL. A
+     * reader that can't start leaves the inline read, which still works. */
+    serial_rd_t rd = { .in = in, .max_frames = max_frames, .y_size = y_size,
+                       .c_size = c_size, .y_bytes = y_bytes, .c_bytes = c_bytes };
+    pthread_t rd_tid;
+    int rd_on = nthreads > 1 && serial_rd_start(&rd, &rd_tid) == 0;
+    uint8_t *y = NULL, *u = NULL, *v = NULL;
+    if (!rd_on) {
+        y = malloc(y_bytes); u = malloc(c_bytes); v = malloc(c_bytes);
+        if (!y || !u || !v) {
+            fprintf(stderr, "yah264: out of memory\n");
+            return 1;
+        }
     }
 
     yah264_nal_t *nal;
     int count;
     int rc = 0;
-    serial_rd_t rd = { .in = in, .max_frames = max_frames, .y_size = y_size,
-                       .c_size = c_size, .y_bytes = y_bytes, .c_bytes = c_bytes };
-    pthread_t rd_tid;
-    int rd_on = 0;
 
     if (g_api->encoder_headers(enc, &nal, &count) < 0) {
         fprintf(stderr, "yah264: headers failed\n");
@@ -5815,15 +5830,6 @@ int main(int argc, char **argv)
     }
     for (int i = 0; i < count; i++)
         fwrite(nal[i].payload, 1, nal[i].size, out);
-
-    if (nthreads > 1) {
-        if (serial_rd_start(&rd, &rd_tid) != 0) {
-            fprintf(stderr, "yah264: cannot start the reader thread\n");
-            rc = 1;
-            goto done;
-        }
-        rd_on = 1;
-    }
 
     long frame = 0, returned = 0;
     while (max_frames == 0 || frame < max_frames) {
@@ -5924,7 +5930,16 @@ int main(int argc, char **argv)
 
 done:
     progress_done();
-    if (rd_on) serial_rd_stop(&rd, rd_tid);
+    if (rd_on && serial_rd_stop(&rd, rd_tid) != 0) {
+        /* An error while the reader is inside a read, which on a stalled
+         * pipe can last forever. exit() could block on the input's lock, so
+         * flush what was written and leave without closing the encoder or
+         * the files. Only an error gets here: a clean end leaves the reader
+         * stopped at EOF or at max_frames. */
+        fflush(out);
+        fflush(stderr);
+        _exit(rc ? rc : 1);
+    }
     for (int i = 0; i < rdump.cap; i++) free(rdump.frames[i]);
     free(rdump.frames);
     free(y); free(u); free(v);
