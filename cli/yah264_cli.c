@@ -3746,11 +3746,13 @@ static int serial_rd_start(serial_rd_t *r, pthread_t *tid)
 {
     size_t frame = r->y_bytes + 2 * r->c_bytes;
     size_t cap = SERIAL_RD_BYTES;
-    /* an explicit --max-memory caps the ring too; one too small for two
-     * frames keeps the inline read, which holds one */
-    if (g_max_mem_mb > 0 && (uint64_t)g_max_mem_mb << 20 < cap) {
-        cap = (size_t)g_max_mem_mb << 20;
-        if (cap / frame < 2) return -1;
+    /* an explicit --max-memory budgets the encoder too, so the ring takes
+     * at most a quarter of it; a quarter too small for two frames keeps the
+     * inline read, which holds one */
+    if (g_max_mem_mb > 0) {
+        uint64_t m = ((uint64_t)g_max_mem_mb << 20) / 4;
+        if (m / frame < 2) return -1;
+        if (m < cap) cap = (size_t)m;
     }
     size_t n = cap / frame;
     r->nslot = n < 2 ? 2 : n > 64 ? 64 : (int)n;
@@ -3797,9 +3799,9 @@ static void serial_rd_release(serial_rd_t *r)
     pthread_mutex_unlock(&r->lock);
 }
 
-/* -1 when the reader is inside a read on a pipe. The join could then wait
- * for as long as the pipe stalls, so it's skipped, the ring and the input are
- * left alone, and the caller has to leave with _exit. */
+/* -1 when the reader is inside a read on anything but a regular file. The
+ * join could then wait for as long as a pipe stalls, so it's skipped, the
+ * ring and the input are left alone, and the caller has to leave with _exit. */
 static int serial_rd_stop(serial_rd_t *r, pthread_t tid)
 {
     pthread_mutex_lock(&r->lock);
@@ -3807,7 +3809,10 @@ static int serial_rd_stop(serial_rd_t *r, pthread_t tid)
     int busy = r->reading && !r->file;
     pthread_cond_signal(&r->cv_space);
     pthread_mutex_unlock(&r->lock);
-    if (busy) return -1;
+    if (busy) {
+        pthread_detach(tid);   /* never joined: the process is about to _exit */
+        return -1;
+    }
     pthread_join(tid, NULL);
     for (int i = 0; i < r->nslot; i++) free(r->buf[i]);
     free(r->buf);
@@ -5945,7 +5950,8 @@ done:
          * pipe can last forever. Close everything that doesn't touch the
          * input (the encoder closes a pass-1 stats file) and leave with
          * _exit: fclose(in) would wait on the input's lock, and exit() would
-         * tear stdio down under a live read. Only an error gets here: a
+         * tear stdio down under a live read. That skips the atexit hooks,
+         * which only the dev_knobs dumps use. Only an error gets here: a
          * clean end leaves the reader stopped at EOF or at max_frames. */
         g_api->encoder_close(enc);
         if (out != stdout) fclose(out); else fflush(out);
