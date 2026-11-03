@@ -3667,6 +3667,136 @@ static int read_line(FILE *f, char *buf, int cap)
     return -1;
 }
 
+/* --- the serial path's reader ---------------------------------------------
+ *
+ * One frame of input for the serial path: 1 read, 0 clean EOF, -1 a header
+ * that isn't FRAME (left in line for the message), -2 a short read. */
+static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
+                             size_t y_size, size_t c_size, char *line, int cap)
+{
+    if (g_raw_input) {
+        int c = fgetc(in);
+        if (c == EOF) return 0;
+        ungetc(c, in);
+    } else {
+        if (read_line(in, line, cap) < 0) return 0;
+        if (strncmp(line, "FRAME", 5) != 0) return -1;
+    }
+    if (!read_plane(in, y, y_size) || !read_plane(in, u, c_size) || !read_plane(in, v, c_size))
+        return -2;
+    return 1;
+}
+
+/* Above one thread the serial path reads on a thread of its own, the way the
+ * GOP-parallel path does, so the read of frame n+1 overlaps the encode of
+ * frame n. The serial path is what --intra-refresh, --hw, --open-gop on a
+ * pipe, an unsplittable pass 2 and --dump-recon take, and a 4K frame off a
+ * USB disk is a read worth hiding. The encoder copies each picture it is
+ * handed, so a slot is free again once encode returns. --threads 1 keeps the
+ * inline read. */
+#define SERIAL_RD_BYTES ((size_t)64 << 20)
+
+typedef struct {
+    FILE *in;
+    long max_frames;
+    size_t y_size, c_size, y_bytes, c_bytes;
+    int nslot;
+    uint8_t **buf;
+    long nread, ntaken;
+    int status;                 /* 0 while running, else serial_read_frame's last answer */
+    int stop;
+    char line[512];
+    pthread_mutex_t lock;
+    pthread_cond_t cv_full, cv_space;
+} serial_rd_t;
+
+static void *serial_reader(void *arg)
+{
+    serial_rd_t *r = arg;
+    int s = 0;
+    for (long i = 0; r->max_frames == 0 || i < r->max_frames; i++) {
+        pthread_mutex_lock(&r->lock);
+        while (!r->stop && r->nread - r->ntaken >= r->nslot)
+            pthread_cond_wait(&r->cv_space, &r->lock);
+        int stop = r->stop;
+        pthread_mutex_unlock(&r->lock);
+        if (stop) return NULL;
+        uint8_t *b = r->buf[i % r->nslot];
+        s = serial_read_frame(r->in, b, b + r->y_bytes, b + r->y_bytes + r->c_bytes,
+                              r->y_size, r->c_size, r->line, sizeof r->line);
+        pthread_mutex_lock(&r->lock);
+        if (s == 1) r->nread++;
+        pthread_cond_signal(&r->cv_full);
+        pthread_mutex_unlock(&r->lock);
+        if (s != 1) break;
+    }
+    pthread_mutex_lock(&r->lock);
+    r->status = s < 0 ? s : 2;    /* 2 is EOF, and so is reaching max_frames */
+    pthread_cond_signal(&r->cv_full);
+    pthread_mutex_unlock(&r->lock);
+    return NULL;
+}
+
+static int serial_rd_start(serial_rd_t *r, pthread_t *tid)
+{
+    size_t frame = r->y_bytes + 2 * r->c_bytes;
+    size_t n = SERIAL_RD_BYTES / frame;
+    r->nslot = n < 2 ? 2 : n > 64 ? 64 : (int)n;
+    r->buf = calloc((size_t)r->nslot, sizeof *r->buf);
+    int ok = r->buf != NULL;
+    for (int i = 0; ok && i < r->nslot; i++)
+        ok = (r->buf[i] = malloc(frame)) != NULL;
+    if (ok) {
+        pthread_mutex_init(&r->lock, NULL);
+        pthread_cond_init(&r->cv_full, NULL);
+        pthread_cond_init(&r->cv_space, NULL);
+        if (pthread_create(tid, NULL, serial_reader, r) == 0) return 0;
+        pthread_mutex_destroy(&r->lock);
+        pthread_cond_destroy(&r->cv_full);
+        pthread_cond_destroy(&r->cv_space);
+    }
+    for (int i = 0; r->buf && i < r->nslot; i++) free(r->buf[i]);
+    free(r->buf);
+    r->buf = NULL;
+    return -1;
+}
+
+/* The next frame in input order, as serial_read_frame answers, with *b set to
+ * it on 1. Frames read before an error or EOF are all handed out first. */
+static int serial_rd_take(serial_rd_t *r, uint8_t **b)
+{
+    pthread_mutex_lock(&r->lock);
+    while (r->nread == r->ntaken && !r->status)
+        pthread_cond_wait(&r->cv_full, &r->lock);
+    int s = 1;
+    if (r->nread > r->ntaken) *b = r->buf[r->ntaken % r->nslot];
+    else s = r->status == 2 ? 0 : r->status;
+    pthread_mutex_unlock(&r->lock);
+    return s;
+}
+
+static void serial_rd_release(serial_rd_t *r)
+{
+    pthread_mutex_lock(&r->lock);
+    r->ntaken++;
+    pthread_cond_signal(&r->cv_space);
+    pthread_mutex_unlock(&r->lock);
+}
+
+static void serial_rd_stop(serial_rd_t *r, pthread_t tid)
+{
+    pthread_mutex_lock(&r->lock);
+    r->stop = 1;
+    pthread_cond_signal(&r->cv_space);
+    pthread_mutex_unlock(&r->lock);
+    pthread_join(tid, NULL);
+    for (int i = 0; i < r->nslot; i++) free(r->buf[i]);
+    free(r->buf);
+    pthread_mutex_destroy(&r->lock);
+    pthread_cond_destroy(&r->cv_full);
+    pthread_cond_destroy(&r->cv_space);
+}
+
 /* x264's one-letter spellings, each a pure alias for the long flag. Rewritten   [x264-ok]
  * in place at the top of the parse loop, so every later reader of argv (the
  * hardware option report, the rate-control mode notes) sees the long name. */
@@ -5673,6 +5803,10 @@ int main(int argc, char **argv)
     yah264_nal_t *nal;
     int count;
     int rc = 0;
+    serial_rd_t rd = { .in = in, .max_frames = max_frames, .y_size = y_size,
+                       .c_size = c_size, .y_bytes = y_bytes, .c_bytes = c_bytes };
+    pthread_t rd_tid;
+    int rd_on = 0;
 
     if (g_api->encoder_headers(enc, &nal, &count) < 0) {
         fprintf(stderr, "yah264: headers failed\n");
@@ -5682,25 +5816,34 @@ int main(int argc, char **argv)
     for (int i = 0; i < count; i++)
         fwrite(nal[i].payload, 1, nal[i].size, out);
 
-    long frame = 0, returned = 0;
-    while (max_frames == 0 || frame < max_frames) {
-        if (g_raw_input) {
-            int c = fgetc(in);
-            if (c == EOF) break;                    /* clean EOF */
-            ungetc(c, in);
-        } else {
-        int len = read_line(in, line, sizeof(line));
-        if (len < 0)
-            break;                                  /* clean EOF */
-        if (strncmp(line, "FRAME", 5) != 0) {
-            fprintf(stderr, "yah264: expected FRAME header, got '%s'\n", line);
+    if (nthreads > 1) {
+        if (serial_rd_start(&rd, &rd_tid) != 0) {
+            fprintf(stderr, "yah264: cannot start the reader thread\n");
             rc = 1;
             goto done;
         }
+        rd_on = 1;
+    }
+
+    long frame = 0, returned = 0;
+    while (max_frames == 0 || frame < max_frames) {
+        uint8_t *fy = y, *fu = u, *fv = v;
+        int s;
+        if (rd_on) {
+            uint8_t *b = NULL;
+            s = serial_rd_take(&rd, &b);
+            if (s == 1) { fy = b; fu = b + y_bytes; fv = fu + c_bytes; }
+        } else {
+            s = serial_read_frame(in, y, u, v, y_size, c_size, line, sizeof(line));
         }
-        if (!read_plane(in, y, y_size) ||
-            !read_plane(in, u, c_size) ||
-            !read_plane(in, v, c_size)) {
+        if (s == 0)
+            break;                                  /* clean EOF */
+        if (s == -1) {
+            fprintf(stderr, "yah264: expected FRAME header, got '%s'\n", rd_on ? rd.line : line);
+            rc = 1;
+            goto done;
+        }
+        if (s == -2) {
             fprintf(stderr, "yah264: short read on frame %ld\n", frame);
             rc = 1;
             goto done;
@@ -5722,11 +5865,12 @@ int main(int argc, char **argv)
         size_t yoff = ((size_t)g_crop_t * g_in_w + g_crop_l) * (size_t)g_enc_sample_sz;
         size_t coff = ((size_t)(g_crop_t / g_sub_h) * cstride + g_crop_l / g_sub_w)
                     * (size_t)g_enc_sample_sz;
-        pic.plane[0] = y + yoff; pic.stride[0] = g_in_w;
-        pic.plane[1] = u + coff; pic.stride[1] = cstride;
-        pic.plane[2] = v + coff; pic.stride[2] = cstride;
+        pic.plane[0] = fy + yoff; pic.stride[0] = g_in_w;
+        pic.plane[1] = fu + coff; pic.stride[1] = cstride;
+        pic.plane[2] = fv + coff; pic.stride[2] = cstride;
 
         int bytes = g_api->encoder_encode(enc, &nal, &count, &pic);
+        if (rd_on) serial_rd_release(&rd);
         if (bytes < 0) {
             fprintf(stderr, "yah264: encode failed on frame %ld\n", frame);
             rc = 1;
@@ -5780,6 +5924,7 @@ int main(int argc, char **argv)
 
 done:
     progress_done();
+    if (rd_on) serial_rd_stop(&rd, rd_tid);
     for (int i = 0; i < rdump.cap; i++) free(rdump.frames[i]);
     free(rdump.frames);
     free(y); free(u); free(v);
