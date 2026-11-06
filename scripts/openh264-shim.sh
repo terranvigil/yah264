@@ -90,7 +90,9 @@ done
 [ -x "$OH" ] || { echo "openh264-shim: no h264enc at $OH (set OPENH264)" >&2; exit 2; }
 
 mkdir -p "$CACHE"
-key=$(printf '%s|%s|%s' "$src" "$(stat -f%z "$src")" "$(stat -f%m "$src")" | shasum | cut -c1-20)
+# -L: a symlinked source keys on the file it points to, so replacing that
+# file makes a new key
+key=$(printf '%s|%s|%s' "$src" "$(stat -L -f%z "$src")" "$(stat -L -f%m "$src")" | shasum | cut -c1-20)
 raw="$CACHE/$key.yuv"
 meta="$CACHE/$key.meta"
 
