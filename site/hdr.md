@@ -162,9 +162,10 @@ encoder has the most to gain on HDR.
 
 At 3840x2160 the default settings declare Level 6.0, because the encoder keeps
 more frames in the decoded picture buffer than Level 5.1 allows at that size.
-Many 4K TVs decode up to Level 5.1 or 5.2. `--level 5.1` (5.2 at 60 fps) fits
-the buffer to the level and keeps the B-pyramid and all three of the default
-references.
+Many 4K TVs decode up to Level 5.1 or 5.2, so for HDR10 delivered to TVs pass
+`--level 5.1` (5.2 at 50 or 60 fps). That fits the buffer to the level and
+keeps the B-pyramid and all three default references, at some speed cost on a
+threaded encode.
 
 ## The pictures
 

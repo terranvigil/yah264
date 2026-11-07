@@ -1052,6 +1052,12 @@ conformant minimum for those is accepted with a warning that the stream may
 be non-conformant. The auto level is derived from frame size, frame rate
 and DPB size per Annex A.
 
+Default 4K streams declare Level 6.0: the threaded pipeline's wide window
+keeps more frames than Level 5.1 holds at that size, and it is the faster
+encode. For TV or other consumer-device delivery, pass `--level 5.1` (5.2 at
+50 or 60 fps). The encode is then fitted to that level's DPB, at some speed
+cost on threaded encodes.
+
 ### Threading
 
 | Option | Argument | Default | What it does |
