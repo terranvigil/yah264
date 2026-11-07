@@ -1449,6 +1449,11 @@ add "multiple references (CAVLC IPPP)" check_clip mref5_motion    "$S/syn_motion
 add "multiple references (CAVLC IPPP)" check_clip mref4_8x8       "$S/syn_motion.y4m"  "--ref 4 --transform-8x8"
 add "multiple references (CAVLC IPPP)" check_clip mref3_crop      "$S/syn_178x100.y4m" "--ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref2_aq        "$S/syn_motion.y4m"  "--ref 2 --aq-strength 1.0"
+# --ref 16 without a pyramid: the SPS declares at most 15 references, so the
+# anchor ring must hold no more, or list 0 names a picture the decoder's
+# sliding window has dropped. 120 frames fill the window.
+add "multiple references (CAVLC IPPP)" check_clip mref16_ippp     "$S/syn_long.y4m"    "--cabac --bframes 0 --ref 16 --keyint 40 --frames 120"
+add "multiple references (CAVLC IPPP)" check_clip mref16_flatb    "$S/syn_long.y4m"    "--cabac --bframes 1 --ref 16 --keyint 40 --frames 120"
 add "multiple references (CAVLC IPPP)" check_clip mref3_cabac     "$S/syn_motion.y4m"  "--cabac --ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref5_cabac     "$S/syn_motion.y4m"  "--cabac --ref 5"
 add "multiple references (CAVLC IPPP)" check_clip mref4_cabac_8x8 "$S/syn_motion.y4m"  "--cabac --ref 4 --transform-8x8"

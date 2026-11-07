@@ -4914,6 +4914,16 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * the whole pair. Without the +1 a --ref N field stream would reach only
  * N-1 previous frames. */
         if (e->fields) mrf++;
+        /* The SPS declares at most 15. Without the pyramid list 0 comes from
+ * the anchor ring, which holds nref pictures whatever the window says,
+ * so the ring has to shrink with the window: at --ref 16 it named a
+ * picture the decoder's sliding window had already dropped. (The
+ * pyramid draws its lists from the DPB itself and is bounded by it.) */
+        if (mrf > 15 && !e->b_pyramid) {
+            e->nref -= mrf - 15;
+            if (e->nref < 1) e->nref = 1;
+            mrf = 15;
+        }
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;
         /* Auto-select the minimum conformant level from resolution/framerate/DPB
  * (Annex A). fps rounded up so MaxMBPS isn't under-counted; the DPB term
