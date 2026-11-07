@@ -5761,6 +5761,18 @@ int main(int argc, char **argv)
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
+    /* --nal-hrd needs a buffering period at every IDR. A GOP segment can't
+ * open one at a scene-cut IDR of its own: the next segment counts its
+ * removal delay back to this segment's start, which it fixes before this
+ * one has found its cuts (see hrd_segmented in yah264.h). One instance
+ * knows every cut, so --nal-hrd runs one, its threads on the wavefront. */
+    if (nal_hrd) {
+        tp_mt = 0;
+        if (nthreads > 1 && !recon_path)
+            LOGF(LOG_INFO, "yah264: --nal-hrd puts a buffering period at every IDR, which "
+                 "needs one continuous encoder, so the %d threads run its row wavefront "
+                 "instead of parallel GOPs\n", nthreads);
+    }
     if (param.rc.method == YAH264_RC_2PASS) {
         const char *ev = y264_env("Y264_2PASS_MT");
         tp_mt = (!ev || atoi(ev)) && param.rc.stats
@@ -5773,7 +5785,7 @@ int main(int argc, char **argv)
  * Only when the user asked explicitly for more than one thread. Unset means
  * "auto, every core", which is not a user asking for anything, and warning on
  * it would fire on all 252 --dump-recon runs of the conformance gate. */
-    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh))) {
+    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !nal_hrd))) {
         /* Ordered by what actually decided it, not by what is also true: with
  * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */

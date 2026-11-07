@@ -124,6 +124,11 @@ def simulate(aus, sps, kind, idx, verbose=False):
 
     viols = []
     lines = []
+    # C.1: every IDR access unit opens a buffering period. A decoder that
+    # starts at one has nothing else to initialise its buffer from.
+    for n, au in enumerate(aus):
+        if n > 0 and au.get("nal_type") == 5 and recs[n]["bp"] is None:
+            viols.append(("NOBPIDR", n, "IDR access unit %d carries no buffering_period SEI" % n))
     tr = [0.0] * len(recs)
     tai = [0.0] * len(recs)
     taf = [0.0] * len(recs)
@@ -291,6 +296,18 @@ def self_test(enc):
         yvbr = y264("yvbr", "--nal-hrd", "vbr")
         ycbr = y264("ycbr", "--nal-hrd", "cbr")
         ycbrn = y264("ycbrn", "--nal-hrd", "cbr", "--no-filler")
+        # Two IDRs, then the second one's buffering period taken out: the
+        # buffer itself may still pass, so only the per-IDR rule can fail it.
+        ykey = y264("ykey", "--nal-hrd", "vbr", "--keyint", "25")
+        kdata = H.read_stream(ykey)
+        nobp = os.path.join(tmp, "nobp.264")
+        idrs = 0
+        with open(nobp, "wb") as f:
+            for nl in H.split_nals(kdata):
+                idrs += nl["type"] == 5
+                if nl["type"] == 6 and idrs >= 1 and any(t == 0 for t, _ in H.parse_sei(nl["rbsp"])):
+                    continue
+                f.write(kdata[nl["start"]:nl["start"] + nl["size"]])
 
         data = H.read_stream(cbr)
         aus, _ = H.split_aus(data)
@@ -319,7 +336,9 @@ def self_test(enc):
             ("yah264 VBV with --allow-no-hrd",       yvbv,   ("--allow-no-hrd",), 0),
             ("yah264 --nal-hrd vbr",                 yvbr,   (),     0),
             ("yah264 --nal-hrd cbr",                 ycbr,   (),     0),
+            ("yah264 --nal-hrd vbr, two IDRs",       ykey,   (),     0),
             ("NEGATIVE: yah264 cbr with --no-filler", ycbrn, (),     1),
+            ("NEGATIVE: an IDR's buffering period removed", nobp, (), 1),
             ("NEGATIVE: cbr with the filler removed", nofill, (),    1),
             ("NEGATIVE: cbr with an access unit bloated", bloat, (), 1),
         ]
