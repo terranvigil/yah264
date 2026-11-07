@@ -15632,14 +15632,20 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     /* --open-gop: a key is still an I picture and still an anchor, but it stops
  * being an IDR. Two keys keep the reset anyway. The FIRST picture of the
  * instance has nothing to continue from -- no DPB, no POC line -- and a
- * keyframe the caller's plan asked for is an IDR by the engine-interface
- * contract, because the orchestrator addresses the segment starting there as
- * a file and re-encodes it alone. Everything else, keyint and adaptive cut
+ * keyframe the caller's plan or a per-frame force asked for is an IDR by the
+ * engine-interface contract, because the orchestrator addresses the segment
+ * starting there as a file and re-encodes it alone. Everything else, keyint and adaptive cut
  * alike, becomes a recovery point. */
     int zone_idr = 0;
     if (is_key && e->nzones) {
         const yah264_zone_t *z = zone_at(e, (int)e->frame_count);
         zone_idr = z && (z->flags & YAH264_ZONE_IDR) && (int)e->frame_count == z->first;
+    }
+    /* ...and so is a per-frame force that names an IDR (a --qpfile I),
+ * which is what the force says */
+    if (is_key && e->nforces) {
+        const yah264_frame_force_t *ff = force_at(e, (int)e->frame_count);
+        zone_idr |= ff && ff->type == YAH264_FORCE_IDR;
     }
     int is_idr = is_key && (!e->open_gop || e->frame_count == 0 || zone_idr);
     int open_key = is_key && !is_idr;
