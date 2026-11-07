@@ -220,10 +220,15 @@ def _run(cmd):
                           stderr=subprocess.DEVNULL).returncode
 
 
-def _check(path, extra=()):
+def _check(path, extra=(), want_code=None):
+    """Exit status of a check; with want_code, also whether that violation
+    code was among the ones reported."""
     import subprocess
-    cmd = [sys.executable, os.path.abspath(__file__), path, "--quiet"] + list(extra)
-    return subprocess.run(cmd).returncode
+    cmd = [sys.executable, os.path.abspath(__file__), path] + list(extra)
+    if want_code is None:
+        return subprocess.run(cmd + ["--quiet"]).returncode
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode, (" %s " % want_code) in r.stdout + r.stderr
 
 
 def self_test(enc):
@@ -296,8 +301,10 @@ def self_test(enc):
         yvbr = y264("yvbr", "--nal-hrd", "vbr")
         ycbr = y264("ycbr", "--nal-hrd", "cbr")
         ycbrn = y264("ycbrn", "--nal-hrd", "cbr", "--no-filler")
-        # Two IDRs, then the second one's buffering period taken out: the
-        # buffer itself may still pass, so only the per-IDR rule can fail it.
+        # Two IDRs, then the second one's buffering period taken out. The
+        # stream then also underflows (the removal times lose their anchor),
+        # so the exit status alone would pass without the per-IDR rule; the
+        # case asserts NOBPIDR itself is reported.
         ykey = y264("ykey", "--nal-hrd", "vbr", "--keyint", "25")
         kdata = H.read_stream(ykey)
         nobp = os.path.join(tmp, "nobp.264")
@@ -346,6 +353,10 @@ def self_test(enc):
         for name, path, extra, want in cases:
             got = _check(path, extra)
             ok = got == want
+            if path == nobp:
+                got, named = _check(path, extra, "NOBPIDR")
+                ok = got == want and named
+                name += "" if named else " (NOBPIDR not reported)"
             bad += 0 if ok else 1
             print("  %-44s want %d got %d  %s" % (name, want, got, "ok" if ok else "FAIL"))
         print("hrd_check --self-test: %s"
