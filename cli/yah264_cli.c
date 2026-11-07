@@ -5206,6 +5206,13 @@ int main(int argc, char **argv)
     param.width = width;
     param.height = height;
     param.csp = csp;
+    /* E.2.1: GBR (matrix 0) only at 4:4:4. The library refuses it too; said
+     * here, the refusal names the option instead of failing the open. */
+    if (g_vs_set && g_vs.matrix == 0 && csp != YAH264_CSP_I444) {
+        fprintf(stderr, "yah264: --colormatrix GBR (0) needs 4:4:4 input; this input is "
+                "4:2:%s\n", csp == YAH264_CSP_I422 ? "2" : "0");
+        return 2;
+    }
     param.timebase.fps_num = fps_num;
     param.timebase.fps_den = fps_den;
     /* with no --preset the bare default is medium with its tool-set (CABAC,

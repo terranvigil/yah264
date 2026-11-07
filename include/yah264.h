@@ -926,12 +926,6 @@ double yah264_2pass_stat_weight(double bits, int qp);
  * -1 on an unknown name. */
 YAH264_EXPORT int yah264_param_apply_preset(yah264_param_t *param, const char *preset);
 
-/* Open an encoder for the given parameters. Returns NULL on error.
- *
- * `param->size` must equal the library's own sizeof(yah264_param_t) or the
- * open is refused with a line on stderr naming both numbers. That is a caller
- * built against a different include/yah264.h, and the encode it would have
- * produced is not worth having. */
 /* The HDR10 option strings the command-line encoder takes, parsed into the
  * parameter struct so every caller validates them the same way:
  * "MaxCLL,MaxFALL" in cd/m^2 (cll_max, cll_avg) and
@@ -945,6 +939,12 @@ YAH264_EXPORT int yah264_param_parse_cll(yah264_param_t *p, const char *s,
 YAH264_EXPORT int yah264_param_parse_mastering(yah264_param_t *p, const char *s,
                                                char *err, size_t errlen);
 
+/* Open an encoder for the given parameters. Returns NULL on error.
+ *
+ * `param->size` must equal the library's own sizeof(yah264_param_t) or the
+ * open is refused with a line on stderr naming both numbers. That is a caller
+ * built against a different include/yah264.h, and the encode it would have
+ * produced is not worth having. */
 YAH264_EXPORT yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param);
 
 /* The hardware mode (docs/hardware-mode.md): the same handle and calls,
@@ -968,7 +968,8 @@ YAH264_EXPORT const char *yah264_encoder_backend(const yah264_encoder_t *enc);
  * characteristics, matrix coefficients: the H.273 codes, 2 = unspecified;
  * full_range 0/1; chroma_loc 0..5, -1 = not signalled). Set once after open
  * and before the headers or the first encode; the parameter struct is not
- * grown for it (ABI). Unset = nothing signalled, as before. */
+ * grown for it (ABI). Unset = nothing signalled, as before. Returns -1 for a
+ * matrix the chroma format can't take: 0 (GBR) is valid only at 4:4:4. */
 typedef struct {
     int full_range;
     int primaries, transfer, matrix;
@@ -977,23 +978,24 @@ typedef struct {
 YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *enc, const yah264_video_signal_t *vs);
 
 /* Retrieve the NAL units that open the stream; write all of them, in order.
- * They are SPS and PPS, plus what the settings call for ahead of the first
- * slice: the access unit delimiter (aud), the buffering period (nal_hrd), the
- * settings record (sei) and frame packing (frame_packing). On return *nal
- * points at an array of *count NAL units owned by the encoder. Returns 0 on
- * success. The software encoder never emits SPS or PPS from encode, so a
- * stream starts with these NAL units.
+ * From the software encoder they are SPS and PPS, plus what the settings
+ * call for ahead of the first slice: the access unit delimiter (aud), the
+ * buffering period (nal_hrd), the settings record (sei) and frame packing
+ * (frame_packing). On return *nal points at an array of *count NAL units
+ * owned by the encoder. Returns 0 on success. The software encoder never
+ * emits SPS or PPS from encode, so a stream starts with these NAL units.
  *
  * The display metadata (cll_*, mastering_*, alternative_transfer) is not
- * here. encode writes it in-band ahead of every IDR and every recovery-point
- * picture, the first IDR included, so a caller that keeps only SPS and PPS
- * as a decoder configuration record (MP4, Matroska) loses none of it. Such
- * a caller should still write this call's SEI in-band ahead of the first
- * slice.
+ * here. The software encoder's encode writes it in-band ahead of every IDR
+ * and every recovery-point picture, the first IDR included, so a caller
+ * that keeps only SPS and PPS as a decoder configuration record (MP4,
+ * Matroska) loses none of it. Such a caller should still write this call's
+ * SEI in-band ahead of the first slice.
  *
  * The hardware backend can't know the parameter sets before its first frame
  * is coded: there this may return no NAL units, and encode then puts SPS and
- * PPS ahead of the first slice it returns. */
+ * PPS ahead of the first slice it returns. It writes no display metadata
+ * at all. */
 YAH264_EXPORT int yah264_encoder_headers(yah264_encoder_t *enc,
                             yah264_nal_t **nal, int *count);
 

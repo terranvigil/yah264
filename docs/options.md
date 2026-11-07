@@ -142,10 +142,10 @@ works, and case doesn't matter:
 `iec61966_2_1`) work too.
 
 A code H.273 leaves reserved draws a warning. A reserved 0 for primaries or
-transfer is written as 2 (unspecified), any other as given. `GBR` or `YCgCo`
-on 4:2:0 or 4:2:2 input draws a warning too: H.264 allows GBR only at 4:4:4,
-and YCgCo on subsampled chroma is rarely what was meant. `--range` takes
-`full`/`pc`/`jpeg` and `limited`/`tv`/`mpeg` in any case.
+transfer is written as 2 (unspecified), any other as given. `GBR` on 4:2:0
+or 4:2:2 input is refused, since H.264 allows it only at 4:4:4. `YCgCo`
+there is legal and draws a warning, since it is rarely what was meant.
+`--range` takes `full`/`pc`/`jpeg` and `limited`/`tv`/`mpeg` in any case.
 
 ### Rate control
 
@@ -1044,10 +1044,10 @@ a 1080p one also codes with two. What can't fit even then is refused: a
 frame larger than the level's whole DPB, or field coding at a one-frame
 DPB. Under `--stitchable` the fit runs the same way and the SPS then
 declares the level's DPB, at most 15 frames, rather than 15 regardless.
-Frame size, frame
-rate and bitrate aren't fitted: a level below the conformant minimum for
-those is accepted with a warning that the stream may be non-conformant. The
-auto level is derived from frame size, frame rate and DPB size per Annex A.
+Frame size, frame rate and bitrate aren't fitted: a level below the
+conformant minimum for those is accepted with a warning that the stream may
+be non-conformant. The auto level is derived from frame size, frame rate
+and DPB size per Annex A.
 
 ### Threading
 
