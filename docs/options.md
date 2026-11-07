@@ -491,7 +491,7 @@ bits. It is not a quality setting, and nothing here suggests moving it from 0.
 | `--qpfile FILE` | off | Per-frame forces, one line per frame: `<frame> <type> <qp>`, frames from 0 in input order. Type `I` or `K` forces an IDR, under `--open-gop` as well, `P` an anchor, `B` or `b` a B frame, `-` leaves the type alone. QP is **absolute** 0..51, or `-1` to leave it to the rate control, so a line can force a type, a QP, or both. Frames the file does not name are free. A force is refused by frame number rather than approximated. See below. |
 | `--gop-threads K` | off | Pin every GOP instance's frame threads to K, so a GOP re-encoded alone reproduces its bytes (`scripts/shot_determinism.sh`). |
 | `--segment-out PATTERN` | off | Also write each GOP to its own file (`%d` = GOP index), each with its own parameter sets. Concatenated in order they equal the stream. |
-| `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k. |
+| `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k. Written on every path, `--dump-recon` included; one instance there, so `gop` is 0. Not under `--hw`. |
 | `--deadzone-inter` | 0..32 | 21 | Inter luma quantization deadzone, x264's flag and x264's value. |
 | `--deadzone-intra` | 0..32 | 11 | Intra luma quantization deadzone. |
 | `--no-psy` | | psy on | `--psy-rd 0 --psy-trellis 0`, which is how x264 spells it. An explicit `--psy-rd` anywhere on the line still wins, exactly as it wins over a `--tune`. |

@@ -5929,6 +5929,28 @@ int main(int argc, char **argv)
         fwrite(nal[i].payload, 1, nal[i].size, out);
 
     long frame = 0, returned = 0;
+    /* --frame-stats on this path too (--dump-recon, an unsplittable input):
+     * one instance, so every record is GOP 0 with frames from 0. The
+     * by-display cache grows with the frames submitted, since the length of
+     * the input may not be known. */
+    FILE *sfst = NULL;
+    yah264_frame_stats_t *sst_by = NULL;
+    long sst_cap = 0;
+    if (g_frame_stats && hw == YAH264_HW_OFF) {
+        sfst = fopen(g_frame_stats, "w");
+        if (!sfst) fprintf(stderr, "yah264: cannot write --frame-stats %s\n", g_frame_stats);
+    }
+#define SERIAL_STATS(nal_, cnt_) do { \
+        if (sfst) { \
+            if (sst_cap < frame + 1) { \
+                long nc = (frame + 1) * 2; \
+                yah264_frame_stats_t *q = realloc(sst_by, (size_t)nc * sizeof *q); \
+                if (q) { memset(q + sst_cap, 0, (size_t)(nc - sst_cap) * sizeof *q); sst_by = q; sst_cap = nc; } \
+            } \
+            if (sst_cap >= frame + 1) \
+                frame_stats_emit(sfst, enc, (nal_), (cnt_), sst_by, (int)sst_cap, 0, 0, param.frame_threads); \
+        } \
+    } while (0)
     while (max_frames == 0 || frame < max_frames) {
         uint8_t *fy = y, *fu = u, *fv = v;
         int s;
@@ -5985,17 +6007,27 @@ int main(int argc, char **argv)
             returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
         }
         frame++;
+        SERIAL_STATS(nal, count);
     }
 
     for (;;) {                                      /* flush (window + B reorder) */
         int fb = g_api->encoder_encode(enc, &nal, &count, NULL);
-        if (fb < 0 || (fb == 0 && count == 0))
+        if (fb < 0) {
+            fprintf(stderr, "yah264: encode failed while flushing; the output is incomplete\n");
+            rc = 1;
+            break;
+        }
+        if (fb == 0 && count == 0)
             break;
         for (int i = 0; i < count; i++) {
             fwrite(nal[i].payload, 1, nal[i].size, out);
             returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
         }
+        SERIAL_STATS(nal, count);
     }
+#undef SERIAL_STATS
+    if (sfst) fclose(sfst);
+    free(sst_by);
     /* The hardware mode counts what came back, not what went in: the session
  * may drop a frame (docs/hardware-mode.md). One slice per frame
  * there; our own streams can carry several NALs per frame, so the count is
