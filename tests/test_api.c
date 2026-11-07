@@ -130,6 +130,31 @@ static void run_close(struct run *r)
     free(r->y); free(r->u); free(r->v);
 }
 
+/* Per IDR picture in an Annex-B stream, whether the SEI ahead of it holds
+ * payload types 137 (mastering display) and 144 (light level); returns the
+ * IDR count and how many carried both. */
+static int idr_display_sei(const unsigned char *b, long len, int *with_both)
+{
+    int idrs = 0, both = 0, m137 = 0, m144 = 0;
+    for (long i = 0; i + 3 < len; i++) {
+        if (b[i] || b[i + 1] || b[i + 2] != 1) continue;
+        int t = b[i + 3] & 0x1f;
+        if (t == 6 && i + 4 < len) {
+            m137 |= b[i + 4] == 137;          /* first payload type; one per NAL here */
+            m144 |= b[i + 4] == 144;
+        } else if (t == 1 || t == 5) {
+            if (t == 5 && i + 4 < len && (b[i + 4] & 0x80)) {   /* first_mb_in_slice 0 */
+                idrs++;
+                both += m137 && m144;
+            }
+            m137 = m144 = 0;
+        }
+        i += 3;
+    }
+    *with_both = both;
+    return idrs;
+}
+
 #define LC_FRAMES 4
 
 /* One encoder alone: the reference its output must match beside another. */
@@ -420,6 +445,33 @@ int main(void)
             CHECK(slices == nframes);
             free(y); free(u); free(v);
             yah264_encoder_close(e);
+        }
+    }
+
+    /* 10. the HDR10 SEI holds only until the next IDR, so every IDR carries
+ * it: the first from the headers, the later ones from encode. Keyint 4 over
+ * 12 frames gives three. Without HDR parameters no IDR carries it. */
+    {
+        yah264_param_t hd = p;
+        hd.width = 128; hd.height = 96; hd.threads = 1; hd.bframes = 0; hd.keyint = 4;
+        hd.rc.method = YAH264_RC_CQP; hd.rc.qp = 30;
+        for (int on = 0; on < 2; on++) {
+            yah264_param_t q = hd;
+            if (on) {
+                static const unsigned prim[6] = { 13250, 34500, 7500, 3000, 34000, 16000 };
+                q.cll_max = 1000; q.cll_avg = 400; q.mastering_set = 1;
+                memcpy(q.mastering_prim, prim, sizeof prim);
+                q.mastering_wp[0] = 15635; q.mastering_wp[1] = 16450;
+                q.mastering_max = 10000000; q.mastering_min = 1;
+            }
+            struct run r;
+            CHECK(run_open(&r, &q) == 0);
+            for (int n = 0; n < 12; n++) CHECK(run_frame(&r, &q) == 0);
+            run_close(&r);
+            int both = -1, idrs = idr_display_sei(r.buf, r.len, &both);
+            CHECK(idrs == 3);
+            CHECK(both == (on ? idrs : 0));
+            free(r.buf);
         }
     }
 

@@ -55,8 +55,21 @@ measure them on the
 master's RGB, before it goes to 4:2:0, because rebuilding RGB from subsampled
 chroma overshoots at bright edges. `scripts/hdr_check.sh` does it that way.
 
-The ffmpeg wrapper doesn't pass the color description or the HDR metadata to
-the encoder yet. Until it does, encode HDR with the command-line encoder.
+Through ffmpeg (`-c:v libyah264`, from a 10-bit build), a tagged input's
+color description and HDR10 metadata carry through on their own. An untagged
+input such as Y4M is tagged on its frames, with the metadata as options:
+
+```
+ffmpeg -i master.y4m \
+  -vf setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv \
+  -c:v libyah264 -crf 22 \
+  -mastering-display 'G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)' \
+  -cll 1000,400 out.mp4
+```
+
+The mastering display and light level SEI go out beside the first parameter
+sets and again at every IDR, so a player that starts or seeks at any keyframe
+finds them. MP4 and MPEG-TS files from the wrapper carry them the same way.
 
 ## What a player reads
 
@@ -175,3 +188,10 @@ fine grain on the jacket.
 the sources, encodes the CRF ladder and scores each encode with HDR-VMAF. It
 needs a libvmaf built with zimg and the `hdr_vmaf_v1.1.8` models from the
 [VMAF repository](https://github.com/Netflix/vmaf).
+
+`scripts/hdr_check.sh meta` checks the signaling instead. It encodes short
+spans as HDR10, HLG and SDR-compatible HLG with yah264 and with x264 using the
+same options, through each CLI and through ffmpeg, and prints what ffprobe and
+MediaInfo read from each, field by field. Every color and HDR field reads
+the same from both. The declared level is where they differ, which the end
+of the HDR-VMAF section explains.

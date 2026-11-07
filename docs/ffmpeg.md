@@ -30,9 +30,25 @@ applies the preset, maps the options below and opens the encoder.
 | `-threads` | thread budget | 0 passes through as "encoder decides" |
 | sample aspect ratio | SAR | |
 | frame rate, or the inverse time base | timebase | |
+| color range, primaries, transfer, matrix, chroma location | VUI video signal | only what's set; untagged input signals nothing |
+| mastering display and content light level side data on the codec context | the HDR10 SEI | ffmpeg puts a tagged input's side data there from its first frame |
+| `-mastering-display`, `-cll` | the same as the CLI's options, same syntax | private options for inputs that carry no side data; they override it |
 | `-subme`, `-trellis`, `-aq-strength`, `-psy-rd` | the same settings | private options; -1 keeps the preset's value |
 
-There's no `-tune` and no free-form parameter string yet.
+There's no `-tune` and no free-form parameter string yet, and no way to
+ask for the alternative transfer SEI.
+
+ffmpeg takes an encoder's primaries and transfer from its input frames, so
+tag an untagged input (Y4M has no field for them) on the frames:
+
+```
+ffmpeg -i in.y4m -vf setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv \
+  -c:v libyah264 -mastering-display 'G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)' \
+  -cll 1000,400 out.mp4
+```
+
+`-color_primaries` and `-color_trc` on their own don't reach the encoder;
+`-colorspace` and `-color_range` do, because ffmpeg negotiates those.
 
 Pixel formats are yuv420p, yuv422p and yuv444p from an 8-bit build, or their
 10-bit forms from a 10-bit build. The wrapper is compiled for one depth and
@@ -46,8 +62,11 @@ labels each packet's pts from the display index the encoder reports
 only: the pyramid depth, 1 for flat B, 0 without B. ABR and VBV keep a wider
 margin, the lookahead delay plus the B count, because those modes can emit
 anchors early. With `AV_CODEC_FLAG_GLOBAL_HEADER` the SPS and PPS go to
-extradata. Without it they're written in-band ahead of the first packet, so raw
-Annex-B output decodes.
+extradata and any SEI from the headers goes in-band ahead of the first
+packet. Without it they're all written in-band ahead of the first packet, so
+raw Annex-B output decodes, and the SPS and PPS are repeated ahead of every
+later IDR, so a transport stream can be joined or seeked there. The encoder
+repeats its HDR SEI at every IDR on its own.
 
 ## Building it
 
@@ -90,6 +109,8 @@ moved field means the library reads the wrong settings.
 | soname = ABI version | an ffmpeg built against an older ABI can't load a newer install at all |
 | depth in pkg-config Cflags, and `yah264_bit_depth()` checked at init | a consumer compiled for the wrong depth links fine and reads every plane at the wrong stride |
 | `-refs` applied only when explicitly set | ffmpeg's default of 1 is a plausible value, not a sentinel; treating it as a choice ran every encode at one reference. The cost: an explicit `-refs 1` reads as unset |
+| extradata holds SPS and PPS only | MP4 and Matroska rebuild extradata as a decoder configuration record with no room for SEI, so the mastering display and light level SEI written there never reached the file |
+| HDR10 metadata read from the codec context at init, not from frames | the encoder takes it at open, before the first frame. Side data that only appears on a later frame can't reach the stream |
 | threads passed through unchanged | core counting and clamping are the encoder's policy, not the wrapper's |
 | input frames submitted one at a time | the encoder parallelizes on its row wavefront, which the thread budget drives; queuing 1 to 256 frames ahead measured no difference |
 | written from ffmpeg's public headers and encoder-API docs only | the wrapper must not copy another encoder's wrapper; resembling it where the AVCodec interface dictates the shape is fine |
@@ -112,7 +133,9 @@ moved field means the library reads the wrong settings.
   the wrapper, which would let the recon-match gate run in-process.
 - The fork's configure asks pkg-config for `yah264`, the 8-bit library. A
   10-bit wrapper needs it pointed at `yah264_10`, and configure doesn't do that
-  yet.
+  yet. Until it does, a directory holding a copy of `yah264_10.pc` renamed
+  `yah264.pc`, with its `Name:` line changed to match, put first on
+  `PKG_CONFIG_PATH`, builds the 10-bit wrapper.
 
 ## Measuring it
 

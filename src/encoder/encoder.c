@@ -3235,6 +3235,51 @@ static int unsafe_no_nal(void)
 static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                           const uint8_t *rbsp, size_t rbsp_size);
 
+/* The static display-metadata SEI: content light level, mastering display
+ * and alternative transfer. Each one holds only until the end of its coded
+ * video sequence and every IDR starts a new one, so they are written beside
+ * the parameter sets and again at every later IDR. Written once, a player
+ * that starts or seeks at a scene-cut IDR finds no HDR metadata at all. */
+static int display_sei_on(const yah264_encoder_t *e)
+{
+    const yah264_param_t *pp = &e->param;
+    return pp->cll_max || pp->cll_avg || pp->mastering_set || pp->alternative_transfer;
+}
+
+static int append_display_sei(yah264_encoder_t *e, size_t *off)
+{
+    uint8_t msg[64], buf[96];
+    y264_bs_t bs;
+    size_t n;
+    const yah264_param_t *pp = &e->param;
+    if (pp->cll_max || pp->cll_avg) {
+        n = y264_sei_cll(msg, sizeof msg, pp->cll_max, pp->cll_avg);
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 144, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    if (pp->mastering_set) {
+        n = y264_sei_mastering(msg, sizeof msg, pp->mastering_prim,
+                               pp->mastering_wp, pp->mastering_max, pp->mastering_min);
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 137, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    if (pp->alternative_transfer) {
+        n = y264_sei_alt_transfer(msg, sizeof msg, pp->alternative_transfer);
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 147, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 /* The NALs that open an access unit, in the order 7.4.1.2.3 requires them:
  * the access unit delimiter first, then (elsewhere) the parameter sets, then
  * the SEI. Called immediately before the FIRST slice of a picture: a picture
@@ -3350,6 +3395,9 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
+    if (nal_type == YAH264_NAL_SLICE_IDR && display_sei_on(e) &&
+        e->display_sei_idr++ > 0 && append_display_sei(e, off) < 0)
+        return -1;
     /* The recovery_point, last of the messages because it is an SEI and the
  * delimiter is not, and after buffering_period because that one has to be
  * the first SEI of its access unit. `recovery` is recovery_frame_cnt plus
@@ -3390,7 +3438,8 @@ static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int t
     if (rbsp_size == 0)
         return -1;
     if (first_slice &&
-        (e->param.aud || e->param.pic_struct || e->hrd_on || recovery) &&
+        (e->param.aud || e->param.pic_struct || e->hrd_on || recovery ||
+         (type == YAH264_NAL_SLICE_IDR && display_sei_on(e))) &&
         au_open(e, off, type, disp, recovery) < 0)
         return -1;
     return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
@@ -5861,8 +5910,9 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
     }
 
     /* The static display-metadata messages. They describe the WHOLE stream and
- * never change, so they are written once beside the parameter sets rather
- * than per picture, which is where the per-picture pic_timing lives. Each
+ * never change, so they go beside the parameter sets rather than on every
+ * picture, which is where the per-picture pic_timing lives; all but the
+ * frame packing one are repeated at later IDRs (append_display_sei). Each
  * one is its own SEI NAL, so a decoder that does not know a payload type
  * skips that NAL rather than the group. */
     {
@@ -5877,32 +5927,11 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
                            e->rbsp, (size_t)(bs.p - bs.start)) < 0)
                 return -1;
         }
-        if (pp->cll_max || pp->cll_avg) {
-            n = y264_sei_cll(msg, sizeof msg, pp->cll_max, pp->cll_avg);
-            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
-            y264_sei_write(&bs, 144, msg, n);
-            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
-                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
-                return -1;
-        }
-        if (pp->mastering_set) {
-            n = y264_sei_mastering(msg, sizeof msg, pp->mastering_prim,
-                                   pp->mastering_wp, pp->mastering_max, pp->mastering_min);
-            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
-            y264_sei_write(&bs, 137, msg, n);
-            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
-                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
-                return -1;
-        }
-        if (pp->alternative_transfer) {
-            n = y264_sei_alt_transfer(msg, sizeof msg, pp->alternative_transfer);
-            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
-            y264_sei_write(&bs, 147, msg, n);
-            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
-                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
-                return -1;
-        }
     }
+    if (append_display_sei(e, &off) < 0)
+        return -1;
+    /* these headers carry the display SEI for the IDR that follows them */
+    e->display_sei_idr = 0;
 
     e->headers_done = 1;
     *nal = e->nal;

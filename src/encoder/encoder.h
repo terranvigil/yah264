@@ -866,6 +866,10 @@ struct yah264_encoder {
  * puts it). The first slice then skips its own opener; every later picture
  * opens its own. */
     int au_opened;
+    /* IDR access units opened since the headers were written. The first
+ * one's display-metadata SEI went out with the headers; every later IDR
+ * writes its own. */
+    long display_sei_idr;
 
     /* --- HRD (B-hrd, --nal-hrd). The declared Annex C model, and the ledger
  * that keeps it true. It is deliberately a SECOND ledger beside vbv_fill:
