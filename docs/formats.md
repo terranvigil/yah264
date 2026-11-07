@@ -161,12 +161,13 @@ Against x264 High 10 at medium, yah264 is ahead on both HDR10 test clips at
   those against the first 15 of the reference.
 - **The board's clips are short.** 64 frames at 480x272 is below the
   project's 120-frame rule for a BD sweep, so read it as a smoke check.
-- **HDR clips score on HDR-VMAF,** not on VMAF v1, which is trained on SDR.
-  The HDR table above uses HDR-VMAF v1.1.8 (the 3d0h model at 1080p, its hfr
-  variant at 50 fps and up) with both sides tagged limited range, BT.2020
-  primaries and matrix, and PQ transfer, plus PSNR-Y on the 10-bit code
-  values. Check that the two CRF ladders overlap in bitrate before reading a
-  BD figure.
+- **HDR clips score on VMAF v1's HDR models,** `hdr_vmaf_v1.1.8` (3d0h at
+  1080p, 1d5h_2160 above, the hfr variant at 50 fps and up), never on its SDR
+  models, which score PQ pictures as if they were SDR without a warning. Tag
+  both sides limited range, BT.2020 primaries and matrix, and PQ transfer;
+  the model scales to its own display resolution, so don't upscale first.
+  Read PSNR-Y on the 10-bit code values beside it, and check that the two CRF
+  ladders overlap in bitrate before reading a BD figure.
 - **Recon-match:** `make conformance` covers every format. By hand, decode the
   `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare `framemd5` hash
   columns Y4M against Y4M. Don't compare a Y4M's framemd5 with one taken
