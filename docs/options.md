@@ -62,7 +62,8 @@ library and a 10-bit one, so a `C420p10` file is coded as High 10 with nothing
 said on the command line. `--output-depth 10` upshifts every sample of 8-bit
 content by 2 and puts it through the 10-bit encoder. `--output-depth 8` on
 10-bit input is refused: taking samples away is a conversion, and ffmpeg owns
-conversions.
+conversions. A 16-bit sample above the depth's maximum (1023 at 10 bits)
+refuses the encode with exit status 1, naming the value and the input frame.
 
 ## What the bare default is
 

@@ -8,6 +8,7 @@
 #include "arch.h"
 #include "../common/ledger.h"
 #include "../common/cpu.h"
+#include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -24,7 +25,7 @@ static inline int clip1(int v)
 /* Clamped reference-sample access (edge replication for out-of-bounds MVs).
  * RN is the unclamped form, valid only inside the plane's replicated border. */
 #define RC(x, y) ref[clampi((y), 0, ph - 1) * rstride + clampi((x), 0, pw - 1)]
-#define RN(x, y) ref[(size_t)(y) * rstride + (x)]
+#define RN(x, y) ref[(ptrdiff_t)(y) * rstride + (x)]   /* y can sit above the plane, in the border */
 #define R(x, y)  (nc ? RN(x, y) : RC(x, y))
 
 /* 6-tap kernel (1,-5,20,20,-5,1) applied to six consecutive samples. */

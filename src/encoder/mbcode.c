@@ -1283,7 +1283,7 @@ static long block_J(const dctcoef lev[16], const dctcoef diff[16], int qp,
         y264_fdct4x4(rec, rdct);
         long s = 0;
         for (int k = 1; k < 16; k++) s += labs(rdct[k]);   /* AC only */
-        J -= (long)psy256 * s;
+        J -= ((long)psy256 * s) << (Y264_BIT_DEPTH - 8);   /* SSD-relative, as at 8 bits */
     }
     return J;
 }
@@ -1578,7 +1578,7 @@ static long block_J_8x8(const dctcoef lev[64], const dctcoef diff[64], int qp,
         /* The 8x8 transform has ~4x the coefficient gain of the 4x4 (same
  * pixels spread over 4x the basis support); >>2 puts the reward on the
  * 4x4 scale so one strength serves both transform sizes. */
-        J -= ((long)psy256 * s) >> 2;
+        J -= (((long)psy256 * s) >> 2) << (Y264_BIT_DEPTH - 8);
     }
     return J;
 }
@@ -1729,16 +1729,38 @@ static void rdoq_8x8(const y264_cabac_t *cb, const pixel *src, int ss,
     if (omsk) scan_mask_8x8(lev, omsk, obig);
 }
 
-/* Lagrangian multiplier for RD mode decision, J = SSD + lambda*bits. Follows
- * the standard H.264 model lambda = 0.85 * 2^((QP-12)/3), rounded to int. */
+/* The lambdas below take the macroblock's QP on the 8-bit scale (QpY, which
+ * runs from -QpBdOffsetY) and read their tables at QpY + QpBdOffsetY. The
+ * distortion they weigh is measured on the coded samples: each extra bit of
+ * depth doubles a sample's error, so SATD grows 2x and SSD 4x per bit while a
+ * macroblock's bits stay put. Six QP steps double lambda_me's SATD weight and
+ * quadruple lambda_mode's SSD weight, so the offset keeps the rate-distortion
+ * trade where it is at 8 bits. At 8 bits the offset is 0 and nothing moves. */
+#define LAMBDA_QP_MAX (51 + Y264_QP_BD_OFFSET)
+static inline int lambda_qp_index(int qp)
+{
+    int q = qp + Y264_QP_BD_OFFSET;
+    return q < 0 ? 0 : (q > LAMBDA_QP_MAX ? LAMBDA_QP_MAX : q);
+}
+
+/* The standard H.264 model lambda = 0.85 * 2^((QP-12)/3), rounded to int,
+ * on the scaled QP. The assert below checks that the table reaches the top
+ * QP of the depth this file is compiled at. */
+static const int lambda_mode_tab[76] = {
+    0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,2,2,3,3,4,5,7,9,11,14,17,
+    22,27,34,43,54,69,86,109,137,173,218,274,345,435,548,691,870,
+    1097,1381,1741,2193,2763,3482,4386,5526,6963,
+    8773,11053,13926,17546,22107,27853,35092,44214,55706,70185,88427,111411,
+    140369,176854,222822,280739,353709,445645,561477,707417,891290,1122955,
+    1414834,1782579
+};
+_Static_assert(LAMBDA_QP_MAX < (int)(sizeof lambda_mode_tab / sizeof lambda_mode_tab[0]),
+               "lambda_mode_tab does not reach this bit depth's top QP");
+
+/* Lagrangian multiplier for RD mode decision, J = SSD + lambda*bits. */
 static int lambda_mode(int qp)
 {
-    static const int tab[52] = {
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,2,2,3,3,4,5,7,9,11,14,17,
-        22,27,34,43,54,69,86,109,137,173,218,274,345,435,548,691,870,
-        1097,1381,1741,2193,2763,3482,4386,5526,6963
-    };
-    return tab[qp < 0 ? 0 : (qp > 51 ? 51 : qp)];
+    return lambda_mode_tab[lambda_qp_index(qp)];
 }
 
 /* Coefficient bits need not be priced at the mode lambda. A squared-lambda
@@ -1793,7 +1815,7 @@ static int lambda_trellis_smooth(int trel, int qp, const pixel *s, int ss, int n
     if (!trel || vl <= 0) return l;
     int64_t sum = 0, sum2 = 0;
     for (int y = 0; y < n; y++)
-        for (int x = 0; x < n; x++) { int p = s[y * ss + x]; sum += p; sum2 += p * p; }
+        for (int x = 0; x < n; x++) { int p = s[y * ss + x]; sum += p; sum2 += (int64_t)p * p; }
     /* n^4 x variance, on the 8-bit scale */
     int64_t vq = ((int64_t)n * n * sum2 - sum * sum) >> (2 * (Y264_BIT_DEPTH - 8));
     int64_t n4 = (int64_t)n * n * n * n, hi = vl * n4, lo = hi / 4;
@@ -1810,13 +1832,13 @@ static int lambda_trellis_smooth(int trel, int qp, const pixel *s, int ss, int n
  * Evaluated rather than tabulated, in integer arithmetic: split the exponent
  * into whole octaves and a remainder, take the remainder from six Q16
  * sixth-octave constants, and shift. Checked exact against a float
- * round(2^((qp-12)/6)) reference on all 52 QPs, and the encoder's output is
+ * round(2^((qp-12)/6)) reference on every scaled QP up to 63, and the encoder's output is
  * byte-identical to the tabulated form it replaces. */
 static int lambda_me(int qp)
 {
     /* Q16 2^(r/6), r = 0..5 */
     static const uint32_t sixth[6] = { 65536, 73562, 82570, 92682, 104032, 116772 };
-    int q = qp < 0 ? 0 : (qp > 51 ? 51 : qp);
+    int q = lambda_qp_index(qp);
     int k = q - 12;
     if (k < 0)
         return 1;
@@ -1828,13 +1850,7 @@ static int lambda_me(int qp)
  * shift it back out. */
 static long lambda_mode16(int qp)
 {
-    static const int tab[52] = {
-        0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,2,2,3,3,4,5,7,9,11,14,17,
-        22,27,34,43,54,69,86,109,137,173,218,274,345,435,548,691,870,
-        1097,1381,1741,2193,2763,3482,4386,5526,6963
-    };
-    int q = qp < 0 ? 0 : (qp > 51 ? 51 : qp);
-    return 16L * tab[q];
+    return 16L * lambda_mode_tab[lambda_qp_index(qp)];
 }
 
 /* J-domain products: lambda is in 1/16 units, so shift (or divide) it back out. */
@@ -2142,7 +2158,10 @@ static long dist_psy_term(y264_frame_t *f, int mbx, int mby, int have)
         else      texture_energy(r, f->rec_stride[0], tr);
         long de4 = labs(ts4 - tr[0]);
         long de8 = labs(ts8 - tr[1]) >> 2;
-        long de = (de4 + de8) / 2;
+        /* the energies are SATD-scale, which grows 2x per bit of depth
+         * where the SSD beside them grows 4x; the shift keeps the weight
+         * the one tuned at 8 bits */
+        long de = ((de4 + de8) / 2) << (Y264_BIT_DEPTH - 8);
         d += (long)(psyw * (float)de);
     }
     return d;
@@ -8101,19 +8120,25 @@ static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
  * no loser outside noise, ABR side 5/5 negative, wall free; the one payer is
  * CGI animation (bbb +3.14) against the -29.76% lead there.
  *
- * Returns the QP to derive the analysis lambdas from, or -1 = NOT ENGAGED
- * (the caller must then leave the per-slice lambdas untouched; the
- * mbtree-less non-ref B frames are never engaged). */
+ * Returns the QP to derive the analysis lambdas from, or MB_LQ_NONE = NOT
+ * ENGAGED (the caller must then leave the per-slice lambdas untouched; the
+ * mbtree-less non-ref B frames are never engaged). The sentinel lies outside
+ * the QP range because above 8 bits a real QP goes below zero. */
+#define MB_LQ_NONE INT_MIN
 static int mb_lambda_qp(const y264_frame_t *f, int mbx, int mby)
 {
-    if (!f->mbtree_off || !f->aq_off) return -1;
+    if (!f->mbtree_off || !f->aq_off) return MB_LQ_NONE;
+    /* The quantiser's QP with the AQ offset taken out, held to the lambda
+     * range. Above 8 bits that range goes on below 0, so taking AQ out can
+     * go under the quantiser's floor of 0 without being clipped there. */
     int q = f->cur_qp - f->aq_off[mby * f->wmb + mbx];
-    if (q < 0) q = 0; else if (q > 51) q = 51;
+    if (q < -Y264_QP_BD_OFFSET) q = -Y264_QP_BD_OFFSET; else if (q > 51) q = 51;
     const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
     uint32_t v2[2];
     y264_dsp.var16x16(s, f->src_stride[0], v2);
     int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
-    if (var256sq < (int64_t)25 << 16) return -1;
+    /* a variance floor of 25 on the 8-bit scale */
+    if (var256sq < (int64_t)25 << (16 + 2 * (Y264_BIT_DEPTH - 8))) return MB_LQ_NONE;
     return q;
 }
 
@@ -8224,7 +8249,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int pw = f->padded_w, ph = f->padded_h;
     mb_qp_pre(f, mbx, mby);
     int lq = mb_lambda_qp(f, mbx, mby);
-    if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
+    if (lq != MB_LQ_NONE) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(1);                 /* oracle attribution: B frame */
@@ -11656,7 +11681,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int rs = f->rec_stride[0], refs = f->ref_stride[0];
     mb_qp_pre(f, mbx, mby);
     int lq = mb_lambda_qp(f, mbx, mby);
-    if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
+    if (lq != MB_LQ_NONE) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(0);                 /* oracle attribution: P frame */
@@ -12912,8 +12937,8 @@ void y264_mb_warm_statics(void)
     (void)tdir_why_on();
     y264_me_warm_statics();     /* + the motion-search env statics */
     /* Premultiplied MV-cost tables for every lambda ME can see: lambda_me over
- * the full QP range. */
-    for (int qp = 0; qp <= 51; qp++)
+ * this depth's whole QP range, -QpBdOffsetY..51. */
+    for (int qp = -Y264_QP_BD_OFFSET; qp <= 51; qp++)
         y264_me_prime_lambda(lambda_me(qp));
     y264_transform_warm_statics();
 }

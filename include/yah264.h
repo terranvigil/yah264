@@ -161,7 +161,11 @@ typedef struct {
  * void*, not a typed pointer: the sample width is the LIBRARY's, uint8_t for
  * yah264 and uint16_t (native-endian) for yah264_10, and one struct serves
  * both so that a program linking both needs one picture type and one dispatch
- * table. stride is in SAMPLES, never bytes, at either depth. */
+ * table. stride is in SAMPLES, never bytes, at either depth.
+ *
+ * Every sample must lie within the library's depth: 0..1023 for yah264_10,
+ * in the low 10 bits of each uint16_t. The library doesn't check; a larger
+ * value is outside what the encoder's arithmetic is written for. */
 typedef struct {
     int       csp;          /* yah264_csp_t */
     int       width;
