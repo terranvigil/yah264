@@ -300,6 +300,37 @@ void y264_texture_ac48_16x16_neon(const pixel *, int, long[2]);
 void y264_var_16x16_neon(const pixel *, int, uint32_t[2]);
 void y264_intra16_satd_trio_neon(const pixel *, int, const pixel *,
                                  const pixel *, int, int[3]);
+
+/* transform, quant, scan (src/dsp/arm/transform_neon10.c) */
+void y264_quant_4x4_fneon(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                          const int32_t mfrow[16]);
+int y264_quant_4x4_ac_fneon(const dctcoef *coef, dctcoef *lev, int n, int qp, int f,
+                            const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_fneon(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                          const int32_t mfrow[64]);
+void y264_dequant_4x4_neon(const dctcoef lev[16], dctcoef coef[16], int qp,
+                           const int32_t lsrow[16]);
+void y264_dequant_8x8_neon(const dctcoef lev[64], dctcoef coef[64], int qp,
+                           const int32_t lsrow[64]);
+void y264_fdct4x4_neon(const dctcoef diff[16], dctcoef coef[16]);
+void y264_idct4x4_neon(const dctcoef coef[16], dctcoef res[16]);
+void y264_fdct8x8_neon(const dctcoef diff[64], dctcoef coef[64]);
+void y264_idct8x8_neon(const dctcoef coef[64], dctcoef res[64]);
+void y264_sub4x4_dct_neon(dctcoef coef[16], const pixel *src, int ss,
+                          const pixel *pred, int ps);
+void y264_add4x4_idct_neon(pixel *dst, int ds, const pixel *pred, int ps,
+                           const dctcoef coef[16]);
+void y264_sub8x8_dct8_neon(dctcoef coef[64], const pixel *src, int ss,
+                           const pixel *pred, int ps);
+void y264_add8x8_idct8_neon(pixel *dst, int ds, const pixel *pred, int ps,
+                            const dctcoef coef[64]);
+void y264_sub_dct4_blocks_neon(dctcoef (*coef)[16], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_zigzag_abs_8x8_neon(int out[64], const dctcoef in[64]);
+void y264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
+void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
+                               uint32_t *omsk, int *obig);
 #endif /* Y264_HAVE_NEON10 */
 
 /* ---- aarch64 SVE (src/dsp/arm/<family>_sve.c) -----------------------------

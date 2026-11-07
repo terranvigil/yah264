@@ -115,7 +115,7 @@ static const uint8_t flat16[64] = {
  * then inherits the adversarial fills, the corner cases and the page guards
  * of the row it joins instead of restating them, and the two tiers cannot
  * drift apart in what they are asked. */
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 
 /* Bench lines name the shape, not just the group: a group covers two or three
  * kernels and two identical labels in a bench table cannot be attributed. */
@@ -155,6 +155,11 @@ static int run_coef(const char *name, coeffn kern, coeffn cref, int n, int fwd)
         for (int i = 0; i < n; i++)
             in[i] = fwd ? (dctcoef)((int)ca_rnd() - (int)ca_rnd())
                         : (dctcoef)(int16_t)(ca_rnd() | ((unsigned)ca_rnd() << 8));
+#if Y264_BIT_DEPTH > 8
+        if (!fwd && (t & 1))        /* a dequantised 10-bit coefficient */
+            for (int i = 0; i < n; i++)
+                in[i] = (dctcoef)((int)ca_below(1u << 21) - (1 << 20));
+#endif
         if (t == 0 && !fwd) { in[0] = 32767; in[1] = -32768; }
         ca_guard_poison(o1, (size_t)n * sizeof(dctcoef));
         kern(in, o1);
@@ -180,7 +185,7 @@ static int run_quant_4x4(const char *name, quantfn kern)
     int32_t row[16];
     int bad = ca_rows_sane();
     for (int t = 0; t < TRIALS * 4 && !bad; t++) {
-        int qp = (int)ca_below(52), intra = t & 1;
+        int qp = (int)ca_below(52 + Y264_QP_BD_OFFSET), intra = t & 1;
         ca_mf4_row(row, qp);
         for (int i = 0; i < 16; i++)
             in[i] = (dctcoef)((int)ca_rnd() - (int)ca_rnd());
@@ -207,7 +212,7 @@ static int run_quant_f64(const char *name, quantfn k4, quantfn k8)
     int32_t r4[16], r8[64];
     int bad = 0;
     for (int t = 0; t < TRIALS * 4 && !bad; t++) {
-        int qp = (int)ca_below(52);
+        int qp = (int)ca_below(52 + Y264_QP_BD_OFFSET);
         int f64 = 1 + (int)ca_below(63);
         int f4 = (int)(((int64_t)f64 << (15 + qp / 6)) >> 6);
         int f8 = (int)(((int64_t)f64 << (16 + qp / 6)) >> 6);
@@ -220,6 +225,16 @@ static int run_quant_f64(const char *name, quantfn k4, quantfn k8)
             for (int i = 0; i < 16; i++) i4[i] = (dctcoef)ext[(i + t / 4) & 3];
             for (int i = 0; i < 64; i++) i8[i] = (dctcoef)ext[(i + t / 4) & 3];
         }
+#if Y264_BIT_DEPTH > 8
+        /* An int32 coefficient: the 8x8 DC of a full-swing residual, the
+         * edges of a kernel's narrow-lane domain and past them. */
+        if ((t & 3) == 2) {
+            static const int ext[8] = { 65472, -65472, 131071, -131071,
+                                        131072, -131072, 1 << 20, -(1 << 20) };
+            for (int i = 0; i < 16; i++) i4[i] = (dctcoef)ext[(i + t / 4) & 7];
+            for (int i = 0; i < 64; i++) i8[i] = (dctcoef)ext[(i + t / 4) & 7];
+        }
+#endif
         k4(i4, a4, qp, f4, r4);
         y264_quant_4x4_f64(i4, b4, qp, f64, flat16);
         if (memcmp(a4, b4, sizeof(a4))) { ca_fail("%s 4x4: qp=%d f64=%d", name, qp, f64); bad++; }
@@ -268,6 +283,12 @@ static void quant_n_fill(dctcoef *in, int n, int t)
         in[i] = (dctcoef)((r & 7) == 0 ? 0 : (int)ca_rnd() - (int)ca_rnd());
         if ((t & 3) == 0) in[i] = (dctcoef)ext[(i + t / 4) & 3];
         if ((t & 3) == 1 && (r & 8)) in[i] = (dctcoef)(((int)ca_rnd() << 6) - 8000);
+#if Y264_BIT_DEPTH > 8
+        if ((t & 3) == 2 && (r & 8)) {
+            static const int wide[6] = { 65472, -65472, 131071, -131071, 131072, -(1 << 20) };
+            in[i] = (dctcoef)wide[ca_below(6)];
+        }
+#endif
     }
 }
 
@@ -278,7 +299,7 @@ static int run_quant_n(const char *name, quantnfn k4, quantnfn k8)
     int32_t r4[16], r8[64];
     int bad = ca_rows_sane();
     for (int t = 0; t < TRIALS * 4 && !bad; t++) {
-        int qp = (int)ca_below(52), n = 1 + (int)ca_below(QN_MAX);
+        int qp = (int)ca_below(52 + Y264_QP_BD_OFFSET), n = 1 + (int)ca_below(QN_MAX);
         int f64 = 1 + (int)ca_below(t % 5 == 4 ? 200 : 63);
         ca_mf4_row(r4, qp);
         ca_mf8_row(r8, qp);
@@ -331,7 +352,7 @@ static int run_quant_ac(const char *name, quantacfn kern)
     int32_t r4[16];
     int bad = ca_rows_sane();
     for (int t = 0; t < TRIALS * 4 && !bad; t++) {
-        int qp = (int)ca_below(52), n = 1 + (int)ca_below(QN_MAX);
+        int qp = (int)ca_below(52 + Y264_QP_BD_OFFSET), n = 1 + (int)ca_below(QN_MAX);
         int f64 = 1 + (int)ca_below(t % 5 == 4 ? 200 : 63);
         int f = (int)(((int64_t)f64 << (15 + qp / 6)) >> 6);
         int tot = n * 16;
@@ -399,7 +420,7 @@ static int run_dequant(const char *name, dequantfn k4, dequantfn k8)
     for (int t = 0; t < TRIALS && !bad; t++) {
         dctcoef l4[16], c4a[16], c4b[16], l8[64], c8a[64], c8b[64];
         int32_t r4[16], r8[64];
-        int qp = t % 52;
+        int qp = t % (52 + Y264_QP_BD_OFFSET);
         int lim = 32767 / (45 << (qp / 6));
         if (lim > 4095) lim = 4095;
         if (lim < 1) lim = 1;
@@ -436,7 +457,7 @@ static int run_dequant(const char *name, dequantfn k4, dequantfn k8)
 
 /* ---- the fused sub-dct / add-idct ---------------------------------------- */
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
 /* Outside the tier guard: the C-against-C batch row at the end of this file
  * uses the same planes and runs in a build with no kernels at all
@@ -453,19 +474,20 @@ static void blocks(void)
     ca_fill(prd, STRIDE * PLANE_H);
 }
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 
 static int run_sub_dct(const char *name, subfn k4, subfn k8)
 {
     dctcoef c1[64], c2[64];
     int bad = 0;
     for (int t = 0; t < TRIALS * 4; t++) {
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;   /* odd trials, odd stride */
         blocks();
-        k4(c1, src, STRIDE, prd, STRIDE);
-        y264_sub4x4_dct_c(c2, src, STRIDE, prd, STRIDE);
+        k4(c1, src, st, prd, st);
+        y264_sub4x4_dct_c(c2, src, st, prd, st);
         if (memcmp(c1, c2, 16 * sizeof(dctcoef))) { if (!bad) ca_fail("%s 4x4", name); bad++; }
-        k8(c1, src, STRIDE, prd, STRIDE);
-        y264_sub8x8_dct8_c(c2, src, STRIDE, prd, STRIDE);
+        k8(c1, src, st, prd, st);
+        y264_sub8x8_dct8_c(c2, src, st, prd, st);
         if (memcmp(c1, c2, 64 * sizeof(dctcoef))) { if (!bad) ca_fail("%s 8x8", name); bad++; }
     }
     /* Both operands sized to exactly the block they declare, at both tails. */
@@ -509,19 +531,25 @@ static int run_add_idct(const char *name, addfn k4, addfn k8)
         for (int i = 0; i < 64; i++)
             c[i] = (dctcoef)(int16_t)(ca_rnd() | ((unsigned)ca_rnd() << 8));
         if (t == 0) { c[0] = 32767; c[1] = -32768; }    /* saturation corner */
+#if Y264_BIT_DEPTH > 8
+        if (t & 1)
+            for (int i = 0; i < 64; i++)
+                c[i] = (dctcoef)((int)ca_below(1u << 21) - (1 << 20));
+#endif
         memset(d1, CA_POISON, DS * 8 * sizeof(pixel));
         ca_guard_poison(d1, DS * 8 * sizeof(pixel));
         memset(d2, CA_POISON, sizeof(d2));
-        k4(d1, DS, prd, STRIDE, c);
-        y264_add4x4_idct_c(d2, DS, prd, STRIDE, c);
+        const int st = (t & 2) ? STRIDE - 1 : STRIDE;   /* an odd prediction stride */
+        k4(d1, DS, prd, st, c);
+        y264_add4x4_idct_c(d2, DS, prd, st, c);
         if (memcmp(d1, d2, DS * 4 * sizeof(pixel))) { if (!bad) ca_fail("%s 4x4", name); bad++; }
         if (!bad && (ca_guard_check(d1, DS * 8 * sizeof(pixel), name) ||
                      ca_check_pad_pix(d1, DS, 4, 4, name))) bad++;
         memset(d1, CA_POISON, DS * 8 * sizeof(pixel));
         ca_guard_poison(d1, DS * 8 * sizeof(pixel));
         memset(d2, CA_POISON, sizeof(d2));
-        k8(d1, DS, prd, STRIDE, c);
-        y264_add8x8_idct8_c(d2, DS, prd, STRIDE, c);
+        k8(d1, DS, prd, st, c);
+        y264_add8x8_idct8_c(d2, DS, prd, st, c);
         if (memcmp(d1, d2, DS * 8 * sizeof(pixel))) { if (!bad) ca_fail("%s 8x8", name); bad++; }
         if (!bad && (ca_guard_check(d1, DS * 8 * sizeof(pixel), name) ||
                      ca_check_pad_pix(d1, DS, 8, 8, name))) bad++;
@@ -571,9 +599,11 @@ static int run_sub_dct4_blocks(const char *name, batchfn kern, subfn single)
                 bad++;
             }
             /* Nothing past the blocks the grid declares. */
+            dctcoef pat;
+            memset(&pat, 0x5a, sizeof(pat));    /* the fill, at either width */
             if (!bad)
                 for (int i = n * 16; i < 256 && !bad; i++)
-                    if (((const dctcoef *)g1)[i] != (dctcoef)0x5a5a) {
+                    if (((const dctcoef *)g1)[i] != pat) {
                         ca_fail("%s: wrote past block %d of %d", name, i / 16, n);
                         bad++;
                     }
@@ -700,6 +730,14 @@ static int run_scan(const char *name, zzabsfn kabs, maskfn kmask, zzscanfn kscan
             if ((t & 7) == 7) z8[ca_below(64)] = (dctcoef)((t & 8) ? 128 + (int)ca_below(900)
                                                                    : -129 - (int)ca_below(900));
         }
+#if Y264_BIT_DEPTH > 8
+        /* past int16, and values whose low halfword is zero */
+        if ((t & 7) == 4)
+            for (int i = 0; i < 64; i++) {
+                static const int wide[6] = { 65536, -65536, 65535, -65537, 1 << 20, 40000 };
+                z8[i] = (dctcoef)(ca_below(2) ? wide[ca_below(6)] : (int)ca_below(5) - 2);
+            }
+#endif
         for (int i = 0; i < 16; i++) z4[i] = z8[i];
 
         memset(i1, 0x5a, sizeof(i1));
@@ -762,12 +800,15 @@ static int t_scan##sfx(void)                                                  \
 { return run_scan("scan" tag, y264_zigzag_abs_8x8##sfx, y264_scan_mask_8x8##sfx,\
                   y264_zigzag_scan_4x4##sfx); }
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
 Y264_CA_TRANSFORM_ROWS(_neon, "")
 /* The NEON quant kernels contract the tier into the name (`_fneon`), so their
- * two rows are written out rather than generated. */
+ * rows are written out rather than generated. The intra/inter entry point is
+ * 8-bit only; the 10-bit tier is reached through the explicit-bias form. */
+#if Y264_HAVE_NEON
 static int t_quant_4x4(void)
 { return run_quant_4x4("quant_4x4", y264_quant_4x4_neon); }
+#endif
 static int t_quant_f64(void)
 { return run_quant_f64("quant_f64", y264_quant_4x4_fneon, y264_quant_8x8_fneon); }
 static int t_quant_ac(void)
@@ -817,7 +858,7 @@ static int t_quant_ac_sve(void)
 { return run_quant_ac("quant_ac_sve", y264_quant_4x4_ac_f_sve); }
 #endif
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
 /* ---- the trellis lattice, bench only --------------------------------------
  *
@@ -1045,6 +1086,19 @@ const ca_test ca_transform_tests[] = {
     { "fdct8x8",         "transform", Y264_CPU_NEON, t_fdct8x8_neon },
     { "idct8x8",         "transform", Y264_CPU_NEON, t_idct8x8_neon },
     { "quant_4x4",       "transform", Y264_CPU_NEON, t_quant_4x4 },
+    { "quant_f64",       "transform", Y264_CPU_NEON, t_quant_f64 },
+    { "dequant",         "transform", Y264_CPU_NEON, t_dequant_neon },
+    { "sub_dct",         "transform", Y264_CPU_NEON, t_sub_dct_neon },
+    { "add_idct",        "transform", Y264_CPU_NEON, t_add_idct_neon },
+    { "sub_dct4_blocks", "transform", Y264_CPU_NEON, t_sub_dct4_blocks_neon },
+    { "scan",            "transform", Y264_CPU_NEON, t_scan_neon },
+    { "quant_ac",        "transform", Y264_CPU_NEON, t_quant_ac },
+#endif
+#if Y264_HAVE_NEON10
+    { "fdct4x4",         "transform", Y264_CPU_NEON, t_fdct4x4_neon },
+    { "idct4x4",         "transform", Y264_CPU_NEON, t_idct4x4_neon },
+    { "fdct8x8",         "transform", Y264_CPU_NEON, t_fdct8x8_neon },
+    { "idct8x8",         "transform", Y264_CPU_NEON, t_idct8x8_neon },
     { "quant_f64",       "transform", Y264_CPU_NEON, t_quant_f64 },
     { "dequant",         "transform", Y264_CPU_NEON, t_dequant_neon },
     { "sub_dct",         "transform", Y264_CPU_NEON, t_sub_dct_neon },
