@@ -7520,8 +7520,10 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
     } else return 0;
 
     int p = c->src[s].poc, w0 = c->s_pastpoc[s], w1 = c->s_futpoc[s];
-    int den0 = p - p0, num0 = p - w0;
-    int den1 = p1 - p, num1 = w1 - p;
+    /* INT_MIN is "no anchor on that side" (the memo key); subtracting it
+     * overflows, so a missing side is simply out of range */
+    int den0 = p - p0, num0 = w0 == INT_MIN ? 0 : p - w0;
+    int den1 = p1 - p, num1 = w1 == INT_MIN ? 0 : w1 - p;
     int ok0 = den0 > 0 && num0 > 0 && num0 <= den0;
     int ok1 = den1 > 0 && num1 > 0 && num1 <= den1;
     if (!ok0 && !ok1) {
