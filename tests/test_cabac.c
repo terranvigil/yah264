@@ -112,11 +112,16 @@ static int d_residual(dec_t *d,int cat,dctcoef *out,int nza,int nzb){
     return np;
 }
 
+/* The engine folds a carry into the byte before its write position
+ * (p[-1]), which in a slice is the last header byte. Each buffer here
+ * starts one guard byte in so that read and write stay inside it. */
+#define GUARDED(name, n) static uint8_t name##_g[1 + (n)]; uint8_t *name = name##_g + 1
+
 int main(void) {
     enum { N = 20000 };
     static int ctxs[N], bins[N], kinds[N];   /* kind: 0 decision, 1 bypass, 2 terminate(0) */
     y264_cabac_t c;
-    static uint8_t buf[1 << 20];
+    GUARDED(buf, 1 << 20);
     y264_cabac_init_engine(&c, buf);
     y264_cabac_init_contexts(&c, 1, 0, 26);
 
@@ -155,7 +160,7 @@ int main(void) {
     {
         enum { NU = 30000 };
         y264_cabac_t eS, eB;
-        static uint8_t bufS[1 << 20], bufB[1 << 20];
+        GUARDED(bufS, 1 << 20); GUARDED(bufB, 1 << 20);
         y264_cabac_init_engine(&eS, bufS); y264_cabac_init_contexts(&eS, 1, 0, 30);
         y264_cabac_init_engine(&eB, bufB); y264_cabac_init_contexts(&eB, 1, 0, 30);
         for (int i = 0; i < NU; i++) {
@@ -192,7 +197,7 @@ int main(void) {
     static dctcoef rc_blk[M][16];
     static const int catN[5] = { 16, 15, 16, 4, 15 };
     y264_cabac_t rc;
-    static uint8_t buf2[1 << 20];
+    GUARDED(buf2, 1 << 20);
     y264_cabac_init_engine(&rc, buf2);
     y264_cabac_init_contexts(&rc, 1, 0, 26);
     for (int m = 0; m < M; m++) {
@@ -235,7 +240,7 @@ int main(void) {
         enum { M8 = 3000 };
         static dctcoef b8[M8][64], g8[64];
         y264_cabac_t e8;
-        static uint8_t buf8[1 << 21];
+        GUARDED(buf8, 1 << 21);
         y264_cabac_init_engine(&e8, buf8);
         y264_cabac_init_contexts(&e8, 1, 0, 26);
         for (int m = 0; m < M8; m++) {
