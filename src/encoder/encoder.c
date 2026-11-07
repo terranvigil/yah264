@@ -4145,7 +4145,8 @@ static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int nar
  * none. References then come back as far as the room left allows. What
  * still doesn't fit (field coding at a one-frame DPB) is refused. The cap
  * is the level's, and 15 at most, which is what the SPS can declare here.
- * --stitchable declares the level's own DPB and is left alone. Returns -1
+ * --stitchable is fitted the same way: it then declares that cap, which
+ * the encode inside it no longer overflows. Returns -1
  * to refuse. Runs before anything reads ref, bframes or b_pyramid. */
 static int level_fit(yah264_encoder_t *e)
 {
@@ -4163,8 +4164,6 @@ static int level_fit(yah264_encoder_t *e)
                 e->width, e->height);
         return -1;
     }
-    if (pp->stitchable)
-        return 0;
     if (cap > 15) cap = 15;
     int ref = pp->ref > 16 ? 16 : pp->ref < 1 ? 1 : pp->ref;
     int bf = pp->bframes > 0 ? pp->bframes : 0, pyr = pp->b_pyramid && bf >= 2, narrow = 0;

@@ -1042,7 +1042,9 @@ room left allows. One line names everything it changed, an explicit
 three of medium's references and only narrows the window; `--level 4.1` on
 a 1080p one also codes with two. What can't fit even then is refused: a
 frame larger than the level's whole DPB, or field coding at a one-frame
-DPB. Frame size, frame
+DPB. Under `--stitchable` the fit runs the same way and the SPS then
+declares the level's DPB, at most 15 frames, rather than 15 regardless.
+Frame size, frame
 rate and bitrate aren't fitted: a level below the conformant minimum for
 those is accepted with a warning that the stream may be non-conformant. The
 auto level is derived from frame size, frame rate and DPB size per Annex A.
