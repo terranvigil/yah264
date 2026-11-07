@@ -238,6 +238,143 @@ void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
 
 #endif /* Y264_HAVE_NEON */
 
+/* ---- aarch64 NEON, 10-bit (src/dsp/arm/<family>_neon10.c) ------------------
+ *
+ * The 10-bit library's NEON tier. Its kernels take the 8-bit kernels' names
+ * and src/common/symbols10.h suffixes them, so a prototype above and its twin
+ * here name different symbols; the two blocks are never both compiled, since
+ * Y264_HAVE_NEON is 0 wherever Y264_HAVE_NEON10 is 1. The set is a subset of
+ * the 8-bit one: a family lands here kernel by kernel, and every entry not
+ * declared stays on C at 10 bits. */
+#if Y264_HAVE_NEON10
+int  y264_sad_16x16_neon(const pixel *, int, const pixel *, int);
+int  y264_sad_16x8_neon(const pixel *, int, const pixel *, int);
+int  y264_sad_8x16_neon(const pixel *, int, const pixel *, int);
+int  y264_sad_8x8_neon(const pixel *, int, const pixel *, int);
+void y264_sad_trio_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_quad_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+int  y264_satd_4x4_neon(const pixel *, int, const pixel *, int);
+int  y264_satd_8x8_neon(const pixel *, int, const pixel *, int);
+void y264_satd_quad_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+int  y264_satd_16x16_neon_ded(const pixel *, int, const pixel *, int);
+int  y264_satd_avg_8x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x16_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_8x16_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_16x8_neon(const pixel *, int, const pixel *, int);
+int  y264_satd_8x16_neon(const pixel *, int, const pixel *, int);
+int  y264_sa8d_8x8_neon(const pixel *, int, const pixel *, int);
+int  y264_sa8d_16x16_neon(const pixel *, int, const pixel *, int);
+long y264_hadamard_ac_8x8_neon(const pixel *, int);
+long y264_texture_ac4_16x16_neon(const pixel *, int);
+void y264_texture_ac48_16x16_neon(const pixel *, int, long[2]);
+void y264_var_16x16_neon(const pixel *, int, uint32_t[2]);
+void y264_intra16_satd_trio_neon(const pixel *, int, const pixel *,
+                                 const pixel *, int, int[3]);
+
+/* transform, quant, scan (src/dsp/arm/transform_neon10.c) */
+void y264_quant_4x4_fneon(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                          const int32_t mfrow[16]);
+int y264_quant_4x4_ac_fneon(const dctcoef *coef, dctcoef *lev, int n, int qp, int f,
+                            const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_fneon(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                          const int32_t mfrow[64]);
+void y264_dequant_4x4_neon(const dctcoef lev[16], dctcoef coef[16], int qp,
+                           const int32_t lsrow[16]);
+void y264_dequant_8x8_neon(const dctcoef lev[64], dctcoef coef[64], int qp,
+                           const int32_t lsrow[64]);
+void y264_fdct4x4_neon(const dctcoef diff[16], dctcoef coef[16]);
+void y264_idct4x4_neon(const dctcoef coef[16], dctcoef res[16]);
+void y264_fdct8x8_neon(const dctcoef diff[64], dctcoef coef[64]);
+void y264_idct8x8_neon(const dctcoef coef[64], dctcoef res[64]);
+void y264_sub4x4_dct_neon(dctcoef coef[16], const pixel *src, int ss,
+                          const pixel *pred, int ps);
+void y264_add4x4_idct_neon(pixel *dst, int ds, const pixel *pred, int ps,
+                           const dctcoef coef[16]);
+void y264_sub8x8_dct8_neon(dctcoef coef[64], const pixel *src, int ss,
+                           const pixel *pred, int ps);
+void y264_add8x8_idct8_neon(pixel *dst, int ds, const pixel *pred, int ps,
+                            const dctcoef coef[64]);
+void y264_sub_dct4_blocks_neon(dctcoef (*coef)[16], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_zigzag_abs_8x8_neon(int out[64], const dctcoef in[64]);
+void y264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
+void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
+                               uint32_t *omsk, int *obig);
+
+/* motion compensation (src/dsp/arm/interp_neon10.c) */
+void y264_mc_chroma_neon8(pixel *dst, int dstride, const pixel *ref,
+                          int rstride, int ix, int iy, int fx, int fy);
+void y264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_neon_w8h(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_pred_copy_neon(pixel *dst, int dstride, const pixel *s, int sstride,
+                         int w, int h);
+void y264_pred_avg2_neon(pixel *dst, int dstride, const pixel *s1,
+                         const pixel *s2, int sstride, int w, int h);
+void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
+                            int w0, int w1);
+void y264_pixel_avg_wt_2d_neon(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
+                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
+                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
+                           const pixel *r0, const pixel *r1, const pixel *r2,
+                           const pixel *r3, const pixel *r4, const pixel *r5,
+                           int x0, int x1);
+
+/* deblocking (src/dsp/arm/loopfilter_neon10.c; the strength kernel is the
+ * shared src/dsp/arm/loopfilter_bs_neon.c). The four-line luma forms are
+ * 8-bit only: the whole-edge ones serve every NEON call site. */
+void y264_deblock_strength_neon(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
+void y264_deblock_chroma2_h_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+#endif /* Y264_HAVE_NEON10 */
+
 /* ---- aarch64 SVE (src/dsp/arm/<family>_sve.c) -----------------------------
  *
  * A sub-tier of NEON, as FEAT_DotProd is: the names below overwrite NEON

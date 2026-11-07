@@ -23,7 +23,7 @@
  * and y264_cpu_tier() for WHICH one. The tier is resolved once per macroblock
  * rather than once per edge segment: a macroblock feeds up to thirty-two
  * segments and the answer cannot change between them. */
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 static int db_have_simd(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
 #endif
 
@@ -53,7 +53,7 @@ static const uint8_t TC0[52][3] = {
  * separately before, and the call site was missed: at BD>8 the predicate
  * compiled to a constant 0 but the unreachable call still needed a declaration
  * that was not there, so a 10-bit build did not compile at all. */
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 #define Y264_DEBLOCK_CHROMA_SIMD 1
 #else
 #define Y264_DEBLOCK_CHROMA_SIMD 0
@@ -175,7 +175,7 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
         .field = (uint8_t)(f->field_pic != 0),
         .refmap = f->wp_dup >= 0 ? f->wp_refmap : NULL,
     };
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     /* The kernel bakes the frame rules (4 on every macroblock edge, threshold
  * 4 on both axes) into its lane compares. A field picture takes the C
  * reference instead rather than carry a second kernel for a mode that has
@@ -266,7 +266,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
     int rs = f->rec_stride[0];
     pixel *Y = f->rec[0];
     int wmb = f->wmb;
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
     int tier = db_have_simd() ? y264_cpu_tier() : Y264_TIER_C;
 #endif
     /* Edge QP is the average of the two macroblocks' QPs (8.7.2.2). Constant
@@ -314,7 +314,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 int ia = IDXA(q);
                 int qa = ALPHA[ia], qb = BETA[IDXB(q)];
                 const uint8_t *qtc = TC0[ia];
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
                 if (tier >= Y264_TIER_NEON) {   /* the whole edge, one call */
                     y264_deblock_luma_v16_neon(Y + (by0 * 4) * rs + lx, rs, qa, qb,
                                                bsg.v[xb], qtc);
@@ -377,7 +377,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 int ia = IDXA(q);
                 int qa = ALPHA[ia], qb = BETA[IDXB(q)];
                 const uint8_t *qtc = TC0[ia];
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
                 if (tier >= Y264_TIER_NEON) {
                     y264_deblock_luma_h16_neon(Y + ly * rs + mbx * 16, rs, qa, qb,
                                                bsg.h[yb], qtc);
@@ -477,7 +477,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                                                 ALPHA[cia], BETA[IDXB(cq)], bs4h, TC0[cia]);     \
                 }                                                                                \
             } while (0)
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
             if (f->cf_idc == 1 && tier >= Y264_TIER_NEON)
                 DB_CHROMA2_EDGES(_neon);
 #endif
@@ -521,7 +521,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     const uint8_t *ctc = TC0[cia];
                     const uint8_t *bs4h = bsg.h[yb];
                     if (!bs_any(bs4h)) continue;
-#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_NEON
+#if Y264_DEBLOCK_CHROMA_SIMD && (Y264_HAVE_NEON || Y264_HAVE_NEON10)
                     if (cstyle && tier >= Y264_TIER_NEON) {
                         for (int g = 0; g < colspan / 2; g++)
                             y264_deblock_chroma8_h_neon(C + cy * crs + cx0 + g * 8,

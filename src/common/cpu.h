@@ -67,6 +67,18 @@ enum {
 #    define Y264_HAVE_NEON 0
 #  endif
 #endif
+/* The 10-bit library's NEON tier: its own kernel files (src/dsp/arm/
+ * *_neon10.c) on 16-bit lanes, its own dispatch blocks, and the same
+ * Y264_CPU_NEON bit and Y264_TIER_NEON answer as the 8-bit tier. At most one
+ * of Y264_HAVE_NEON and Y264_HAVE_NEON10 is 1 in a translation unit, since
+ * each names the depth it was built for. */
+#ifndef Y264_HAVE_NEON10
+#  if (defined(__aarch64__) || defined(_M_ARM64)) && Y264_BIT_DEPTH == 10
+#    define Y264_HAVE_NEON10 1
+#  else
+#    define Y264_HAVE_NEON10 0
+#  endif
+#endif
 /* The SVE tier is aarch64 Linux only (Apple parts have no SVE) and 8-bit
  * only, like NEON; meson's `sve` option defines it. It sits INSIDE the NEON
  * tier the way FEAT_DotProd does rather than above it: y264_cpu_tier() keeps
@@ -92,7 +104,7 @@ enum {
  * every architecture. WHICH tier runs is y264_cpu_tier()'s question, asked
  * once per dispatch site rather than once per call. */
 #define Y264_CPU_SIMD_ANY \
-    ((Y264_HAVE_NEON   ? (uint32_t)Y264_CPU_NEON    : 0u) | \
+    ((Y264_HAVE_NEON || Y264_HAVE_NEON10 ? (uint32_t)Y264_CPU_NEON : 0u) | \
      (Y264_HAVE_SSE4   ? (uint32_t)Y264_CPU_SSE4    : 0u) | \
      (Y264_HAVE_AVX2   ? (uint32_t)Y264_CPU_AVX2    : 0u) | \
      (Y264_HAVE_AVX512 ? (uint32_t)Y264_CPU_AVX512F : 0u))
@@ -182,7 +194,7 @@ static inline int y264_cpu_tier(void)
     if ((f & Y264_CPU_SSE4_ALL) == Y264_CPU_SSE4_ALL)
         return Y264_TIER_SSE4;
 #endif
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (f & Y264_CPU_NEON)
         return Y264_TIER_NEON;
 #endif

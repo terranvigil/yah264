@@ -22,7 +22,7 @@ The sample width is a compile-time type, so there are two encoder libraries.
 | `PIXEL_MAX` | 255 | 1023 |
 | `Y264_QP_BD_OFFSET` | 0 | 12 (QP range -12 to 51) |
 | profile at 4:2:0 | per options (Baseline/Main/High) | 110, High 10 |
-| SIMD | every tier ([simd.md](simd.md)) | none, C reference only |
+| SIMD | every tier ([simd.md](simd.md)) | NEON on aarch64, C on x86-64 ([simd.md](simd.md)) |
 | GPU offload | available, off ([gpu.md](gpu.md)) | stubbed out |
 | library | `libyah264`, `yah264.pc` | `libyah264_10`, `yah264_10.pc` |
 
@@ -122,7 +122,7 @@ putting its costs on the 8-bit scale in two places:
 | Both libraries in every build, one binary | 10-bit became a property of the input instead of a rebuild. Over the ten board clips at CRF, CQP and ABR, at one and eight threads, 8-bit output is byte-identical to the single-library build. |
 | `--output-depth 8` on 10-bit input refused | Rounding samples away is a conversion. Silent truncation would hide it. |
 | The pixel-type change before any SIMD work | Widening `pixel` and `dctcoef` is the one change that would invalidate 8-bit kernels. Doing it first meant each kernel is written once per depth. |
-| 10-bit runs C only | 16-bit SIMD is open. |
+| 10-bit NEON as its own tier | Each kernel is written for the depth's lanes and checked against the 10-bit C reference; the 8-bit kernels are untouched. |
 | Recon-match against ffmpeg as the gate for each format | A format is accepted at open only once its whole chain decodes bit-exact. 4:2:0 output stayed byte-identical while each format went in. |
 
 The two-library dispatch costs the 8-bit path +0.3% to 0.6% wall time at one
@@ -144,7 +144,8 @@ layout is the likelier cause than the dispatch itself.
   the CABAC 8x8 chroma context init values.
 - **4:2:2 and 4:4:4 against x264.** Both recon-match, but no BD board exists
   for them yet.
-- **16-bit SIMD** for the 10-bit library.
+- **The rest of 10-bit SIMD.** An x86-64 tier, and NEON for intra
+  prediction, SSD and six-tap luma MC (see [simd.md](simd.md)).
 
 ## Measuring it
 

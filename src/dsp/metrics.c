@@ -619,6 +619,50 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
     }
 #endif
 
+#if Y264_HAVE_NEON10
+    /* The 10-bit tier: the 8-bit block's entries that have a 16-bit-lane
+     * kernel. No dot-product twins, since UDOT takes bytes. The fused intra
+     * 4x4 search stays C. */
+    if (cpu & Y264_CPU_NEON) {
+        pf->sad[Y264_PU_16x16] = y264_sad_16x16_neon;
+        pf->sad[Y264_PU_16x8]  = y264_sad_16x8_neon;
+        pf->sad[Y264_PU_8x16]  = y264_sad_8x16_neon;
+        pf->sad[Y264_PU_8x8]   = y264_sad_8x8_neon;
+        pf->sad_quad[Y264_PU_16x16] = y264_sad_quad_16x16_neon;
+        pf->sad_quad[Y264_PU_16x8]  = y264_sad_quad_16x8_neon;
+        pf->sad_quad[Y264_PU_8x16]  = y264_sad_quad_8x16_neon;
+        pf->sad_quad[Y264_PU_8x8]   = y264_sad_quad_8x8_neon;
+        pf->sad_quad[Y264_PU_8x4]   = y264_sad_quad_8x4_neon;
+        pf->sad_trio[Y264_PU_16x16] = y264_sad_trio_16x16_neon;
+        pf->sad_pair[Y264_PU_16x16] = y264_sad_pair_16x16_neon;
+        pf->sad_trio[Y264_PU_16x8] = y264_sad_trio_16x8_neon;
+        pf->sad_pair[Y264_PU_16x8] = y264_sad_pair_16x8_neon;
+        pf->sad_trio[Y264_PU_8x16] = y264_sad_trio_8x16_neon;
+        pf->sad_pair[Y264_PU_8x16] = y264_sad_pair_8x16_neon;
+        pf->sad_trio[Y264_PU_8x8] = y264_sad_trio_8x8_neon;
+        pf->sad_pair[Y264_PU_8x8] = y264_sad_pair_8x8_neon;
+        pf->sad_trio[Y264_PU_8x4] = y264_sad_trio_8x4_neon;
+        pf->sad_pair[Y264_PU_8x4] = y264_sad_pair_8x4_neon;
+        pf->satd4x4            = y264_satd_4x4_neon;
+        pf->satd8x8            = y264_satd_8x8_neon;
+        pf->satd_quad_8x8        = y264_satd_quad_8x8_neon;
+        pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_neon;
+        pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_neon;
+        pf->satd_avg[Y264_PU_8x16]  = y264_satd_avg_8x16_neon;
+        pf->satd_avg[Y264_PU_8x8]   = y264_satd_avg_8x8_neon;
+        pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_neon;
+        pf->satd_pu[Y264_PU_8x16]   = y264_satd_8x16_neon;
+        pf->satd16x16          = y264_satd_16x16_neon_ded;
+        pf->sa8d8x8            = y264_sa8d_8x8_neon;
+        pf->sa8d16x16          = y264_sa8d_16x16_neon;
+        pf->hadamard_ac8x8     = y264_hadamard_ac_8x8_neon;
+        pf->texture_ac4_16x16  = y264_texture_ac4_16x16_neon;
+        pf->texture_ac48_16x16 = y264_texture_ac48_16x16_neon;
+        pf->var16x16           = y264_var_16x16_neon;
+        pf->intra16_satd_trio   = y264_intra16_satd_trio_neon;
+    }
+#endif
+
 #if Y264_HAVE_SSE4
     if ((cpu & Y264_CPU_SSE4_ALL) == Y264_CPU_SSE4_ALL) {
         pf->sad[Y264_PU_16x16] = y264_sad_16x16_sse4;

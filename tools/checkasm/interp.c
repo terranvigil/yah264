@@ -73,7 +73,7 @@ static void mplane(void)
 #define HTAP6(a, b, c, d, e, f) ((a) - 5 * (b) + 20 * (c) + 20 * (d) - 5 * (e) + (f))
 #define HCLIP(v) ((v) < 0 ? 0 : (v) > PIXEL_MAX ? PIXEL_MAX : (v))
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 
 /* ---- one body per group, the kernel as an argument ------------------------
  *
@@ -221,8 +221,8 @@ static int run_pixel_avg_wt(const char *name, avg_wt_fn kern)
     for (int t = 0; t < TRIALS; t++) {
         plane();
         if (t == 0) { memset(pa, 0, 256 * sizeof(pixel));
-                      memset(pb, 0xff, 256 * sizeof(pixel)); }
-        if (t == 1) { memset(pa, 0xff, 256 * sizeof(pixel));
+                      ca_fill_max(pb, 256); }
+        if (t == 1) { ca_fill_max(pa, 256);
                       memset(pb, 0, 256 * sizeof(pixel)); }
         for (int w1 = -64; w1 <= 128; w1++) {
             int w0 = 64 - w1;
@@ -240,6 +240,21 @@ static int run_pixel_avg_wt(const char *name, avg_wt_fn kern)
                     bad++;
             }
         }
+#if Y264_BIT_DEPTH > 8
+        /* explicit weights, which the 10-bit kernel takes as well, and one
+         * past int16 that it must hand to its scalar loop */
+        static const int xw[][2] = { { -128, 127 }, { 127, -128 }, { 200, -300 },
+                                     { 1, 1 }, { 0, 64 }, { 40000, 5 } };
+        for (unsigned j = 0; j < sizeof(xw) / sizeof(xw[0]); j++) {
+            memset(d1, CA_POISON, 256 * sizeof(pixel));
+            kern(d1, pa, pb, 77, xw[j][0], xw[j][1]);
+            y264_pixel_avg_wt_c(d2, pa, pb, 77, xw[j][0], xw[j][1]);
+            if (memcmp(d1, d2, 77 * sizeof(pixel))) {
+                if (!bad) ca_fail("%s: w0=%d w1=%d", name, xw[j][0], xw[j][1]);
+                bad++;
+            }
+        }
+#endif
     }
     CA_BENCH2(name, kern(d1, pa, pb, 256, 32, 32),
                     y264_pixel_avg_wt_c(d2, pa, pb, 256, 32, 32));
@@ -263,8 +278,8 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
     for (int t = 0; t < TRIALS; t++) {
         plane();
         if (t == 0) { memset(pa, 0, 16 * BS * sizeof(pixel));
-                      memset(pb, 0xff, 16 * BS * sizeof(pixel)); }
-        if (t == 1) { memset(pa, 0xff, 16 * BS * sizeof(pixel));
+                      ca_fill_max(pb, 16 * BS); }
+        if (t == 1) { ca_fill_max(pa, 16 * BS);
                       memset(pb, 0, 16 * BS * sizeof(pixel)); }
         for (int w1 = -64; w1 <= 128; w1 += (t < 2 ? 1 : 7)) {
             int w0 = 64 - w1;
@@ -280,6 +295,19 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
                 }
             }
         }
+#if Y264_BIT_DEPTH > 8
+        static const int xw[][2] = { { -128, 127 }, { 200, -300 }, { 40000, 5 } };
+        for (unsigned j = 0; j < sizeof(xw) / sizeof(xw[0]); j++) {
+            memset(d1, CA_POISON, 16 * DS * sizeof(pixel));
+            memcpy(d2, d1, sizeof(d2));
+            kern(d1, DS, pa, AS, pb, BS, 16, 16, xw[j][0], xw[j][1]);
+            y264_pixel_avg_wt_2d_c(d2, DS, pa, AS, pb, BS, 16, 16, xw[j][0], xw[j][1]);
+            if (memcmp(d1, d2, 16 * DS * sizeof(pixel))) {
+                if (!bad) ca_fail("%s: w0=%d w1=%d", name, xw[j][0], xw[j][1]);
+                bad++;
+            }
+        }
+#endif
     }
     /* Both operands mapped to exactly w x h at their own strides, at the
      * flat pair and at a weighted one: a row step that loads a whole register
@@ -315,6 +343,9 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
     return bad;
 }
 
+/* The bodies from here to the chroma window group have kernels at 8 bits
+ * only. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
 typedef void (*bilin4_row_fn)(pixel *, const pixel *, const pixel *, int, int,
                               int, int, int, int);
 /* The lowres plane's bilinear row against the scalar row: every phase weight
@@ -575,6 +606,8 @@ static int run_mc_luma_win(const char *name, mc_luma_fn k16, mc_luma_fn k8,
     return bad;
 }
 
+#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+
 /* The chroma kernels, at the shapes the dispatcher routes to each of them.
  * `k8` is the fixed 8x8 form where a tier has one and NULL where the 8-wide
  * kernel serves that height too. */
@@ -715,7 +748,12 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
         for (int k = 0; k < 6; k++) {
             ca_fill(r[k], HRST);
             for (int x = 0; x < HRST; x++)
+#if Y264_BIT_DEPTH > 8
+                /* a horizontal six-tap of 10-bit samples: [-10230, 42966] */
+                s[k][x] = (int32_t)((int)ca_below(53197) - 10230);
+#else
                 s[k][x] = (int32_t)((int)ca_rnd() * 32 - 4096);
+#endif
         }
         memset(Hr, 0x5a, sizeof(Hr));
         memset(Vr, 0x5a, sizeof(Vr));
@@ -753,7 +791,7 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
 #if Y264_HAVE_SSE4
 
@@ -938,7 +976,7 @@ static int run_hpel_band(const char *name, hpel_band_fn kern)
 
 /* ---- the rows, one thin function per tier -------------------------------- */
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
 
 static int t_pred_copy_neon(void)
 { return run_pred_copy("pred_copy", y264_pred_copy_neon); }
@@ -946,6 +984,7 @@ static int t_pred_avg2_neon(void)
 { return run_pred_avg2("pred_avg2", y264_pred_avg2_neon); }
 static int t_pixel_avg_wt_neon(void)
 { return run_pixel_avg_wt("pixel_avg_wt", y264_pixel_avg_wt_neon); }
+#if Y264_HAVE_NEON
 static int t_mc_chroma_bi8_neon(void)
 { return run_mc_chroma_bi8("mc_chroma_bi8", y264_mc_chroma_bi8_neon); }
 static int t_avg_mb420_flat_neon(void)
@@ -953,21 +992,24 @@ static int t_avg_mb420_flat_neon(void)
 
 static int t_bilin4_row_neon(void)
 { return run_bilin4_row("bilin4_row", y264_bilin4_row_neon); }
+#endif
 
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
 /* The NEON 8-wide form takes one sixteen-byte load from ix-2, so it declares
  * five columns past the block where the 16-wide form declares two. */
+#if Y264_HAVE_NEON
 static int t_mc_luma_win_neon(void)
 { return run_mc_luma_win("mc_luma_win", y264_mc_luma_neon16,
                          y264_mc_luma_neon8, 2, 5); }
+#endif
 static int t_mc_chroma_win_neon(void)
 { return run_mc_chroma_win("mc_chroma_win", y264_mc_chroma_neon_w8h,
                            y264_mc_chroma_neon_w4h, y264_mc_chroma_neon8); }
 static int t_hpel_rows_neon(void)
 { return run_hpel_rows("hpel_rows", y264_hpel_hrow_neon, y264_hpel_outrow_neon); }
 
-#endif /* Y264_HAVE_NEON */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 */
 
 #if Y264_HAVE_SSE4
 
@@ -1407,6 +1449,14 @@ const ca_test ca_mc_tests[] = {
     { "bilin4_row",        "mc", Y264_CPU_NEON, t_bilin4_row_neon },
     { "avg_mb420_flat",    "mc", Y264_CPU_NEON, t_avg_mb420_flat_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
+    { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
+    { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
+#endif
+#if Y264_HAVE_NEON10
+    { "pred_copy",         "mc", Y264_CPU_NEON, t_pred_copy_neon },
+    { "pred_avg2",         "mc", Y264_CPU_NEON, t_pred_avg2_neon },
+    { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
+    { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
 #endif

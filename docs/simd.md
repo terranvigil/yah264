@@ -25,8 +25,8 @@ is the developer's view: how the tiers are built, dispatched and tested.
 | AVX2 (with FMA3, BMI2) | x86-64 | every kernel family | the main x86 tier |
 | AVX-512 (F, BW, VL) | x86-64 | pixel metrics only | the CPU reports all three |
 
-The tiers are 8-bit only. The 10-bit library is built with no SIMD at all and
-runs the C reference everywhere (see [formats.md](formats.md)).
+The tiers above are 8-bit lanes. The 10-bit library has its own NEON tier on
+aarch64, on 16-bit lanes, and runs C on x86-64 (see "The 10-bit tier" below).
 
 SVE rides inside the NEON tier the way dot product does. `y264_cpu_tier()`
 still answers NEON on a Graviton3, and the SVE entries overwrite the NEON
@@ -71,6 +71,31 @@ What stays C on every tier:
 Outside `src/dsp`, the lowres downscale, the lowres sub-pel planes, plane
 padding, the mb-tree propagate and the entropy coders are C. The entropy
 coders, trellis and RDOQ aren't vectorizable in any useful sense.
+
+### The 10-bit tier
+
+The 10-bit library's NEON kernels live in `src/dsp/arm/<family>_neon10.c` and
+compile into that library only, behind `Y264_HAVE_NEON10`. They take the 8-bit
+kernels' names, and `src/common/symbols10.h` gives each one its `_10` suffix,
+so `arch.h` declares them with the same prototypes and `symbol_check.sh` keeps
+the two depths apart. The tier answers `Y264_TIER_NEON` and takes the same
+`YAH264_NO_ASM`, `Y264_ASM_OFF` and `Y264_SIMD_FORCE` escapes. At most one of
+`Y264_HAVE_NEON` and `Y264_HAVE_NEON10` is set in a translation unit, so the
+8-bit build preprocesses as it did without it.
+
+| family | 10-bit NEON | stays C |
+|---|---|---|
+| pixel metrics | SAD and its batches, SATD at every shape and its average form, SA8D, Hadamard AC, both texture terms, variance, intra 16x16 SATD | intra 4x4 search, SSD |
+| motion compensation | plane fetch, weighted average, chroma at widths 8 and 4, half-pel plane rows | six-tap luma, band build, fused bi-prediction |
+| transform, quant, scan | every NEON dispatch site | as on 8 bits |
+| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | four-line luma: no 10-bit twin, since the whole-edge kernels serve every call site |
+| intra prediction | none yet | all |
+
+A coefficient is an int32 at 10 bits, so the transforms run on int32 lanes. The
+pixel and deblock kernels keep int16 lanes and widen where 1023 pushes a sum
+past them; each kernel states its bounds. The boundary-strength kernel reads no
+samples and is one source both libraries build
+(`src/dsp/arm/loopfilter_bs_neon.c`).
 
 ### Dispatch
 
@@ -230,8 +255,9 @@ The ranges span sunflower 1080p and crowd_run 4K.
   beats AVX2 on both AMD and Intel.
 - **Wider AVX2.** Several AVX2 kernels re-encode the SSE4.2 body and could use
   the whole register on 16-wide blocks.
-- **10-bit SIMD.** None exists; the 10-bit library runs C only (see
-  [formats.md](formats.md)).
+- **10-bit SIMD.** NEON covers the pixel, transform, MC and deblock families.
+  Intra prediction, SSD, the six-tap luma MC and the fused forms are still C,
+  and x86-64 has no 10-bit tier.
 
 ## Measuring it
 
