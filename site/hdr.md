@@ -14,9 +14,9 @@ HDR models for VMAF v1 on two open HDR10 masters, and the results are below.
 
 | | how the stream says it | options |
 |---|---|---|
-| HDR10 | PQ transfer with BT.2020 primaries and matrix in the VUI, plus mastering display (SMPTE ST 2086) and content light level (CTA-861.3) SEI | `--transfer smpte2084 --colorprim bt2020 --colormatrix bt2020 --mastering-display ... --cll ...` |
-| HLG | HLG transfer in the VUI | `--transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020` |
-| HLG, SDR-compatible | BT.2020 transfer in the VUI and an alternative transfer SEI that names HLG, so an SDR-only decoder still shows a picture | `--transfer bt2020 --alternative-transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020` |
+| HDR10 | PQ transfer with BT.2020 primaries and matrix in the VUI, plus mastering display (SMPTE ST 2086) and content light level (CTA-861.3) SEI | `--transfer smpte2084 --colorprim bt2020 --colormatrix bt2020nc --mastering-display ... --cll ...` |
+| HLG | HLG transfer in the VUI | `--transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020nc` |
+| HLG, SDR-compatible | BT.2020 transfer in the VUI and an alternative transfer SEI that names HLG, so an SDR-only decoder still shows a picture | `--transfer bt2020-10 --alternative-transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020nc` |
 | 10-bit 4:2:0, 4:2:2, 4:4:4 | High 10, High 4:2:2, High 4:4:4 Predictive | picked from the input, see [Getting started](start.md#bit-depth) |
 
 There's no HDR10+ (SMPTE ST 2094-40) or Dolby Vision. Both are built for HEVC
@@ -35,14 +35,15 @@ pipes it in:
 ```
 ffmpeg -i master.mov -pix_fmt yuv420p10le -strict -1 -f yuv4mpegpipe - |
   yah264 --input-y4m - -o out.264 --crf 22 \
-    --colorprim bt2020 --transfer smpte2084 --colormatrix bt2020 --range limited \
+    --colorprim bt2020 --transfer smpte2084 --colormatrix bt2020nc --range limited \
     --mastering-display 'G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)' \
     --cll 1000,400
 ```
 
 Y4M has no field for the transfer or the primaries, so they go on the command
-line. `--colormatrix bt2020` is the non-constant-luminance matrix, H.273 code
-9, which ffmpeg calls `bt2020nc`.
+line. The color options take the names ffmpeg and x264 use, so `bt2020nc`
+there is the non-constant-luminance matrix, H.273 code 9. `bt2020` also works
+as a matrix and means the same.
 
 `--mastering-display` lists green, blue, red, then the white point, which is the
 order the H.264 spec uses. Chromaticities are in units of 0.00002 and luminance

@@ -115,8 +115,29 @@ as something else.
 | `--output-depth` | 8 or 10 | the input's | Which of the two encoder libraries codes the stream. 10 on 8-bit input upshifts each sample by 2 and writes High 10. 8 on 10-bit input is refused, not rounded. |
 | `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below). An explicit `--threads` above 1 is warned about rather than dropped. |
 | `--range` | `full` or `limited` | not signaled | VUI color range. The Y4M `XCOLORRANGE` tag sets it on its own. |
-| `--colorprim`, `--transfer`, `--colormatrix` | H.273 code or a name (`bt709`, `bt2020`, `bt601`, `smpte170m`, `bt470bg`, `srgb`, `smpte2084`, `arib-std-b67`) | not signaled | VUI color description. Signaling only: nothing in the encoder changes with them. |
+| `--colorprim`, `--transfer`, `--colormatrix` | H.273 code 0..255 or a name, below | not signaled | VUI color description. Signaling only: nothing in the encoder changes with them. |
 | `--chromaloc` | 0..5 | not signaled | VUI chroma sample location. |
+
+The names are the ones x264's CLI and ffmpeg use, so a value copied from either
+works, and case doesn't matter:
+
+- `--colorprim`: `bt709` (1), `undef` (2), `bt470m` (4), `bt470bg` (5),
+  `smpte170m` (6), `smpte240m` (7), `film` (8), `bt2020` (9), `smpte428` (10),
+  `smpte431` (11), `smpte432` (12), `ebu3213` or `jedec-p22` (22).
+- `--transfer`: `bt709` (1), `undef` (2), `bt470m` or `gamma22` (4), `bt470bg`
+  or `gamma28` (5), `smpte170m` (6), `smpte240m` (7), `linear` (8), `log100`
+  (9), `log316` (10), `iec61966-2-4` (11), `bt1361e` (12), `iec61966-2-1` or
+  `srgb` (13), `bt2020-10` (14), `bt2020-12` (15), `smpte2084` or `pq` (16),
+  `smpte428` (17), `arib-std-b67` or `hlg` (18).
+- `--colormatrix`: `GBR` (0), `bt709` (1), `undef` (2), `fcc` (4), `bt470bg`
+  (5), `smpte170m` (6), `smpte240m` (7), `YCgCo` (8), `bt2020nc` (9), `bt2020c`
+  (10), `smpte2085` (11), `chroma-derived-nc` (12), `chroma-derived-c` (13),
+  `ICtCp` (14).
+
+`bt601` is accepted for all three (code 6), `bt2020` as a transfer means
+`bt2020-10` and as a matrix `bt2020nc`, and `unknown` and `unspecified` mean
+`undef`. ffmpeg's underscore spellings (`bt2020_ncl`, `smpte428_1`,
+`iec61966_2_1`) work too.
 | `--version` | | | Print version, exit. |
 | `-h`, `--help` | | | Print usage, exit. `--longhelp` and `--fullhelp` print the same list, since it already names every flag. |
 
@@ -820,7 +841,7 @@ parallelism, not encoder speed.
 | `--frame-packing` | 0..7 | off | `frame_packing_arrangement` SEI: 0 checkerboard, 1 column, 2 row, 3 side-by-side, 4 top-bottom, 5 frame alternation, 6 2D, 7 tile. Written once, "until canceled". |
 | `--cll` | `MAX,AVG` | off | Content light level SEI (MaxCLL, MaxFALL) in cd/m^2, each a plain number 0..65535. MaxFALL above MaxCLL is refused unless MaxCLL is 0 (unknown). `0,0` writes no SEI. |
 | `--mastering-display` | `G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)` | off | Mastering display color volume SEI. Chromaticity in 0.00002 units, luminance in 0.0001 cd/m^2. **G, B, R is the spec's order**, not the R, G, B a person writes. `L(0,0)` means unknown luminance. A chromaticity above 50000 (1.0), a luminance wider than 32 bits, or a min at or above a real peak is refused. A chromaticity outside the SEI's range (x 5..37000, y 5..42000), a peak above 10000 cd/m^2 or under 5 (other than 0), or a min above 5 cd/m^2 draws a warning and is written as given; a peak under 5 is usually nits typed in place of 0.0001 units. |
-| `--alternative-transfer` | H.273 code or a `--transfer` name | off | `alternative_transfer_characteristics` SEI: the transfer a display should prefer over the VUI's. |
+| `--alternative-transfer` | H.273 code or a `--transfer` name | off | `alternative_transfer_characteristics` SEI: the transfer a display should prefer over the VUI's. `undef` writes no SEI, as the default does. |
 | `--overscan` | `undef`\|`show`\|`crop` | `undef` | VUI `overscan_info`. `undef` writes nothing, which is the default. |
 | `--videoformat` | `component`\|`pal`\|`ntsc`\|`secam`\|`mac`\|`undef` | `undef` | VUI `video_format`. Naming it opens the `video_signal_type` block even with no color description. The three color codes then stay at 2 (unspecified). |
 | `--stitchable` | | off | Size the **declared** DPB from the level rather than from `--ref`/`--bframes`, and pin the FrameNum width, so two encodes at the same geometry carry the same SPS. **It does move bits**: see below. |

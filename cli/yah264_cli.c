@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <math.h>
 #include <limits.h>
@@ -607,18 +608,57 @@ static void frame_stats_emit(FILE *out, yah264_encoder_t *e, const yah264_nal_t 
     }
 }
 static int g_vs_set, g_y4m_full_range = -1;
+/* The VUI colour codes by name. Each H.273 code takes the spelling the
+ * reference encoder's CLI documents and the one ffmpeg prints, so a value
+ * read off ffprobe or copied from a reference command line works here
+ * unchanged. Names match without regard to case (ffmpeg writes gbr where
+ * the reference writes GBR). The extras at the end of each list (bt2020 as a
+ * matrix, pq, hlg, bt601, srgb) are this CLI's own older spellings and stay
+ * accepted. */
+struct colour_name { const char *name; int code; };
+static const struct colour_name colour_prim_names[] = {
+    { "bt709", 1 }, { "undef", 2 }, { "unknown", 2 }, { "unspecified", 2 },
+    { "bt470m", 4 }, { "bt470bg", 5 }, { "smpte170m", 6 }, { "smpte240m", 7 },
+    { "film", 8 }, { "bt2020", 9 }, { "smpte428", 10 }, { "smpte428_1", 10 },
+    { "smpte431", 11 }, { "smpte432", 12 }, { "ebu3213", 22 }, { "jedec-p22", 22 },
+    { "bt601", 6 }, { "srgb", 1 }, { "iec61966-2-1", 1 }, { NULL, 0 }
+};
+static const struct colour_name colour_trc_names[] = {
+    { "bt709", 1 }, { "undef", 2 }, { "unknown", 2 }, { "unspecified", 2 },
+    { "bt470m", 4 }, { "gamma22", 4 }, { "bt470bg", 5 }, { "gamma28", 5 },
+    { "smpte170m", 6 }, { "smpte240m", 7 }, { "linear", 8 },
+    { "log100", 9 }, { "log", 9 }, { "log316", 10 }, { "log_sqrt", 10 },
+    { "iec61966-2-4", 11 }, { "iec61966_2_4", 11 }, { "bt1361e", 12 }, { "bt1361", 12 },
+    { "iec61966-2-1", 13 }, { "iec61966_2_1", 13 }, { "srgb", 13 },
+    { "bt2020-10", 14 }, { "bt2020_10bit", 14 }, { "bt2020-12", 15 }, { "bt2020_12bit", 15 },
+    { "smpte2084", 16 }, { "pq", 16 }, { "smpte428", 17 }, { "smpte428_1", 17 },
+    { "arib-std-b67", 18 }, { "hlg", 18 },
+    { "bt601", 6 }, { "bt2020", 14 }, { NULL, 0 }
+};
+static const struct colour_name colour_matrix_names[] = {
+    { "gbr", 0 }, { "rgb", 0 }, { "bt709", 1 }, { "undef", 2 }, { "unknown", 2 },
+    { "unspecified", 2 }, { "fcc", 4 }, { "bt470bg", 5 }, { "smpte170m", 6 },
+    { "smpte240m", 7 }, { "ycgco", 8 }, { "ycocg", 8 },
+    { "bt2020nc", 9 }, { "bt2020_ncl", 9 }, { "bt2020c", 10 }, { "bt2020_cl", 10 },
+    { "smpte2085", 11 }, { "chroma-derived-nc", 12 }, { "chroma-derived-c", 13 },
+    { "ictcp", 14 },
+    { "bt601", 6 }, { "bt2020", 9 }, { "srgb", 0 }, { "iec61966-2-1", 0 }, { NULL, 0 }
+};
+
+/* -1 for a name the option doesn't know or a number outside H.273's 0..255.
+ * A number must be all digits: "9x" used to read as 9. */
 static int colour_code(const char *opt, const char *v)
 {
-    if (v[0] >= '0' && v[0] <= '9') return atoi(v);
-    int prim = !strcmp(opt, "--colorprim"), tr = !strcmp(opt, "--transfer"), mat = !strcmp(opt, "--colormatrix");
-    if (!strcmp(v, "bt709")) return 1;
-    if (!strcmp(v, "bt2020")) return prim ? 9 : (tr ? 14 : 9);
-    if (!strcmp(v, "bt601") || !strcmp(v, "smpte170m")) return prim ? 6 : (tr ? 6 : 6);
-    if (!strcmp(v, "bt470bg")) return prim ? 5 : (tr ? 5 : 5);
-    if (!strcmp(v, "srgb") || !strcmp(v, "iec61966-2-1")) return tr ? 13 : (mat ? 0 : 1);
-    if (!strcmp(v, "smpte2084") || !strcmp(v, "pq")) return tr ? 16 : -1;
-    if (!strcmp(v, "arib-std-b67") || !strcmp(v, "hlg")) return tr ? 18 : -1;
-    if (!strcmp(v, "unspecified")) return 2;
+    if (v[0] >= '0' && v[0] <= '9') {
+        char *end;
+        long n = strtol(v, &end, 10);
+        return *end || n > 255 ? -1 : (int)n;
+    }
+    const struct colour_name *t = !strcmp(opt, "--colorprim") ? colour_prim_names
+                                : !strcmp(opt, "--transfer") ? colour_trc_names
+                                : colour_matrix_names;
+    for (; t->name; t++)
+        if (!strcasecmp(v, t->name)) return t->code;
     return -1;
 }
 static void apply_video_signal(yah264_encoder_t *e)
@@ -990,8 +1030,9 @@ static void usage(const char *argv0)
         "  --segment-out PATTERN   also write each GOP to its own file, PATTERN with a %%d for the GOP index\n"
         "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k\n"
         "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
-        "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description (H.273 codes or\n"
-        "                          bt709 bt2020 bt601 smpte170m bt470bg srgb smpte2084 arib-std-b67)\n"
+        "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description: an H.273\n"
+        "                          code or its name as ffmpeg or the reference CLI spells it, e.g.\n"
+        "                          --colorprim bt2020 --transfer smpte2084|arib-std-b67 --colormatrix bt2020nc\n"
         "  --chromaloc 0..5        VUI chroma sample location\n"
         "  --output-depth N   code at 8 or 10 bits (default: the input's). 10 on\n"
         "                     8-bit input upshifts every sample by 2 and codes\n"
@@ -4304,14 +4345,23 @@ int main(int argc, char **argv)
             g_vs_set = 1;
         }
         else if ((!strcmp(argv[i], "--colorprim") || !strcmp(argv[i], "--transfer") ||
-                  !strcmp(argv[i], "--colormatrix") || !strcmp(argv[i], "--chromaloc")) && i + 1 < argc) {
+                  !strcmp(argv[i], "--colormatrix")) && i + 1 < argc) {
             const char *opt = argv[i], *v = argv[++i];
             int code = colour_code(opt, v);
-            if (code < 0) { fprintf(stderr, "yah264: %s: unknown value '%s' (use the H.273 code or bt709/bt2020/bt601/smpte170m/bt470bg/srgb/smpte2084/arib-std-b67)\n", opt, v); return 2; }
+            if (code < 0) {
+                fprintf(stderr, "yah264: %s: unknown value '%s' (an H.273 code 0..255, or a name "
+                        "such as bt709, bt2020, %s; see docs/options.md)\n", opt, v,
+                        !strcmp(opt, "--transfer") ? "smpte2084, arib-std-b67"
+                        : !strcmp(opt, "--colormatrix") ? "bt2020nc, bt2020c" : "smpte432");
+                return 2;
+            }
             if (!strcmp(opt, "--colorprim")) g_vs.primaries = code;
             else if (!strcmp(opt, "--transfer")) g_vs.transfer = code;
-            else if (!strcmp(opt, "--colormatrix")) g_vs.matrix = code;
-            else g_vs.chroma_loc = code;
+            else g_vs.matrix = code;
+            g_vs_set = 1;
+        }
+        else if (!strcmp(argv[i], "--chromaloc") && i + 1 < argc) {
+            g_vs.chroma_loc = (int)opt_int("--chromaloc", argv[++i], 0, 5);
             g_vs_set = 1;
         }
         else if (!strcmp(argv[i], "--qp") && i + 1 < argc) {
@@ -4615,7 +4665,9 @@ int main(int argc, char **argv)
             frame_packing = (int)opt_int("--frame-packing", argv[++i], 0, 7);
         else if (!strcmp(argv[i], "--alternative-transfer") && i + 1 < argc) {
             const char *v = argv[++i];
-            int code = colour_code("--transfer", v);
+            /* undef is the reference CLI's default here and means no SEI,
+             * not an SEI that says "unspecified" */
+            int code = !strcasecmp(v, "undef") ? 0 : colour_code("--transfer", v);
             if (code < 0) {
                 fprintf(stderr, "yah264: --alternative-transfer: unknown value '%s' "
                         "(an H.273 code, or the names --transfer takes)\n", v);
