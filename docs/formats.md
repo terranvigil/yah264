@@ -168,10 +168,13 @@ layout is the likelier cause than the dispatch itself.
   Read PSNR-Y on the 10-bit code values beside it, and check that the two CRF
   ladders overlap in bitrate before reading a BD figure.
 - **The HDR ladder:** `scripts/hdr_ladder.py SRC.y4m` runs CRF 18-34 on
-  yah264 and x264 High 10 at medium over a 10-bit HDR10 Y4M, scores each
-  rung as above, and prints BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over
-  the rungs both ladders cover (`--max-crf` drops the top rungs). It needs
-  `VMAF_HDR` and `VMAF_HDR_MODELS`. The 1080p test spans are 120 frames.
+  yah264 and x264 High 10 at medium over a C420p10 HDR10 Y4M at 1920x1080 or
+  3840x2160 (other sizes are refused), scores each rung as above, and prints
+  BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over the rungs both ladders cover
+  (`--max-crf` drops the top rungs). It needs `VMAF_HDR` and
+  `VMAF_HDR_MODELS`. Rungs are cached, keyed on each encoder binary's md5
+  and its command line; a reused rung prints "cached", and `--fresh` ignores
+  the cache. The 1080p test spans are 120 frames.
 - **Recon-match:** `make conformance` covers every format. By hand, decode the
   `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare `framemd5` hash
   columns Y4M against Y4M. Don't compare a Y4M's framemd5 with one taken
