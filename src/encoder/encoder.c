@@ -5934,7 +5934,6 @@ static inline pixel lr_clip(int v) { return (pixel)(v < 0 ? 0 : v > 255 ? 255 : 
 #define LR_SAT(v)     (pixel)(v)                      /* an average of 8-bit samples */
 #endif
 #define LR_DOWN(sum4) LR_SAT(((sum4) + (2 << LR_SHIFT)) >> (2 + LR_SHIFT))
-#define LR_NORM(v)    LR_SAT(((v) + ((1 << LR_SHIFT) >> 1)) >> LR_SHIFT)
 
 /* The lowres half-pel samples taken from the source at one-pixel offsets (right,
  * down, both) with the same 2x2 average as the whole-pel plane, instead of
@@ -5945,7 +5944,10 @@ static inline pixel lr_clip(int v) { return (pixel)(v < 0 ? 0 : v > 255 ? 255 : 
 static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, int ph,
                         int lw, int lh)
 {
-#define LRHF(a, b, c, d) (((((a) + (b) + 1) >> 1) + (((c) + (d) + 1) >> 1) + 1) >> 1)
+/* Each pair's mean rounds straight to the 8-bit scale, so a 10-bit plane
+ * that is 8-bit content shifted up gives exactly the 8-bit planes. */
+#define LRH2(a, b) (((a) + (b) + (1 << LR_SHIFT)) >> (1 + LR_SHIFT))
+#define LRHF(a, b, c, d) LR_SAT((LRH2(a, b) + LRH2(c, d) + 1) >> 1)
     /* the clamps only ever bite on the last column (x2 = 2*lw) and the last
      * row (y2 = 2*lh), so the body runs clamp-free and vectorises */
     int xe = 2 * lw <= pw - 1 ? lw : lw - 1;
@@ -5960,19 +5962,20 @@ static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, in
 #else
         for (int x = 0; x < xe; x++) {
             int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
-            oh[x] = LR_NORM(LRHF(r0[x1], r1[x1], r0[x2], r1[x2]));
-            ov[x] = LR_NORM(LRHF(r1[x0], r2[x0], r1[x1], r2[x1]));
-            oc[x] = LR_NORM(LRHF(r1[x1], r2[x1], r1[x2], r2[x2]));
+            oh[x] = LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
+            ov[x] = LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
+            oc[x] = LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
         }
 #endif
         for (int x = xe; x < lw; x++) {
             int x0 = 2 * x, x1 = x0 + 1 < pw ? x0 + 1 : pw - 1, x2 = x0 + 2 < pw ? x0 + 2 : pw - 1;
-            oh[x] = LR_NORM(LRHF(r0[x1], r1[x1], r0[x2], r1[x2]));
-            ov[x] = LR_NORM(LRHF(r1[x0], r2[x0], r1[x1], r2[x1]));
-            oc[x] = LR_NORM(LRHF(r1[x1], r2[x1], r1[x2], r2[x2]));
+            oh[x] = LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
+            ov[x] = LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
+            oc[x] = LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
         }
     }
 #undef LRHF
+#undef LRH2
 }
 
 /* The fifteen quarter-pel phase planes (the layout build_lr_subpel writes)
