@@ -154,17 +154,19 @@ if have_neon
   # NEON is baseline on aarch64; no extra flags needed.
   neon_sources = ['src/dsp/metrics_neon.c', 'src/dsp/interp_neon.c',
                   'src/dsp/transform_neon.c', 'src/dsp/loopfilter_neon.c',
-                  'src/dsp/intrapred_neon.c']
+                  'src/dsp/intrapred_neon.c', 'src/dsp/arm/loopfilter_bs_neon.c']
 endif
 # The 10-bit library's NEON tier: one file per family under src/dsp/arm/, on
 # 16-bit lanes, compiled into the 10-bit library only. A family is listed once
 # it has a kernel; what is not listed stays on C at 10 bits.
-neon10_families = ['metrics', 'transform', 'interp']
+neon10_families = ['metrics', 'transform', 'interp', 'loopfilter']
 neon10_sources = []
 if have_neon
   foreach f : neon10_families
     neon10_sources += 'src/dsp/arm/' + f + '_neon10.c'
   endforeach
+  # the strength kernel reads no samples, so both libraries build it
+  neon10_sources += 'src/dsp/arm/loopfilter_bs_neon.c'
 endif
 # The SVE kernels, one file per family under src/dsp/arm/. A family is listed
 # once it has a kernel; metrics_sve.c also holds the vector-length probe that

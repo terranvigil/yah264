@@ -354,6 +354,25 @@ void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            const pixel *r0, const pixel *r1, const pixel *r2,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
+
+/* deblocking (src/dsp/arm/loopfilter_neon10.c; the strength kernel is the
+ * shared src/dsp/arm/loopfilter_bs_neon.c). The four-line luma forms are
+ * 8-bit only: the whole-edge ones serve every NEON call site. */
+void y264_deblock_strength_neon(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
+void y264_deblock_chroma2_h_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
 #endif /* Y264_HAVE_NEON10 */
 
 /* ---- aarch64 SVE (src/dsp/arm/<family>_sve.c) -----------------------------

@@ -46,7 +46,7 @@ static const uint8_t TC0[52][3] = {
     {8,11,16},{9,12,18},{10,13,20},{11,15,23},{13,17,25}
 };
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 
 /* ---- one body per group, the kernel as an argument ----------------------- */
 
@@ -61,6 +61,10 @@ static int clipv(int v) { return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v); }
 /* 8.7.2.3 / 8.7.2.4 on one luma line. `st` steps ACROSS the edge. */
 static void luma_line_c(pixel *q0, int st, int bs, int alpha, int beta, int tc0)
 {
+    /* 8.7.2.2: the tabled thresholds scale by 2^(BitDepth - 8) */
+    alpha <<= Y264_BIT_DEPTH - 8;
+    beta  <<= Y264_BIT_DEPTH - 8;
+    tc0   <<= Y264_BIT_DEPTH - 8;
     int p0 = q0[-st], p1 = q0[-2*st], p2 = q0[-3*st], p3 = q0[-4*st];
     int Q0 = q0[0], Q1 = q0[st], Q2 = q0[2*st], Q3 = q0[3*st];
     if (abs(p0 - Q0) >= alpha || abs(p1 - p0) >= beta || abs(Q1 - Q0) >= beta)
@@ -104,6 +108,9 @@ static void luma_line_c(pixel *q0, int st, int bs, int alpha, int beta, int tc0)
 /* chromaStyleFilteringFlag == 1: only p0/q0 move, and tc is tc0 + 1. */
 static void chroma_line_c(pixel *q0, int st, int b, int alpha, int beta, int tc0)
 {
+    alpha <<= Y264_BIT_DEPTH - 8;
+    beta  <<= Y264_BIT_DEPTH - 8;
+    tc0   <<= Y264_BIT_DEPTH - 8;
     int p0 = q0[-st], p1 = q0[-2*st], Q0 = q0[0], Q1 = q0[st];
     if (abs(p0 - Q0) >= alpha || abs(p1 - p0) >= beta || abs(Q1 - Q0) >= beta)
         return;
@@ -139,11 +146,15 @@ static void edge_plane(int wide)
         eb = ca_guard_alloc(STRIDE * PLANE_H * sizeof(pixel));
     }
     for (int i = 0; i < STRIDE * PLANE_H; i++)
-        ea[i] = (pixel)clipv(128 + (int)ca_below(32) - 16 +
-                             (wide ? (int)ca_below(200) - 100 : 0));
+        ea[i] = (pixel)clipv((128 << (Y264_BIT_DEPTH - 8)) +
+                             (int)ca_below(32u << (Y264_BIT_DEPTH - 8)) -
+                             (16 << (Y264_BIT_DEPTH - 8)) +
+                             (wide ? (int)ca_below(200u << (Y264_BIT_DEPTH - 8)) -
+                                     (100 << (Y264_BIT_DEPTH - 8)) : 0));
     memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
 }
 
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4   /* the four-line kernels: no 10-bit twin */
 /* The window a luma edge kernel DECLARES, mapped against an unmapped page at
  * both tails. A vertical edge reads eight samples across four lines and a
  * horizontal one four samples down eight lines; a ninth sample or a ninth line
@@ -229,6 +240,8 @@ static int run_deblock_luma(const char *name, db_luma_fn v4, db_luma_fn h4)
     }
     return bad;
 }
+
+#endif
 
 /* The whole-edge chroma filter: eight lines in one pass with per-lane tc and a
  * bS == 4 select. Every bS combination over the four groups is drawn, including
@@ -339,9 +352,9 @@ static int run_deblock_strength(const char *name, db_strength_fn kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 typedef void (*db_chroma2_fn)(pixel *, pixel *, int, int, int, int,
                               const uint8_t *, const uint8_t *);
 
@@ -350,7 +363,7 @@ typedef void (*db_chroma2_fn)(pixel *, pixel *, int, int, int, int,
  * the planes get different strides and contents. Then each plane's declared
  * window against an unmapped page at both tails: eight rows of four samples
  * for the vertical edge, four rows of eight for the horizontal one. */
-static int db_clamp_pix(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+static int db_clamp_pix(int v) { return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v); }
 static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn kh)
 {
     int bad = 0;
@@ -364,7 +377,8 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
         for (int k = 0; k < 4; k++) bs[k] = (uint8_t)ca_below(5);
         if (t == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
-        int base = (int)ca_below(256), amp = (t & 2) ? 6 : 60;
+        int base = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
+        int amp = ((t & 2) ? 6 : 60) << (Y264_BIT_DEPTH - 8);
         for (int i = 0; i < S1 * H; i++) a1[i] = (pixel)db_clamp_pix(base + (int)ca_below(2 * amp + 1) - amp);
         for (int i = 0; i < S2 * H; i++) a2[i] = (pixel)db_clamp_pix(base + (int)ca_below(2 * amp + 1) - amp);
         memcpy(b1, a1, sizeof a1); memcpy(b2, a2, sizeof a2);
@@ -495,7 +509,7 @@ static int t_deblock_strength_avx2(void)
 #endif
 
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 typedef void (*db_luma16_fn)(pixel *, int, int, int, const uint8_t *, const uint8_t *);
 
 /* A whole sixteen-line luma edge with four bS values, against four scalar
@@ -572,6 +586,33 @@ static int t_deblock_luma16_neon(void)
 }
 #endif
 
+#if Y264_HAVE_NEON10
+/* The 10-bit tier has the whole-edge forms only; the bench's four-call
+ * baseline is the reference filter's four-line unit. */
+static void c_v4(pixel *q0, int st, int bs, int a, int b, int tc0)
+{ luma_edge4_c(q0, 1, st, bs, a, b, tc0); }
+static void c_h4(pixel *q0, int st, int bs, int a, int b, int tc0)
+{ luma_edge4_c(q0, st, 1, bs, a, b, tc0); }
+static int t_deblock_luma16_neon(void)
+{
+    return run_deblock_luma16("deblock_luma16", y264_deblock_luma_v16_neon,
+                              y264_deblock_luma_h16_neon, c_v4, c_h4);
+}
+static int t_deblock_chroma2_v_neon(void)
+{
+    return run_deblock_chroma2("deblock_chroma2", y264_deblock_chroma2_v_neon,
+                               y264_deblock_chroma2_h_neon);
+}
+static int t_deblock_chroma_neon(void)
+{
+    return run_deblock_chroma("deblock_chroma8_h", y264_deblock_chroma8_h_neon);
+}
+static int t_deblock_strength_neon(void)
+{
+    return run_deblock_strength("deblock_strength", y264_deblock_strength_neon);
+}
+#endif
+
 #if Y264_HAVE_SSE4
 static int t_deblock_luma16_sse4(void)
 {
@@ -603,6 +644,12 @@ static int t_deblock_chroma2_avx2(void)
 const ca_test ca_deblock_tests[] = {
 #if Y264_HAVE_NEON
     { "deblock_luma",          "deblock", Y264_CPU_NEON, t_deblock_luma_neon },
+    { "deblock_chroma8_h",     "deblock", Y264_CPU_NEON, t_deblock_chroma_neon },
+    { "deblock_strength",      "deblock", Y264_CPU_NEON, t_deblock_strength_neon },
+    { "deblock_luma16",        "deblock", Y264_CPU_NEON, t_deblock_luma16_neon },
+    { "deblock_chroma2_v",     "deblock", Y264_CPU_NEON, t_deblock_chroma2_v_neon },
+#endif
+#if Y264_HAVE_NEON10
     { "deblock_chroma8_h",     "deblock", Y264_CPU_NEON, t_deblock_chroma_neon },
     { "deblock_strength",      "deblock", Y264_CPU_NEON, t_deblock_strength_neon },
     { "deblock_luma16",        "deblock", Y264_CPU_NEON, t_deblock_luma16_neon },
