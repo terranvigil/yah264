@@ -1501,6 +1501,10 @@ add "open GOP" check_clip ogop_mref5     "$S/syn_motion.y4m" "--open-gop --cabac
 # buffer (the JM) output them swapped once the window filled. 60 frames is
 # what fills it.
 add "open GOP" check_clip ogop_b4_lead   "$S/syn_long.y4m"   "--open-gop --cabac --bframes 4 --keyint 10 --frames 60"
+# The same waiters on top of a 15-frame window would need 17-18 frames, past
+# H.264's 16: the encode is fitted to 16 instead (fewer references).
+add "open GOP" check_clip ogop_b4_ref16  "$S/syn_long.y4m"   "--open-gop --cabac --bframes 4 --ref 16 --b-adapt 0 --keyint 10 --frames 120"
+add "open GOP" check_clip ogop_b14_ref1  "$S/syn_long.y4m"   "--open-gop --cabac --bframes 14 --ref 1 --b-adapt 0 --keyint 30 --frames 120"
 add "open GOP" check_clip ogop_nob       "$S/syn_motion.y4m" "--open-gop --cabac --bframes 0 --keyint 4"
 add "open GOP" check_clip ogop_flat      "$S/syn_motion.y4m" "--open-gop --cabac --bframes 3 --b-pyramid none --keyint 4"
 add "open GOP" check_clip ogop_8x8       "$S/syn_motion.y4m" "--open-gop --cabac --transform-8x8 --keyint 4"

@@ -4130,7 +4130,7 @@ static int open_lead_wait(int open_gop, int pyramid, int bframes)
 /* The DPB an encode with these settings declares, in frames: what the SPS
  * sizing in open computes for max_dec_frame_buffering, from the parameters
  * alone (keep the two in step). `narrow` is the tight window. */
-static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int narrow)
+static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int narrow, int clamp)
 {
     const yah264_param_t *pp = &e->param;
     int has_b = bf > 0, pyramid = pyr && bf >= 2;
@@ -4139,9 +4139,10 @@ static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int nar
     int wide_rc = !rc_decide || (rcp_lag_for(e) > 0 && !vbv);
     int wide = stair_wide_on() && !narrow;
     int nrefb = pyramid ? (wide && wide_rc ? bf : stair_plan_nrefb(bf)) : 0;
-    /* unclamped: the SPS writes at most 15, so a fit compares against a cap
- * of 15 and never reaches the clamp */
+    /* `clamp` mirrors the SPS, which writes at most 15 references; a forced
+ * level's fit leaves it off and compares against a cap of 15 instead */
     int mrf = (ref > 16 ? 16 : ref < 1 ? 1 : ref) + has_b + nrefb + (e->fields ? 1 : 0);
+    if (clamp && mrf > 15) mrf = 15;
     int reo = 0;
     if (pyramid) { while ((1 << reo) < bf + 1) reo++; }
     else reo = has_b;
@@ -4167,9 +4168,17 @@ static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int nar
 static int level_fit(yah264_encoder_t *e)
 {
     yah264_param_t *pp = &e->param;
-    if (pp->level_idc <= 0)
-        return 0;
-    int cap = level_max_dpb_frames(pp->level_idc, e->width_in_mbs * e->height_in_mbs);
+    /* With no level forced the only limit is H.264's own 16 frames, which
+ * only the --open-gop pyramid's leading waiters can pass: they sit on top
+ * of a reference window that may already be 15. */
+    int forced = pp->level_idc > 0, clamp = !forced;
+    if (!forced) {
+        int bf = pp->bframes > 0 ? pp->bframes : 0, pyr = pp->b_pyramid && bf >= 2;
+        if (!open_lead_wait(e->open_gop, pyr, bf) ||
+            dpb_need(e, pp->ref, bf, pyr, 0, 1) <= 16)
+            return 0;
+    }
+    int cap = forced ? level_max_dpb_frames(pp->level_idc, e->width_in_mbs * e->height_in_mbs) : 16;
     if (cap < 0) {
         fprintf(stderr, "yah264: level_idc %d is not a Table A-1 level\n", pp->level_idc);
         return -1;
@@ -4180,30 +4189,30 @@ static int level_fit(yah264_encoder_t *e)
                 e->width, e->height);
         return -1;
     }
-    if (cap > 15) cap = 15;
+    if (forced && cap > 15) cap = 15;
     int ref = pp->ref > 16 ? 16 : pp->ref < 1 ? 1 : pp->ref;
     int bf = pp->bframes > 0 ? pp->bframes : 0, pyr = pp->b_pyramid && bf >= 2, narrow = 0;
     int ref0 = ref, bf0 = bf, pyr0 = pyr;
-    if (dpb_need(e, ref, bf, pyr, 0) <= cap)
+    if (dpb_need(e, ref, bf, pyr, 0, clamp) <= cap)
         return 0;
-    if (pyr && dpb_need(e, ref, bf, pyr, 1) < dpb_need(e, ref, bf, pyr, 0))
+    if (pyr && dpb_need(e, ref, bf, pyr, 1, clamp) < dpb_need(e, ref, bf, pyr, 0, clamp))
         narrow = 1;
-    while (dpb_need(e, ref, bf, pyr, narrow) > cap && ref > 1) ref--;
+    while (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && ref > 1) ref--;
     /* fewer B frames under the pyramid first, which marks fewer of them */
-    while (dpb_need(e, ref, bf, pyr, narrow) > cap && pyr && bf > 2) bf--;
-    if (dpb_need(e, ref, bf, pyr, narrow) > cap && pyr) {
+    while (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && pyr && bf > 2) bf--;
+    if (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && pyr) {
         pyr = 0;
         bf = bf0;
     }
-    while (dpb_need(e, ref, bf, pyr, narrow) > cap && bf > 0) bf--;
+    while (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && bf > 0) bf--;
     if (bf < 2) pyr = 0;
     /* what the B frames gave back goes to list 0 again */
-    while (ref < ref0 && dpb_need(e, ref + 1, bf, pyr, narrow) <= cap) ref++;
-    if (dpb_need(e, ref, bf, pyr, narrow) > cap) {
+    while (ref < ref0 && dpb_need(e, ref + 1, bf, pyr, narrow, clamp) <= cap) ref++;
+    if (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap) {
         fprintf(stderr, "yah264: level %d.%d holds %d frame(s) in the DPB at %dx%d, and "
                 "this encode needs %d even with ref 1 and no B frames%s\n",
                 pp->level_idc / 10, pp->level_idc % 10, cap, e->width, e->height,
-                dpb_need(e, ref, bf, pyr, narrow),
+                dpb_need(e, ref, bf, pyr, narrow, clamp),
                 e->fields ? " (a field pair keeps one more)" : "");
         return -1;
     }
@@ -4222,9 +4231,13 @@ static int level_fit(yah264_encoder_t *e)
         if (pyr0 && !pyr) FIT_NOTE(", no B-pyramid");
         if (bf != bf0) FIT_NOTE(", bframes %d (was %d)", bf, bf0);
 #undef FIT_NOTE
-        fprintf(stderr, "yah264: level %d.%d holds %d frame%s in the DPB at %dx%d; coding "
-                "with%s\n", pp->level_idc / 10, pp->level_idc % 10, cap, cap == 1 ? "" : "s", e->width,
-                e->height, what[0] ? what + 1 : " the settings unchanged");
+        if (forced)
+            fprintf(stderr, "yah264: level %d.%d holds %d frame%s in the DPB at %dx%d; coding "
+                    "with%s\n", pp->level_idc / 10, pp->level_idc % 10, cap, cap == 1 ? "" : "s",
+                    e->width, e->height, what[0] ? what + 1 : " the settings unchanged");
+        else
+            fprintf(stderr, "yah264: --open-gop's leading B frames would take the DPB past "
+                    "H.264's 16 frames; coding with%s\n", what[0] ? what + 1 : " the settings unchanged");
     }
     return 0;
 }
