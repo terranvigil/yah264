@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
@@ -216,10 +217,42 @@ static const char *y264_y4m_ctag(void)
  * n+i+1, and 2i+1 < n+i+1 for every i below n, so the expansion never passes
  * the read head. (Descending is the version that corrupts: it writes into the
  * tail before reading it.) */
+/* A 16-bit sample above the depth's maximum isn't 10-bit video (a 12- or
+ * 16-bit file tagged p10, say), and the encoder's arithmetic assumes the
+ * range, so the frame is refused like a truncated one. The first such value
+ * is kept for the message; 0 = none seen. */
+static _Atomic unsigned g_bad_sample;
+
+static int plane_in_range(const uint16_t *p, size_t n)
+{
+    const unsigned max = (1u << g_api->depth) - 1;
+    unsigned hi = 0;
+    for (size_t i = 0; i < n; i++) hi |= p[i];
+    if (hi <= max) return 1;
+    for (size_t i = 0; i < n; i++)
+        if (p[i] > max) {
+            unsigned want = 0;
+            if (atomic_compare_exchange_strong(&g_bad_sample, &want, (unsigned)p[i]))
+                fprintf(stderr, "yah264: input sample %u is above %u, the %d-bit maximum: "
+                        "the input is not %d-bit video\n", p[i], max, g_api->depth, g_api->depth);
+            return 0;
+        }
+    return 1;
+}
+
+/* what a failed read_plane was, for the caller's message */
+static const char *read_fail_what(void)
+{
+    return atomic_load(&g_bad_sample) ? "out-of-range sample" : "short read";
+}
+
 static int read_plane(FILE *in, void *dst, size_t n)
 {
-    if (!g_upshift)
-        return fread(dst, 1, n * (size_t)g_in_sample_sz, in) == n * (size_t)g_in_sample_sz;
+    if (!g_upshift) {
+        if (fread(dst, 1, n * (size_t)g_in_sample_sz, in) != n * (size_t)g_in_sample_sz)
+            return 0;
+        return g_in_sample_sz == 1 || plane_in_range(dst, n);
+    }
     uint16_t *d16 = dst;
     uint8_t *tail = (uint8_t *)dst + n;         /* the 8-bit plane, right-aligned */
     if (fread(tail, 1, n, in) != n) return 0;
@@ -1747,7 +1780,7 @@ static void *y4m_reader(void *arg)
         if (!read_plane(r->in, f.y, r->ys) ||
             !read_plane(r->in, f.u, r->cs) ||
             !read_plane(r->in, f.v, r->cs)) {
-            fprintf(stderr, "yah264: short read on frame %d\n", n);
+            fprintf(stderr, "yah264: %s on frame %d\n", read_fail_what(), n);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
 
@@ -1869,7 +1902,7 @@ static void *y4m_reader_seek(void *arg)
         if (!read_plane(r->in, f.y, r->ys) ||
             !read_plane(r->in, f.u, r->cs) ||
             !read_plane(r->in, f.v, r->cs)) {
-            fprintf(stderr, "yah264: short read on frame %d\n", i);
+            fprintf(stderr, "yah264: %s on frame %d\n", read_fail_what(), i);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
         pthread_mutex_lock(&j->lock);
@@ -2456,7 +2489,7 @@ static int scan_pass(const yah264_param_t *param, FILE *in, long max_frames, int
         int h = scan_frame_header(in, n, hdr_len);
         if (h <= 0) { rc = h; break; }
         if (!read_plane(in, buf[k], ys) || scan_skip(in, chroma, st.st_size) != 0) {
-            fprintf(stderr, "yah264: short read on frame %d\n", n);
+            fprintf(stderr, "yah264: %s on frame %d\n", read_fail_what(), n);
             rc = -1; break;
         }
         lp[k] = (const uint8_t *)buf[k] + yoff;
@@ -5865,7 +5898,7 @@ int main(int argc, char **argv)
             goto done;
         }
         if (s == -2) {
-            fprintf(stderr, "yah264: short read on frame %ld\n", frame);
+            fprintf(stderr, "yah264: %s on frame %ld\n", read_fail_what(), frame);
             rc = 1;
             goto done;
         }

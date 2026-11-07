@@ -1815,7 +1815,7 @@ static int lambda_trellis_smooth(int trel, int qp, const pixel *s, int ss, int n
     if (!trel || vl <= 0) return l;
     int64_t sum = 0, sum2 = 0;
     for (int y = 0; y < n; y++)
-        for (int x = 0; x < n; x++) { int p = s[y * ss + x]; sum += p; sum2 += p * p; }
+        for (int x = 0; x < n; x++) { int p = s[y * ss + x]; sum += p; sum2 += (int64_t)p * p; }
     /* n^4 x variance, on the 8-bit scale */
     int64_t vq = ((int64_t)n * n * sum2 - sum * sum) >> (2 * (Y264_BIT_DEPTH - 8));
     int64_t n4 = (int64_t)n * n * n * n, hi = vl * n4, lo = hi / 4;
