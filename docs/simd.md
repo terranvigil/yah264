@@ -230,8 +230,8 @@ The ranges span sunflower 1080p and crowd_run 4K.
   beats AVX2 on both AMD and Intel.
 - **Wider AVX2.** Several AVX2 kernels re-encode the SSE4.2 body and could use
   the whole register on 16-wide blocks.
-- **10-bit SIMD.** None exists. The 10-bit path's coding efficiency gap comes
-  first (see [formats.md](formats.md)).
+- **10-bit SIMD.** None exists; the 10-bit library runs C only (see
+  [formats.md](formats.md)).
 
 ## Measuring it
 

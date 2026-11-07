@@ -3,9 +3,9 @@
 yah264 encodes 8-bit and 10-bit video at 4:2:0, 4:2:2 or 4:4:4. Each depth
 and each chroma format recon-matches ffmpeg's decoder across I, P and B frames
 on both entropy coders. One `yah264` binary handles both depths and picks the encoder
-from the input. The 8-bit 4:2:0 path is the tuned one. The 10-bit path makes
-the same decisions as 8-bit on the same picture, and on HDR10 test clips it
-is ahead of x264 High 10 on coding efficiency.
+from the input. The 8-bit 4:2:0 path is the tuned one. The 10-bit path keeps
+the 8-bit rate-distortion trades and picks the same frame types, and on the
+HDR10 test clips it is ahead of x264 High 10 on coding efficiency.
 
 ## How it works
 
@@ -103,7 +103,7 @@ from the Y4M `C` tag the same way the serial path does.
 | Both libraries in every build, one binary | 10-bit became a property of the input instead of a rebuild. Over the ten board clips at CRF, CQP and ABR, at one and eight threads, 8-bit output is byte-identical to the single-library build. |
 | `--output-depth 8` on 10-bit input refused | Rounding samples away is a conversion. Silent truncation would hide it. |
 | The pixel-type change before any SIMD work | Widening `pixel` and `dctcoef` is the one change that would invalidate 8-bit kernels. Doing it first meant each kernel is written once per depth. |
-| 10-bit runs C only | Coding efficiency came first. 16-bit SIMD is the next 10-bit item. |
+| 10-bit runs C only | 16-bit SIMD is open. |
 | Recon-match against ffmpeg as the gate for each format | A format is accepted at open only once its whole chain decodes bit-exact. 4:2:0 output stayed byte-identical while each format went in. |
 
 The two-library dispatch costs the 8-bit path +0.3% to 0.6% wall time at one
@@ -123,7 +123,7 @@ layout is the likelier cause than the dispatch itself.
 
 ### 10-bit coding efficiency
 
-The tuning is all done at 8 bits, so 10-bit keeps every 8-bit trade by
+The tuning is all done at 8 bits, so 10-bit keeps the 8-bit trades by
 putting its costs on the 8-bit scale in two places:
 
 - **Lambdas.** The mode, trellis and motion lambdas are read at the QP plus
@@ -132,22 +132,13 @@ putting its costs on the 8-bit scale in two places:
   scales the lambdas by the same factors. The psy terms scale with the
   sample scale for the same reason.
 - **The lookahead.** Its lowres planes hold 8-bit samples at every depth, so
-  B placement, scene cuts, mb-tree and the rate control's complexity read
-  the costs their constants were fitted on. At 10 bits the frame types
-  match the 8-bit encode of the same source.
+  B placement, scene cuts, mb-tree and CRF's complexity read the costs their
+  constants were fitted on. 8-bit content coded at 10 bits gets the frame
+  types of its 8-bit encode. ABR, VBV and two-pass frame complexity still
+  sums full-resolution SATD at the coded depth.
 
-Against x264 High 10 at medium, on 120 frames of two HDR10 1080p clips (PQ,
-BT.2020), CRF 18-34 on both encoders:
-
-| clip | fps | BD-rate (HDR-VMAF) | BD-rate (PSNR-Y) |
-|---|--:|--:|--:|
-| Sparks | 60 | -5.95% | -5.40% |
-| Sol Levante | 24 | -16.97% | -10.88% |
-
-Over CRF 18-30 only, the leads are smaller: Sparks -2.84% / -3.43%,
-Sol Levante -13.98% / -9.45%. At a fixed QP with AQ and mb-tree off, the
-10-bit gap to x264 is within about two points of the 8-bit gap on the same
-content, so what remains there is not depth-specific.
+Against x264 High 10 at medium, yah264 is ahead on both HDR10 test clips at
+1080p.
 
 ### Other open items
 
