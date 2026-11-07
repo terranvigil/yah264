@@ -4981,11 +4981,28 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--level") && i + 1 < argc) {
             const char *v = argv[++i];
-            /* accept "3.1" or "31"; store as level*10 */
-            if (strchr(v, '.')) { double d = atof(v); level_idc = (int)(d * 10 + 0.5); }
-            else { int n = atoi(v); level_idc = n < 10 ? n * 10 : n; }
-            if (level_idc < 10 || level_idc > 62) {
-                fprintf(stderr, "yah264: --level expects e.g. 3.1 or 4.0 (10..62)\n");
+            /* "3.1", "31" or "3": a Table A-1 level, stored as level*10 */
+            static const int levels[] = { 10, 11, 12, 13, 20, 21, 22, 30, 31, 32,
+                                          40, 41, 42, 50, 51, 52, 60, 61, 62 };
+            size_t len = strlen(v);
+            level_idc = -1;
+            if (len == 1 && isdigit((unsigned char)v[0]))
+                level_idc = (v[0] - '0') * 10;
+            else if (len == 2 && isdigit((unsigned char)v[0]) && isdigit((unsigned char)v[1]))
+                level_idc = (v[0] - '0') * 10 + (v[1] - '0');
+            else if (len == 3 && isdigit((unsigned char)v[0]) && v[1] == '.' &&
+                     isdigit((unsigned char)v[2]))
+                level_idc = (v[0] - '0') * 10 + (v[2] - '0');
+            int known = 0;
+            for (size_t k = 0; k < sizeof levels / sizeof levels[0]; k++)
+                known |= levels[k] == level_idc;
+            if (!strcasecmp(v, "1b")) {
+                fprintf(stderr, "yah264: --level 1b isn't supported; 1.1 is the next level up\n");
+                return 2;
+            }
+            if (!known) {
+                fprintf(stderr, "yah264: --level '%s' is not an H.264 level (1.0 1.1 1.2 1.3 "
+                        "2.0 2.1 2.2 3.0 3.1 3.2 4.0 4.1 4.2 5.0 5.1 5.2 6.0 6.1 6.2)\n", v);
                 return 2;
             }
         }

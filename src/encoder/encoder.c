@@ -3665,11 +3665,13 @@ static int level_max_dpb_frames(int level_idc, int fs)
         {40,  32768}, {41,  32768}, {42,  34816}, {50, 110400}, {51, 184320},
         {52, 184320}, {60, 696320}, {61, 696320}, {62, 696320},
     };
-    long cap = 696320;
+    long cap = -1;
     for (size_t i = 0; i < sizeof L / sizeof L[0]; i++)
         if (L[i].idc == level_idc) { cap = L[i].max_dpb; break; }
+    if (cap < 0)
+        return -1;                  /* not a level */
     int n = fs > 0 ? (int)(cap / fs) : 16;
-    return n > 16 ? 16 : n < 1 ? 1 : n;
+    return n > 16 ? 16 : n;         /* 0: one frame of this size overflows it */
 }
 
 /* The widest row-wavefront
@@ -4110,6 +4112,108 @@ static void deblock_auto_resolve(yah264_param_t *p)
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
+/* The DPB an encode with these settings declares, in frames: what the SPS
+ * sizing in open computes for max_dec_frame_buffering, from the parameters
+ * alone (keep the two in step). `narrow` is the tight window. */
+static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int narrow)
+{
+    const yah264_param_t *pp = &e->param;
+    int has_b = bf > 0, pyramid = pyr && bf >= 2;
+    int vbv = pp->rc.vbv_maxrate > 0 && pp->rc.vbv_bufsize > 0;
+    int rc_decide = (pp->rc.method == YAH264_RC_ABR && pp->rc.bitrate > 0) || pp->rc.pass > 0 || vbv;
+    int wide_rc = !rc_decide || (rcp_lag_for(e) > 0 && !vbv);
+    int wide = stair_wide_on() && !narrow;
+    int nrefb = pyramid ? (wide && wide_rc ? bf : stair_plan_nrefb(bf)) : 0;
+    /* unclamped: the SPS writes at most 15, so a fit compares against a cap
+ * of 15 and never reaches the clamp */
+    int mrf = (ref > 16 ? 16 : ref < 1 ? 1 : ref) + has_b + nrefb + (e->fields ? 1 : 0);
+    int reo = 0;
+    if (pyramid) { while ((1 << reo) < bf + 1) reo++; }
+    else reo = has_b;
+    if (has_b && rc_decide && rcp_lag_for(e) > 0 && !vbv && wide)
+        reo += rcp_lag_for(e);
+    return mrf > reo ? mrf : reo;
+}
+
+/* A forced --level promises a decoder that the DPB fits it, so the encode
+ * shrinks to fit instead of declaring a level it breaks. In order: the tight
+ * window, which drops the slot per B frame the threaded staircase holds
+ * (measured within 0.1% BD on VMAF v1 at one and four threads; it turns the
+ * overlap off for this encoder, a speed cost not yet measured); list-0
+ * references, down to one; B frames under the pyramid, down to two; the
+ * pyramid itself, with the B count back as asked; then B frames, down to
+ * none. References then come back as far as the room left allows. What
+ * still doesn't fit (field coding at a one-frame DPB) is refused. The cap
+ * is the level's, and 15 at most, which is what the SPS can declare here.
+ * --stitchable declares the level's own DPB and is left alone. Returns -1
+ * to refuse. Runs before anything reads ref, bframes or b_pyramid. */
+static int level_fit(yah264_encoder_t *e)
+{
+    yah264_param_t *pp = &e->param;
+    if (pp->level_idc <= 0)
+        return 0;
+    int cap = level_max_dpb_frames(pp->level_idc, e->width_in_mbs * e->height_in_mbs);
+    if (cap < 0) {
+        fprintf(stderr, "yah264: level_idc %d is not a Table A-1 level\n", pp->level_idc);
+        return -1;
+    }
+    if (cap < 1) {
+        fprintf(stderr, "yah264: level %d.%d's DPB can't hold one %dx%d frame; "
+                "this size needs a higher level\n", pp->level_idc / 10, pp->level_idc % 10,
+                e->width, e->height);
+        return -1;
+    }
+    if (pp->stitchable)
+        return 0;
+    if (cap > 15) cap = 15;
+    int ref = pp->ref > 16 ? 16 : pp->ref < 1 ? 1 : pp->ref;
+    int bf = pp->bframes > 0 ? pp->bframes : 0, pyr = pp->b_pyramid && bf >= 2, narrow = 0;
+    int ref0 = ref, bf0 = bf, pyr0 = pyr;
+    if (dpb_need(e, ref, bf, pyr, 0) <= cap)
+        return 0;
+    if (pyr && dpb_need(e, ref, bf, pyr, 1) < dpb_need(e, ref, bf, pyr, 0))
+        narrow = 1;
+    while (dpb_need(e, ref, bf, pyr, narrow) > cap && ref > 1) ref--;
+    /* fewer B frames under the pyramid first, which marks fewer of them */
+    while (dpb_need(e, ref, bf, pyr, narrow) > cap && pyr && bf > 2) bf--;
+    if (dpb_need(e, ref, bf, pyr, narrow) > cap && pyr) {
+        pyr = 0;
+        bf = bf0;
+    }
+    while (dpb_need(e, ref, bf, pyr, narrow) > cap && bf > 0) bf--;
+    if (bf < 2) pyr = 0;
+    /* what the B frames gave back goes to list 0 again */
+    while (ref < ref0 && dpb_need(e, ref + 1, bf, pyr, narrow) <= cap) ref++;
+    if (dpb_need(e, ref, bf, pyr, narrow) > cap) {
+        fprintf(stderr, "yah264: level %d.%d holds %d frame(s) in the DPB at %dx%d, and "
+                "this encode needs %d even with ref 1 and no B frames%s\n",
+                pp->level_idc / 10, pp->level_idc % 10, cap, e->width, e->height,
+                dpb_need(e, ref, bf, pyr, narrow),
+                e->fields ? " (a field pair keeps one more)" : "");
+        return -1;
+    }
+    e->stair_narrow = narrow && pyr;
+    pp->ref = ref;
+    pp->bframes = bf;
+    pp->b_pyramid = pyr;
+    /* once per process: a CLI run opens an encoder per GOP */
+    static atomic_int noted;
+    if (!atomic_exchange(&noted, 1)) {
+        char what[160] = "";
+        size_t n = 0;
+#define FIT_NOTE(...) n += (size_t)snprintf(what + n, n < sizeof what ? sizeof what - n : 0, __VA_ARGS__)
+        if (e->stair_narrow) FIT_NOTE(", the tight B-frame window (no threaded B overlap)");
+        if (ref != ref0) FIT_NOTE(", ref %d (was %d)", ref, ref0);
+        if (pyr0 && !pyr) FIT_NOTE(", no B-pyramid");
+        if (bf != bf0) FIT_NOTE(", bframes %d (was %d)", bf, bf0);
+#undef FIT_NOTE
+        fprintf(stderr, "yah264: level %d.%d holds %d frame%s in the DPB at %dx%d; coding "
+                "with%s\n", pp->level_idc / 10, pp->level_idc % 10, cap, cap == 1 ? "" : "s", e->width,
+                e->height, what[0] ? what + 1 : " the settings unchanged");
+    }
+    return 0;
+}
+
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
@@ -4555,6 +4659,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         if (wp == 0) wp = 1;
         e->weightp = wp < 0 ? 0 : (wp > 2 ? 2 : wp);
     }
+    if (level_fit(e) < 0) { yah264_encoder_close(e); return NULL; }
     int has_b = e->param.bframes > 0;
     e->sps.entropy_coding_mode_flag = e->param.cabac ? 1 : 0;
     e->sps.profile_idc = y264_profile_idc(e->param.cabac, e->param.bframes); /* Main for CABAC/B, else Baseline */
@@ -4757,7 +4862,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 || (param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0);
         int sps_vbv = param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
         int sps_wide_rc = !sps_rc_decide || (rcp_lag_for(e) > 0 && !sps_vbv);
-        if (e->b_pyramid && !(stair_wide_on() && sps_wide_rc)) {
+        if (e->b_pyramid && !(stair_wide_e(e) && sps_wide_rc)) {
             nrefb = stair_plan_nrefb(e->param.bframes);
         }
         int mrf = e->nref + (has_b ? 1 : 0) + nrefb;
@@ -4767,32 +4872,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * the whole pair. Without the +1 a --ref N field stream would reach only
  * N-1 previous frames. */
         if (e->fields) mrf++;
-        /* A forced --level promises a decoder that the DPB fits it, so the
- * encode shrinks to fit instead of declaring a level it breaks. The wide
- * window goes first: it holds a slot per B frame for the threaded
- * staircase, and the tight one measured within 0.1% BD on VMAF v1 at one and
- * four threads (it does turn the overlap off for this encoder, a speed cost
- * not yet measured). Then list-0 references, down to one.
- * --stitchable declares the level's own DPB and is left alone. */
-        if (e->param.level_idc > 0 && !e->param.stitchable) {
-            int cap = level_max_dpb_frames(e->param.level_idc, e->width_in_mbs * e->height_in_mbs);
-            int tight = stair_plan_nrefb(e->param.bframes), was = e->nref;
-            if (mrf > cap && e->b_pyramid && nrefb > tight) {
-                mrf -= nrefb - tight;
-                nrefb = tight;
-                e->stair_narrow = 1;
-            }
-            while (mrf > cap && e->nref > 1) {
-                e->nref--;
-                mrf--;
-            }
-            /* once per process: a CLI run opens an encoder per GOP */
-            static atomic_int noted;
-            if (e->nref != was && !atomic_exchange(&noted, 1))
-                fprintf(stderr, "yah264: level %d.%d holds %d frames in the DPB at this size: "
-                        "coding with ref %d\n", e->param.level_idc / 10,
-                        e->param.level_idc % 10, cap, e->nref);
-        }
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;
         /* Auto-select the minimum conformant level from resolution/framerate/DPB
  * (Annex A). fps rounded up so MaxMBPS isn't under-counted; the DPB term

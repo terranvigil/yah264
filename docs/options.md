@@ -831,7 +831,7 @@ parallelism, not encoder speed.
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
 | `--sar` | `W:H` | unspecified (square) | Sample aspect ratio. Accepts `16:11` or `16/11`. |
-| `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level. Range 1.0 to 6.2. The DPB is fitted to it, see below. |
+| `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level, 1.0 to 6.2. The DPB is fitted to it, see below. |
 | `--no-sei` | | SEI on | Drop the identification message at the start of the stream: a user-data SEI naming the encoder, its version and the options in force. |
 | `--profile` | `baseline`\|`main`\|`high`\|`high10`\|`high422`\|`high444` | derived | Constrain the tool-set to a profile and write its `profile_idc`. See below. |
 | `--aud` | | off | An access unit delimiter (NAL type 9) opens every access unit, ahead of the parameter sets. |
@@ -1023,16 +1023,23 @@ interlaced board, scheduled with the B-field item instead of guessed at here.
 Until then, reach for `--tff` when the source really is interlaced and you need
 a field-coded stream, not as a compression win.
 
-`--level` fits the DPB to the level you asked for. When the frames the encode
-keeps would overflow the level's DPB at this frame size, it first drops the
-extra B-frame slots the threaded pipeline reserves (which turns that overlap
-off for the encode), then lowers `--ref`, one at a time down to 1, and says
-so once, an explicit `--ref` included. `--level 5.1` on a 4K encode keeps all
-three of medium's references; `--level 4.1` on a 1080p one codes with two.
-Frame size, frame rate and bitrate aren't fitted: a level below the
-conformant minimum for those is accepted with a warning that the stream may
-be non-conformant. The auto level is derived from frame size, frame rate
-and DPB size per Annex A.
+`--level` takes a Table A-1 level (`3.1`, `31` or `3`); anything else,
+including `1b`, is refused. The DPB is fitted to it: when the frames the
+encode keeps would overflow the level's DPB at this frame size (at most 15
+frames), it gives up, in order and only as far as it has to, the extra
+B-frame slots the threaded pipeline reserves (which turns that overlap off
+for the encode), list-0 references down to `--ref 1`, B frames under the
+pyramid down to two, the pyramid itself (with `--bframes` back as asked),
+and then B frames down to none; references then come back as far as the
+room left allows. One line names everything it changed, an explicit
+`--ref` or `--bframes` included. `--level 5.1` on a 4K encode keeps all
+three of medium's references and only narrows the window; `--level 4.1` on
+a 1080p one also codes with two. What can't fit even then is refused: a
+frame larger than the level's whole DPB, or field coding at a one-frame
+DPB. Frame size, frame
+rate and bitrate aren't fitted: a level below the conformant minimum for
+those is accepted with a warning that the stream may be non-conformant. The
+auto level is derived from frame size, frame rate and DPB size per Annex A.
 
 ### Threading
 
@@ -1451,7 +1458,7 @@ Options that differ, and how:
 | `--qcomp` | Reaches the ABR curve and mb-tree strength. The CRF and two-pass curves carry their own. The reference documents it as one global setting. |
 | `--deadzone-inter`/`-intra` | Same values and scale, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 | `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
-| `--level` | Fits the DPB by lowering an explicit `--ref` as well as the preset's. x264 lowers only the preset's and keeps an explicit `--ref` with a warning. |
+| `--level` | Fits the DPB by lowering an explicit `--ref`, the pyramid and `--bframes` as well as the preset's references. x264 lowers only the preset's references and keeps an explicit `--ref` with a warning. `1b` is refused. |
 | `--stitchable` | Pins the SPS only, and raises the declared level (and with it the MV range), so it changes the encode and not only the header. |
 | `--pic-struct` | Writes pic_struct by parity: 0 for a frame picture, 1 or 2 for the two halves of a field pair. The clock timestamps are all written absent, which is the cheapest legal spelling. |
 | `--nal-hrd` | One SchedSelIdx and NAL HRD only, where x264 offers the choice of both models. The encoder obeys one bucket, so declaring a second would be declaring a schedule nothing enforces. |
