@@ -175,8 +175,10 @@ dec_decode() {  # dec_decode <decoder> <stream.264> <pix_fmt> <WxH> <workprefix>
             # under fixed names, and this pool runs jobs in parallel in one work
             # dir, so each invocation gets its own.
             rm -rf "$p.jm"; mkdir -p "$p.jm"
+            # DPBPLUS0=0: JM otherwise gives itself a frame more than the SPS
+            # declares, which hides a DPB declared one frame short
             ( cd "$p.jm" && "$root/tools/jm/ldecod" -p InputFile="$str" \
-                  -p OutputFile="$p.jm.yuv" >/dev/null 2>&1 ) || true
+                  -p OutputFile="$p.jm.yuv" -p DPBPLUS0=0 >/dev/null 2>&1 ) || true
             rawmd5frames "$p.jm.yuv" "$pf" "$sz"
             rm -rf "$p.jm" "$p.jm.yuv"
             ;;
