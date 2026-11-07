@@ -1129,6 +1129,29 @@ check_twopass() {   # check_twopass <name> <src> [pass-2 args]
     echo "SUMMARY $RM_T $RM_F"
 }
 
+# --nal-hrd two-pass at four threads over scene cuts: both passes, then the
+# buffer model read back out of the stream. Threads are the point: the bug
+# was a threaded rule putting the encode back on the per-GOP path, which
+# leaves a scene-cut IDR without its buffering period. A stream with only
+# one IDR would pass vacuously, so the cell asks for more than one.
+check_hrd_mt() {   # check_hrd_mt <name> <src> <spec>
+    local name="$1" src="$2" spec="$3" p="$work/hrdmt.$1" f=0
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --threads 4 --pass 1 --stats "$p.stats" -o /dev/null 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --threads 4 --pass 2 --stats "$p.stats" -o "$p.264" 2>/dev/null || true
+    local idrs
+    idrs=$(python3 -c "
+import sys; sys.path.insert(0, '$root/scripts'); import h264_syntax as H
+print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/dev/null || echo 0)
+    if [ "${idrs:-0}" -gt 1 ] && python3 "$root/scripts/hrd_check.py" "$p.264" --quiet >/dev/null 2>&1; then
+        echo "  ok   HRD clean over $idrs IDRs, two-pass at 4 threads ($spec)"
+    else
+        echo "  FAIL hrd_check over $idrs IDRs, two-pass at 4 threads ($spec)"; f=1
+    fi
+    echo "SUMMARY 1 $f"
+}
+
 # ---------------------------------------------------------------------------
 # Worker mode: run one check into its own result file, then exit 0 (so xargs
 # never aborts the pool). Globals come from the exported environment.
@@ -1299,6 +1322,17 @@ if [ ! -f "$fixdir/syn_p10_crop.y4m" ]; then
         -pix_fmt yuv420p10le -strict -1 -f yuv4mpegpipe \
         "$fixdir/syn_p10_crop.y4m.tmp.$$"
     mv "$fixdir/syn_p10_crop.y4m.tmp.$$" "$fixdir/syn_p10_crop.y4m"
+fi
+# Three unrelated synthetic shots of 50 frames, so an encode with a keyint
+# above 50 places scene-cut IDRs inside a GOP: the shape that left an IDR
+# without a buffering period under --nal-hrd.
+if [ ! -f "$fixdir/syn_shots.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=352x288:rate=25" \
+        -f lavfi -i "mandelbrot=size=352x288:rate=25" \
+        -f lavfi -i "life=size=352x288:rate=25:mold=10:ratio=0.3" \
+        -filter_complex "[0:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[a];[1:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[b];[2:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[c];[a][b][c]concat=n=3:v=1[o]" \
+        -map "[o]" -f yuv4mpegpipe "$fixdir/syn_shots.y4m.tmp.$$"
+    mv "$fixdir/syn_shots.y4m.tmp.$$" "$fixdir/syn_shots.y4m"
 fi
 # Interlaced clips (item C2-PAFF-1). tinterlace weaves two source frames into
 # one, so the Y4M carries It / Ib and the CLI field-codes it without a flag --
@@ -1693,6 +1727,8 @@ add "nal-hrd" check_rc hrd_tff "$S/syn_tff.y4m" \
     "--tff --cabac --crf 26 --vbv-maxrate 600 --vbv-bufsize 600 --nal-hrd vbr"
 add "nal-hrd" check_rc hrd_sl  "$S/syn_motion.y4m" \
     "--cabac --crf 20 --vbv-maxrate 600 --vbv-bufsize 600 --slices 4 --nal-hrd vbr"
+add "nal-hrd" check_hrd_mt hrd_2pass_mt "$S/syn_shots.y4m" \
+    "--cabac --bitrate 800 --vbv-maxrate 1000 --vbv-bufsize 1000 --nal-hrd vbr --keyint 60"
 
 add "2-pass rate control" check_twopass base "$S/syn_motion.y4m"
 

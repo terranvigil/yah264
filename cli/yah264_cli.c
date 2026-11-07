@@ -5643,6 +5643,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
+    /* --nal-hrd runs one continuous encoder (see the path choice below), and
+ * these three exist only on the per-GOP path, so they would be dropped. */
+    if (nal_hrd && (g_cut_split || g_shot_table || g_shot_crf)) {
+        fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: a buffering period "
+                "at every IDR needs one continuous encoder, and that option splits the "
+                "stream into per-GOP encoders\n",
+                g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table" : "--cut-split");
+        return 2;
+    }
     /* --intra-refresh. Everything it cannot run with is named here, because
  * the library's own refusal reaches the user as "encoder_open failed". B
  * frames are the one a preset or tune turns on by itself, so an unset
@@ -5741,17 +5750,18 @@ int main(int argc, char **argv)
  * removal delay back to this segment's start, which it fixes before this
  * one has found its cuts (see hrd_segmented in yah264.h). One instance
  * knows every cut, so --nal-hrd runs one, its threads on the wavefront. */
+    if (param.rc.method == YAH264_RC_2PASS) {
+        const char *ev = y264_env("Y264_2PASS_MT");
+        tp_mt = (!ev || atoi(ev)) && param.rc.stats
+             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
+    }
+    /* Last, so no rule above can turn GOP parallelism back on. */
     if (nal_hrd) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path)
             LOGF(LOG_INFO, "yah264: --nal-hrd puts a buffering period at every IDR, which "
                  "needs one continuous encoder, so the %d threads run its row wavefront "
                  "instead of parallel GOPs\n", nthreads);
-    }
-    if (param.rc.method == YAH264_RC_2PASS) {
-        const char *ev = y264_env("Y264_2PASS_MT");
-        tp_mt = (!ev || atoi(ev)) && param.rc.stats
-             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
