@@ -275,7 +275,7 @@ void y264_pred_avg2_c(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
 void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
                     int w, int h)
 {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         y264_pred_copy_neon(dst, dstride, s, sstride, w, h);
         return;
@@ -302,7 +302,7 @@ void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
 void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
                     int sstride, int w, int h)
 {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         y264_pred_avg2_neon(dst, dstride, s1, s2, sstride, w, h);
         return;
@@ -393,7 +393,7 @@ void y264_pixel_avg_wt_2d_c(pixel *dst, int ds, const pixel *a, int as,
 void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
                           const pixel *b, int bs, int w, int h, int w0, int w1)
 {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (y264_asm_on(Y264_ASM_MC)) {
         y264_pixel_avg_wt_2d_neon(dst, ds, a, as, b, bs, w, h, w0, w1);
         return;
@@ -422,7 +422,7 @@ void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
 void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
                        int w0, int w1)
 {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (y264_asm_on(Y264_ASM_MC)) {
         y264_pixel_avg_wt_neon(dst, a, b, n, w0, w1);
         return;
@@ -588,7 +588,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     if (xin0 < x0) xin0 = x0;
     if (xin1 > x1) xin1 = x1;
     if (xin1 < xin0) xin1 = xin0;                   /* tiny frame: no interior */
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
     /* Which tier owns the two row kernels for this band, or Y264_TIER_C for
  * none: the span test is the kernels' own contract (they step back to end on
  * the span and need eight columns to do it), and it is asked once per band
@@ -643,7 +643,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             int x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
             srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
         }
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
         if (hpel_tier == Y264_TIER_NEON) {
             y264_hpel_hrow_neon(srow, row, xin0, xin1);
             x = xin1;
@@ -703,7 +703,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         int nseg = 0;
         int v0 = x0 > 0 ? x0 : 0, v1 = x1 < pw ? x1 : pw;
         int mid = 0;
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
         if (hpel_tier == Y264_TIER_NEON && v1 - v0 >= 8) {
             y264_hpel_outrow_neon(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                   r0, r1, r2, r3, r4, r5, v0, v1);
@@ -807,7 +807,7 @@ void y264_mc_chroma(pixel *dst, int dstride,
                     int sub_w, int sub_h)
 {
     NLED(mc_chroma_call, 1); NLED(mc_chroma_pix, (uint64_t)w*h);
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     /* y264_cpu_detect is warmed on the main thread at encoder open and returns
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by

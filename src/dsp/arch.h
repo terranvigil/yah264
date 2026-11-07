@@ -331,6 +331,29 @@ void y264_zigzag_abs_8x8_neon(int out[64], const dctcoef in[64]);
 void y264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
+
+/* motion compensation (src/dsp/arm/interp_neon10.c) */
+void y264_mc_chroma_neon8(pixel *dst, int dstride, const pixel *ref,
+                          int rstride, int ix, int iy, int fx, int fy);
+void y264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_neon_w8h(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_pred_copy_neon(pixel *dst, int dstride, const pixel *s, int sstride,
+                         int w, int h);
+void y264_pred_avg2_neon(pixel *dst, int dstride, const pixel *s1,
+                         const pixel *s2, int sstride, int w, int h);
+void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
+                            int w0, int w1);
+void y264_pixel_avg_wt_2d_neon(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
+                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
+                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
+                           const pixel *r0, const pixel *r1, const pixel *r2,
+                           const pixel *r3, const pixel *r4, const pixel *r5,
+                           int x0, int x1);
 #endif /* Y264_HAVE_NEON10 */
 
 /* ---- aarch64 SVE (src/dsp/arm/<family>_sve.c) -----------------------------

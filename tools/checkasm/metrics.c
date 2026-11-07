@@ -825,8 +825,8 @@ static int t_satd_avg8x8_neon(void)
 /* ---- the rows: one thin function per kernel per tier ----------------------
  *
  * The NEON rows serve both depths: at 10 bits the same names are the 16-bit
- * lane kernels (src/dsp/arm/*_neon10.c), and the rows whose kernels exist at
- * 8 bits only sit behind Y264_HAVE_NEON alone. */
+ * lane kernels (src/dsp/arm/<family>_neon10.c), and the rows whose kernels
+ * exist at 8 bits only sit behind Y264_HAVE_NEON alone. */
 
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
 
