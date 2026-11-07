@@ -5741,9 +5741,17 @@ int main(int argc, char **argv)
  * the GOP markers there is nothing to split on, so it stays serial, which is
  * also what keeps a serial pass 1 feeding a serial pass 2 unchanged. */
     int tp_mt = param.rc.method != YAH264_RC_2PASS;
+    if (param.rc.method == YAH264_RC_2PASS) {
+        const char *ev = y264_env("Y264_2PASS_MT");
+        tp_mt = (!ev || atoi(ev)) && param.rc.stats
+             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
+    }
+    /* The modes that need one continuous encoder, after every rule above
+ * that can choose the per-GOP path, so none of those can undo them. Each
+ * is said out loud when there is more than one thread to spend. */
     /* --intra-refresh has no keyframe after the first, so no GOP boundary to
  * split the encode at: one instance, and the threads go to its wavefront
- * and lookahead. Said out loud when there is more than one to spend. */
+ * and lookahead. */
     if (intra_refresh) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path)
@@ -5757,12 +5765,6 @@ int main(int argc, char **argv)
  * removal delay back to this segment's start, which it fixes before this
  * one has found its cuts (see hrd_segmented in yah264.h). One instance
  * knows every cut, so --nal-hrd runs one, its threads on the wavefront. */
-    if (param.rc.method == YAH264_RC_2PASS) {
-        const char *ev = y264_env("Y264_2PASS_MT");
-        tp_mt = (!ev || atoi(ev)) && param.rc.stats
-             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
-    }
-    /* Last, so no rule above can turn GOP parallelism back on. */
     if (nal_hrd) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path)

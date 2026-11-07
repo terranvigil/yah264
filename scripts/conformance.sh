@@ -1152,6 +1152,26 @@ print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/de
     echo "SUMMARY 1 $f"
 }
 
+# --intra-refresh two-pass at four threads: one IDR in the whole stream. The
+# two-pass path choice used to put it back on the per-GOP path, where every
+# GOP opens with its own IDR.
+check_ir_mt() {   # check_ir_mt <name> <src> <spec>
+    local name="$1" src="$2" spec="$3" p="$work/irmt.$1" f=0 idrs
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --threads 4 --pass 1 --stats "$p.stats" -o /dev/null 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --threads 4 --pass 2 --stats "$p.stats" -o "$p.264" 2>/dev/null || true
+    idrs=$(python3 -c "
+import sys; sys.path.insert(0, '$root/scripts'); import h264_syntax as H
+print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/dev/null || echo 0)
+    if [ "$idrs" = 1 ] && ffmpeg -v error -xerror -i "$p.264" -f null - 2>/dev/null; then
+        echo "  ok   one IDR, two-pass at 4 threads ($spec)"
+    else
+        echo "  FAIL $idrs IDRs or a failed decode, two-pass at 4 threads ($spec)"; f=1
+    fi
+    echo "SUMMARY 1 $f"
+}
+
 # ---------------------------------------------------------------------------
 # Worker mode: run one check into its own result file, then exit 0 (so xargs
 # never aborts the pool). Globals come from the exported environment.
@@ -1526,6 +1546,7 @@ add "open GOP" check_threading ogop "$S/syn_motion.y4m" "--open-gop --cabac"
 add "intra refresh" check_clip ir_cavlc  "$S/syn_pan.y4m"      "--intra-refresh --cavlc --keyint 8"
 add "intra refresh" check_clip ir_cabac  "$S/syn_pan.y4m"      "--intra-refresh --cabac --ref 3 --keyint 8"
 add "intra refresh" check_clip ir_8x8    "$S/syn_pan.y4m"      "--intra-refresh --cabac --transform-8x8 --keyint 6"
+add "intra refresh" check_ir_mt ir_2pass_mt "$S/syn_shots.y4m"   "--intra-refresh --cabac --bitrate 500 --keyint 50"
 add "intra refresh" check_clip ir_crop   "$S/syn_pan_crop.y4m" "--intra-refresh --cabac --keyint 5"
 add "intra refresh" check_clip ir_slices "$S/syn_pan.y4m"      "--intra-refresh --cabac --slices 3 --keyint 8"
 add "intra refresh" check_irefresh rec_cavlc "$S/syn_pan.y4m"      8  "--cavlc --ref 2"
