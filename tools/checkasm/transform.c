@@ -410,10 +410,12 @@ static int run_quant_ac(const char *name, quantacfn kern)
     return bad;
 }
 
-/* Levels are bounded so the dequantised coefficient stays inside 16 bits (the
- * largest flat scale is 45 at the 8x8 positions with qp%6 == 5, times
- * 2^(qp/6)): past that the C path wraps and the kernel saturates, and no
- * conforming stream carries such a level. */
+/* At 8 bits levels are bounded so the dequantised coefficient stays inside
+ * 16 bits (the largest flat scale is 45 at the 8x8 positions with qp%6 == 5,
+ * times 2^(qp/6)): past that the C path wraps and the int16 kernel saturates,
+ * and no conforming stream carries such a level. At 10 bits the coefficient
+ * is an int32 and levels run to +-65535, which keeps every product inside int
+ * at every qp (65535 * 16 * 58 * 2^4 for 8x8, 65535 * 16 * 25 * 2^6 for 4x4). */
 static int run_dequant(const char *name, dequantfn k4, dequantfn k8)
 {
     int bad = 0;
@@ -421,9 +423,13 @@ static int run_dequant(const char *name, dequantfn k4, dequantfn k8)
         dctcoef l4[16], c4a[16], c4b[16], l8[64], c8a[64], c8b[64];
         int32_t r4[16], r8[64];
         int qp = t % (52 + Y264_QP_BD_OFFSET);
+#if Y264_BIT_DEPTH > 8
+        int lim = 65535;
+#else
         int lim = 32767 / (45 << (qp / 6));
         if (lim > 4095) lim = 4095;
         if (lim < 1) lim = 1;
+#endif
         ca_dq4_row(r4, qp);
         ca_dq8_row(r8, qp);
         for (int k = 0; k < 16; k++)

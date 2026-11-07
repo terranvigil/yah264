@@ -770,49 +770,51 @@ static int t_satd_avg8x8_neon(void)
     static pixel avg[8 * 8];
     refs();
     for (int t = 0; t < TRIALS && !bad; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 1) ca_fill_max(pb, STRIDE * PLANE_H);
-        if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
-                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
-        const pixel *p = pb + (t % 3), *q = pb + STRIDE * (1 + t % 2) + (t % 5);
+        if (t == 1) ca_fill_max(pb, st * PLANE_H);
+        if (t == 2) { ca_fill_max(pa, st * PLANE_H);
+                      memset(pb, 0, st * PLANE_H * sizeof(pixel)); }
+        const pixel *p = pb + (t % 3), *q = pb + st * (1 + t % 2) + (t % 5);
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++)
-                avg[y * 8 + x] = (pixel)((p[y * STRIDE + x] + q[y * STRIDE + x] + 1) >> 1);
-        int e = ref.satd8x8(pa, STRIDE, avg, 8);
-        int g = y264_satd_avg_8x8_neon(pa, STRIDE, p, q, STRIDE);
+                avg[y * 8 + x] = (pixel)((p[y * st + x] + q[y * st + x] + 1) >> 1);
+        int e = ref.satd8x8(pa, st, avg, 8);
+        int g = y264_satd_avg_8x8_neon(pa, st, p, q, st);
         if (e != g) { ca_fail("satd_avg8x8: %d vs %d (trial %d)", g, e, t); bad++; }
         int e16 = 0;
         for (int by = 0; by < 16; by += 8)
             for (int bx = 0; bx < 16; bx += 8) {
                 for (int y = 0; y < 8; y++)
                     for (int x = 0; x < 8; x++)
-                        avg[y * 8 + x] = (pixel)((p[(by + y) * STRIDE + bx + x]
-                                                + q[(by + y) * STRIDE + bx + x] + 1) >> 1);
-                e16 += ref.satd8x8(pa + by * STRIDE + bx, STRIDE, avg, 8);
+                        avg[y * 8 + x] = (pixel)((p[(by + y) * st + bx + x]
+                                                + q[(by + y) * st + bx + x] + 1) >> 1);
+                e16 += ref.satd8x8(pa + by * st + bx, st, avg, 8);
             }
-        int g16 = y264_satd_avg_16x16_neon(pa, STRIDE, p, q, STRIDE);
+        int g16 = y264_satd_avg_16x16_neon(pa, st, p, q, st);
         if (e16 != g16) { ca_fail("satd_avg16x16: %d vs %d (trial %d)", g16, e16, t); bad++; }
         int e168 = 0, e816 = 0;
         for (int b = 0; b < 2; b++) {
             for (int y = 0; y < 8; y++)
                 for (int x = 0; x < 8; x++)
-                    avg[y * 8 + x] = (pixel)((p[y * STRIDE + 8 * b + x] + q[y * STRIDE + 8 * b + x] + 1) >> 1);
-            e168 += ref.satd8x8(pa + 8 * b, STRIDE, avg, 8);
+                    avg[y * 8 + x] = (pixel)((p[y * st + 8 * b + x] + q[y * st + 8 * b + x] + 1) >> 1);
+            e168 += ref.satd8x8(pa + 8 * b, st, avg, 8);
             for (int y = 0; y < 8; y++)
                 for (int x = 0; x < 8; x++)
-                    avg[y * 8 + x] = (pixel)((p[(8 * b + y) * STRIDE + x] + q[(8 * b + y) * STRIDE + x] + 1) >> 1);
-            e816 += ref.satd8x8(pa + 8 * b * STRIDE, STRIDE, avg, 8);
+                    avg[y * 8 + x] = (pixel)((p[(8 * b + y) * st + x] + q[(8 * b + y) * st + x] + 1) >> 1);
+            e816 += ref.satd8x8(pa + 8 * b * st, st, avg, 8);
         }
-        int s168 = ref.satd8x8(pa, STRIDE, p, STRIDE) + ref.satd8x8(pa + 8, STRIDE, p + 8, STRIDE);
-        int s816 = ref.satd8x8(pa, STRIDE, p, STRIDE)
-                 + ref.satd8x8(pa + 8 * STRIDE, STRIDE, p + 8 * STRIDE, STRIDE);
-        if (s168 != y264_satd_16x8_neon(pa, STRIDE, p, STRIDE) ||
-            s816 != y264_satd_8x16_neon(pa, STRIDE, p, STRIDE)) {
+        int s168 = ref.satd8x8(pa, st, p, st) + ref.satd8x8(pa + 8, st, p + 8, st);
+        int s816 = ref.satd8x8(pa, st, p, st)
+                 + ref.satd8x8(pa + 8 * st, st, p + 8 * st, st);
+        if (s168 != y264_satd_16x8_neon(pa, st, p, st) ||
+            s816 != y264_satd_8x16_neon(pa, st, p, st)) {
             ca_fail("satd16x8/8x16 (trial %d)", t);
             bad++;
         }
-        int g168 = y264_satd_avg_16x8_neon(pa, STRIDE, p, q, STRIDE);
-        int g816 = y264_satd_avg_8x16_neon(pa, STRIDE, p, q, STRIDE);
+        int g168 = y264_satd_avg_16x8_neon(pa, st, p, q, st);
+        int g816 = y264_satd_avg_8x16_neon(pa, st, p, q, st);
         if (e168 != g168 || e816 != g816) {
             ca_fail("satd_avg16x8/8x16: %d/%d vs %d/%d (trial %d)", g168, g816, e168, e816, t);
             bad++;
@@ -884,16 +886,18 @@ static int t_sad_multi_neon(void)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 0) memcpy(pb, pa, st * PLANE_H * sizeof(pixel));
         for (unsigned k = 0; k < sizeof(rows) / sizeof(rows[0]); k++) {
-            const pixel *r0 = pb + 1, *r1 = pb + STRIDE, *r2 = pb + STRIDE + 3;
+            const pixel *r0 = pb + 1, *r1 = pb + st, *r2 = pb + st + 3;
             int s3[3], s2[2];
-            rows[k].k3(pa, STRIDE, r0, r1, r2, STRIDE, s3);
-            rows[k].k2(pa, STRIDE, r2, r0, STRIDE, s2);
-            int e0 = ref.sad[rows[k].pu](pa, STRIDE, r0, STRIDE);
-            int e1 = ref.sad[rows[k].pu](pa, STRIDE, r1, STRIDE);
-            int e2 = ref.sad[rows[k].pu](pa, STRIDE, r2, STRIDE);
+            rows[k].k3(pa, st, r0, r1, r2, st, s3);
+            rows[k].k2(pa, st, r2, r0, st, s2);
+            int e0 = ref.sad[rows[k].pu](pa, st, r0, st);
+            int e1 = ref.sad[rows[k].pu](pa, st, r1, st);
+            int e2 = ref.sad[rows[k].pu](pa, st, r2, st);
             if (s3[0] != e0 || s3[1] != e1 || s3[2] != e2 || s2[0] != e2 || s2[1] != e0) {
                 if (!bad) ca_fail("%s: x3 {%d,%d,%d} x2 {%d,%d} vs {%d,%d,%d}", rows[k].n,
                                   s3[0], s3[1], s3[2], s2[0], s2[1], e0, e1, e2);
