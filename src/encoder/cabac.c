@@ -1071,6 +1071,10 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
                         long zero_cost, long coded_cost, tr_level *tree, int lastq)
 {
     rq_state A[8], B[8], *prev = A, *cur = B;
+    /* the reward is linear in the coefficients and the distortion squared,
+     * so above 8 bits the strength grows with the sample scale to keep the
+     * 8-bit balance */
+    psy256 <<= (Y264_BIT_DEPTH - 8);
     prev[0].cost = 0;
     prev[0].chain = 0;
     tree[0].nxt = 0; tree[0].lev = 0; tree[0].pos = 0;

@@ -5912,7 +5912,28 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
 
 /* --- lowres lookahead analysis (shared by scene-cut, adaptive-B, mb-tree) ---
  * All costs are on half-resolution luma: a 16x16 macroblock maps to an 8x8
- * lowres block, so the motion search is ~4x cheaper and reaches twice as far. */
+ * lowres block, so the motion search is ~4x cheaper and reaches twice as far.
+ *
+ * The lowres planes hold 8-bit samples at every depth. Every lookahead
+ * constant -- the intra penalty, the motion-rate weights, the search exits,
+ * the B-placement and cut thresholds, and the rate control's complexity
+ * fits -- was set on 8-bit costs, and a 10-bit sample reads four times the
+ * SATD of the same picture at 8 bits. Rounding the samples down here puts
+ * every cost the lookahead makes on that scale at once, where scaling each
+ * consumer would leave any one missed to compare a 10-bit cost against an
+ * 8-bit one. At 8 bits LR_SHIFT is 0 and the planes are unchanged. Above 8
+ * bits the rounding can reach 256 on near-white full-range samples, so the
+ * planes and every prediction built from them are clamped at 255 (LR_CLIP),
+ * the ceiling the 8-bit costs were fitted under. */
+#define LR_SHIFT (Y264_BIT_DEPTH - 8)
+static inline pixel lr_clip(int v) { return (pixel)(v < 0 ? 0 : v > 255 ? 255 : v); }
+#define LR_CLIP(v)    lr_clip(v)
+#if Y264_BIT_DEPTH > 8
+#define LR_SAT(v)     (pixel)((v) > 255 ? 255 : (v))  /* the rounding's only overflow */
+#else
+#define LR_SAT(v)     (pixel)(v)                      /* an average of 8-bit samples */
+#endif
+#define LR_DOWN(sum4) LR_SAT(((sum4) + (2 << LR_SHIFT)) >> (2 + LR_SHIFT))
 
 /* The lowres half-pel samples taken from the source at one-pixel offsets (right,
  * down, both) with the same 2x2 average as the whole-pel plane, instead of
@@ -5923,7 +5944,10 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
 static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, int ph,
                         int lw, int lh)
 {
-#define LRHF(a, b, c, d) (((((a) + (b) + 1) >> 1) + (((c) + (d) + 1) >> 1) + 1) >> 1)
+/* Each pair's mean rounds straight to the 8-bit scale, so a 10-bit plane
+ * that is 8-bit content shifted up gives exactly the 8-bit planes. */
+#define LRH2(a, b) (((a) + (b) + (1 << LR_SHIFT)) >> (1 + LR_SHIFT))
+#define LRHF(a, b, c, d) LR_SAT((LRH2(a, b) + LRH2(c, d) + 1) >> 1)
     /* the clamps only ever bite on the last column (x2 = 2*lw) and the last
      * row (y2 = 2*lh), so the body runs clamp-free and vectorises */
     int xe = 2 * lw <= pw - 1 ? lw : lw - 1;
@@ -5931,25 +5955,27 @@ static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, in
         int y0 = 2 * y, y1 = y0 + 1 < ph ? y0 + 1 : ph - 1, y2 = y0 + 2 < ph ? y0 + 2 : ph - 1;
         const pixel *r0 = src + y0 * ss, *r1 = src + y1 * ss, *r2 = src + y2 * ss;
         pixel *restrict oh = hp[0] + y * lw, *restrict ov = hp[1] + y * lw, *restrict oc = hp[2] + y * lw;
-#if Y264_HAVE_SSE4
-        /* the x86 tiers take the clamp-free span as one dispatched row */
+#if Y264_HAVE_SSE4 && Y264_BIT_DEPTH == 8
+        /* the x86 tiers take the clamp-free span as one dispatched row; above
+         * 8 bits the loop below runs, since its rows round to the 8-bit scale */
         y264_lr_hp_row(oh, ov, oc, r0, r1, r2, xe);
 #else
         for (int x = 0; x < xe; x++) {
             int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
-            oh[x] = (pixel)LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
-            ov[x] = (pixel)LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
-            oc[x] = (pixel)LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
+            oh[x] = LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
+            ov[x] = LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
+            oc[x] = LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
         }
 #endif
         for (int x = xe; x < lw; x++) {
             int x0 = 2 * x, x1 = x0 + 1 < pw ? x0 + 1 : pw - 1, x2 = x0 + 2 < pw ? x0 + 2 : pw - 1;
-            oh[x] = (pixel)LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
-            ov[x] = (pixel)LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
-            oc[x] = (pixel)LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
+            oh[x] = LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
+            ov[x] = LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
+            oc[x] = LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
         }
     }
 #undef LRHF
+#undef LRH2
 }
 
 /* The fifteen quarter-pel phase planes (the layout build_lr_subpel writes)
@@ -6013,7 +6039,7 @@ static void downscale(pixel *dst, int dw, int dh, const pixel *src, int ss)
         pixel *d = dst + y * dw;
         for (int x = 0; x < dw; x++) {
             int x2 = 2 * x;
-            d[x] = (pixel)((a[x2] + a[x2 + 1] + b[x2] + b[x2 + 1] + 2) >> 2);
+            d[x] = LR_DOWN(a[x2] + a[x2 + 1] + b[x2] + b[x2 + 1]);
         }
     }
 }
@@ -6082,7 +6108,7 @@ static int lr_intra_penalty(const yah264_param_t *p)
 static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_left,
                                  const pixel *pb, int i10, int pen)
 {
-    const int dcv = 1 << (Y264_BIT_DEPTH - 1);
+    const int dcv = 128;                    /* lowres samples are 8-bit */
     pixel top[8], left[8], tl = (pixel)dcv, pred[64];
     if (have_top)  for (int x = 0; x < 8; x++) top[x]  = s[-ss + x];
     if (have_left) for (int y = 0; y < 8; y++) left[y] = s[y * ss - 1];
@@ -6116,6 +6142,11 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
         int b = (17 * H + 16) >> 5;
         int c2 = (17 * V + 16) >> 5;
         y264_intra8_dvhp(p4, top, left, dc, a, b, c2);
+#if Y264_BIT_DEPTH > 8
+        /* the kernel clamps the plane mode at the coded depth's ceiling;
+         * DC, V and H can't pass 255 on lowres edges */
+        for (int k = 0; k < 64; k++) p4[3][k] = LR_CLIP(p4[3][k]);
+#endif
         int sc[4];
         y264_dsp.satd_quad_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
         best = sc[0];
@@ -6149,7 +6180,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
                 int v = (a + b * (x - 3) + c2 * (y - 3) + 16) >> 5;
-                pred[y * 8 + x] = y264_clip_pixel(v);
+                pred[y * 8 + x] = LR_CLIP(v);
             }
         long c = y264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
     }
@@ -6196,7 +6227,7 @@ dir_modes:;
         }
         long c = y264_dsp.satd8x8(s, ss, bp, 8); if (c < best) best = c;
     }
-    return ((best + pen) >> (Y264_BIT_DEPTH - 8));
+    return best + pen;
 }
 
 static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb,
@@ -9826,7 +9857,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * reads, which is why the exit is worth having at all only well below the
  * probe's own noise. */
     if (settle > 0 &&
-        bsatd < (long)settle * 64 * (1 << (Y264_BIT_DEPTH - 8))) {
+        bsatd < (long)settle * 64) {
         bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
         best = bsatd + LRMVCOST(cx, cy);
         *outmvx = cx; *outmvy = cy; *outsatd = bsatd;
@@ -9998,7 +10029,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         }
     }
     if (stage >= 3 && subgate > 0 &&
-        bsatd < (long)subgate * 64 * (1 << (Y264_BIT_DEPTH - 8))) {
+        bsatd < (long)subgate * 64) {
         *outmvx = cx; *outmvy = cy; *outsatd = bsatd;
         return best;
     }
@@ -10172,7 +10203,7 @@ static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
             /* Fast skip: near-zero residual on a zero predictor. */
             if (!predx && !predy) {
                 long z = blk8_satd(sb, lw, ref + (my * 8) * lw + mx * 8, lw);
-                if (z < (64 << (Y264_BIT_DEPTH - 8))) {
+                if (z < 64) {
                     long c = z;
                     if (price && c > d_intra[i]) c = d_intra[i];
                     leg[i] = (y264_lr_blk){ (int32_t)c, 0, 0, 0 };
@@ -10279,7 +10310,7 @@ static int lr_wp_vote(const yah264_encoder_t *e, const struct la_entry *en, cons
             for (int y = 0; y < 8; y++)
                 for (int x = 0; x < 8; x++) {
                     int v = ((sb[y * lw + x] - o) * scale + w / 2) / w;
-                    ib[y * 8 + x] = (pixel)(v < 0 ? 0 : v > PIXEL_MAX ? PIXEL_MAX : v);
+                    ib[y * 8 + x] = LR_CLIP(v);     /* a lowres sample */
                 }
             int cand[2][2] = { { b->mvx, b->mvy }, { 0, 0 } };
             int vx, vy; long satd_p, satd_w;
@@ -16213,12 +16244,12 @@ static void sc_downscale(pixel *dst, int dw, int dh, const pixel *src, int ss,
          * plain loop vectorises; the clamped tail is the padding */
         int xin = sw / 2 < dw ? sw / 2 : dw;
         for (int x = 0; x < xin; x++)
-            d[x] = (pixel)((a[2 * x] + a[2 * x + 1] + b[2 * x] + b[2 * x + 1] + 2) >> 2);
+            d[x] = LR_DOWN(a[2 * x] + a[2 * x + 1] + b[2 * x] + b[2 * x + 1]);
         for (int x = xin; x < dw; x++) {
             int x0 = 2 * x, x1 = x0 + 1;
             if (x0 > sw - 1) x0 = sw - 1;
             if (x1 > sw - 1) x1 = sw - 1;
-            d[x] = (pixel)((a[x0] + a[x1] + b[x0] + b[x1] + 2) >> 2);
+            d[x] = LR_DOWN(a[x0] + a[x1] + b[x0] + b[x1]);
         }
     }
 }
@@ -16750,6 +16781,11 @@ int yah264_shotscan_signature(const yah264_param_t *param, char *buf, int cap)
                      param->bframes > 0, ss_dbl(ju, sizeof ju, SC_JUMP),
                      ss_dbl(fl, sizeof fl, SC_FLOOR), 1,
                      LR_I10_MODE, lr_intra_penalty(param), 1);
+    /* Above 8 bits the scan's costs are read off 8-bit lowres samples, which
+     * moves its cuts; the field keeps a scan saved by a build that costed
+     * 10-bit samples from being reused. 8-bit lines are left as they were. */
+    if (Y264_BIT_DEPTH > 8 && n >= 0 && n < cap)
+        n += snprintf(buf + n, (size_t)(cap - n), " lr-scale=8");
     return n < 0 || n >= cap ? -1 : n;
 }
 
