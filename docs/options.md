@@ -281,9 +281,9 @@ It carries a recovery_point SEI (`recovery_frame_cnt` 0, `exact_match_flag` 1).
 The decoded picture buffer survives it, and POC and FrameNum run straight
 through. The frames before it in display order stay B frames that reference
 backward to the anchor behind the key and forward to the key itself. The first
-picture of an encode is still an IDR, and so is a keyframe a `--plan` zone asked
-for, because the engine interface promises a plan keyframe is addressable as a
-segment on its own.
+picture of an encode is still an IDR, and so is a keyframe a `--plan` zone or a
+`--qpfile` I or K asked for, because the engine interface promises a forced
+keyframe is addressable as a segment on its own.
 
 **Every other keyframe becomes an open one, including the adaptive scene-cut
 keys** as well as the `--keyint` cadence. That matters because at the default
@@ -306,7 +306,10 @@ started there discards them. Two things follow inside the encoder. No picture
 after the key may reference one from before it, so the reference lists are cut
 at the key. The leading B frames are coded as non-reference pictures, because a
 reference among them would head the default list of everything after the key
-while holding the wrong picture on a cold start. `scripts/recovery_check.py` is
+while holding the wrong picture on a cold start. They wait in the DPB beside the
+reference window, so the SPS declares room for them, and with no level forced
+an encode that would need more than H.264's 16 frames is fitted to 16 the way
+`--level` fits one. `scripts/recovery_check.py` is
 the test, and `make conformance` runs it. It asks the decoder for **every**
 picture the decoding process produced and makes the selection itself out of the
 tail. Which pictures a decoder hands to a display after a mid-stream start is

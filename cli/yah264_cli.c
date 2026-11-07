@@ -465,9 +465,10 @@ static int parse_zones_arg(const char *arg)
  * absolute, or -1 for "the rate control decides"; a frame the file does not
  * name is left entirely to the encoder.
  *
- * `i` is accepted and refused rather than ignored: a non-IDR I frame needs an
- * open GOP, which this encoder does not have, and silently coding an IDR there
- * would answer a different question than the one the file asked. */
+ * `i` is refused rather than ignored: a forced non-IDR I frame isn't
+ * supported (under --open-gop the encoder makes its other keyframes non-IDR
+ * itself), and silently coding an IDR there would answer a different
+ * question than the one the file asked. */
 static int parse_qpfile(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -502,8 +503,9 @@ static int parse_qpfile(const char *path)
             case '-':           type = YAH264_FORCE_NONE; break;
             case 'i':
                 fprintf(stderr, "yah264: qpfile %s:%d: frame %d asks for a non-IDR I frame, "
-                                "which needs an open GOP this encoder does not have\n",
-                        path, lineno, frame);
+                                "and a forced non-IDR I isn't supported: use I or K for an "
+                                "IDR (under --open-gop the encoder makes the other keyframes "
+                                "non-IDR itself)\n", path, lineno, frame);
                 fclose(f); return -1;
             default: type = -1;
         }
@@ -734,7 +736,8 @@ static void usage(const char *argv0)
         "                     (default 40; 0 = off, same as --no-scenecut)\n"
         "  --no-scenecut      never insert extra keyframes; only --keyint places\n"
         "                     IDRs. Also makes the cut-aware GOP split a no-op\n"
-        "  --open-gop         every keyframe but the first is a non-IDR I picture\n"
+        "  --open-gop         every keyframe but the first, a --plan keyframe and a\n"
+        "                     --qpfile I/K is a non-IDR I picture\n"
         "                     with a recovery_point SEI -- the --keyint cadence and\n"
         "                     the adaptive scene cuts alike: the B frames before it\n"
         "                     keep referencing the anchor behind it, the DPB is not\n"
@@ -1040,8 +1043,8 @@ static void usage(const char *argv0)
         "  --qpfile FILE           per-frame forces, one line per frame: \"<frame> <type> <qp>\" (frames from 0).\n"
         "                          Type I or K = IDR (under --open-gop too), P = anchor, B or b = B frame,\n"
         "                          - = leave the type alone;\n"
-        "                          QP is ABSOLUTE 0..51, or -1 to leave it to the rate control. i (non-IDR I)\n"
-        "                          is refused: it needs an open GOP. Unlisted frames are free.\n"
+        "                          QP is ABSOLUTE 0..51, or -1 to leave it to the rate control. i (a forced\n"
+        "                          non-IDR I) is refused. Unlisted frames are free.\n"
         "  --gop-threads K         pin every GOP instance's frame threads to K (a shot then re-encodes byte-identically alone)\n"
         "  --segment-out PATTERN   also write each GOP to its own file, PATTERN with a %%d for the GOP index\n"
         "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k\n"
@@ -5749,13 +5752,14 @@ int main(int argc, char **argv)
     }
     /* The modes that need one continuous encoder, after every rule above
  * that can choose the per-GOP path, so none of those can undo them. Each
- * is said out loud when there is more than one thread to spend. */
+ * is said out loud when there is more than one thread to spend, except
+ * under --hw, whose own block says --threads is ignored. */
     /* --intra-refresh has no keyframe after the first, so no GOP boundary to
  * split the encode at: one instance, and the threads go to its wavefront
  * and lookahead. */
     if (intra_refresh) {
         tp_mt = 0;
-        if (nthreads > 1 && !recon_path)
+        if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
             LOGF(threads > 1 ? LOG_WARN : LOG_INFO,
                  "yah264: %s--intra-refresh is one sequence with no keyframes to split "
                  "at, so the %d threads run the row wavefront of one encoder instead "
@@ -5768,7 +5772,7 @@ int main(int argc, char **argv)
  * knows every cut, so --nal-hrd runs one, its threads on the wavefront. */
     if (nal_hrd) {
         tp_mt = 0;
-        if (nthreads > 1 && !recon_path)
+        if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
             LOGF(LOG_INFO, "yah264: --nal-hrd puts a buffering period at every IDR, which "
                  "needs one continuous encoder, so the %d threads run its row wavefront "
                  "instead of parallel GOPs\n", nthreads);
