@@ -4112,6 +4112,16 @@ static void deblock_auto_resolve(yah264_param_t *p)
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
+/* The longest B run the encoder codes. --bframes takes up to 16, and open
+ * caps the run at this (e->bframes), so everything that sizes the DPB, the
+ * reorder depth or the open-GOP waiters from the parameters reads it through
+ * here rather than from --bframes. */
+#define Y264_BRUN_MAX 7
+static int brun(int bframes)
+{
+    return bframes < 0 ? 0 : bframes > Y264_BRUN_MAX ? Y264_BRUN_MAX : bframes;
+}
+
 /* An --open-gop key's leading B frames are coded as a hierarchy with no
  * reference among them (code_b_hier, flat), so each one on the run's left
  * spine waits in the DPB for the lower-POC pictures decoded after it, beside
@@ -4122,6 +4132,7 @@ static int lr_intra_penalty(const yah264_param_t *p);
 static int open_lead_wait(int open_gop, int pyramid, int bframes)
 {
     int w = 0;
+    bframes = brun(bframes);
     if (open_gop && pyramid)
         while ((2 << w) <= bframes) w++;
     return w;
@@ -4133,6 +4144,7 @@ static int open_lead_wait(int open_gop, int pyramid, int bframes)
 static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int narrow, int clamp)
 {
     const yah264_param_t *pp = &e->param;
+    bf = brun(bf);
     int has_b = bf > 0, pyramid = pyr && bf >= 2;
     int vbv = pp->rc.vbv_maxrate > 0 && pp->rc.vbv_bufsize > 0;
     int rc_decide = (pp->rc.method == YAH264_RC_ABR && pp->rc.bitrate > 0) || pp->rc.pass > 0 || vbv;
@@ -4173,7 +4185,7 @@ static int level_fit(yah264_encoder_t *e)
  * of a reference window that may already be 15. */
     int forced = pp->level_idc > 0, clamp = !forced;
     if (!forced) {
-        int bf = pp->bframes > 0 ? pp->bframes : 0, pyr = pp->b_pyramid && bf >= 2;
+        int bf = brun(pp->bframes), pyr = pp->b_pyramid && bf >= 2;
         if (!open_lead_wait(e->open_gop, pyr, bf) ||
             dpb_need(e, pp->ref, bf, pyr, 0, 1) <= 16)
             return 0;
@@ -4191,11 +4203,13 @@ static int level_fit(yah264_encoder_t *e)
     }
     if (forced && cap > 15) cap = 15;
     int ref = pp->ref > 16 ? 16 : pp->ref < 1 ? 1 : pp->ref;
-    int bf = pp->bframes > 0 ? pp->bframes : 0, pyr = pp->b_pyramid && bf >= 2, narrow = 0;
-    int ref0 = ref, bf0 = bf, pyr0 = pyr;
+    int bf = brun(pp->bframes), pyr = pp->b_pyramid && bf >= 2, narrow = 0;
+    int ref0 = ref, bf0 = bf, pyr0 = pyr, bf_asked = pp->bframes;
     if (dpb_need(e, ref, bf, pyr, 0, clamp) <= cap)
         return 0;
-    if (pyr && dpb_need(e, ref, bf, pyr, 1, clamp) < dpb_need(e, ref, bf, pyr, 0, clamp))
+    /* compared unclamped: at the SPS's 15 both windows can read the same
+ * and hide what the tight one saves */
+    if (pyr && dpb_need(e, ref, bf, pyr, 1, 0) < dpb_need(e, ref, bf, pyr, 0, 0))
         narrow = 1;
     while (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && ref > 1) ref--;
     /* fewer B frames under the pyramid first, which marks fewer of them */
@@ -4218,7 +4232,7 @@ static int level_fit(yah264_encoder_t *e)
     }
     e->stair_narrow = narrow && pyr;
     pp->ref = ref;
-    pp->bframes = bf;
+    if (bf != bf0) pp->bframes = bf;    /* left as asked when the run fit */
     pp->b_pyramid = pyr;
     /* once per process: a CLI run opens an encoder per GOP */
     static atomic_int noted;
@@ -4229,7 +4243,7 @@ static int level_fit(yah264_encoder_t *e)
         if (e->stair_narrow) FIT_NOTE(", the tight B-frame window (no threaded B overlap)");
         if (ref != ref0) FIT_NOTE(", ref %d (was %d)", ref, ref0);
         if (pyr0 && !pyr) FIT_NOTE(", no B-pyramid");
-        if (bf != bf0) FIT_NOTE(", bframes %d (was %d)", bf, bf0);
+        if (bf != bf0) FIT_NOTE(", bframes %d (was %d)", bf, bf_asked);
 #undef FIT_NOTE
         if (forced)
             fprintf(stderr, "yah264: level %d.%d holds %d frame%s in the DPB at %dx%d; coding "
@@ -4858,7 +4872,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * window changes which references the pyramid's lists can offer (bits moved
  * when it shipped). */
     {
-        int nrefb = e->b_pyramid ? e->param.bframes : 0;
+        int nrefb = e->b_pyramid ? brun(e->param.bframes) : 0;
         /* The tight window is NOT applied where the wide staircase can engage
          * (ref <= 1 shapes): its slot recycling depends on the wide window's
          * slack -- determ_repeat under load reads 4/16 nondeterministic
@@ -4891,7 +4905,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         int sps_vbv = param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
         int sps_wide_rc = !sps_rc_decide || (rcp_lag_for(e) > 0 && !sps_vbv);
         if (e->b_pyramid && !(stair_wide_e(e) && sps_wide_rc)) {
-            nrefb = stair_plan_nrefb(e->param.bframes);
+            nrefb = stair_plan_nrefb(brun(e->param.bframes));
         }
         int mrf = e->nref + (has_b ? 1 : 0) + nrefb;
         /* A field pair's FIRST field is marked for reference before the second
@@ -4966,7 +4980,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     {
         int reo = 0;
         if (e->b_pyramid) {
-            int d = 0, n = e->param.bframes + 1;
+            int d = 0, n = brun(e->param.bframes) + 1;
             while ((1 << d) < n) d++;
             reo = d;
         } else if (has_b) {
@@ -5572,7 +5586,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->bframes = e->param.bframes;
     if (e->bframes < 0) e->bframes = 0;
     e->lr_intra_pen = lr_intra_penalty(&e->param);
-    if (e->bframes > 7) e->bframes = 7;
+    if (e->bframes > Y264_BRUN_MAX) e->bframes = Y264_BRUN_MAX;
     e->nbuf = 0;
     e->ref1[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);                      /* always allocated: uniform */
     e->ref1[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);                    /* reorder logic uses it even */
