@@ -88,7 +88,7 @@ the two depths apart. The tier answers `Y264_TIER_NEON` and takes the same
 | pixel metrics | SAD and its batches, SATD at every shape and its average form, SA8D, Hadamard AC, both texture terms, variance, intra 16x16 SATD | intra 4x4 search, SSD |
 | motion compensation | plane fetch, weighted average, chroma at widths 8 and 4, half-pel plane rows | six-tap luma, band build, fused bi-prediction |
 | transform, quant, scan | every NEON dispatch site | as on 8 bits |
-| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | four-line luma, as on 8 bits |
+| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | four-line luma: no 10-bit twin, since the whole-edge kernels serve every call site |
 | intra prediction | none yet | all |
 
 A coefficient is an int32 at 10 bits, so the transforms run on int32 lanes. The
