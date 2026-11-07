@@ -16763,6 +16763,11 @@ int yah264_shotscan_signature(const yah264_param_t *param, char *buf, int cap)
                      param->bframes > 0, ss_dbl(ju, sizeof ju, SC_JUMP),
                      ss_dbl(fl, sizeof fl, SC_FLOOR), 1,
                      LR_I10_MODE, lr_intra_penalty(param), 1);
+    /* Above 8 bits the scan's costs are read off 8-bit lowres samples, which
+     * moves its cuts; the field keeps a scan saved by a build that costed
+     * 10-bit samples from being reused. 8-bit lines are left as they were. */
+    if (Y264_BIT_DEPTH > 8 && n >= 0 && n < cap)
+        n += snprintf(buf + n, (size_t)(cap - n), " lr-scale=8");
     return n < 0 || n >= cap ? -1 : n;
 }
 
