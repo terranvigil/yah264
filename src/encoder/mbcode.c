@@ -8115,12 +8115,14 @@ static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
  * no loser outside noise, ABR side 5/5 negative, wall free; the one payer is
  * CGI animation (bbb +3.14) against the -29.76% lead there.
  *
- * Returns the QP to derive the analysis lambdas from, or -1 = NOT ENGAGED
- * (the caller must then leave the per-slice lambdas untouched; the
- * mbtree-less non-ref B frames are never engaged). */
+ * Returns the QP to derive the analysis lambdas from, or MB_LQ_NONE = NOT
+ * ENGAGED (the caller must then leave the per-slice lambdas untouched; the
+ * mbtree-less non-ref B frames are never engaged). The sentinel lies outside
+ * the QP range because above 8 bits a real QP goes below zero. */
+#define MB_LQ_NONE INT_MIN
 static int mb_lambda_qp(const y264_frame_t *f, int mbx, int mby)
 {
-    if (!f->mbtree_off || !f->aq_off) return -1;
+    if (!f->mbtree_off || !f->aq_off) return MB_LQ_NONE;
     int q = f->cur_qp - f->aq_off[mby * f->wmb + mbx];
     if (q < -Y264_QP_BD_OFFSET) q = -Y264_QP_BD_OFFSET; else if (q > 51) q = 51;
     const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
@@ -8128,7 +8130,7 @@ static int mb_lambda_qp(const y264_frame_t *f, int mbx, int mby)
     y264_dsp.var16x16(s, f->src_stride[0], v2);
     int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
     /* a variance floor of 25 on the 8-bit scale */
-    if (var256sq < (int64_t)25 << (16 + 2 * (Y264_BIT_DEPTH - 8))) return -1;
+    if (var256sq < (int64_t)25 << (16 + 2 * (Y264_BIT_DEPTH - 8))) return MB_LQ_NONE;
     return q;
 }
 
@@ -8239,7 +8241,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int pw = f->padded_w, ph = f->padded_h;
     mb_qp_pre(f, mbx, mby);
     int lq = mb_lambda_qp(f, mbx, mby);
-    if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
+    if (lq != MB_LQ_NONE) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(1);                 /* oracle attribution: B frame */
@@ -11671,7 +11673,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int rs = f->rec_stride[0], refs = f->ref_stride[0];
     mb_qp_pre(f, mbx, mby);
     int lq = mb_lambda_qp(f, mbx, mby);
-    if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
+    if (lq != MB_LQ_NONE) { mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
     pred_cache_new_mb();
     y264_me_set_isb(0);                 /* oracle attribution: P frame */
