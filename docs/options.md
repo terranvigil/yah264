@@ -117,6 +117,8 @@ as something else.
 | `--range` | `full` or `limited` | not signaled | VUI color range. The Y4M `XCOLORRANGE` tag sets it on its own. |
 | `--colorprim`, `--transfer`, `--colormatrix` | H.273 code 0..255 or a name, below | not signaled | VUI color description. Signaling only: nothing in the encoder changes with them. |
 | `--chromaloc` | 0..5 | not signaled | VUI chroma sample location. |
+| `--version` | | | Print version, exit. |
+| `-h`, `--help` | | | Print usage, exit. `--longhelp` and `--fullhelp` print the same list, since it already names every flag. |
 
 The names are the ones x264's CLI and ffmpeg use, so a value copied from either
 works, and case doesn't matter:
@@ -132,14 +134,18 @@ works, and case doesn't matter:
 - `--colormatrix`: `GBR` (0), `bt709` (1), `undef` (2), `fcc` (4), `bt470bg`
   (5), `smpte170m` (6), `smpte240m` (7), `YCgCo` (8), `bt2020nc` (9), `bt2020c`
   (10), `smpte2085` (11), `chroma-derived-nc` (12), `chroma-derived-c` (13),
-  `ICtCp` (14).
+  `ICtCp` (14), `ipt-c2` (15), `ycgco-re` (16), `ycgco-ro` (17).
 
 `bt601` is accepted for all three (code 6), `bt2020` as a transfer means
 `bt2020-10` and as a matrix `bt2020nc`, and `unknown` and `unspecified` mean
 `undef`. ffmpeg's underscore spellings (`bt2020_ncl`, `smpte428_1`,
 `iec61966_2_1`) work too.
-| `--version` | | | Print version, exit. |
-| `-h`, `--help` | | | Print usage, exit. `--longhelp` and `--fullhelp` print the same list, since it already names every flag. |
+
+A code H.273 leaves reserved draws a warning. A reserved 0 for primaries or
+transfer is written as 2 (unspecified), any other as given. `GBR` or `YCgCo`
+on 4:2:0 or 4:2:2 input draws a warning too: H.264 allows GBR only at 4:4:4,
+and YCgCo on subsampled chroma is rarely what was meant. `--range` takes
+`full`/`pc`/`jpeg` and `limited`/`tv`/`mpeg` in any case.
 
 ### Rate control
 
@@ -1458,6 +1464,7 @@ Options that differ, and how:
 | `--qcomp` | Reaches the ABR curve and mb-tree strength. The CRF and two-pass curves carry their own. The reference documents it as one global setting. |
 | `--deadzone-inter`/`-intra` | Same values and scale, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 | `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
+| `--cll` | `0,0` writes no SEI, where x264 writes one that says both are unknown. The parameter struct has no way to tell an explicit `0,0` from unset, and a zero light level tells a display nothing it can use. |
 | `--level` | Fits the DPB by lowering an explicit `--ref`, the pyramid and `--bframes` as well as the preset's references. x264 lowers only the preset's references and keeps an explicit `--ref` with a warning. `1b` is refused. |
 | `--stitchable` | Pins the SPS only, and raises the declared level (and with it the MV range), so it changes the encode and not only the header. |
 | `--pic-struct` | Writes pic_struct by parity: 0 for a frame picture, 1 or 2 for the two halves of a field pair. The clock timestamps are all written absent, which is the cheapest legal spelling. |

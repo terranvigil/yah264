@@ -641,12 +641,12 @@ static const struct colour_name colour_matrix_names[] = {
     { "smpte240m", 7 }, { "ycgco", 8 }, { "ycocg", 8 },
     { "bt2020nc", 9 }, { "bt2020_ncl", 9 }, { "bt2020c", 10 }, { "bt2020_cl", 10 },
     { "smpte2085", 11 }, { "chroma-derived-nc", 12 }, { "chroma-derived-c", 13 },
-    { "ictcp", 14 },
+    { "ictcp", 14 }, { "ipt-c2", 15 }, { "ycgco-re", 16 }, { "ycgco-ro", 17 },
     { "bt601", 6 }, { "bt2020", 9 }, { "srgb", 0 }, { "iec61966-2-1", 0 }, { NULL, 0 }
 };
 
-/* -1 for a name the option doesn't know or a number outside H.273's 0..255.
- * A number must be all digits: "9x" used to read as 9. */
+/* -1 for a name the option doesn't know, or for anything but all digits
+ * making a number in H.273's 0..255. */
 static int colour_code(const char *opt, const char *v)
 {
     if (v[0] >= '0' && v[0] <= '9') {
@@ -661,6 +661,21 @@ static int colour_code(const char *opt, const char *v)
         if (!strcasecmp(v, t->name)) return t->code;
     return -1;
 }
+/* H.273 leaves these unassigned. The encoder writes 2 in place of a 0
+ * primaries or transfer, and any other as given; either way it is worth
+ * saying, since no player will know what the stream means. */
+static void colour_reserved_warn(const char *opt, int code)
+{
+    int prim = !strcmp(opt, "--colorprim"), tr = !strcmp(opt, "--transfer");
+    int reserved = code == 3 ||
+        (prim ? code == 0 || (code >= 13 && code <= 21) || code > 22
+         : tr ? code == 0 || code > 18
+         : code > 17);
+    if (reserved)
+        fprintf(stderr, "yah264: warning: %s %d is reserved in H.273; written as %d\n",
+                opt, code, (prim || tr) && code == 0 ? 2 : code);
+}
+
 static void apply_video_signal(yah264_encoder_t *e)
 {
     if (!e) return;
@@ -4339,8 +4354,8 @@ int main(int argc, char **argv)
             preset = argv[++i];
         else if (!strcmp(argv[i], "--range") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v, "full") || !strcmp(v, "pc") || !strcmp(v, "jpeg")) g_vs.full_range = 1;
-            else if (!strcmp(v, "limited") || !strcmp(v, "tv") || !strcmp(v, "mpeg")) g_vs.full_range = 0;
+            if (!strcasecmp(v, "full") || !strcasecmp(v, "pc") || !strcasecmp(v, "jpeg")) g_vs.full_range = 1;
+            else if (!strcasecmp(v, "limited") || !strcasecmp(v, "tv") || !strcasecmp(v, "mpeg")) g_vs.full_range = 0;
             else { fprintf(stderr, "yah264: --range expects full or limited\n"); return 2; }
             g_vs_set = 1;
         }
@@ -4355,6 +4370,7 @@ int main(int argc, char **argv)
                         : !strcmp(opt, "--colormatrix") ? "bt2020nc, bt2020c" : "smpte432");
                 return 2;
             }
+            colour_reserved_warn(opt, code);
             if (!strcmp(opt, "--colorprim")) g_vs.primaries = code;
             else if (!strcmp(opt, "--transfer")) g_vs.transfer = code;
             else g_vs.matrix = code;
@@ -4625,8 +4641,8 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--input-range") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v, "full") || !strcmp(v, "pc")) { g_vs.full_range = 1; g_vs_set = 1; }
-            else if (!strcmp(v, "limited") || !strcmp(v, "tv")) { g_vs.full_range = 0; g_vs_set = 1; }
+            if (!strcasecmp(v, "full") || !strcasecmp(v, "pc")) { g_vs.full_range = 1; g_vs_set = 1; }
+            else if (!strcasecmp(v, "limited") || !strcasecmp(v, "tv")) { g_vs.full_range = 0; g_vs_set = 1; }
             else { fprintf(stderr, "yah264: --input-range expects full or limited\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--fps") && i + 1 < argc) {
@@ -4693,88 +4709,30 @@ int main(int argc, char **argv)
                 return 2;
             }
         }
-        /* the reference encoder's spelling: "MaxCLL,MaxFALL" in cd/m^2. */
-        else if (!strcmp(argv[i], "--cll") && i + 1 < argc) {
-            const char *v = argv[++i]; char *sep = NULL;
-            long a = strtol(v, &sep, 10);
-            long b = (sep && *sep == ',' && isdigit((unsigned char)sep[1]))
-                     ? strtol(sep + 1, &sep, 10) : -1;
-            if (!isdigit((unsigned char)v[0]) || !sep || *sep ||
-                a < 0 || a > 65535 || b < 0 || b > 65535) {
-                fprintf(stderr, "yah264: --cll expects MaxCLL,MaxFALL, each 0..65535 "
-                        "(got '%s')\n", v);
+        /* the reference encoder's spellings, parsed by the library so the
+         * ffmpeg wrapper validates them the same way */
+        else if ((!strcmp(argv[i], "--cll") || !strcmp(argv[i], "--mastering-display")) &&
+                 i + 1 < argc) {
+            const char *opt = argv[i], *v = argv[++i];
+            char why[256];
+            yah264_param_t t;
+            memset(&t, 0, sizeof t);
+            int r = !strcmp(opt, "--cll") ? yah264_param_parse_cll(&t, v, why, sizeof why)
+                                          : yah264_param_parse_mastering(&t, v, why, sizeof why);
+            if (r < 0) {
+                fprintf(stderr, "yah264: %s %s\n", opt, why);
                 return 2;
             }
-            /* a frame's average light can't pass the brightest pixel; the
-             * usual cause is the two values swapped. A MaxCLL of 0 means
-             * unknown, so it leaves MaxFALL unchecked. */
-            if (a > 0 && b > a) {
-                fprintf(stderr, "yah264: --cll: MaxFALL %ld is above MaxCLL %ld; "
-                        "the order is MaxCLL,MaxFALL\n", b, a);
-                return 2;
+            if (r > 0)
+                fprintf(stderr, "yah264: warning: %s %s\n", opt, why);
+            if (!strcmp(opt, "--cll")) {
+                cll_max = t.cll_max; cll_avg = t.cll_avg;
+            } else {
+                for (int k = 0; k < 6; k++) mast_prim[k] = t.mastering_prim[k];
+                mast_wp[0] = t.mastering_wp[0]; mast_wp[1] = t.mastering_wp[1];
+                mast_max = t.mastering_max; mast_min = t.mastering_min;
+                mastering_set = 1;
             }
-            cll_max = (int)a; cll_avg = (int)b;
-        }
-        /* the reference encoder's spelling: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min). The chromaticity
- * pairs are in 0.00002 units and the luminance pair in 0.0001 cd/m^2, and
- * the G,B,R order is the SPEC's, not the R,G,B a person writes. */
-        else if (!strcmp(argv[i], "--mastering-display") && i + 1 < argc) {
-            const char *v = argv[++i];
-            unsigned long long g[10];
-            int end = 0;
-            /* %llu takes a sign and skips blanks, wrapping a '-', so refuse
-             * all three outright; --cll takes digits only too */
-            int n = strpbrk(v, "-+ \t\n\v\f\r") ? 0 :
-                sscanf(v, "G(%llu,%llu)B(%llu,%llu)R(%llu,%llu)WP(%llu,%llu)L(%llu,%llu)%n",
-                       &g[0], &g[1], &g[2], &g[3], &g[4],
-                       &g[5], &g[6], &g[7], &g[8], &g[9], &end);
-            if (n != 10 || v[end]) {
-                fprintf(stderr, "yah264: --mastering-display expects "
-                        "G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min) -- chromaticity in "
-                        "0.00002 units, luminance in 0.0001 cd/m^2 (got '%s')\n", v);
-                return 2;
-            }
-            for (int k = 0; k < 8; k++) {
-                if (g[k] > 50000) {
-                    fprintf(stderr, "yah264: --mastering-display: chromaticity %llu is "
-                            "above 1.0 in 0.00002 units\n", g[k]);
-                    return 2;
-                }
-                if (k < 6) mast_prim[k] = (unsigned)g[k];
-            }
-            /* min below max binds only on a real peak: one under 5 cd/m^2
-             * isn't (0 means unknown, as in L(0,0)), so the min isn't held
-             * below it */
-            if (g[8] > 0xFFFFFFFFull || g[9] > 0xFFFFFFFFull || (g[8] >= 50000 && g[9] >= g[8])) {
-                fprintf(stderr, "yah264: --mastering-display: L(max,min) needs min below "
-                        "max and both within 32 bits, in 0.0001 cd/m^2\n");
-                return 2;
-            }
-            /* the SEI's semantics keep x in 5..37000, y in 5..42000 and the
-             * peak at 10000 cd/m^2 or below; a player may ignore a value
-             * outside them, so say so but write what was asked */
-            for (int k = 0; k < 8; k++)
-                if (g[k] < 5 || g[k] > ((k & 1) ? 42000u : 37000u)) {
-                    fprintf(stderr, "yah264: warning: --mastering-display chromaticity %llu "
-                            "is outside the SEI's range (x 5..37000, y 5..42000)\n", g[k]);
-                    break;
-                }
-            if (g[8] > 100000000)
-                fprintf(stderr, "yah264: warning: --mastering-display peak is above "
-                        "10000 cd/m^2\n");
-            if (g[9] > 50000)
-                fprintf(stderr, "yah264: warning: --mastering-display min is above "
-                        "5 cd/m^2; luminance is in 0.0001 cd/m^2 units\n");
-            /* the SEI's semantics expect a peak of 5 cd/m^2 or more; less,
-             * other than 0 for unknown, is almost always nits typed where
-             * 0.0001 units belong */
-            if (g[8] > 0 && g[8] < 50000)
-                fprintf(stderr, "yah264: warning: --mastering-display peak L(%llu,...) is "
-                        "%.4f cd/m^2; luminance is in 0.0001 cd/m^2 units\n",
-                        g[8], g[8] / 10000.0);
-            mast_wp[0] = (unsigned)g[6]; mast_wp[1] = (unsigned)g[7];
-            mast_max = (unsigned)g[8];   mast_min = (unsigned)g[9];
-            mastering_set = 1;
         }
         else if (!strcmp(argv[i], "--cqm") && i + 1 < argc) {
             const char *v = argv[++i];

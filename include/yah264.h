@@ -54,6 +54,8 @@ extern "C" {
 #define yah264_param_default            YAH264_API(yah264_param_default)
 #define yah264_2pass_stat_weight        YAH264_API(yah264_2pass_stat_weight)
 #define yah264_param_apply_preset       YAH264_API(yah264_param_apply_preset)
+#define yah264_param_parse_cll          YAH264_API(yah264_param_parse_cll)
+#define yah264_param_parse_mastering    YAH264_API(yah264_param_parse_mastering)
 #define yah264_encoder_open             YAH264_API(yah264_encoder_open)
 #define yah264_encoder_open_hw          YAH264_API(yah264_encoder_open_hw)
 #define yah264_encoder_backend          YAH264_API(yah264_encoder_backend)
@@ -930,6 +932,19 @@ YAH264_EXPORT int yah264_param_apply_preset(yah264_param_t *param, const char *p
  * open is refused with a line on stderr naming both numbers. That is a caller
  * built against a different include/yah264.h, and the encode it would have
  * produced is not worth having. */
+/* The HDR10 option strings the command-line encoder takes, parsed into the
+ * parameter struct so every caller validates them the same way:
+ * "MaxCLL,MaxFALL" in cd/m^2 (cll_max, cll_avg) and
+ * "G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)" in the SEI's own units, green, blue,
+ * red in the spec's order (mastering_*). Digits only: no signs, no spaces.
+ * Returns 0 with the fields set; 1 with the fields set and a warning in
+ * err, for a value the SEI carries but a player may ignore; -1 with p
+ * untouched and the reason in err. err may be NULL. */
+YAH264_EXPORT int yah264_param_parse_cll(yah264_param_t *p, const char *s,
+                                         char *err, size_t errlen);
+YAH264_EXPORT int yah264_param_parse_mastering(yah264_param_t *p, const char *s,
+                                               char *err, size_t errlen);
+
 YAH264_EXPORT yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param);
 
 /* The hardware mode (docs/hardware-mode.md): the same handle and calls,

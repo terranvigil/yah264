@@ -16042,6 +16042,14 @@ YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah
     e->sps.vs_present = 1;
     e->sps.vs_full_range = vs->full_range ? 1 : 0;
     e->sps.vs_primaries = p; e->sps.vs_transfer = t; e->sps.vs_matrix = m;
+    /* E.2.1 allows GBR only at 4:4:4; YCgCo on subsampled chroma is legal but
+ * almost never meant. Both are written as asked. Once per process: a CLI
+ * run sets every GOP's encoder. */
+    static atomic_int warned;
+    if ((m == 0 || m == 8) && e->cf_idc != 3 && !atomic_exchange(&warned, 1))
+        fprintf(stderr, "yah264: warning: matrix_coefficients %d (%s) on 4:2:%s chroma%s\n",
+                m, m ? "YCgCo" : "GBR", e->cf_idc == 1 ? "0" : "2",
+                m ? " is unusual" : " is not a valid H.264 stream; GBR needs 4:4:4");
     e->sps.chroma_loc = vs->chroma_loc >= 0 && vs->chroma_loc <= 5 ? vs->chroma_loc : -1;
     return 0;
 }
