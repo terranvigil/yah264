@@ -1431,6 +1431,12 @@ add "PAFF field pictures" check_clip paff_mref5     "$S/syn_bff.y4m"      "--bff
 add "PAFF field pictures" check_clip paff_crop      "$S/syn_tff_crop.y4m" "--tff --cabac --transform-8x8"
 add "PAFF field pictures" check_clip paff_crop_cavlc "$S/syn_tff_crop.y4m" "--tff --cavlc"
 add "PAFF field pictures" check_clip paff_intra     "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8 --keyint 1"
+# The tight DPB window under field coding: --level 1.2 is too small for the
+# wide one at this size, so the encode runs one slot per reference B. The
+# sliding window then evicts at a reference pair's FIRST field, and a second
+# field that still named the evicted frame lost a reference in the decode.
+add "PAFF field pictures" check_clip paff_tight_tff "$S/syn_tff.y4m"      "--tff --cabac --bframes 7 --ref 1 --level 1.2"
+add "PAFF field pictures" check_clip paff_tight_bff "$S/syn_bff.y4m"      "--bff --cabac --bframes 5 --ref 1 --level 1.2"
 # No flag at all: the Y4M's It tag is what selects field coding, and
 # --no-interlaced is what refuses to take it.
 add "PAFF field pictures" check_clip paff_auto      "$S/syn_tff.y4m"      "--cabac --transform-8x8"

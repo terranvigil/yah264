@@ -11385,6 +11385,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * intra field per key frame. The second field of an IDR frame is a picture of
  * its own and carries nal_unit_type 1: an IDR there would reset frame_num and
  * POC in the middle of the pair. */
+static void dpb_slide(yah264_encoder_t *e);
 static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                      int is_ref, pixel *const src[3])
 {
@@ -11418,6 +11419,15 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * keyframe. */
         int t = (type == 0 && k == 1 && is_ref && !rp) ? 1 : type;
         r = emit_frame(e, off, t, is_idr && k == 0, is_ref, src);
+        /* A decoder marks the first field of a reference pair as soon as it is
+ * decoded, and the sliding window runs then, so the second field is
+ * decoded with the oldest reference already gone when the DPB was full.
+ * Evicting here, rather than when the pair is stored, keeps the second
+ * field's lists to what the decoder holds; the store then finds a free
+ * slot. Without it a tight window (ref 1, four or more B frames) named
+ * the evicted frame and the decode lost a reference. */
+        if (k == 0 && is_ref && e->b_pyramid && !is_idr)
+            dpb_slide(e);
         /* The recovery point marks the FIRST field of the pair; the second is
  * the same picture's other half and needs no second copy of it. The
  * caller sets the flag and clears it after; clearing it here as well is
@@ -11573,10 +11583,9 @@ static void col_reset(yah264_encoder_t *e)
     e->col_l0poc0 = -1;
 }
 
-/* Store the just-coded reference (e->rec + e->mvx/mvy/refidx) into a DPB slot,
- * applying the sliding-window: if the DPB is full, evict the reference with the
- * smallest FrameNum (mirrors the decoder, 8.2.5.3). Assigns the running FrameNum. */
-static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
+/* The sliding window (8.2.5.3): with the DPB full, the reference with the
+ * smallest FrameNum goes. */
+static void dpb_slide(yah264_encoder_t *e)
 {
     int used = 0;
     for (int i = 0; i < e->dpb_size; i++) used += e->dpb[i].used;
@@ -11588,6 +11597,14 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
             }
         if (victim >= 0) e->dpb[victim].used = 0;
     }
+}
+
+/* Store the just-coded reference (e->rec + e->mvx/mvy/refidx) into a DPB slot,
+ * applying the sliding window first (mirrors the decoder). Assigns the running
+ * FrameNum. */
+static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
+{
+    dpb_slide(e);
     int slot = -1;
     for (int i = 0; i < e->dpb_size; i++) if (!e->dpb[i].used) { slot = i; break; }
     if (slot < 0) slot = 0;                         /* should not happen */
