@@ -10,6 +10,25 @@
 #   VMAF_HDR_BIN=/path/to/vmaf VMAF_HDR_MODELS=/path/to/vmaf/model \
 #   WORK=/scratch/hdr scripts/hdr_check.sh
 #
+# With `meta` it checks the signaling instead and scores nothing: short
+# spans of both clips as HDR10, Sol Levante as HLG and as SDR-compatible HLG
+# and as HDR10 again with --open-gop and with --intra-refresh,
+# each encoded by yah264 and by x264 with the same color, mastering-display
+# and light-level options, then what ffprobe and MediaInfo read from each,
+# field by field. FF names an ffmpeg built with libyah264; with it the cases
+# also go through `-c:v libyah264` against `-c:v libx264` (FFX, default the
+# ffmpeg on PATH), into MP4 and MPEG-TS, plus a leg where the HDR metadata
+# comes from the input's own VUI and SEI instead of from options.
+#
+#   YAH264=build/cli/yah264 X264=x264 FF=/path/to/ffmpeg \
+#   WORK=/scratch/hdr scripts/hdr_check.sh meta
+#
+# It exits 1 when a field that matters differs (marked !!). Level and
+# reference count print beside them (marked ~ when they differ) but don't
+# count. FRAMES (48), KEYINT (24) and THREADS set the spans. KEYINT below
+# FRAMES puts a second key in every stream, which is where a player that
+# seeks or joins late has to find the metadata.
+#
 # VMAF_HDR_BIN is a libvmaf `vmaf` tool built with -Denable_zimg=true, which
 # the HDR models need for their colorspace conversion. VMAF_HDR_MODELS is the
 # repository's model/ directory, holding hdr_vmaf_v1.1.8 and its _hfr twin.
@@ -27,16 +46,20 @@ set -euo pipefail
 unset CDPATH
 
 abs() { case $1 in /*) echo "$1" ;; */*) echo "$PWD/$1" ;; *) [ -e "$1" ] && echo "$PWD/$1" || command -v "$1" || echo "$1" ;; esac; }
+MODE=${1:-quality}
+case $MODE in quality|meta) ;; *) echo "usage: hdr_check.sh [meta]" >&2; exit 2 ;; esac
 Y=$(abs "${YAH264:-build-rel/cli/yah264}")
-VMAF=$(abs "${VMAF_HDR_BIN:?set VMAF_HDR_BIN to a zimg-enabled libvmaf vmaf tool}")
-M=$(abs "${VMAF_HDR_MODELS:?set VMAF_HDR_MODELS to libvmaf model/ directory}")
+if [ $MODE = quality ]; then
+  VMAF=$(abs "${VMAF_HDR_BIN:?set VMAF_HDR_BIN to a zimg-enabled libvmaf vmaf tool}")
+  M=$(abs "${VMAF_HDR_MODELS:?set VMAF_HDR_MODELS to libvmaf model/ directory}")
+fi
 W=${WORK:?set WORK to a scratch directory with ~45 GB free}
 CRFS=${CRFS:-18 22 26 30 34}
 THREADS=${THREADS:-6}
 NOC=https://s3.amazonaws.com/download.opencontent.netflix.com
 # both titles were graded on a 1000-nit P3 D65 display
 MD='G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)'
-COLOR=(--colorprim bt2020 --transfer smpte2084 --colormatrix bt2020 --range limited)
+COLOR=(--colorprim bt2020 --transfer smpte2084 --colormatrix bt2020nc --range limited)
 VCOLOR=()
 for s in ref dist; do
   VCOLOR+=("--color_range_$s" limited "--color_primaries_$s" bt2020 "--color_trc_$s" pq "--color_matrix_$s" bt2020nc)
@@ -46,12 +69,15 @@ fps() { case $1 in sol) echo 24 ;; sparks) echo 60000/1001 ;; esac; }
 
 die() { echo "hdr_check: $*" >&2; exit 1; }
 [ -x "$Y" ] || die "no encoder at $Y (set YAH264)"
-[ -x "$VMAF" ] || die "no vmaf tool at $VMAF"
-for d in hdr_vmaf_v1.1.8 hdr_vmaf_v1.1.8_hfr; do [ -d "$M/$d" ] || die "no $d under $M"; done
+if [ $MODE = quality ]; then
+  [ -x "$VMAF" ] || die "no vmaf tool at $VMAF"
+  for d in hdr_vmaf_v1.1.8 hdr_vmaf_v1.1.8_hfr; do [ -d "$M/$d" ] || die "no $d under $M"; done
+fi
 for t in curl ffprobe shasum; do command -v $t > /dev/null || die "needs $t"; done
 # grep reads the whole list: -q would quit early and SIGPIPE ffmpeg under pipefail
 ffmpeg -hide_banner -filters 2> /dev/null | grep ' zscale ' > /dev/null || die "needs ffmpeg with zscale"
-python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
+# the light levels need numpy; meta checks for it only if it has to prepare
+[ $MODE = meta ] || python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
 
 mkdir -p "$W/sparks_tif" "$W/enc" || die "can't create $W"
 cd "$W"
@@ -267,6 +293,194 @@ print(f"{c:7s} {r:>5s}p  {q:>6s}  {os.path.getsize(o + '.264') * 8 / float(secs)
       f"  HDR-VMAF {m['vmaf']['mean']:6.2f}  CAMBI mean {cambi['mean']:5.2f} max {cambi['max']:5.2f}")
 EOF
 }
+
+# ---- meta: the signaling check ----
+
+# what ffprobe and MediaInfo read from two streams of one case, side by side
+compare() {
+  python3 - "$@" <<'EOF'
+import json, re, subprocess, sys
+case, a, b = sys.argv[1:4]
+def run(cmd):
+    return json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
+def share(n, of):
+    return "all" if n == of and of else "none" if n == 0 else f"{n} of {of}"
+# What precedes each random access point in the elementary stream itself: an
+# IDR picture, or one whose SEI carries a recovery point (--open-gop and
+# --intra-refresh keys). A container
+# can carry the same metadata in its own boxes, and ffprobe then shows it on
+# every frame whatever the stream holds, so this reads the bytes.
+def inband(f):
+    es = subprocess.run(["ffmpeg", "-v", "error", "-i", f, "-map", "0:v:0", "-c", "copy",
+                         "-bsf:v", "h264_mp4toannexb", "-f", "h264", "-"],
+                        capture_output=True, check=True).stdout
+    idrs, pend = [], set()
+    for n in re.split(b"\x00\x00\x01", es)[1:]:
+        if not n:
+            continue
+        t = n[0] & 0x1f
+        if t == 7:
+            pend.add("sps")
+        elif t == 6:
+            b, i = re.sub(b"\x00\x00\x03", b"\x00\x00", n[1:]), 0
+            while i < len(b) and b[i] != 0x80:
+                pt = sz = 0
+                while b[i] == 0xff: pt += 255; i += 1
+                pt += b[i]; i += 1
+                while b[i] == 0xff: sz += 255; i += 1
+                sz += b[i]; i += 1 + sz
+                pend.add(pt)
+        elif t in (1, 5):
+            if (t == 5 or 6 in pend) and len(n) > 1 and n[1] & 0x80:   # first_mb_in_slice 0
+                idrs.append(pend)
+            pend = set()
+    return idrs
+def probe(f):
+    j = run(["ffprobe", "-v", "error", "-of", "json", "-select_streams", "v:0", "-show_streams", f])
+    j = j["streams"][0]
+    # side data on every keyframe: a player that starts or seeks at a later
+    # IDR reads it there, not from the first one
+    k = run(["ffprobe", "-v", "error", "-of", "json", "-select_streams", "v:0", "-skip_frame", "nokey",
+             "-show_frames", "-show_entries", "frame=key_frame,side_data_list", f])["frames"]
+    r = {f"stream {x}": str(j.get(x, "-")) for x in
+         ("profile", "pix_fmt", "color_range", "color_space", "color_transfer", "color_primaries",
+          "chroma_location")}
+    r["~keyframes"] = str(len(k))
+    idrs = inband(f)
+    for name, pt in (("mastering display (137)", 137), ("light level (144)", 144),
+                     ("alternative transfer (147)", 147)):
+        r[f"in-band {name} SEI at keys"] = share(sum(pt in x for x in idrs), len(idrs))
+    r["~random access points"] = str(len(idrs))
+    r["~in-band SPS at keys"] = share(sum("sps" in x for x in idrs), len(idrs))
+    r["stream side data"] = ",".join(sorted(d["side_data_type"] for d in j.get("side_data_list", []))) or "-"
+    r["~level"] = str(j.get("level", "-"))
+    want = {"Mastering display metadata": {
+                "  primaries R G B, white": ("red_x", "red_y", "green_x", "green_y", "blue_x", "blue_y",
+                                             "white_point_x", "white_point_y"),
+                "  luminance min max": ("min_luminance", "max_luminance")},
+            "Content light level metadata": {"  MaxCLL MaxFALL": ("max_content", "max_average")}}
+    for t, rows in want.items():
+        got = [next((d for d in fr.get("side_data_list", []) if d["side_data_type"] == t), None)
+               for fr in k]
+        r[f"keyframes with {t}"] = share(sum(g is not None for g in got), len(k))
+        first = next((g for g in got if g), None)
+        for name, keys in rows.items():
+            # 34000/50000 -> 34000: the numerators are the SEI's own fields
+            r[name] = " ".join(str(first.get(x, "-")).split("/")[0] for x in keys) if first else "-"
+    try:
+        m = run(["mediainfo", "--Output=JSON", f])
+    except (OSError, subprocess.CalledProcessError):
+        return r
+    v = next((t for t in m["media"]["track"] if t["@type"] == "Video"), {})
+    for x in ("HDR_Format", "HDR_Format_Compatibility", "Format_Profile", "BitDepth", "colour_range",
+              "colour_primaries", "transfer_characteristics", "transfer_characteristics_Original",
+              "matrix_coefficients", "MasteringDisplay_ColorPrimaries", "MasteringDisplay_Luminance",
+              "MaxCLL", "MaxFALL"):
+        r[f"mediainfo {x}"] = v.get(x, "-")
+    r["~mediainfo Format_Level"] = v.get("Format_Level", "-")
+    r["~mediainfo Format_Settings_RefFrames"] = v.get("Format_Settings_RefFrames", "-")
+    return r
+ra, rb = probe(a), probe(b)
+bad = 0
+print(f"== {case}")
+print(f"   {'field':46s} {'x264':34s} yah264")
+for x in ra:
+    same = ra[x] == rb.get(x)
+    info = x.startswith("~")
+    bad += not same and not info
+    mark = "  " if same else (" ~" if info else "!!")
+    print(f"{mark} {x.lstrip('~'):46s} {ra[x]:34s} {rb.get(x, '-')}")
+sys.exit(1 if bad else 0)
+EOF
+}
+
+meta() {
+  local F=${FRAMES:-48} K=${KEYINT:-24} X FF=${FF:-} FFX=${FFX:-ffmpeg} bad=0 c
+  X=$(abs "${X264:-x264}")
+  [ -x "$X" ] || die "no x264 at $X (set X264)"
+  if [ -n "$FF" ]; then
+    FF=$(abs "$FF")
+    "$FF" -hide_banner -encoders 2> /dev/null | grep ' libyah264 ' > /dev/null || die "$FF has no libyah264"
+    "$FFX" -hide_banner -encoders 2> /dev/null | grep ' libx264 ' > /dev/null || die "$FFX has no libx264 (set FFX)"
+  fi
+  # the spans come from the prepared 1080p sources; the full prep runs only
+  # when one of them is missing
+  if [ ! -s sol_1080.y4m ] || [ ! -s sparks_1080.y4m ] || [ ! -s sol.cll ] || [ ! -s sparks.cll ]; then
+    python3 -c 'import numpy' 2> /dev/null || die "needs python3 with numpy"
+    fetch
+    prep
+  fi
+  mkdir -p meta
+  for c in sol sparks; do
+    ! stale meta/$c.y4m ${c}_1080.y4m || y4m meta/$c.y4m "" -i ${c}_1080.y4m -frames:v "$F"
+  done
+  # HLG from the PQ grade at its 1000-nit peak
+  ! stale meta/sol_hlg.y4m meta/sol.y4m || y4m meta/sol_hlg.y4m "" -i meta/sol.y4m -vf \
+    "zscale=tin=smpte2084:min=2020_ncl:pin=2020:rin=tv:t=arib-std-b67:m=2020_ncl:p=2020:r=tv:npl=1000:f=spline36,format=yuv420p10le"
+
+  local PQ=(--colorprim bt2020 --transfer smpte2084 --colormatrix bt2020nc --range tv)
+  local HLG=(--colorprim bt2020 --transfer arib-std-b67 --colormatrix bt2020nc --range tv)
+  local HLGC=(--colorprim bt2020 --transfer bt2020-10 --colormatrix bt2020nc --range tv
+              --alternative-transfer arib-std-b67)
+  local src opts
+  # the last two put the keys on recovery points instead of IDRs
+  for c in hdr10_sparks hdr10_sol hlg_sol hlgcompat_sol hdr10open_sol hdr10ir_sol; do
+    case $c in
+      hdr10_*) src=meta/${c#hdr10_}.y4m
+               opts=("${PQ[@]}" --mastering-display "$MD" --cll "$(cat ${c#hdr10_}.cll)") ;;
+      hdr10open_sol) src=meta/sol.y4m
+               opts=("${PQ[@]}" --mastering-display "$MD" --cll "$(cat sol.cll)" --open-gop) ;;
+      hdr10ir_sol) src=meta/sol.y4m
+               opts=("${PQ[@]}" --mastering-display "$MD" --cll "$(cat sol.cll)" --intra-refresh) ;;
+      hlg_sol) src=meta/sol_hlg.y4m; opts=("${HLG[@]}") ;;
+      hlgcompat_sol) src=meta/sol_hlg.y4m; opts=("${HLGC[@]}") ;;
+    esac
+    "$X" --profile high10 --output-depth 10 --keyint "$K" --threads "$THREADS" --frames "$F" \
+      "${opts[@]}" -o meta/$c.x264.264 "$src" 2> meta/$c.x264.log || failed "x264 $c" meta/$c.x264.log
+    "$Y" --input-y4m "$src" --keyint "$K" --threads "$THREADS" --frames "$F" --no-progress \
+      "${opts[@]}" -o meta/$c.yah264.264 2> meta/$c.yah264.log || failed "yah264 $c" meta/$c.yah264.log
+    compare "cli $c" meta/$c.x264.264 meta/$c.yah264.264 || bad=1
+  done
+  [ -n "$FF" ] || { [ $bad = 0 ]; return; }
+
+  # through ffmpeg: the color fields tagged on the frames, the HDR10
+  # metadata as each wrapper's private options. The tags go on with
+  # setparams because ffmpeg takes an encoder's primaries and transfer from
+  # its input frames, so -color_primaries and -color_trc alone don't reach
+  # it. ffmpeg has no option for the alternative transfer, so the
+  # SDR-compatible HLG case stays CLI-only.
+  local FFPQ=(-vf setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv)
+  local FFHLG=(-vf setparams=color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc:range=tv)
+  local cll ext
+  cll=$(cat sparks.cll)
+  for ext in mp4 ts; do
+    "$FFX" -v error -nostdin -i meta/sparks.y4m -c:v libx264 -preset medium -g "$K" -threads "$THREADS" \
+      "${FFPQ[@]}" -x264-params "mastering-display=$MD:cll=$cll" -y meta/ff_hdr10.x264.$ext ||
+      die "libx264 hdr10 .$ext failed"
+    "$FF" -v error -nostdin -i meta/sparks.y4m -c:v libyah264 -g "$K" -threads "$THREADS" \
+      "${FFPQ[@]}" -mastering-display "$MD" -cll "$cll" -y meta/ff_hdr10.yah264.$ext ||
+      die "libyah264 hdr10 .$ext failed"
+    compare "ffmpeg hdr10_sparks .$ext" meta/ff_hdr10.x264.$ext meta/ff_hdr10.yah264.$ext || bad=1
+    "$FFX" -v error -nostdin -i meta/sol_hlg.y4m -c:v libx264 -preset medium -g "$K" -threads "$THREADS" \
+      "${FFHLG[@]}" -y meta/ff_hlg.x264.$ext || die "libx264 hlg .$ext failed"
+    "$FF" -v error -nostdin -i meta/sol_hlg.y4m -c:v libyah264 -g "$K" -threads "$THREADS" \
+      "${FFHLG[@]}" -y meta/ff_hlg.yah264.$ext || die "libyah264 hlg .$ext failed"
+    compare "ffmpeg hlg_sol .$ext" meta/ff_hlg.x264.$ext meta/ff_hlg.yah264.$ext || bad=1
+    # no options: the color and the HDR10 metadata come from the input, the
+    # x264 CLI's HDR10 stream above, through ffmpeg's decoder
+    "$FFX" -v error -nostdin -i meta/hdr10_sparks.x264.264 -c:v libx264 -preset medium -g "$K" \
+      -threads "$THREADS" -y meta/ff_side.x264.$ext || die "libx264 side-data .$ext failed"
+    "$FF" -v error -nostdin -i meta/hdr10_sparks.x264.264 -c:v libyah264 -g "$K" \
+      -threads "$THREADS" -y meta/ff_side.yah264.$ext || die "libyah264 side-data .$ext failed"
+    compare "ffmpeg side data .$ext" meta/ff_side.x264.$ext meta/ff_side.yah264.$ext || bad=1
+  done
+  [ $bad = 0 ]
+}
+
+if [ $MODE = meta ]; then
+  meta || { echo "hdr_check: the signaling differs (!! above)" >&2; exit 1; }
+  exit 0
+fi
 
 fetch
 prep

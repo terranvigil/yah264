@@ -130,6 +130,44 @@ static void run_close(struct run *r)
     free(r->y); free(r->u); free(r->v);
 }
 
+/* Per random access point in an Annex-B stream -- an IDR picture, or one
+ * whose SEI carries a recovery point (payload 6) -- whether the SEI ahead of
+ * it holds payload types 137 (mastering display) and 144 (light level).
+ * Returns the count of those pictures; *with_both how many carried both,
+ * *bp_first how many IDRs had a buffering period (payload 0) as their first
+ * SEI, *aud_first how many access units opened with a delimiter. */
+struct rap_census { int raps, both, idr, bp_first, aud_first, aus; };
+static struct rap_census rap_display_sei(const unsigned char *b, long len)
+{
+    struct rap_census c = { 0, 0, 0, 0, 0, 0 };
+    int m137 = 0, m144 = 0, m6 = 0, first_sei = -1, aud = 0, opened = 0;
+    for (long i = 0; i + 3 < len; i++) {
+        if (b[i] || b[i + 1] || b[i + 2] != 1) continue;
+        int t = b[i + 3] & 0x1f;
+        if (t == 9 && !opened) { aud = 1; opened = 1; }
+        else if (t == 7 || t == 8) opened = 1;
+        else if (t == 6 && i + 4 < len) {
+            int pt = b[i + 4];                /* first payload type; one per NAL here */
+            if (first_sei < 0) first_sei = pt;
+            m137 |= pt == 137; m144 |= pt == 144; m6 |= pt == 6;
+            opened = 1;
+        } else if (t == 1 || t == 5) {
+            if (i + 4 < len && (b[i + 4] & 0x80)) {   /* first_mb_in_slice 0 */
+                c.aus++;
+                c.aud_first += aud;
+                if (t == 5 || m6) {
+                    c.raps++;
+                    c.both += m137 && m144;
+                }
+                if (t == 5) { c.idr++; c.bp_first += first_sei == 0; }
+            }
+            m137 = m144 = m6 = 0; first_sei = -1; aud = 0; opened = 0;
+        }
+        i += 3;
+    }
+    return c;
+}
+
 #define LC_FRAMES 4
 
 /* One encoder alone: the reference its output must match beside another. */
@@ -420,6 +458,58 @@ int main(void)
             CHECK(slices == nframes);
             free(y); free(u); free(v);
             yah264_encoder_close(e);
+        }
+    }
+
+    /* 10. the HDR10 SEI holds only until the next random access point, so
+ * every IDR and every recovery-point picture carries it in-band, the first
+ * IDR included: a caller that keeps the headers as a configuration record
+ * must not lose it. Keyint 4 over 12 frames gives three keys. Without HDR
+ * parameters no picture carries it. With --nal-hrd and an AUD the delimiter
+ * still opens every access unit and the buffering period stays the IDR's
+ * first SEI; threaded encodes follow the same rule. */
+    {
+        yah264_param_t hd = p;
+        hd.width = 128; hd.height = 96; hd.threads = 1; hd.bframes = 0; hd.keyint = 4;
+        hd.rc.method = YAH264_RC_CQP; hd.rc.qp = 30;
+        enum { PLAIN, HDR, HDR_OPEN, HDR_IR, HDR_HRD, HDR_T4, NCASE };
+        for (int cs = 0; cs < NCASE; cs++) {
+            yah264_param_t q = hd;
+            if (cs != PLAIN) {
+                static const unsigned prim[6] = { 13250, 34500, 7500, 3000, 34000, 16000 };
+                q.cll_max = 1000; q.cll_avg = 400; q.mastering_set = 1;
+                memcpy(q.mastering_prim, prim, sizeof prim);
+                q.mastering_wp[0] = 15635; q.mastering_wp[1] = 16450;
+                q.mastering_max = 10000000; q.mastering_min = 1;
+            }
+            if (cs == HDR_OPEN) { q.open_gop = 1; q.bframes = 2; }
+            if (cs == HDR_IR) { q.intra_refresh = 1; q.keyint = 6; }
+            if (cs == HDR_HRD) {
+                q.aud = 1; q.nal_hrd = YAH264_NAL_HRD_VBR;
+                q.rc.method = YAH264_RC_ABR; q.rc.bitrate = 400;
+                q.rc.vbv_maxrate = 400; q.rc.vbv_bufsize = 800;
+            }
+            if (cs == HDR_T4) { q.threads = 4; q.bframes = 3; }
+            struct run r;
+            CHECK(run_open(&r, &q) == 0);
+            /* the headers alone carry none of it */
+            struct rap_census h = rap_display_sei(r.buf, r.len);
+            CHECK(h.raps == 0);
+            for (int n = 0; n < 12; n++) CHECK(run_frame(&r, &q) == 0);
+            run_close(&r);
+            struct rap_census c = rap_display_sei(r.buf, r.len);
+            if (cs == HDR_IR) {
+                CHECK(c.raps >= 2);           /* the IDR and the sweeps' recovery points */
+            } else {
+                CHECK(c.raps == 3);
+            }
+            if (cs == HDR_OPEN) CHECK(c.idr == 1);
+            CHECK(c.both == (cs == PLAIN ? 0 : c.raps));
+            if (cs == HDR_HRD) {
+                CHECK(c.bp_first == c.idr);
+                CHECK(c.aud_first == c.aus && c.aus == 12);
+            }
+            free(r.buf);
         }
     }
 

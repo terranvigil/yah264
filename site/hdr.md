@@ -14,9 +14,9 @@ HDR models for VMAF v1 on two open HDR10 masters, and the results are below.
 
 | | how the stream says it | options |
 |---|---|---|
-| HDR10 | PQ transfer with BT.2020 primaries and matrix in the VUI, plus mastering display (SMPTE ST 2086) and content light level (CTA-861.3) SEI | `--transfer smpte2084 --colorprim bt2020 --colormatrix bt2020 --mastering-display ... --cll ...` |
-| HLG | HLG transfer in the VUI | `--transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020` |
-| HLG, SDR-compatible | BT.2020 transfer in the VUI and an alternative transfer SEI that names HLG, so an SDR-only decoder still shows a picture | `--transfer bt2020 --alternative-transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020` |
+| HDR10 | PQ transfer with BT.2020 primaries and matrix in the VUI, plus mastering display (SMPTE ST 2086) and content light level (CTA-861.3) SEI | `--transfer smpte2084 --colorprim bt2020 --colormatrix bt2020nc --mastering-display ... --cll ...` |
+| HLG | HLG transfer in the VUI | `--transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020nc` |
+| HLG, SDR-compatible | BT.2020 transfer in the VUI and an alternative transfer SEI that names HLG, so an SDR-only decoder still shows a picture | `--transfer bt2020-10 --alternative-transfer arib-std-b67 --colorprim bt2020 --colormatrix bt2020nc` |
 | 10-bit 4:2:0, 4:2:2, 4:4:4 | High 10, High 4:2:2, High 4:4:4 Predictive | picked from the input, see [Getting started](start.md#bit-depth) |
 
 There's no HDR10+ (SMPTE ST 2094-40) or Dolby Vision. Both are built for HEVC
@@ -35,14 +35,15 @@ pipes it in:
 ```
 ffmpeg -i master.mov -pix_fmt yuv420p10le -strict -1 -f yuv4mpegpipe - |
   yah264 --input-y4m - -o out.264 --crf 22 \
-    --colorprim bt2020 --transfer smpte2084 --colormatrix bt2020 --range limited \
+    --colorprim bt2020 --transfer smpte2084 --colormatrix bt2020nc --range limited \
     --mastering-display 'G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)' \
     --cll 1000,400
 ```
 
 Y4M has no field for the transfer or the primaries, so they go on the command
-line. `--colormatrix bt2020` is the non-constant-luminance matrix, H.273 code
-9, which ffmpeg calls `bt2020nc`.
+line. The color options take the names ffmpeg and x264 use, so `bt2020nc`
+there is the non-constant-luminance matrix, H.273 code 9. `bt2020` also works
+as a matrix and means the same.
 
 `--mastering-display` lists green, blue, red, then the white point, which is the
 order the H.264 spec uses. Chromaticities are in units of 0.00002 and luminance
@@ -54,8 +55,21 @@ measure them on the
 master's RGB, before it goes to 4:2:0, because rebuilding RGB from subsampled
 chroma overshoots at bright edges. `scripts/hdr_check.sh` does it that way.
 
-The ffmpeg wrapper doesn't pass the color description or the HDR metadata to
-the encoder yet. Until it does, encode HDR with the command-line encoder.
+Through ffmpeg (`-c:v libyah264`, from a 10-bit build), a tagged input's
+color description and HDR10 metadata carry through on their own. An untagged
+input such as Y4M is tagged on its frames, with the metadata as options:
+
+```
+ffmpeg -i master.y4m \
+  -vf setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv \
+  -c:v libyah264 -crf 22 \
+  -mastering-display 'G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)' \
+  -cll 1000,400 out.mp4
+```
+
+The mastering display and light level SEI go in-band ahead of every IDR, and
+ahead of every recovery point under `--open-gop` or `--intra-refresh`, so a
+player that starts or seeks at any keyframe finds them. MP4 and MPEG-TS files from the wrapper carry them the same way.
 
 ## What a player reads
 
@@ -146,10 +160,12 @@ encoder has the most to gain on HDR.
 | Sparks 4K | 22 | 167.8 | 92.3 | 0.14 | 0.34 |
 | Sparks 4K | 26 | 101.5 | 84.5 | 0.20 | 0.47 |
 
-At 3840x2160 the default settings need Level 6.0, because the B-pyramid keeps
-more reference frames than Level 5.1 allows at that size. Many 4K TVs decode up
-to Level 5.1 or 5.2. `--b-pyramid none` brings a 4K encode down to 5.1 at
-24 fps and 5.2 at 60 fps.
+At 3840x2160 the default settings declare Level 6.0, because the encoder keeps
+more frames in the decoded picture buffer than Level 5.1 allows at that size.
+Many 4K TVs decode up to Level 5.1 or 5.2, so for HDR10 delivered to TVs pass
+`--level 5.1` (5.2 at 50 or 60 fps). That fits the buffer to the level and
+keeps the B-pyramid and all three default references, at some speed cost on a
+threaded encode.
 
 ## The pictures
 
@@ -174,3 +190,10 @@ fine grain on the jacket.
 the sources, encodes the CRF ladder and scores each encode with HDR-VMAF. It
 needs a libvmaf built with zimg and the `hdr_vmaf_v1.1.8` models from the
 [VMAF repository](https://github.com/Netflix/vmaf).
+
+`scripts/hdr_check.sh meta` checks the signaling instead. It encodes short
+spans as HDR10, HLG and SDR-compatible HLG with yah264 and with x264 using the
+same options, through each CLI and through ffmpeg, and prints what ffprobe and
+MediaInfo read from each, field by field. Every color and HDR field reads
+the same from both. The declared level is where they differ, which the end
+of the HDR-VMAF section explains.

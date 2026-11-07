@@ -116,10 +116,37 @@ as something else.
 | `--output-depth` | 8 or 10 | the input's | Which of the two encoder libraries codes the stream. 10 on 8-bit input upshifts each sample by 2 and writes High 10. 8 on 10-bit input is refused, not rounded. |
 | `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below). An explicit `--threads` above 1 is warned about rather than dropped. |
 | `--range` | `full` or `limited` | not signaled | VUI color range. The Y4M `XCOLORRANGE` tag sets it on its own. |
-| `--colorprim`, `--transfer`, `--colormatrix` | H.273 code or a name (`bt709`, `bt2020`, `bt601`, `smpte170m`, `bt470bg`, `srgb`, `smpte2084`, `arib-std-b67`) | not signaled | VUI color description. Signaling only: nothing in the encoder changes with them. |
+| `--colorprim`, `--transfer`, `--colormatrix` | H.273 code 0..255 or a name, below | not signaled | VUI color description. Signaling only: nothing in the encoder changes with them. |
 | `--chromaloc` | 0..5 | not signaled | VUI chroma sample location. |
 | `--version` | | | Print version, exit. |
 | `-h`, `--help` | | | Print usage, exit. `--longhelp` and `--fullhelp` print the same list, since it already names every flag. |
+
+The names are the ones x264's CLI and ffmpeg use, so a value copied from either
+works, and case doesn't matter:
+
+- `--colorprim`: `bt709` (1), `undef` (2), `bt470m` (4), `bt470bg` (5),
+  `smpte170m` (6), `smpte240m` (7), `film` (8), `bt2020` (9), `smpte428` (10),
+  `smpte431` (11), `smpte432` (12), `ebu3213` or `jedec-p22` (22).
+- `--transfer`: `bt709` (1), `undef` (2), `bt470m` or `gamma22` (4), `bt470bg`
+  or `gamma28` (5), `smpte170m` (6), `smpte240m` (7), `linear` (8), `log100`
+  (9), `log316` (10), `iec61966-2-4` (11), `bt1361e` (12), `iec61966-2-1` or
+  `srgb` (13), `bt2020-10` (14), `bt2020-12` (15), `smpte2084` or `pq` (16),
+  `smpte428` (17), `arib-std-b67` or `hlg` (18).
+- `--colormatrix`: `GBR` (0), `bt709` (1), `undef` (2), `fcc` (4), `bt470bg`
+  (5), `smpte170m` (6), `smpte240m` (7), `YCgCo` (8), `bt2020nc` (9), `bt2020c`
+  (10), `smpte2085` (11), `chroma-derived-nc` (12), `chroma-derived-c` (13),
+  `ICtCp` (14), `ipt-c2` (15), `ycgco-re` (16), `ycgco-ro` (17).
+
+`bt601` is accepted for all three (code 6), `bt2020` as a transfer means
+`bt2020-10` and as a matrix `bt2020nc`, and `unknown` and `unspecified` mean
+`undef`. ffmpeg's underscore spellings (`bt2020_ncl`, `smpte428_1`,
+`iec61966_2_1`) work too.
+
+A code H.273 leaves reserved draws a warning. A reserved 0 for primaries or
+transfer is written as 2 (unspecified), any other as given. `GBR` on 4:2:0
+or 4:2:2 input is refused, since H.264 allows it only at 4:4:4. `YCgCo`
+there is legal and draws a warning, since it is rarely what was meant.
+`--range` takes `full`/`pc`/`jpeg` and `limited`/`tv`/`mpeg` in any case.
 
 ### Rate control
 
@@ -228,7 +255,7 @@ default sits just above it. Why it lands so far below the reference's default is
 | `--no-scenecut` | | | Same as `--scenecut 0`. Only `--keyint` places IDRs. |
 | `--open-gop` | | off | The periodic keyframe is a non-IDR I picture with a recovery_point SEI instead of an IDR: the B frames before it keep referencing the anchor behind it, the DPB is not flushed and POC runs on. See the note below. |
 | `--intra-refresh` | | off | No keyframe after the first: a column of intra macroblocks sweeps the picture once every `--keyint` frames, and each sweep opens with a recovery_point SEI. P frames only. See the note below. |
-| `-b`, `--bframes` | N | preset (3) | Consecutive B frames between anchors. 0 disables B entirely. |
+| `-b`, `--bframes` | N | preset (3) | Consecutive B frames between anchors, up to 16 accepted; a run is capped at 7. 0 disables B entirely. |
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
 | `--b-bias` | -100..100 | 0 | Leans the adaptive B placement toward more B frames (positive) or fewer (negative). A tuning dial, not a quality setting: see [`--b-bias`](#--b-bias-is-a-tuning-dial) below. Ignored at `--b-adapt 0`. |
 | `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation. `auto` lets each B slice pick by the running skippability score (since 2026-09-03). |
@@ -255,9 +282,9 @@ It carries a recovery_point SEI (`recovery_frame_cnt` 0, `exact_match_flag` 1).
 The decoded picture buffer survives it, and POC and FrameNum run straight
 through. The frames before it in display order stay B frames that reference
 backward to the anchor behind the key and forward to the key itself. The first
-picture of an encode is still an IDR, and so is a keyframe a `--plan` zone asked
-for, because the engine interface promises a plan keyframe is addressable as a
-segment on its own.
+picture of an encode is still an IDR, and so is a keyframe a `--plan` zone or a
+`--qpfile` I or K asked for, because the engine interface promises a forced
+keyframe is addressable as a segment on its own.
 
 **Every other keyframe becomes an open one, including the adaptive scene-cut
 keys** as well as the `--keyint` cadence. That matters because at the default
@@ -280,7 +307,10 @@ started there discards them. Two things follow inside the encoder. No picture
 after the key may reference one from before it, so the reference lists are cut
 at the key. The leading B frames are coded as non-reference pictures, because a
 reference among them would head the default list of everything after the key
-while holding the wrong picture on a cold start. `scripts/recovery_check.py` is
+while holding the wrong picture on a cold start. They wait in the DPB beside the
+reference window, so the SPS declares room for them, and with no level forced
+an encode that would need more than H.264's 16 frames is fitted to 16 the way
+`--level` fits one. `scripts/recovery_check.py` is
 the test, and `make conformance` runs it. It asks the decoder for **every**
 picture the decoding process produced and makes the selection itself out of the
 tail. Which pictures a decoder hands to a display after a mid-stream start is
@@ -459,10 +489,10 @@ bits. It is not a quality setting, and nothing here suggests moving it from 0.
 | `--scan-in FILE` | off | With `--cut-split` or `--shot-crf`: use a saved pre-scan instead of running one. Refused, never applied, unless the frame count, the input's geometry, the scan's settings and a hash of three frames' luma all match this encode. Output is byte-identical to running the scan. |
 | `--plan FILE` | off | Zones, one per line: `first last [idr] [qp+N\|qp-N]`, frames from 0 in input order, inclusive. `idr` forces a keyframe and a GOP boundary at `first`. The QP offset applies to every frame in the range on top of the rate control (CRF, CQP, ABR). The engine interface's plan (docs/engine-interface.md). |
 | `--zones LIST` | off | x264's inline zones: `start,end,option` joined by `/`, frames from 0 in input order, inclusive. `q=N` codes every frame in the range at base QP N, 0..51, the way `--qp N` would: I frames take N-3 and B frames the cascade on top, and neither the rate control nor the VBV moves it. `b=F` multiplies the range's bitrate by F, applied as a QP offset of -6 log2(F) on what the rate control chose, so `b=0.5` is `qp+6` in a `--plan` file. One option per zone. Anything else, overlapping zones and `--plan` on the same command line are refused with a message. |
-| `--qpfile FILE` | off | Per-frame forces, one line per frame: `<frame> <type> <qp>`, frames from 0 in input order. Type `I` or `K` forces an IDR, `P` an anchor, `B` or `b` a B frame, `-` leaves the type alone. QP is **absolute** 0..51, or `-1` to leave it to the rate control, so a line can force a type, a QP, or both. Frames the file does not name are free. A force is refused by frame number rather than approximated. See below. |
+| `--qpfile FILE` | off | Per-frame forces, one line per frame: `<frame> <type> <qp>`, frames from 0 in input order. Type `I` or `K` forces an IDR, under `--open-gop` as well, `P` an anchor, `B` or `b` a B frame, `-` leaves the type alone. QP is **absolute** 0..51, or `-1` to leave it to the rate control, so a line can force a type, a QP, or both. Frames the file does not name are free. A force is refused by frame number rather than approximated. See below. |
 | `--gop-threads K` | off | Pin every GOP instance's frame threads to K, so a GOP re-encoded alone reproduces its bytes (`scripts/shot_determinism.sh`). |
 | `--segment-out PATTERN` | off | Also write each GOP to its own file (`%d` = GOP index), each with its own parameter sets. Concatenated in order they equal the stream. |
-| `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k. |
+| `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k. Written on every path, `--dump-recon` included; one instance there, so `gop` is 0. Not under `--hw`. |
 | `--deadzone-inter` | 0..32 | 21 | Inter luma quantization deadzone, x264's flag and x264's value. |
 | `--deadzone-intra` | 0..32 | 11 | Intra luma quantization deadzone. |
 | `--no-psy` | | psy on | `--psy-rd 0 --psy-trellis 0`, which is how x264 spells it. An explicit `--psy-rd` anywhere on the line still wins, exactly as it wins over a `--tune`. |
@@ -811,17 +841,17 @@ parallelism, not encoder speed.
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
 | `--sar` | `W:H` | unspecified (square) | Sample aspect ratio. Accepts `16:11` or `16/11`. |
-| `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level. Range 1.0 to 6.2. |
+| `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level, 1.0 to 6.2. The DPB is fitted to it, see below. |
 | `--no-sei` | | SEI on | Drop the identification message at the start of the stream: a user-data SEI naming the encoder, its version and the options in force. |
 | `--profile` | `baseline`\|`main`\|`high`\|`high10`\|`high422`\|`high444` | derived | Constrain the tool-set to a profile and write its `profile_idc`. See below. |
 | `--aud` | | off | An access unit delimiter (NAL type 9) opens every access unit, ahead of the parameter sets. |
 | `--pic-struct` | | off | VUI `pic_struct_present_flag` plus a `pic_timing` SEI per picture. A frame picture writes 0. Under `--tff`/`--bff` each field writes its own parity, 1 for a top field and 2 for a bottom one. |
-| `--nal-hrd` | `none`\|`vbr`\|`cbr` | `none` | Write the buffer model into the stream: `hrd_parameters` in the VUI, a `buffering_period` SEI at every IDR, a `pic_timing` SEI carrying `cpb_removal_delay` and `dpb_output_delay` on every picture. **Needs `--vbv-maxrate` and `--vbv-bufsize`**, and a frame rate. Refused without them. `vbr` declares a schedule the channel may pause on and moves no sample and no slice bit. `cbr` declares a channel that never pauses, so every access unit is padded up to the rate with filler. See [rate-control.md](rate-control.md#what-vbv-actually-guarantees). |
+| `--nal-hrd` | `none`\|`vbr`\|`cbr` | `none` | Write the buffer model into the stream: `hrd_parameters` in the VUI, a `buffering_period` SEI at every IDR, a `pic_timing` SEI carrying `cpb_removal_delay` and `dpb_output_delay` on every picture. **Needs `--vbv-maxrate` and `--vbv-bufsize`**, and a frame rate. Refused without them. Every IDR opens a buffering period, scene cuts included, so the CLI runs one encoder instance under `--nal-hrd` and its threads go to the row wavefront rather than to parallel GOPs. On a multi-GOP encode that costs CPU time and a little stream size. `--cut-split`, `--shot-table` and `--shot-crf` run only on the per-GOP path, so they are refused with `--nal-hrd`. `vbr` declares a schedule the channel may pause on and moves no sample and no slice bit. `cbr` declares a channel that never pauses, so every access unit is padded up to the rate with filler. See [rate-control.md](rate-control.md#what-vbv-actually-guarantees). |
 | `--filler` / `--no-filler` | | follows `--nal-hrd` | Pad access units to the constant rate with filler NAL units (type 12). On under `--nal-hrd cbr` and refused anywhere else, because padding to a constant rate only means something where a constant rate is declared. `--no-filler` under `cbr` gives the CBR headers over an unpadded stream, whose buffer a conforming decoder may overflow. It is the negative control, not a shipping mode. |
 | `--frame-packing` | 0..7 | off | `frame_packing_arrangement` SEI: 0 checkerboard, 1 column, 2 row, 3 side-by-side, 4 top-bottom, 5 frame alternation, 6 2D, 7 tile. Written once, "until canceled". |
-| `--cll` | `MAX,AVG` | off | Content light level SEI (MaxCLL, MaxFALL) in cd/m^2, each a plain number 0..65535. MaxFALL above MaxCLL is refused unless MaxCLL is 0 (unknown). `0,0` writes no SEI. |
+| `--cll` | `MAX,AVG` | off | Content light level SEI (MaxCLL, MaxFALL) in cd/m^2, each a plain number 0..65535. MaxFALL above MaxCLL is refused unless MaxCLL is 0 (unknown). `0,0` writes no SEI. Written in-band ahead of every IDR and every recovery point (`--open-gop`, `--intra-refresh`), like the next two, because each holds only until the next one. |
 | `--mastering-display` | `G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)` | off | Mastering display color volume SEI. Chromaticity in 0.00002 units, luminance in 0.0001 cd/m^2. **G, B, R is the spec's order**, not the R, G, B a person writes. `L(0,0)` means unknown luminance. A chromaticity above 50000 (1.0), a luminance wider than 32 bits, or a min at or above a real peak is refused. A chromaticity outside the SEI's range (x 5..37000, y 5..42000), a peak above 10000 cd/m^2 or under 5 (other than 0), or a min above 5 cd/m^2 draws a warning and is written as given; a peak under 5 is usually nits typed in place of 0.0001 units. |
-| `--alternative-transfer` | H.273 code or a `--transfer` name | off | `alternative_transfer_characteristics` SEI: the transfer a display should prefer over the VUI's. |
+| `--alternative-transfer` | H.273 code or a `--transfer` name | off | `alternative_transfer_characteristics` SEI: the transfer a display should prefer over the VUI's. `undef`, `unspecified` and 2 write no SEI, as the default does. |
 | `--overscan` | `undef`\|`show`\|`crop` | `undef` | VUI `overscan_info`. `undef` writes nothing, which is the default. |
 | `--videoformat` | `component`\|`pal`\|`ntsc`\|`secam`\|`mac`\|`undef` | `undef` | VUI `video_format`. Naming it opens the `video_signal_type` block even with no color description. The three color codes then stay at 2 (unspecified). |
 | `--stitchable` | | off | Size the **declared** DPB from the level rather than from `--ref`/`--bframes`, and pin the FrameNum width, so two encodes at the same geometry carry the same SPS. **It does move bits**: see below. |
@@ -1003,10 +1033,31 @@ interlaced board, scheduled with the B-field item instead of guessed at here.
 Until then, reach for `--tff` when the source really is interlaced and you need
 a field-coded stream, not as a compression win.
 
-`--level` below the computed conformant minimum is accepted, but prints a
-warning that the stream may be non-conformant. It does not clamp the encode to
-fit the level you asked for. The auto level is derived from frame size, frame
-rate and DPB size per Annex A.
+`--level` takes a Table A-1 level (`3.1`, `31` or `3`); anything else,
+including `1b`, is refused. The DPB is fitted to it: when the frames the
+encode keeps would overflow the level's DPB at this frame size (at most 15
+frames), it gives up, in order and only as far as it has to, the extra
+B-frame slots the threaded pipeline reserves (which turns that overlap off
+for the encode), list-0 references down to `--ref 1`, B frames under the
+pyramid down to two, the pyramid itself (with `--bframes` back as asked),
+and then B frames down to none; references then come back as far as the
+room left allows. One line names everything it changed, an explicit
+`--ref` or `--bframes` included. `--level 5.1` on a 4K encode keeps all
+three of medium's references and only narrows the window; `--level 4.1` on
+a 1080p one also codes with two. What can't fit even then is refused: a
+frame larger than the level's whole DPB, or field coding at a one-frame
+DPB. Under `--stitchable` the fit runs the same way and the SPS then
+declares the level's DPB, at most 15 frames.
+Frame size, frame rate and bitrate aren't fitted: a level below the
+conformant minimum for those is accepted with a warning that the stream may
+be non-conformant. The auto level is derived from frame size, frame rate
+and DPB size per Annex A.
+
+Default 4K streams declare Level 6.0: the threaded pipeline's wide window
+keeps more frames than Level 5.1 holds at that size, and it is the faster
+encode. For TV or other consumer-device delivery, pass `--level 5.1` (5.2 at
+50 or 60 fps). The encode is then fitted to that level's DPB, at some speed
+cost on threaded encodes.
 
 ### Threading
 
@@ -1425,6 +1476,9 @@ Options that differ, and how:
 | `--qcomp` | Reaches the ABR curve and mb-tree strength. The CRF and two-pass curves carry their own. The reference documents it as one global setting. |
 | `--deadzone-inter`/`-intra` | Same values and scale, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 | `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
+| `--qpfile` | `K` is always an IDR. x264's `K` is a non-IDR I under `--open-gop`, and its `i` (a non-IDR I) is refused here. |
+| `--cll` | `0,0` writes no SEI, where x264 writes one that says both are unknown. The parameter struct has no way to tell an explicit `0,0` from unset, and a zero light level tells a display nothing it can use. |
+| `--level` | Fits the DPB by lowering an explicit `--ref`, the pyramid and `--bframes` as well as the preset's references. x264 lowers only the preset's references and keeps an explicit `--ref` with a warning. `1b` is refused. |
 | `--stitchable` | Pins the SPS only, and raises the declared level (and with it the MV range), so it changes the encode and not only the header. |
 | `--pic-struct` | Writes pic_struct by parity: 0 for a frame picture, 1 or 2 for the two halves of a field pair. The clock timestamps are all written absent, which is the cheapest legal spelling. |
 | `--nal-hrd` | One SchedSelIdx and NAL HRD only, where x264 offers the choice of both models. The encoder obeys one bucket, so declaring a second would be declaring a schedule nothing enforces. |

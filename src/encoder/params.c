@@ -6,6 +6,8 @@
 #include "yah264.h"
 #include "../common/cpu.h"
 #include <string.h>
+#include <stdio.h>
+#include <ctype.h>
 
 /* The two off-switches are negative, and the encoder tests them as `< 0` rather
  * than against these values. Anyone who "fixes" the constants to 0 turns both
@@ -217,4 +219,103 @@ int yah264_param_apply_preset(yah264_param_t *param, const char *preset)
             return 0;
         }
     return -1;
+}
+
+/* A digits-only unsigned number at *s, up to `max`; -1 when there isn't one.
+ * strtoul takes a sign and skips blanks, so neither reaches it. */
+static long long hdr_number(const char **s, unsigned long long max)
+{
+    const char *p = *s;
+    unsigned long long v = 0;
+    if (!isdigit((unsigned char)*p))
+        return -1;
+    while (isdigit((unsigned char)*p)) {
+        v = v * 10 + (unsigned)(*p++ - '0');
+        if (v > max)
+            return -1;
+    }
+    *s = p;
+    return (long long)v;
+}
+
+int yah264_param_parse_cll(yah264_param_t *p, const char *s, char *err, size_t errlen)
+{
+    const char *q = s;
+    long long a = hdr_number(&q, 65535), b = -1;
+    if (a >= 0 && *q == ',') { q++; b = hdr_number(&q, 65535); }
+    if (a < 0 || b < 0 || *q) {
+        if (err) snprintf(err, errlen, "expects MaxCLL,MaxFALL, each 0..65535 (got '%s')", s);
+        return -1;
+    }
+    /* a frame's average light can't pass the brightest pixel; the usual
+     * cause is the two values swapped. A MaxCLL of 0 means unknown, so it
+     * leaves MaxFALL unchecked. */
+    if (a > 0 && b > a) {
+        if (err) snprintf(err, errlen, "MaxFALL %lld is above MaxCLL %lld; the order is "
+                          "MaxCLL,MaxFALL", b, a);
+        return -1;
+    }
+    p->cll_max = (int)a;
+    p->cll_avg = (int)b;
+    return 0;
+}
+
+int yah264_param_parse_mastering(yah264_param_t *p, const char *s, char *err, size_t errlen)
+{
+    static const char *const lead[10] = { "G(", ",", ")B(", ",", ")R(", ",", ")WP(", ",", ")L(", "," };
+    long long g[10] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    const char *q = s;
+    for (int k = 0; k < 10; k++) {
+        size_t n = strlen(lead[k]);
+        if (strncmp(q, lead[k], n)) break;
+        q += n;
+        g[k] = hdr_number(&q, k < 8 ? 50000ull : 0xFFFFFFFFull);
+        if (g[k] < 0) break;
+    }
+    if (g[9] < 0 || strcmp(q, ")")) {
+        if (err) snprintf(err, errlen, "expects G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min) -- "
+                          "chromaticity 0..50000 in 0.00002 units, luminance in 0.0001 "
+                          "cd/m^2 within 32 bits (got '%s')", s);
+        return -1;
+    }
+    /* min below max binds only on a real peak: one under 5 cd/m^2 isn't (0
+     * means unknown, as in L(0,0)), so the min isn't held below it */
+    if (g[8] >= 50000 && g[9] >= g[8]) {
+        if (err) snprintf(err, errlen, "L(max,min) needs min below max, in 0.0001 cd/m^2");
+        return -1;
+    }
+    /* the SEI's semantics keep x in 5..37000, y in 5..42000 and the peak at
+     * 10000 cd/m^2 or below; a player may ignore a value outside them, so
+     * say so but write what was asked */
+    int warn = 0;
+    if (err && errlen) err[0] = 0;
+    for (int k = 0; k < 8; k++)
+        if (g[k] < 5 || g[k] > ((k & 1) ? 42000 : 37000)) {
+            if (err) snprintf(err, errlen, "chromaticity %lld is outside the SEI's range "
+                              "(x 5..37000, y 5..42000)", g[k]);
+            warn = 1;
+            break;
+        }
+    if (!warn && g[8] > 100000000) {
+        if (err) snprintf(err, errlen, "peak is above 10000 cd/m^2");
+        warn = 1;
+    }
+    if (!warn && g[9] > 50000) {
+        if (err) snprintf(err, errlen, "min is above 5 cd/m^2; luminance is in 0.0001 cd/m^2 units");
+        warn = 1;
+    }
+    /* a peak under 5 cd/m^2, other than 0 for unknown, is almost always nits
+     * typed where 0.0001 units belong */
+    if (!warn && g[8] > 0 && g[8] < 50000) {
+        if (err) snprintf(err, errlen, "peak L(%lld,...) is %.4f cd/m^2; luminance is in "
+                          "0.0001 cd/m^2 units", g[8], g[8] / 10000.0);
+        warn = 1;
+    }
+    for (int k = 0; k < 6; k++) p->mastering_prim[k] = (unsigned)g[k];
+    p->mastering_wp[0] = (unsigned)g[6];
+    p->mastering_wp[1] = (unsigned)g[7];
+    p->mastering_max = (unsigned)g[8];
+    p->mastering_min = (unsigned)g[9];
+    p->mastering_set = 1;
+    return warn;
 }

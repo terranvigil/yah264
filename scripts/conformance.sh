@@ -175,8 +175,10 @@ dec_decode() {  # dec_decode <decoder> <stream.264> <pix_fmt> <WxH> <workprefix>
             # under fixed names, and this pool runs jobs in parallel in one work
             # dir, so each invocation gets its own.
             rm -rf "$p.jm"; mkdir -p "$p.jm"
+            # DPBPLUS0=0: JM otherwise gives itself a frame more than the SPS
+            # declares, which hides a DPB declared one frame short
             ( cd "$p.jm" && "$root/tools/jm/ldecod" -p InputFile="$str" \
-                  -p OutputFile="$p.jm.yuv" >/dev/null 2>&1 ) || true
+                  -p OutputFile="$p.jm.yuv" -p DPBPLUS0=0 >/dev/null 2>&1 ) || true
             rawmd5frames "$p.jm.yuv" "$pf" "$sz"
             rm -rf "$p.jm" "$p.jm.yuv"
             ;;
@@ -1129,6 +1131,71 @@ check_twopass() {   # check_twopass <name> <src> [pass-2 args]
     echo "SUMMARY $RM_T $RM_F"
 }
 
+# --nal-hrd two-pass over scene cuts, at one thread and at four: both passes,
+# then the buffer model read back out of the stream. Four threads is where a
+# rule once put the encode back on the per-GOP path, which leaves a scene-cut
+# IDR without its buffering period. A stream with only one IDR would pass
+# vacuously, so the cell asks for more than one.
+check_hrd_mt() {   # check_hrd_mt <name> <src> <spec>
+    local name="$1" src="$2" spec="$3" t f=0 n=0 p idrs
+    for t in 1 4; do
+        p="$work/hrdmt.$name.t$t"
+        n=$((n + 1))
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads $t --pass 1 --stats "$p.stats" -o /dev/null 2>/dev/null || true
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads $t --pass 2 --stats "$p.stats" -o "$p.264" 2>/dev/null || true
+        idrs=$(python3 -c "
+import sys; sys.path.insert(0, '$root/scripts'); import h264_syntax as H
+print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/dev/null || echo 0)
+        if [ "${idrs:-0}" -gt 1 ] && python3 "$root/scripts/hrd_check.py" "$p.264" --quiet >/dev/null 2>&1; then
+            echo "  ok   HRD clean over $idrs IDRs, two-pass at $t thread(s) ($spec)"
+        else
+            echo "  FAIL hrd_check over $idrs IDRs, two-pass at $t thread(s) ($spec)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $n $f"
+}
+
+# --intra-refresh two-pass at four threads: one IDR in the whole stream. The
+# two-pass path choice used to put it back on the per-GOP path, where every
+# GOP opens with its own IDR.
+check_ir_mt() {   # check_ir_mt <name> <src> <spec>
+    local name="$1" src="$2" spec="$3" p="$work/irmt.$1" f=0 idrs
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --threads 4 --pass 1 --stats "$p.stats" -o /dev/null 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --threads 4 --pass 2 --stats "$p.stats" -o "$p.264" 2>/dev/null || true
+    idrs=$(python3 -c "
+import sys; sys.path.insert(0, '$root/scripts'); import h264_syntax as H
+print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/dev/null || echo 0)
+    if [ "$idrs" = 1 ] && ffmpeg -v error -xerror -i "$p.264" -f null - 2>/dev/null; then
+        echo "  ok   one IDR, two-pass at 4 threads ($spec)"
+    else
+        echo "  FAIL $idrs IDRs or a failed decode, two-pass at 4 threads ($spec)"; f=1
+    fi
+    echo "SUMMARY 1 $f"
+}
+
+# A --qpfile force the encoder refuses only once the frames behind it are
+# coded surfaces in a GOP worker's flush. That GOP's output stops there, so
+# the run must either fail or deliver every frame: an exit 0 with a short
+# stream is the failure this cell is for.
+check_qpfile_mt() {   # check_qpfile_mt <name> <src> <frames> <qpfile lines> <spec>
+    local name="$1" src="$2" n="$3" lines="$4" spec="$5" p="$work/qpmt.$1" rc got f=0
+    printf '%b' "$lines" > "$p.qp"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --frames "$n" --qpfile "$p.qp" --threads 4 -o "$p.264" 2>/dev/null
+    rc=$?
+    got=$(ffprobe -v error -count_frames -show_entries stream=nb_read_frames -of csv=p=0 "$p.264" 2>/dev/null)
+    if [ "$rc" -ne 0 ] || [ "${got:-0}" = "$n" ]; then
+        echo "  ok   exit $rc with $got of $n frames ($spec)"
+    else
+        echo "  FAIL exit 0 with $got of $n frames ($spec)"; f=1
+    fi
+    echo "SUMMARY 1 $f"
+}
+
 # ---------------------------------------------------------------------------
 # Worker mode: run one check into its own result file, then exit 0 (so xargs
 # never aborts the pool). Globals come from the exported environment.
@@ -1300,6 +1367,17 @@ if [ ! -f "$fixdir/syn_p10_crop.y4m" ]; then
         "$fixdir/syn_p10_crop.y4m.tmp.$$"
     mv "$fixdir/syn_p10_crop.y4m.tmp.$$" "$fixdir/syn_p10_crop.y4m"
 fi
+# Three unrelated synthetic shots of 50 frames, so an encode with a keyint
+# above 50 places scene-cut IDRs inside a GOP: the shape that left an IDR
+# without a buffering period under --nal-hrd.
+if [ ! -f "$fixdir/syn_shots.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=352x288:rate=25" \
+        -f lavfi -i "mandelbrot=size=352x288:rate=25" \
+        -f lavfi -i "life=size=352x288:rate=25:mold=10:ratio=0.3" \
+        -filter_complex "[0:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[a];[1:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[b];[2:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[c];[a][b][c]concat=n=3:v=1[o]" \
+        -map "[o]" -f yuv4mpegpipe "$fixdir/syn_shots.y4m.tmp.$$"
+    mv "$fixdir/syn_shots.y4m.tmp.$$" "$fixdir/syn_shots.y4m"
+fi
 # Interlaced clips (item C2-PAFF-1). tinterlace weaves two source frames into
 # one, so the Y4M carries It / Ib and the CLI field-codes it without a flag --
 # which is itself part of what these cells check. syn_tff_crop is 178x100: seven
@@ -1390,6 +1468,11 @@ add "multiple references (CAVLC IPPP)" check_clip mref5_motion    "$S/syn_motion
 add "multiple references (CAVLC IPPP)" check_clip mref4_8x8       "$S/syn_motion.y4m"  "--ref 4 --transform-8x8"
 add "multiple references (CAVLC IPPP)" check_clip mref3_crop      "$S/syn_178x100.y4m" "--ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref2_aq        "$S/syn_motion.y4m"  "--ref 2 --aq-strength 1.0"
+# --ref 16 without a pyramid: the SPS declares at most 15 references, so the
+# anchor ring must hold no more, or list 0 names a picture the decoder's
+# sliding window has dropped. 120 frames fill the window.
+add "multiple references (CAVLC IPPP)" check_clip mref16_ippp     "$S/syn_long.y4m"    "--cabac --bframes 0 --ref 16 --keyint 40 --frames 120"
+add "multiple references (CAVLC IPPP)" check_clip mref16_flatb    "$S/syn_long.y4m"    "--cabac --bframes 1 --ref 16 --keyint 40 --frames 120"
 add "multiple references (CAVLC IPPP)" check_clip mref3_cabac     "$S/syn_motion.y4m"  "--cabac --ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref5_cabac     "$S/syn_motion.y4m"  "--cabac --ref 5"
 add "multiple references (CAVLC IPPP)" check_clip mref4_cabac_8x8 "$S/syn_motion.y4m"  "--cabac --ref 4 --transform-8x8"
@@ -1431,6 +1514,12 @@ add "PAFF field pictures" check_clip paff_mref5     "$S/syn_bff.y4m"      "--bff
 add "PAFF field pictures" check_clip paff_crop      "$S/syn_tff_crop.y4m" "--tff --cabac --transform-8x8"
 add "PAFF field pictures" check_clip paff_crop_cavlc "$S/syn_tff_crop.y4m" "--tff --cavlc"
 add "PAFF field pictures" check_clip paff_intra     "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8 --keyint 1"
+# The tight DPB window under field coding: --level 1.2 is too small for the
+# wide one at this size, so the encode runs one slot per reference B. The
+# sliding window then evicts at a reference pair's FIRST field, and a second
+# field that still named the evicted frame lost a reference in the decode.
+add "PAFF field pictures" check_clip paff_tight_tff "$S/syn_tff.y4m"      "--tff --cabac --bframes 7 --ref 1 --level 1.2"
+add "PAFF field pictures" check_clip paff_tight_bff "$S/syn_bff.y4m"      "--bff --cabac --bframes 5 --ref 1 --level 1.2"
 # No flag at all: the Y4M's It tag is what selects field coding, and
 # --no-interlaced is what refuses to take it.
 add "PAFF field pictures" check_clip paff_auto      "$S/syn_tff.y4m"      "--cabac --transform-8x8"
@@ -1455,6 +1544,18 @@ add "open GOP" check_clip ogop_b3_cabac  "$S/syn_motion.y4m" "--open-gop --cabac
 add "open GOP" check_clip ogop_keyint5   "$S/syn_motion.y4m" "--open-gop --cabac --keyint 5"
 add "open GOP" check_clip ogop_cavlc     "$S/syn_motion.y4m" "--open-gop --cavlc --keyint 4"
 add "open GOP" check_clip ogop_mref5     "$S/syn_motion.y4m" "--open-gop --cabac --ref 5 --keyint 4"
+# Leading B frames under a 4-B pyramid: the key's run is coded as a hierarchy
+# with no reference among it, so two of the four wait in the DPB beside a full
+# reference window. Declared without them, a decoder that bumps on a full
+# buffer (the JM) output them swapped once the window filled. 60 frames is
+# what fills it.
+add "open GOP" check_clip ogop_b4_lead   "$S/syn_long.y4m"   "--open-gop --cabac --bframes 4 --keyint 10 --frames 60"
+# The same waiters on top of a 15-frame window would need 17-18 frames, past
+# H.264's 16: the encode is fitted to 16 instead (fewer references).
+add "open GOP" check_clip ogop_b4_ref16  "$S/syn_long.y4m"   "--open-gop --cabac --bframes 4 --ref 16 --b-adapt 0 --keyint 10 --frames 120"
+add "open GOP" check_clip ogop_b14_ref1  "$S/syn_long.y4m"   "--open-gop --cabac --bframes 14 --ref 1 --b-adapt 0 --keyint 30 --frames 120"
+add "open GOP" check_qpfile_mt ogop_qpfile_flush "$S/syn_long.y4m" 150 \
+    "30 I -1\\n61 K 24\\n45 P -1\\n20 B -1\\n90 - 30\\n" "--open-gop --cabac --bframes 3 --keyint 50"
 add "open GOP" check_clip ogop_nob       "$S/syn_motion.y4m" "--open-gop --cabac --bframes 0 --keyint 4"
 add "open GOP" check_clip ogop_flat      "$S/syn_motion.y4m" "--open-gop --cabac --bframes 3 --b-pyramid none --keyint 4"
 add "open GOP" check_clip ogop_8x8       "$S/syn_motion.y4m" "--open-gop --cabac --transform-8x8 --keyint 4"
@@ -1476,6 +1577,7 @@ add "open GOP" check_threading ogop "$S/syn_motion.y4m" "--open-gop --cabac"
 add "intra refresh" check_clip ir_cavlc  "$S/syn_pan.y4m"      "--intra-refresh --cavlc --keyint 8"
 add "intra refresh" check_clip ir_cabac  "$S/syn_pan.y4m"      "--intra-refresh --cabac --ref 3 --keyint 8"
 add "intra refresh" check_clip ir_8x8    "$S/syn_pan.y4m"      "--intra-refresh --cabac --transform-8x8 --keyint 6"
+add "intra refresh" check_ir_mt ir_2pass_mt "$S/syn_shots.y4m"   "--intra-refresh --cabac --bitrate 500 --keyint 50"
 add "intra refresh" check_clip ir_crop   "$S/syn_pan_crop.y4m" "--intra-refresh --cabac --keyint 5"
 add "intra refresh" check_clip ir_slices "$S/syn_pan.y4m"      "--intra-refresh --cabac --slices 3 --keyint 8"
 add "intra refresh" check_irefresh rec_cavlc "$S/syn_pan.y4m"      8  "--cavlc --ref 2"
@@ -1687,6 +1789,8 @@ add "nal-hrd" check_rc hrd_tff "$S/syn_tff.y4m" \
     "--tff --cabac --crf 26 --vbv-maxrate 600 --vbv-bufsize 600 --nal-hrd vbr"
 add "nal-hrd" check_rc hrd_sl  "$S/syn_motion.y4m" \
     "--cabac --crf 20 --vbv-maxrate 600 --vbv-bufsize 600 --slices 4 --nal-hrd vbr"
+add "nal-hrd" check_hrd_mt hrd_2pass_mt "$S/syn_shots.y4m" \
+    "--cabac --bitrate 800 --vbv-maxrate 1000 --vbv-bufsize 1000 --nal-hrd vbr --keyint 60"
 
 add "2-pass rate control" check_twopass base "$S/syn_motion.y4m"
 

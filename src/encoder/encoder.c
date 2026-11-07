@@ -399,6 +399,15 @@ static int stair_wide_on(void)
     return v;
 }
 
+/* The same switch for one encoder. A forced --level the wide window can't fit
+ * turns width off for that encoder alone (see the DPB sizing in open), and
+ * every reader below has to agree with the window it sized: the clamps that
+ * make width safe arm on exactly this. */
+static int stair_wide_e(const yah264_encoder_t *e)
+{
+    return stair_wide_on() && !e->stair_narrow;
+}
+
 /* How many bursts may stay IN FLIGHT across an anchor's rcp decide. 0 = the
  * shipped zero-lag-anchor schedule -- stair_run_burst retires everything before
  * the launch, so an anchor decides on full actuals and nothing overlaps it.
@@ -663,7 +672,7 @@ static int stair_direct_blocks(const yah264_encoder_t *e)
  * != 1), since width is deferred retirement of an ASYNC chain. */
 static int stair_wide_capable(const yah264_encoder_t *e)
 {
-    return stair_wide_on()
+    return stair_wide_e(e)
         && e->b_pyramid && !stair_direct_blocks(e)
         && !e->vbv_on
         && e->wf_width >= Y264_MT_POOL_MIN;
@@ -1809,7 +1818,7 @@ static int stair_refbgate_elig(const yah264_encoder_t *e)
  * the whole ABR penalty: foreman 180f t12, 0 of 41 launches gated and 59 ms
  * of a 110 ms encode blocked on reference-B content, against 44 of 44 gated
  * and 12 ms under CRF (2026-09-04). */
-    return stair_bdepth_on() && stair_wide_on() &&
+    return stair_bdepth_on() && stair_wide_e(e) &&
            stair_clamp_on(e) && e->nref >= 2 &&
            (!e->rcp_on || e->rcp_lag > 0);
 }
@@ -2154,7 +2163,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * the condition width engages on. The two must never disagree: a wide burst
  * at --ref > 1 with the hop-2 clamp disarmed would search a reference that
  * is still streaming. */
-    int clamp0_hop2 = (clamp0_poc >= 0 && stair_wide_on() &&
+    int clamp0_hop2 = (clamp0_poc >= 0 && stair_wide_e(e) &&
                        e->nref >= 2 && !e->rcp_on)
                     ? e->prev_anchor_poc2 : -1;
     /* v6: and the live predecessors' REFERENCE B's, the pictures that actually
@@ -3235,6 +3244,58 @@ static int unsafe_no_nal(void)
 static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                           const uint8_t *rbsp, size_t rbsp_size);
 
+/* The static display-metadata SEI: content light level, mastering display
+ * and alternative transfer. Each one holds only until the end of its coded
+ * video sequence, and a player can start at any random access point, so they
+ * go in-band ahead of every IDR and every recovery-point picture (--open-gop,
+ * --intra-refresh), the first IDR included. Not in the headers: a caller
+ * that keeps those as a decoder configuration record, the usual MP4 and
+ * Matroska pattern, has nowhere to store an SEI. */
+static int alt_transfer_on(const yah264_param_t *pp)
+{
+    return pp->alternative_transfer > 0 && pp->alternative_transfer != 2;
+}
+
+static int display_sei_on(const yah264_encoder_t *e)
+{
+    const yah264_param_t *pp = &e->param;
+    return pp->cll_max || pp->cll_avg || pp->mastering_set || alt_transfer_on(pp);
+}
+
+static int append_display_sei(yah264_encoder_t *e, size_t *off)
+{
+    uint8_t msg[64], buf[96];
+    y264_bs_t bs;
+    size_t n;
+    const yah264_param_t *pp = &e->param;
+    if (pp->cll_max || pp->cll_avg) {
+        n = y264_sei_cll(msg, sizeof msg, pp->cll_max, pp->cll_avg);
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 144, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    if (pp->mastering_set) {
+        n = y264_sei_mastering(msg, sizeof msg, pp->mastering_prim,
+                               pp->mastering_wp, pp->mastering_max, pp->mastering_min);
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 137, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    if (alt_transfer_on(pp)) {
+        n = y264_sei_alt_transfer(msg, sizeof msg, pp->alternative_transfer);
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 147, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 /* The NALs that open an access unit, in the order 7.4.1.2.3 requires them:
  * the access unit delimiter first, then (elsewhere) the parameter sets, then
  * the SEI. Called immediately before the FIRST slice of a picture: a picture
@@ -3350,6 +3411,9 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
+    if ((nal_type == YAH264_NAL_SLICE_IDR || recovery) && display_sei_on(e) &&
+        append_display_sei(e, off) < 0)
+        return -1;
     /* The recovery_point, last of the messages because it is an SEI and the
  * delimiter is not, and after buffering_period because that one has to be
  * the first SEI of its access unit. `recovery` is recovery_frame_cnt plus
@@ -3390,7 +3454,8 @@ static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int t
     if (rbsp_size == 0)
         return -1;
     if (first_slice &&
-        (e->param.aud || e->param.pic_struct || e->hrd_on || recovery) &&
+        (e->param.aud || e->param.pic_struct || e->hrd_on || recovery ||
+         (type == YAH264_NAL_SLICE_IDR && display_sei_on(e))) &&
         au_open(e, off, type, disp, recovery) < 0)
         return -1;
     return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
@@ -3600,11 +3665,13 @@ static int level_max_dpb_frames(int level_idc, int fs)
         {40,  32768}, {41,  32768}, {42,  34816}, {50, 110400}, {51, 184320},
         {52, 184320}, {60, 696320}, {61, 696320}, {62, 696320},
     };
-    long cap = 696320;
+    long cap = -1;
     for (size_t i = 0; i < sizeof L / sizeof L[0]; i++)
         if (L[i].idc == level_idc) { cap = L[i].max_dpb; break; }
+    if (cap < 0)
+        return -1;                  /* not a level */
     int n = fs > 0 ? (int)(cap / fs) : 16;
-    return n > 16 ? 16 : n < 1 ? 1 : n;
+    return n > 16 ? 16 : n;         /* 0: one frame of this size overflows it */
 }
 
 /* The widest row-wavefront
@@ -4045,6 +4112,150 @@ static void deblock_auto_resolve(yah264_param_t *p)
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
+/* The longest B run the encoder codes. --bframes takes up to 16, and open
+ * caps the run at this (e->bframes), so everything that sizes the DPB, the
+ * reorder depth or the open-GOP waiters from the parameters reads it through
+ * here rather than from --bframes. */
+#define Y264_BRUN_MAX 7
+static int brun(int bframes)
+{
+    return bframes < 0 ? 0 : bframes > Y264_BRUN_MAX ? Y264_BRUN_MAX : bframes;
+}
+
+/* An --open-gop key's leading B frames are coded as a hierarchy with no
+ * reference among them (code_b_hier, flat), so each one on the run's left
+ * spine waits in the DPB for the lower-POC pictures decoded after it, beside
+ * every reference the window holds. That is floor(log2(n)) pictures for a run
+ * of n, on top of max_num_ref_frames; the DPB has to be declared with them or
+ * a decoder that bumps on a full buffer outputs them early (out of order).
+ * Closed GOPs and flat runs have no such waiters. */
+static int open_lead_wait(int open_gop, int pyramid, int bframes)
+{
+    int w = 0;
+    bframes = brun(bframes);
+    if (open_gop && pyramid)
+        while ((2 << w) <= bframes) w++;
+    return w;
+}
+
+/* The DPB an encode with these settings declares, in frames: what the SPS
+ * sizing in open computes for max_dec_frame_buffering, from the parameters
+ * alone (keep the two in step). `narrow` is the tight window. */
+static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int narrow, int clamp)
+{
+    const yah264_param_t *pp = &e->param;
+    bf = brun(bf);
+    int has_b = bf > 0, pyramid = pyr && bf >= 2;
+    int vbv = pp->rc.vbv_maxrate > 0 && pp->rc.vbv_bufsize > 0;
+    int rc_decide = (pp->rc.method == YAH264_RC_ABR && pp->rc.bitrate > 0) || pp->rc.pass > 0 || vbv;
+    int wide_rc = !rc_decide || (rcp_lag_for(e) > 0 && !vbv);
+    int wide = stair_wide_on() && !narrow;
+    int nrefb = pyramid ? (wide && wide_rc ? bf : stair_plan_nrefb(bf)) : 0;
+    /* `clamp` mirrors the SPS, which writes at most 15 references; a forced
+ * level's fit leaves it off and compares against a cap of 15 instead */
+    int mrf = (ref > 16 ? 16 : ref < 1 ? 1 : ref) + has_b + nrefb + (e->fields ? 1 : 0);
+    if (clamp && mrf > 15) mrf = 15;
+    int reo = 0;
+    if (pyramid) { while ((1 << reo) < bf + 1) reo++; }
+    else reo = has_b;
+    if (has_b && rc_decide && rcp_lag_for(e) > 0 && !vbv && wide)
+        reo += rcp_lag_for(e);
+    mrf += open_lead_wait(e->open_gop, pyramid, bf);
+    return mrf > reo ? mrf : reo;
+}
+
+/* A forced --level promises a decoder that the DPB fits it, so the encode
+ * shrinks to fit instead of declaring a level it breaks. In order: the tight
+ * window, which drops the slot per B frame the threaded staircase holds
+ * (measured within 0.1% BD on VMAF v1 at one and four threads; it turns the
+ * overlap off for this encoder, a speed cost not yet measured); list-0
+ * references, down to one; B frames under the pyramid, down to two; the
+ * pyramid itself, with the B count back as asked; then B frames, down to
+ * none. References then come back as far as the room left allows. What
+ * still doesn't fit (field coding at a one-frame DPB) is refused. The cap
+ * is the level's, and 15 at most, which is what the SPS can declare here.
+ * --stitchable is fitted the same way: it then declares that cap, which
+ * the encode inside it no longer overflows. Returns -1
+ * to refuse. Runs before anything reads ref, bframes or b_pyramid. */
+static int level_fit(yah264_encoder_t *e)
+{
+    yah264_param_t *pp = &e->param;
+    /* With no level forced the only limit is H.264's own 16 frames, which
+ * only the --open-gop pyramid's leading waiters can pass: they sit on top
+ * of a reference window that may already be 15. */
+    int forced = pp->level_idc > 0, clamp = !forced;
+    if (!forced) {
+        int bf = brun(pp->bframes), pyr = pp->b_pyramid && bf >= 2;
+        if (!open_lead_wait(e->open_gop, pyr, bf) ||
+            dpb_need(e, pp->ref, bf, pyr, 0, 1) <= 16)
+            return 0;
+    }
+    int cap = forced ? level_max_dpb_frames(pp->level_idc, e->width_in_mbs * e->height_in_mbs) : 16;
+    if (cap < 0) {
+        fprintf(stderr, "yah264: level_idc %d is not a Table A-1 level\n", pp->level_idc);
+        return -1;
+    }
+    if (cap < 1) {
+        fprintf(stderr, "yah264: level %d.%d's DPB can't hold one %dx%d frame; "
+                "this size needs a higher level\n", pp->level_idc / 10, pp->level_idc % 10,
+                e->width, e->height);
+        return -1;
+    }
+    if (forced && cap > 15) cap = 15;
+    int ref = pp->ref > 16 ? 16 : pp->ref < 1 ? 1 : pp->ref;
+    int bf = brun(pp->bframes), pyr = pp->b_pyramid && bf >= 2, narrow = 0;
+    int ref0 = ref, bf0 = bf, pyr0 = pyr, bf_asked = pp->bframes;
+    if (dpb_need(e, ref, bf, pyr, 0, clamp) <= cap)
+        return 0;
+    /* compared unclamped: at the SPS's 15 both windows can read the same
+ * and hide what the tight one saves */
+    if (pyr && dpb_need(e, ref, bf, pyr, 1, 0) < dpb_need(e, ref, bf, pyr, 0, 0))
+        narrow = 1;
+    while (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && ref > 1) ref--;
+    /* fewer B frames under the pyramid first, which marks fewer of them */
+    while (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && pyr && bf > 2) bf--;
+    if (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && pyr) {
+        pyr = 0;
+        bf = bf0;
+    }
+    while (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap && bf > 0) bf--;
+    if (bf < 2) pyr = 0;
+    /* what the B frames gave back goes to list 0 again */
+    while (ref < ref0 && dpb_need(e, ref + 1, bf, pyr, narrow, clamp) <= cap) ref++;
+    if (dpb_need(e, ref, bf, pyr, narrow, clamp) > cap) {
+        fprintf(stderr, "yah264: level %d.%d holds %d frame(s) in the DPB at %dx%d, and "
+                "this encode needs %d even with ref 1 and no B frames%s\n",
+                pp->level_idc / 10, pp->level_idc % 10, cap, e->width, e->height,
+                dpb_need(e, ref, bf, pyr, narrow, clamp),
+                e->fields ? " (a field pair keeps one more)" : "");
+        return -1;
+    }
+    e->stair_narrow = narrow && pyr;
+    pp->ref = ref;
+    if (bf != bf0) pp->bframes = bf;    /* left as asked when the run fit */
+    pp->b_pyramid = pyr;
+    /* once per process: a CLI run opens an encoder per GOP */
+    static atomic_int noted;
+    if (!atomic_exchange(&noted, 1)) {
+        char what[160] = "";
+        size_t n = 0;
+#define FIT_NOTE(...) n += (size_t)snprintf(what + n, n < sizeof what ? sizeof what - n : 0, __VA_ARGS__)
+        if (e->stair_narrow) FIT_NOTE(", the tight B-frame window (no threaded B overlap)");
+        if (ref != ref0) FIT_NOTE(", ref %d (was %d)", ref, ref0);
+        if (pyr0 && !pyr) FIT_NOTE(", no B-pyramid");
+        if (bf != bf0) FIT_NOTE(", bframes %d (was %d)", bf, bf_asked);
+#undef FIT_NOTE
+        if (forced)
+            fprintf(stderr, "yah264: level %d.%d holds %d frame%s in the DPB at %dx%d; coding "
+                    "with%s\n", pp->level_idc / 10, pp->level_idc % 10, cap, cap == 1 ? "" : "s",
+                    e->width, e->height, what[0] ? what + 1 : " the settings unchanged");
+        else
+            fprintf(stderr, "yah264: --open-gop's leading B frames would take the DPB past "
+                    "H.264's 16 frames; coding with%s\n", what[0] ? what + 1 : " the settings unchanged");
+    }
+    return 0;
+}
+
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
@@ -4490,6 +4701,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         if (wp == 0) wp = 1;
         e->weightp = wp < 0 ? 0 : (wp > 2 ? 2 : wp);
     }
+    if (level_fit(e) < 0) { yah264_encoder_close(e); return NULL; }
     int has_b = e->param.bframes > 0;
     e->sps.entropy_coding_mode_flag = e->param.cabac ? 1 : 0;
     e->sps.profile_idc = y264_profile_idc(e->param.cabac, e->param.bframes); /* Main for CABAC/B, else Baseline */
@@ -4660,7 +4872,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * window changes which references the pyramid's lists can offer (bits moved
  * when it shipped). */
     {
-        int nrefb = e->b_pyramid ? e->param.bframes : 0;
+        int nrefb = e->b_pyramid ? brun(e->param.bframes) : 0;
         /* The tight window is NOT applied where the wide staircase can engage
          * (ref <= 1 shapes): its slot recycling depends on the wide window's
          * slack -- determ_repeat under load reads 4/16 nondeterministic
@@ -4692,8 +4904,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 || (param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0);
         int sps_vbv = param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
         int sps_wide_rc = !sps_rc_decide || (rcp_lag_for(e) > 0 && !sps_vbv);
-        if (e->b_pyramid && !(stair_wide_on() && sps_wide_rc)) {
-            nrefb = stair_plan_nrefb(e->param.bframes);
+        if (e->b_pyramid && !(stair_wide_e(e) && sps_wide_rc)) {
+            nrefb = stair_plan_nrefb(brun(e->param.bframes));
         }
         int mrf = e->nref + (has_b ? 1 : 0) + nrefb;
         /* A field pair's FIRST field is marked for reference before the second
@@ -4702,6 +4914,16 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * the whole pair. Without the +1 a --ref N field stream would reach only
  * N-1 previous frames. */
         if (e->fields) mrf++;
+        /* The SPS declares at most 15. Without the pyramid list 0 comes from
+ * the anchor ring, which holds nref pictures whatever the window says,
+ * so the ring has to shrink with the window: at --ref 16 it named a
+ * picture the decoder's sliding window had already dropped. (The
+ * pyramid draws its lists from the DPB itself and is bounded by it.) */
+        if (mrf > 15 && !e->b_pyramid) {
+            e->nref -= mrf - 15;
+            if (e->nref < 1) e->nref = 1;
+            mrf = 15;
+        }
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;
         /* Auto-select the minimum conformant level from resolution/framerate/DPB
  * (Annex A). fps rounded up so MaxMBPS isn't under-counted; the DPB term
@@ -4719,8 +4941,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * rate cap alone, all of which the two encodes share. It costs a
  * higher declared level, and with it a wider MaxVmvR -- so a stitchable
  * stream really is a different encode, not only different bytes. */
+        int lead_wait = open_lead_wait(e->open_gop, e->b_pyramid, e->param.bframes);
         long dpb_mbs = (long)fs * (e->param.stitchable ? Y264_STITCH_DPB
-                                                       : e->sps.max_num_ref_frames);
+                                                       : e->sps.max_num_ref_frames + lead_wait);
         long br_kbps = e->param.rc.vbv_maxrate > e->param.rc.bitrate ? e->param.rc.vbv_maxrate : e->param.rc.bitrate;
         if (e->param.rc.method != YAH264_RC_ABR && e->param.rc.method != YAH264_RC_2PASS && e->param.rc.vbv_maxrate <= 0)
             br_kbps = 0;                                  /* CRF/CQP without a cap: no MaxBR constraint */
@@ -4767,7 +4990,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     {
         int reo = 0;
         if (e->b_pyramid) {
-            int d = 0, n = e->param.bframes + 1;
+            int d = 0, n = brun(e->param.bframes) + 1;
             while ((1 << d) < n) d++;
             reo = d;
         } else if (has_b) {
@@ -4785,11 +5008,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 || (param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0);
         int lag_vbv = param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
         if (has_b && lag_rc_decide && rcp_lag_for(e) > 0 && !lag_vbv
-            && stair_wide_on())
+            && stair_wide_e(e))
             reo += rcp_lag_for(e);
         e->sps.max_num_reorder_frames = reo;
-        e->sps.max_dec_frame_buffering = e->sps.max_num_ref_frames > reo
-                                       ? e->sps.max_num_ref_frames : reo;
+        int dpb = e->sps.max_num_ref_frames +
+                  open_lead_wait(e->open_gop, e->b_pyramid, e->param.bframes);
+        if (dpb > 16) dpb = 16;     /* MaxDpbFrames; see open_lead_wait */
+        e->sps.max_dec_frame_buffering = dpb > reo ? dpb : reo;
         /* --stitchable: declare the level's own maximum instead of what this
  * encode needs, so two streams at the same geometry carry the same SPS
  * whatever --ref and --bframes were. A declared DPB is an upper bound
@@ -5371,7 +5596,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->bframes = e->param.bframes;
     if (e->bframes < 0) e->bframes = 0;
     e->lr_intra_pen = lr_intra_penalty(&e->param);
-    if (e->bframes > 7) e->bframes = 7;
+    if (e->bframes > Y264_BRUN_MAX) e->bframes = Y264_BRUN_MAX;
     e->nbuf = 0;
     e->ref1[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);                      /* always allocated: uniform */
     e->ref1[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);                    /* reorder logic uses it even */
@@ -5860,11 +6085,11 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
             return -1;
     }
 
-    /* The static display-metadata messages. They describe the WHOLE stream and
- * never change, so they are written once beside the parameter sets rather
- * than per picture, which is where the per-picture pic_timing lives. Each
- * one is its own SEI NAL, so a decoder that does not know a payload type
- * skips that NAL rather than the group. */
+    /* The frame packing message describes the WHOLE stream and never changes,
+ * so it goes beside the parameter sets rather than on every picture, which
+ * is where the per-picture pic_timing lives. It is its own SEI NAL, so a
+ * decoder that does not know the payload type skips that NAL alone. The
+ * display-metadata ones go in-band instead (append_display_sei). */
     {
         uint8_t msg[64];
         size_t n;
@@ -5877,33 +6102,7 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
                            e->rbsp, (size_t)(bs.p - bs.start)) < 0)
                 return -1;
         }
-        if (pp->cll_max || pp->cll_avg) {
-            n = y264_sei_cll(msg, sizeof msg, pp->cll_max, pp->cll_avg);
-            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
-            y264_sei_write(&bs, 144, msg, n);
-            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
-                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
-                return -1;
-        }
-        if (pp->mastering_set) {
-            n = y264_sei_mastering(msg, sizeof msg, pp->mastering_prim,
-                                   pp->mastering_wp, pp->mastering_max, pp->mastering_min);
-            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
-            y264_sei_write(&bs, 137, msg, n);
-            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
-                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
-                return -1;
-        }
-        if (pp->alternative_transfer) {
-            n = y264_sei_alt_transfer(msg, sizeof msg, pp->alternative_transfer);
-            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
-            y264_sei_write(&bs, 147, msg, n);
-            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
-                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
-                return -1;
-        }
     }
-
     e->headers_done = 1;
     *nal = e->nal;
     *count = e->nal_count;
@@ -7389,8 +7588,10 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
     } else return 0;
 
     int p = c->src[s].poc, w0 = c->s_pastpoc[s], w1 = c->s_futpoc[s];
-    int den0 = p - p0, num0 = p - w0;
-    int den1 = p1 - p, num1 = w1 - p;
+    /* INT_MIN is "no anchor on that side" (the memo key); subtracting it
+     * overflows, so a missing side is simply out of range */
+    int den0 = p - p0, num0 = w0 == INT_MIN ? 0 : p - w0;
+    int den1 = p1 - p, num1 = w1 == INT_MIN ? 0 : w1 - p;
     int ok0 = den0 > 0 && num0 > 0 && num0 <= den0;
     int ok1 = den1 > 0 && num1 > 0 && num1 <= den1;
     if (!ok0 && !ok1) {
@@ -11352,6 +11553,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * intra field per key frame. The second field of an IDR frame is a picture of
  * its own and carries nal_unit_type 1: an IDR there would reset frame_num and
  * POC in the middle of the pair. */
+static void dpb_slide(yah264_encoder_t *e);
 static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                      int is_ref, pixel *const src[3])
 {
@@ -11385,6 +11587,15 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * keyframe. */
         int t = (type == 0 && k == 1 && is_ref && !rp) ? 1 : type;
         r = emit_frame(e, off, t, is_idr && k == 0, is_ref, src);
+        /* A decoder marks the first field of a reference pair as soon as it is
+ * decoded, and the sliding window runs then, so the second field is
+ * decoded with the oldest reference already gone when the DPB was full.
+ * Evicting here, rather than when the pair is stored, keeps the second
+ * field's lists to what the decoder holds; the store then finds a free
+ * slot. Without it a tight window (ref 1, four or more B frames) named
+ * the evicted frame and the decode lost a reference. */
+        if (k == 0 && is_ref && e->b_pyramid && !is_idr)
+            dpb_slide(e);
         /* The recovery point marks the FIRST field of the pair; the second is
  * the same picture's other half and needs no second copy of it. The
  * caller sets the flag and clears it after; clearing it here as well is
@@ -11540,10 +11751,9 @@ static void col_reset(yah264_encoder_t *e)
     e->col_l0poc0 = -1;
 }
 
-/* Store the just-coded reference (e->rec + e->mvx/mvy/refidx) into a DPB slot,
- * applying the sliding-window: if the DPB is full, evict the reference with the
- * smallest FrameNum (mirrors the decoder, 8.2.5.3). Assigns the running FrameNum. */
-static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
+/* The sliding window (8.2.5.3): with the DPB full, the reference with the
+ * smallest FrameNum goes. */
+static void dpb_slide(yah264_encoder_t *e)
 {
     int used = 0;
     for (int i = 0; i < e->dpb_size; i++) used += e->dpb[i].used;
@@ -11555,6 +11765,14 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
             }
         if (victim >= 0) e->dpb[victim].used = 0;
     }
+}
+
+/* Store the just-coded reference (e->rec + e->mvx/mvy/refidx) into a DPB slot,
+ * applying the sliding window first (mirrors the decoder). Assigns the running
+ * FrameNum. */
+static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
+{
+    dpb_slide(e);
     int slot = -1;
     for (int i = 0; i < e->dpb_size; i++) if (!e->dpb[i].used) { slot = i; break; }
     if (slot < 0) slot = 0;                         /* should not happen */
@@ -14071,9 +14289,9 @@ static void stair_col_apply(yah264_encoder_t *e, struct stair_burst *B,
  * codebase already tracks in hpel_ensure_ws, and one of those is enough. */
 static void dpbp_open(yah264_encoder_t *e, size_t mvcount)
 {
-    if (!stair_wide_on() || !stair_wide_rc_ok(e))
+    if (!stair_wide_e(e) || !stair_wide_rc_ok(e))
         return;
-    int nrefb = stair_plan_nrefb(e->param.bframes);
+    int nrefb = stair_plan_nrefb(brun(e->param.bframes));
     int want = Y264_STAIR_K * (1 + nrefb);
     if (want > Y264_DPB_POOL_MAX) want = Y264_DPB_POOL_MAX;
     for (int i = 0; i < want; i++) {
@@ -14927,7 +15145,7 @@ static int stair_run_burst(yah264_encoder_t *e, size_t *off,
  * everything in flight before each decide, and deferred retirement is what
  * width IS. stair_wide_rc_ok carries the rule; Y264_RCP_LAG buys the
  * budget, at a rate-accuracy price that is the whole point of measuring it. */
-    int wide = async && stair_wide_on() && stair_wide_rc_ok(e);
+    int wide = async && stair_wide_e(e) && stair_wide_rc_ok(e);
     if (!async && stair_drain_all(e, off) < 0)
         return -2;
     /* The ring is the throttle: a launch waits only when the slot it needs is
@@ -15469,14 +15687,20 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     /* --open-gop: a key is still an I picture and still an anchor, but it stops
  * being an IDR. Two keys keep the reset anyway. The FIRST picture of the
  * instance has nothing to continue from -- no DPB, no POC line -- and a
- * keyframe the caller's plan asked for is an IDR by the engine-interface
- * contract, because the orchestrator addresses the segment starting there as
- * a file and re-encodes it alone. Everything else, keyint and adaptive cut
+ * keyframe the caller's plan or a per-frame force asked for is an IDR by the
+ * engine-interface contract, because the orchestrator addresses the segment
+ * starting there as a file and re-encodes it alone. Everything else, keyint and adaptive cut
  * alike, becomes a recovery point. */
     int zone_idr = 0;
     if (is_key && e->nzones) {
         const yah264_zone_t *z = zone_at(e, (int)e->frame_count);
         zone_idr = z && (z->flags & YAH264_ZONE_IDR) && (int)e->frame_count == z->first;
+    }
+    /* ...and so is a per-frame force that names an IDR (a --qpfile I),
+ * which is what the force says */
+    if (is_key && e->nforces) {
+        const yah264_frame_force_t *ff = force_at(e, (int)e->frame_count);
+        zone_idr |= ff && ff->type == YAH264_FORCE_IDR;
     }
     int is_idr = is_key && (!e->open_gop || e->frame_count == 0 || zone_idr);
     int open_key = is_key && !is_idr;
@@ -15909,6 +16133,20 @@ YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah
     int p = vs->primaries > 0 && vs->primaries < 256 ? vs->primaries : 2;
     int t = vs->transfer > 0 && vs->transfer < 256 ? vs->transfer : 2;
     int m = vs->matrix >= 0 && vs->matrix < 256 ? vs->matrix : 2;
+    /* E.2.1: matrix_coefficients 0 (GBR) shall be used only with 4:4:4, so
+ * on subsampled chroma it is refused rather than written into a stream no
+ * decoder should accept. YCgCo has no such rule and is legal at 4:2:0, but
+ * is rarely what was meant, so it only warns (once per process: a CLI run
+ * sets every GOP's encoder). */
+    if (m == 0 && e->cf_idc != 3) {
+        fprintf(stderr, "yah264: matrix_coefficients 0 (GBR) needs 4:4:4 input, and this "
+                "is 4:2:%s\n", e->cf_idc == 1 ? "0" : "2");
+        return -1;
+    }
+    static atomic_int warned;
+    if (m == 8 && e->cf_idc != 3 && !atomic_exchange(&warned, 1))
+        fprintf(stderr, "yah264: warning: matrix_coefficients 8 (YCgCo) on 4:2:%s chroma is "
+                "unusual\n", e->cf_idc == 1 ? "0" : "2");
     e->sps.vs_present = 1;
     e->sps.vs_full_range = vs->full_range ? 1 : 0;
     e->sps.vs_primaries = p; e->sps.vs_transfer = t; e->sps.vs_matrix = m;

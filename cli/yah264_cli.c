@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <math.h>
 #include <limits.h>
@@ -309,6 +310,9 @@ static volatile int g_force_reject;
  * added back to a number in the file. -1 = the whole stream was one instance,
  * where the two already agree. */
 static volatile int g_force_reject_base = -1;
+/* Any other encode error inside a GOP worker, feed or flush: the GOP's
+ * output stops there, so the run must not exit 0 with a short stream. */
+static volatile int g_gop_encode_err;
 static int g_gop_threads;                 /* --gop-threads K: every GOP instance's frame_threads */
 static int g_threads_auto;                /* --threads was left to auto (0 / unset) */
 /* Y264_GOP_TRACE=1: one stderr line per GOP (worker, frame-thread share, start
@@ -515,9 +519,10 @@ static int parse_zones_arg(const char *arg)
  * absolute, or -1 for "the rate control decides"; a frame the file does not
  * name is left entirely to the encoder.
  *
- * `i` is accepted and refused rather than ignored: a non-IDR I frame needs an
- * open GOP, which this encoder does not have, and silently coding an IDR there
- * would answer a different question than the one the file asked. */
+ * `i` is refused rather than ignored: a forced non-IDR I frame isn't
+ * supported (under --open-gop the encoder makes its other keyframes non-IDR
+ * itself), and silently coding an IDR there would answer a different
+ * question than the one the file asked. */
 static int parse_qpfile(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -552,8 +557,9 @@ static int parse_qpfile(const char *path)
             case '-':           type = YAH264_FORCE_NONE; break;
             case 'i':
                 fprintf(stderr, "yah264: qpfile %s:%d: frame %d asks for a non-IDR I frame, "
-                                "which needs an open GOP this encoder does not have\n",
-                        path, lineno, frame);
+                                "and a forced non-IDR I isn't supported: use I or K for an "
+                                "IDR (under --open-gop the encoder makes the other keyframes "
+                                "non-IDR itself)\n", path, lineno, frame);
                 fclose(f); return -1;
             default: type = -1;
         }
@@ -658,20 +664,74 @@ static void frame_stats_emit(FILE *out, yah264_encoder_t *e, const yah264_nal_t 
     }
 }
 static int g_vs_set, g_y4m_full_range = -1;
+/* The VUI colour codes by name. Each H.273 code takes the spelling the
+ * reference encoder's CLI documents and the one ffmpeg prints, so a value
+ * read off ffprobe or copied from a reference command line works here
+ * unchanged. Names match without regard to case (ffmpeg writes gbr where
+ * the reference writes GBR). The extras at the end of each list (bt2020 as a
+ * matrix, pq, hlg, bt601, srgb) are this CLI's own older spellings and stay
+ * accepted. */
+struct colour_name { const char *name; int code; };
+static const struct colour_name colour_prim_names[] = {
+    { "bt709", 1 }, { "undef", 2 }, { "unknown", 2 }, { "unspecified", 2 },
+    { "bt470m", 4 }, { "bt470bg", 5 }, { "smpte170m", 6 }, { "smpte240m", 7 },
+    { "film", 8 }, { "bt2020", 9 }, { "smpte428", 10 }, { "smpte428_1", 10 },
+    { "smpte431", 11 }, { "smpte432", 12 }, { "ebu3213", 22 }, { "jedec-p22", 22 },
+    { "bt601", 6 }, { "srgb", 1 }, { "iec61966-2-1", 1 }, { NULL, 0 }
+};
+static const struct colour_name colour_trc_names[] = {
+    { "bt709", 1 }, { "undef", 2 }, { "unknown", 2 }, { "unspecified", 2 },
+    { "bt470m", 4 }, { "gamma22", 4 }, { "bt470bg", 5 }, { "gamma28", 5 },
+    { "smpte170m", 6 }, { "smpte240m", 7 }, { "linear", 8 },
+    { "log100", 9 }, { "log", 9 }, { "log316", 10 }, { "log_sqrt", 10 },
+    { "iec61966-2-4", 11 }, { "iec61966_2_4", 11 }, { "bt1361e", 12 }, { "bt1361", 12 },
+    { "iec61966-2-1", 13 }, { "iec61966_2_1", 13 }, { "srgb", 13 },
+    { "bt2020-10", 14 }, { "bt2020_10bit", 14 }, { "bt2020-12", 15 }, { "bt2020_12bit", 15 },
+    { "smpte2084", 16 }, { "pq", 16 }, { "smpte428", 17 }, { "smpte428_1", 17 },
+    { "arib-std-b67", 18 }, { "hlg", 18 },
+    { "bt601", 6 }, { "bt2020", 14 }, { NULL, 0 }
+};
+static const struct colour_name colour_matrix_names[] = {
+    { "gbr", 0 }, { "rgb", 0 }, { "bt709", 1 }, { "undef", 2 }, { "unknown", 2 },
+    { "unspecified", 2 }, { "fcc", 4 }, { "bt470bg", 5 }, { "smpte170m", 6 },
+    { "smpte240m", 7 }, { "ycgco", 8 }, { "ycocg", 8 },
+    { "bt2020nc", 9 }, { "bt2020_ncl", 9 }, { "bt2020c", 10 }, { "bt2020_cl", 10 },
+    { "smpte2085", 11 }, { "chroma-derived-nc", 12 }, { "chroma-derived-c", 13 },
+    { "ictcp", 14 }, { "ipt-c2", 15 }, { "ycgco-re", 16 }, { "ycgco-ro", 17 },
+    { "bt601", 6 }, { "bt2020", 9 }, { "srgb", 0 }, { "iec61966-2-1", 0 }, { NULL, 0 }
+};
+
+/* -1 for a name the option doesn't know, or for anything but all digits
+ * making a number in H.273's 0..255. */
 static int colour_code(const char *opt, const char *v)
 {
-    if (v[0] >= '0' && v[0] <= '9') return atoi(v);
-    int prim = !strcmp(opt, "--colorprim"), tr = !strcmp(opt, "--transfer"), mat = !strcmp(opt, "--colormatrix");
-    if (!strcmp(v, "bt709")) return 1;
-    if (!strcmp(v, "bt2020")) return prim ? 9 : (tr ? 14 : 9);
-    if (!strcmp(v, "bt601") || !strcmp(v, "smpte170m")) return prim ? 6 : (tr ? 6 : 6);
-    if (!strcmp(v, "bt470bg")) return prim ? 5 : (tr ? 5 : 5);
-    if (!strcmp(v, "srgb") || !strcmp(v, "iec61966-2-1")) return tr ? 13 : (mat ? 0 : 1);
-    if (!strcmp(v, "smpte2084") || !strcmp(v, "pq")) return tr ? 16 : -1;
-    if (!strcmp(v, "arib-std-b67") || !strcmp(v, "hlg")) return tr ? 18 : -1;
-    if (!strcmp(v, "unspecified")) return 2;
+    if (v[0] >= '0' && v[0] <= '9') {
+        char *end;
+        long n = strtol(v, &end, 10);
+        return *end || n > 255 ? -1 : (int)n;
+    }
+    const struct colour_name *t = !strcmp(opt, "--colorprim") ? colour_prim_names
+                                : !strcmp(opt, "--transfer") ? colour_trc_names
+                                : colour_matrix_names;
+    for (; t->name; t++)
+        if (!strcasecmp(v, t->name)) return t->code;
     return -1;
 }
+/* H.273 leaves these unassigned. The encoder writes 2 in place of a 0
+ * primaries or transfer, and any other as given; either way it is worth
+ * saying, since no player will know what the stream means. */
+static void colour_reserved_warn(const char *opt, int code)
+{
+    int prim = !strcmp(opt, "--colorprim"), tr = !strcmp(opt, "--transfer");
+    int reserved = code == 3 ||
+        (prim ? code == 0 || (code >= 13 && code <= 21) || code > 22
+         : tr ? code == 0 || code > 18
+         : code > 17);
+    if (reserved)
+        fprintf(stderr, "yah264: warning: %s %d is reserved in H.273; written as %d\n",
+                opt, code, (prim || tr) && code == 0 ? 2 : code);
+}
+
 static void apply_video_signal(yah264_encoder_t *e)
 {
     if (!e) return;
@@ -730,7 +790,8 @@ static void usage(const char *argv0)
         "                     (default 40; 0 = off, same as --no-scenecut)\n"
         "  --no-scenecut      never insert extra keyframes; only --keyint places\n"
         "                     IDRs. Also makes the cut-aware GOP split a no-op\n"
-        "  --open-gop         every keyframe but the first is a non-IDR I picture\n"
+        "  --open-gop         every keyframe but the first, a --plan keyframe and a\n"
+        "                     --qpfile I/K is a non-IDR I picture\n"
         "                     with a recovery_point SEI -- the --keyint cadence and\n"
         "                     the adaptive scene cuts alike: the B frames before it\n"
         "                     keep referencing the anchor behind it, the DPB is not\n"
@@ -1034,15 +1095,17 @@ static void usage(const char *argv0)
         "                          the rate control chose. Any other zone option is refused, and so is --plan\n"
         "                          alongside it\n"
         "  --qpfile FILE           per-frame forces, one line per frame: \"<frame> <type> <qp>\" (frames from 0).\n"
-        "                          Type I or K = IDR, P = anchor, B or b = B frame, - = leave the type alone;\n"
-        "                          QP is ABSOLUTE 0..51, or -1 to leave it to the rate control. i (non-IDR I)\n"
-        "                          is refused: it needs an open GOP. Unlisted frames are free.\n"
+        "                          Type I or K = IDR (under --open-gop too), P = anchor, B or b = B frame,\n"
+        "                          - = leave the type alone;\n"
+        "                          QP is ABSOLUTE 0..51, or -1 to leave it to the rate control. i (a forced\n"
+        "                          non-IDR I) is refused. Unlisted frames are free.\n"
         "  --gop-threads K         pin every GOP instance's frame threads to K (a shot then re-encodes byte-identically alone)\n"
         "  --segment-out PATTERN   also write each GOP to its own file, PATTERN with a %%d for the GOP index\n"
         "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k\n"
         "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
-        "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description (H.273 codes or\n"
-        "                          bt709 bt2020 bt601 smpte170m bt470bg srgb smpte2084 arib-std-b67)\n"
+        "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description: an H.273\n"
+        "                          code or its name as ffmpeg or the reference CLI spells it, e.g.\n"
+        "                          --colorprim bt2020 --transfer smpte2084|arib-std-b67 --colormatrix bt2020nc\n"
         "  --chromaloc 0..5        VUI chroma sample location\n"
         "  --output-depth N   code at 8 or 10 bits (default: the input's). 10 on\n"
         "                     8-bit input upshifts every sample by 2 and codes\n"
@@ -1661,6 +1724,8 @@ static void *gop_worker(void *arg)
             } else if (g_nforces) {
                 g_force_reject = 1;             /* the qpfile named something unplaceable */
                 g_force_reject_base = start;
+            } else {
+                g_gop_encode_err = 1;
             }
 
             pthread_mutex_lock(&j->lock);
@@ -1671,7 +1736,18 @@ static void *gop_worker(void *arg)
         }
         for (;;) {                              /* flush (window + B reorder) */
             int fb = g_api->encoder_encode(e, &nal, &cnt, NULL);
-            if (fb < 0 || (fb == 0 && cnt == 0))
+            /* a force the encoder can only refuse once the frames behind it
+             * are coded surfaces here, in the flush, not in the feed above */
+            if (fb < 0) {
+                if (g_nforces) {
+                    g_force_reject = 1;
+                    g_force_reject_base = start;
+                } else {
+                    g_gop_encode_err = 1;
+                }
+                break;
+            }
+            if (fb == 0 && cnt == 0)
                 break;
             for (int k = 0; k < cnt; k++)
                 buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
@@ -4358,20 +4434,30 @@ int main(int argc, char **argv)
             preset = argv[++i];
         else if (!strcmp(argv[i], "--range") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v, "full") || !strcmp(v, "pc") || !strcmp(v, "jpeg")) g_vs.full_range = 1;
-            else if (!strcmp(v, "limited") || !strcmp(v, "tv") || !strcmp(v, "mpeg")) g_vs.full_range = 0;
+            if (!strcasecmp(v, "full") || !strcasecmp(v, "pc") || !strcasecmp(v, "jpeg")) g_vs.full_range = 1;
+            else if (!strcasecmp(v, "limited") || !strcasecmp(v, "tv") || !strcasecmp(v, "mpeg")) g_vs.full_range = 0;
             else { fprintf(stderr, "yah264: --range expects full or limited\n"); return 2; }
             g_vs_set = 1;
         }
         else if ((!strcmp(argv[i], "--colorprim") || !strcmp(argv[i], "--transfer") ||
-                  !strcmp(argv[i], "--colormatrix") || !strcmp(argv[i], "--chromaloc")) && i + 1 < argc) {
+                  !strcmp(argv[i], "--colormatrix")) && i + 1 < argc) {
             const char *opt = argv[i], *v = argv[++i];
             int code = colour_code(opt, v);
-            if (code < 0) { fprintf(stderr, "yah264: %s: unknown value '%s' (use the H.273 code or bt709/bt2020/bt601/smpte170m/bt470bg/srgb/smpte2084/arib-std-b67)\n", opt, v); return 2; }
+            if (code < 0) {
+                fprintf(stderr, "yah264: %s: unknown value '%s' (an H.273 code 0..255, or a name "
+                        "such as bt709, bt2020, %s; see docs/options.md)\n", opt, v,
+                        !strcmp(opt, "--transfer") ? "smpte2084, arib-std-b67"
+                        : !strcmp(opt, "--colormatrix") ? "bt2020nc, bt2020c" : "smpte432");
+                return 2;
+            }
+            colour_reserved_warn(opt, code);
             if (!strcmp(opt, "--colorprim")) g_vs.primaries = code;
             else if (!strcmp(opt, "--transfer")) g_vs.transfer = code;
-            else if (!strcmp(opt, "--colormatrix")) g_vs.matrix = code;
-            else g_vs.chroma_loc = code;
+            else g_vs.matrix = code;
+            g_vs_set = 1;
+        }
+        else if (!strcmp(argv[i], "--chromaloc") && i + 1 < argc) {
+            g_vs.chroma_loc = (int)opt_int("--chromaloc", argv[++i], 0, 5);
             g_vs_set = 1;
         }
         else if (!strcmp(argv[i], "--qp") && i + 1 < argc) {
@@ -4635,8 +4721,8 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--input-range") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v, "full") || !strcmp(v, "pc")) { g_vs.full_range = 1; g_vs_set = 1; }
-            else if (!strcmp(v, "limited") || !strcmp(v, "tv")) { g_vs.full_range = 0; g_vs_set = 1; }
+            if (!strcasecmp(v, "full") || !strcasecmp(v, "pc")) { g_vs.full_range = 1; g_vs_set = 1; }
+            else if (!strcasecmp(v, "limited") || !strcasecmp(v, "tv")) { g_vs.full_range = 0; g_vs_set = 1; }
             else { fprintf(stderr, "yah264: --input-range expects full or limited\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--fps") && i + 1 < argc) {
@@ -4675,7 +4761,9 @@ int main(int argc, char **argv)
             frame_packing = (int)opt_int("--frame-packing", argv[++i], 0, 7);
         else if (!strcmp(argv[i], "--alternative-transfer") && i + 1 < argc) {
             const char *v = argv[++i];
-            int code = colour_code("--transfer", v);
+            /* undef is the reference CLI's default here and means no SEI,
+             * not an SEI that says "unspecified" */
+            int code = !strcasecmp(v, "undef") ? 0 : colour_code("--transfer", v);
             if (code < 0) {
                 fprintf(stderr, "yah264: --alternative-transfer: unknown value '%s' "
                         "(an H.273 code, or the names --transfer takes)\n", v);
@@ -4701,88 +4789,30 @@ int main(int argc, char **argv)
                 return 2;
             }
         }
-        /* the reference encoder's spelling: "MaxCLL,MaxFALL" in cd/m^2. */
-        else if (!strcmp(argv[i], "--cll") && i + 1 < argc) {
-            const char *v = argv[++i]; char *sep = NULL;
-            long a = strtol(v, &sep, 10);
-            long b = (sep && *sep == ',' && isdigit((unsigned char)sep[1]))
-                     ? strtol(sep + 1, &sep, 10) : -1;
-            if (!isdigit((unsigned char)v[0]) || !sep || *sep ||
-                a < 0 || a > 65535 || b < 0 || b > 65535) {
-                fprintf(stderr, "yah264: --cll expects MaxCLL,MaxFALL, each 0..65535 "
-                        "(got '%s')\n", v);
+        /* the reference encoder's spellings, parsed by the library so the
+         * ffmpeg wrapper validates them the same way */
+        else if ((!strcmp(argv[i], "--cll") || !strcmp(argv[i], "--mastering-display")) &&
+                 i + 1 < argc) {
+            const char *opt = argv[i], *v = argv[++i];
+            char why[256];
+            yah264_param_t t;
+            memset(&t, 0, sizeof t);
+            int r = !strcmp(opt, "--cll") ? yah264_param_parse_cll(&t, v, why, sizeof why)
+                                          : yah264_param_parse_mastering(&t, v, why, sizeof why);
+            if (r < 0) {
+                fprintf(stderr, "yah264: %s %s\n", opt, why);
                 return 2;
             }
-            /* a frame's average light can't pass the brightest pixel; the
-             * usual cause is the two values swapped. A MaxCLL of 0 means
-             * unknown, so it leaves MaxFALL unchecked. */
-            if (a > 0 && b > a) {
-                fprintf(stderr, "yah264: --cll: MaxFALL %ld is above MaxCLL %ld; "
-                        "the order is MaxCLL,MaxFALL\n", b, a);
-                return 2;
+            if (r > 0)
+                fprintf(stderr, "yah264: warning: %s %s\n", opt, why);
+            if (!strcmp(opt, "--cll")) {
+                cll_max = t.cll_max; cll_avg = t.cll_avg;
+            } else {
+                for (int k = 0; k < 6; k++) mast_prim[k] = t.mastering_prim[k];
+                mast_wp[0] = t.mastering_wp[0]; mast_wp[1] = t.mastering_wp[1];
+                mast_max = t.mastering_max; mast_min = t.mastering_min;
+                mastering_set = 1;
             }
-            cll_max = (int)a; cll_avg = (int)b;
-        }
-        /* the reference encoder's spelling: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min). The chromaticity
- * pairs are in 0.00002 units and the luminance pair in 0.0001 cd/m^2, and
- * the G,B,R order is the SPEC's, not the R,G,B a person writes. */
-        else if (!strcmp(argv[i], "--mastering-display") && i + 1 < argc) {
-            const char *v = argv[++i];
-            unsigned long long g[10];
-            int end = 0;
-            /* %llu takes a sign and skips blanks, wrapping a '-', so refuse
-             * all three outright; --cll takes digits only too */
-            int n = strpbrk(v, "-+ \t\n\v\f\r") ? 0 :
-                sscanf(v, "G(%llu,%llu)B(%llu,%llu)R(%llu,%llu)WP(%llu,%llu)L(%llu,%llu)%n",
-                       &g[0], &g[1], &g[2], &g[3], &g[4],
-                       &g[5], &g[6], &g[7], &g[8], &g[9], &end);
-            if (n != 10 || v[end]) {
-                fprintf(stderr, "yah264: --mastering-display expects "
-                        "G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min) -- chromaticity in "
-                        "0.00002 units, luminance in 0.0001 cd/m^2 (got '%s')\n", v);
-                return 2;
-            }
-            for (int k = 0; k < 8; k++) {
-                if (g[k] > 50000) {
-                    fprintf(stderr, "yah264: --mastering-display: chromaticity %llu is "
-                            "above 1.0 in 0.00002 units\n", g[k]);
-                    return 2;
-                }
-                if (k < 6) mast_prim[k] = (unsigned)g[k];
-            }
-            /* min below max binds only on a real peak: one under 5 cd/m^2
-             * isn't (0 means unknown, as in L(0,0)), so the min isn't held
-             * below it */
-            if (g[8] > 0xFFFFFFFFull || g[9] > 0xFFFFFFFFull || (g[8] >= 50000 && g[9] >= g[8])) {
-                fprintf(stderr, "yah264: --mastering-display: L(max,min) needs min below "
-                        "max and both within 32 bits, in 0.0001 cd/m^2\n");
-                return 2;
-            }
-            /* the SEI's semantics keep x in 5..37000, y in 5..42000 and the
-             * peak at 10000 cd/m^2 or below; a player may ignore a value
-             * outside them, so say so but write what was asked */
-            for (int k = 0; k < 8; k++)
-                if (g[k] < 5 || g[k] > ((k & 1) ? 42000u : 37000u)) {
-                    fprintf(stderr, "yah264: warning: --mastering-display chromaticity %llu "
-                            "is outside the SEI's range (x 5..37000, y 5..42000)\n", g[k]);
-                    break;
-                }
-            if (g[8] > 100000000)
-                fprintf(stderr, "yah264: warning: --mastering-display peak is above "
-                        "10000 cd/m^2\n");
-            if (g[9] > 50000)
-                fprintf(stderr, "yah264: warning: --mastering-display min is above "
-                        "5 cd/m^2; luminance is in 0.0001 cd/m^2 units\n");
-            /* the SEI's semantics expect a peak of 5 cd/m^2 or more; less,
-             * other than 0 for unknown, is almost always nits typed where
-             * 0.0001 units belong */
-            if (g[8] > 0 && g[8] < 50000)
-                fprintf(stderr, "yah264: warning: --mastering-display peak L(%llu,...) is "
-                        "%.4f cd/m^2; luminance is in 0.0001 cd/m^2 units\n",
-                        g[8], g[8] / 10000.0);
-            mast_wp[0] = (unsigned)g[6]; mast_wp[1] = (unsigned)g[7];
-            mast_max = (unsigned)g[8];   mast_min = (unsigned)g[9];
-            mastering_set = 1;
         }
         else if (!strcmp(argv[i], "--cqm") && i + 1 < argc) {
             const char *v = argv[++i];
@@ -4989,11 +5019,28 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--level") && i + 1 < argc) {
             const char *v = argv[++i];
-            /* accept "3.1" or "31"; store as level*10 */
-            if (strchr(v, '.')) { double d = atof(v); level_idc = (int)(d * 10 + 0.5); }
-            else { int n = atoi(v); level_idc = n < 10 ? n * 10 : n; }
-            if (level_idc < 10 || level_idc > 62) {
-                fprintf(stderr, "yah264: --level expects e.g. 3.1 or 4.0 (10..62)\n");
+            /* "3.1", "31" or "3": a Table A-1 level, stored as level*10 */
+            static const int levels[] = { 10, 11, 12, 13, 20, 21, 22, 30, 31, 32,
+                                          40, 41, 42, 50, 51, 52, 60, 61, 62 };
+            size_t len = strlen(v);
+            level_idc = -1;
+            if (len == 1 && isdigit((unsigned char)v[0]))
+                level_idc = (v[0] - '0') * 10;
+            else if (len == 2 && isdigit((unsigned char)v[0]) && isdigit((unsigned char)v[1]))
+                level_idc = (v[0] - '0') * 10 + (v[1] - '0');
+            else if (len == 3 && isdigit((unsigned char)v[0]) && v[1] == '.' &&
+                     isdigit((unsigned char)v[2]))
+                level_idc = (v[0] - '0') * 10 + (v[2] - '0');
+            int known = 0;
+            for (size_t k = 0; k < sizeof levels / sizeof levels[0]; k++)
+                known |= levels[k] == level_idc;
+            if (!strcasecmp(v, "1b")) {
+                fprintf(stderr, "yah264: --level 1b isn't supported; 1.1 is the next level up\n");
+                return 2;
+            }
+            if (!known) {
+                fprintf(stderr, "yah264: --level '%s' is not an H.264 level (1.0 1.1 1.2 1.3 "
+                        "2.0 2.1 2.2 3.0 3.1 3.2 4.0 4.1 4.2 5.0 5.1 5.2 6.0 6.1 6.2)\n", v);
                 return 2;
             }
         }
@@ -5239,6 +5286,13 @@ int main(int argc, char **argv)
     param.width = width;
     param.height = height;
     param.csp = csp;
+    /* E.2.1: GBR (matrix 0) only at 4:4:4. The library refuses it too; said
+     * here, the refusal names the option instead of failing the open. */
+    if (g_vs_set && g_vs.matrix == 0 && csp != YAH264_CSP_I444) {
+        fprintf(stderr, "yah264: --colormatrix GBR (0) needs 4:4:4 input; this input is "
+                "4:2:%s\n", csp == YAH264_CSP_I422 ? "2" : "0");
+        return 2;
+    }
     param.timebase.fps_num = fps_num;
     param.timebase.fps_den = fps_den;
     /* with no --preset the bare default is medium with its tool-set (CABAC,
@@ -5676,6 +5730,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
+    /* --nal-hrd runs one continuous encoder (see the path choice below), and
+ * these three exist only on the per-GOP path, so they would be dropped. */
+    if (nal_hrd && (g_cut_split || g_shot_table || g_shot_crf)) {
+        fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: a buffering period "
+                "at every IDR needs one continuous encoder, and that option splits the "
+                "stream into per-GOP encoders\n",
+                g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table" : "--cut-split");
+        return 2;
+    }
     /* --intra-refresh. Everything it cannot run with is named here, because
  * the library's own refusal reaches the user as "encoder_open failed". B
  * frames are the one a preset or tune turns on by itself, so an unset
@@ -5758,21 +5821,37 @@ int main(int argc, char **argv)
  * the GOP markers there is nothing to split on, so it stays serial, which is
  * also what keeps a serial pass 1 feeding a serial pass 2 unchanged. */
     int tp_mt = param.rc.method != YAH264_RC_2PASS;
+    if (param.rc.method == YAH264_RC_2PASS) {
+        const char *ev = y264_env("Y264_2PASS_MT");
+        tp_mt = (!ev || atoi(ev)) && param.rc.stats
+             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
+    }
+    /* The modes that need one continuous encoder, after every rule above
+ * that can choose the per-GOP path, so none of those can undo them. Each
+ * is said out loud when there is more than one thread to spend, except
+ * under --hw, whose own block says --threads is ignored. */
     /* --intra-refresh has no keyframe after the first, so no GOP boundary to
  * split the encode at: one instance, and the threads go to its wavefront
- * and lookahead. Said out loud when there is more than one to spend. */
+ * and lookahead. */
     if (intra_refresh) {
         tp_mt = 0;
-        if (nthreads > 1 && !recon_path)
+        if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
             LOGF(threads > 1 ? LOG_WARN : LOG_INFO,
                  "yah264: %s--intra-refresh is one sequence with no keyframes to split "
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
-    if (param.rc.method == YAH264_RC_2PASS) {
-        const char *ev = y264_env("Y264_2PASS_MT");
-        tp_mt = (!ev || atoi(ev)) && param.rc.stats
-             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
+    /* --nal-hrd needs a buffering period at every IDR. A GOP segment can't
+ * open one at a scene-cut IDR of its own: the next segment counts its
+ * removal delay back to this segment's start, which it fixes before this
+ * one has found its cuts (see hrd_segmented in yah264.h). One instance
+ * knows every cut, so --nal-hrd runs one, its threads on the wavefront. */
+    if (nal_hrd) {
+        tp_mt = 0;
+        if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
+            LOGF(LOG_INFO, "yah264: --nal-hrd puts a buffering period at every IDR, which "
+                 "needs one continuous encoder, so the %d threads run its row wavefront "
+                 "instead of parallel GOPs\n", nthreads);
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
@@ -5781,7 +5860,7 @@ int main(int argc, char **argv)
  * Only when the user asked explicitly for more than one thread. Unset means
  * "auto, every core", which is not a user asking for anything, and warning on
  * it would fire on all 252 --dump-recon runs of the conformance gate. */
-    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh))) {
+    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !nal_hrd))) {
         /* Ordered by what actually decided it, not by what is also true: with
  * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */
@@ -5832,6 +5911,9 @@ int main(int argc, char **argv)
                     fprintf(stderr, "yah264: --qpfile: refused inside the GOP starting at input frame %d; "
                                     "add that to the frame number above\n", g_force_reject_base);
                 fprintf(stderr, "yah264: --qpfile: the encode was refused, the output is incomplete\n");
+                rc = 1;
+            } else if (g_gop_encode_err) {
+                fprintf(stderr, "yah264: an encode inside a GOP failed; the output is incomplete\n");
                 rc = 1;
             }
             if (in != stdin) fclose(in);
@@ -5897,6 +5979,14 @@ int main(int argc, char **argv)
     yah264_nal_t *nal;
     int count;
     int rc = 0;
+    /* --frame-stats on this path too (--dump-recon, an unsplittable input):
+     * one instance, so every record is GOP 0 with frames from 0. The
+     * by-display cache grows with the frames submitted, since the length of
+     * the input may not be known. Declared ahead of every `goto done`, which
+     * closes them. */
+    FILE *sfst = NULL;
+    yah264_frame_stats_t *sst_by = NULL;
+    long sst_cap = 0;
 
     if (g_api->encoder_headers(enc, &nal, &count) < 0) {
         fprintf(stderr, "yah264: headers failed\n");
@@ -5908,6 +5998,22 @@ int main(int argc, char **argv)
 
     long frame = 0, returned = 0;
     unsigned bad = 0;
+    if (g_frame_stats && hw == YAH264_HW_OFF) {
+        sfst = fopen(g_frame_stats, "w");
+        if (!sfst) fprintf(stderr, "yah264: cannot write --frame-stats %s\n", g_frame_stats);
+    }
+#define SERIAL_STATS(nal_, cnt_) do { \
+        if (sfst) { \
+            if (sst_cap < frame + 1) { \
+                long nc = (frame + 1) * 2; \
+                yah264_frame_stats_t *q = realloc(sst_by, (size_t)nc * sizeof *q); \
+                if (q) { memset(q + sst_cap, 0, (size_t)(nc - sst_cap) * sizeof *q); sst_by = q; sst_cap = nc; } \
+            } \
+            if (sst_cap >= frame + 1) \
+                frame_stats_emit(sfst, enc, (nal_), (cnt_), sst_by, (int)sst_cap, 0, 0, \
+                                 param.frame_threads > 0 ? param.frame_threads : nthreads); \
+        } \
+    } while (0)
     while (max_frames == 0 || frame < max_frames) {
         uint8_t *fy = y, *fu = u, *fv = v;
         int s;
@@ -5965,17 +6071,25 @@ int main(int argc, char **argv)
             returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
         }
         frame++;
+        SERIAL_STATS(nal, count);
     }
 
     for (;;) {                                      /* flush (window + B reorder) */
         int fb = g_api->encoder_encode(enc, &nal, &count, NULL);
-        if (fb < 0 || (fb == 0 && count == 0))
+        if (fb < 0) {
+            fprintf(stderr, "yah264: encode failed while flushing; the output is incomplete\n");
+            rc = 1;
+            break;
+        }
+        if (fb == 0 && count == 0)
             break;
         for (int i = 0; i < count; i++) {
             fwrite(nal[i].payload, 1, nal[i].size, out);
             returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
         }
+        SERIAL_STATS(nal, count);
     }
+#undef SERIAL_STATS
     /* The hardware mode counts what came back, not what went in: the session
  * may drop a frame (docs/hardware-mode.md). One slice per frame
  * there; our own streams can carry several NALs per frame, so the count is
@@ -6007,6 +6121,8 @@ int main(int argc, char **argv)
 
 done:
     progress_done();
+    if (sfst) fclose(sfst);
+    free(sst_by);
     if (rd_on && serial_rd_stop(&rd, rd_tid) != 0) {
         /* An error while the reader is inside a read, which on a stalled
          * pipe can last forever. Close everything that doesn't touch the

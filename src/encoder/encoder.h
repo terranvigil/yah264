@@ -866,6 +866,9 @@ struct yah264_encoder {
  * puts it). The first slice then skips its own opener; every later picture
  * opens its own. */
     int au_opened;
+    /* 1 = this encoder runs the tight DPB window and no staircase width,
+ * because a forced level can't hold the wide one */
+    int stair_narrow;
 
     /* --- HRD (B-hrd, --nal-hrd). The declared Annex C model, and the ledger
  * that keeps it true. It is deliberately a SECOND ledger beside vbv_fill:
