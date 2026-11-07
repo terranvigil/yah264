@@ -8127,7 +8127,14 @@ static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
 static int mb_lambda_qp(const y264_frame_t *f, int mbx, int mby)
 {
     if (!f->mbtree_off || !f->aq_off) return MB_LQ_NONE;
-    int q = f->cur_qp - f->aq_off[mby * f->wmb + mbx];
+    /* The mb-tree QP held to the lambda range rather than taken from cur_qp,
+     * which mb_cur_qp floors at 0: above 8 bits the lambda range goes on
+     * below it, and the AQ offset is taken out after the floor. At 8 bits
+     * the two ranges are the same and so is the result. */
+    int i = mby * f->wmb + mbx;
+    int q = f->qp + f->mbtree_off[i];
+    if (q < -Y264_QP_BD_OFFSET) q = -Y264_QP_BD_OFFSET; else if (q > 51) q = 51;
+    q -= f->aq_off[i];
     if (q < -Y264_QP_BD_OFFSET) q = -Y264_QP_BD_OFFSET; else if (q > 51) q = 51;
     const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
     uint32_t v2[2];
