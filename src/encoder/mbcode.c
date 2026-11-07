@@ -1744,13 +1744,17 @@ static inline int lambda_qp_index(int qp)
 }
 
 /* The standard H.264 model lambda = 0.85 * 2^((QP-12)/3), rounded to int,
- * on the scaled QP (0..63 covers 10 bits). */
-static const int lambda_mode_tab[64] = {
+ * on the scaled QP (0..75 covers every depth the build allows, up to 12). */
+static const int lambda_mode_tab[76] = {
     0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,2,2,3,3,4,5,7,9,11,14,17,
     22,27,34,43,54,69,86,109,137,173,218,274,345,435,548,691,870,
     1097,1381,1741,2193,2763,3482,4386,5526,6963,
-    8773,11053,13926,17546,22107,27853,35092,44214,55706,70185,88427,111411
+    8773,11053,13926,17546,22107,27853,35092,44214,55706,70185,88427,111411,
+    140369,176854,222822,280739,353709,445645,561477,707417,891290,1122955,
+    1414834,1782579
 };
+_Static_assert(LAMBDA_QP_MAX < (int)(sizeof lambda_mode_tab / sizeof lambda_mode_tab[0]),
+               "lambda_mode_tab does not reach this bit depth's top QP");
 
 /* Lagrangian multiplier for RD mode decision, J = SSD + lambda*bits. */
 static int lambda_mode(int qp)
