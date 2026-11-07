@@ -14260,7 +14260,7 @@ static void dpbp_open(yah264_encoder_t *e, size_t mvcount)
 {
     if (!stair_wide_e(e) || !stair_wide_rc_ok(e))
         return;
-    int nrefb = stair_plan_nrefb(e->param.bframes);
+    int nrefb = stair_plan_nrefb(brun(e->param.bframes));
     int want = Y264_STAIR_K * (1 + nrefb);
     if (want > Y264_DPB_POOL_MAX) want = Y264_DPB_POOL_MAX;
     for (int i = 0; i < want; i++) {

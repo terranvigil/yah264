@@ -59,7 +59,7 @@ the text and the behavior can't drift apart.
 | `--scenecut`, `--no-scenecut` | our scene-cut forcing the hardware's keyframes | ours |
 | `--no-sei` | the hardware writes none of our SEI anyway | maps |
 | profile | always High, level chosen by the hardware | fixed |
-| `--ref`, `--min-keyint`, `--b-adapt`, `--b-bias`, `--direct`, `--zones`, `--qpfile`, `--pass`, `--stats`, `--abr-model`, `--crf-max`, `--ratetol`, `--qcomp`, `--rc-lookahead`, `--sync-lookahead`, `--preset`, other tunes, `--threads`, `--aq-strength`, `--psy-rd`, `--psy-trellis`, `--trellis`, the deadzones, the `--cqm` family, `--me`, `--merange`, `--subme`, `--subpel`, `--partitions`, `--no-mixed-refs`, `--no-chroma-me`, `--transform-8x8`, `--cll`, `--mastering-display`, `--alternative-transfer` | nothing | ignored |
+| `--ref`, `--min-keyint`, `--b-adapt`, `--b-bias`, `--direct`, `--zones`, `--qpfile`, `--pass`, `--stats`, `--abr-model`, `--crf-max`, `--ratetol`, `--qcomp`, `--rc-lookahead`, `--sync-lookahead`, `--preset`, other tunes, `--threads`, `--aq-strength`, `--psy-rd`, `--psy-trellis`, `--trellis`, the deadzones, the `--cqm` family, `--me`, `--merange`, `--subme`, `--subpel`, `--partitions`, `--no-mixed-refs`, `--no-chroma-me`, `--transform-8x8`, `--cll`, `--mastering-display`, `--alternative-transfer`, `--frame-stats` | nothing | ignored |
 | `--dump-recon`, `--slices` above 1, anything but 4:2:0, input above 8 bits | nothing | refused |
 
 The CRF table: rate-matched, not quality-matched. Each point is the quality at

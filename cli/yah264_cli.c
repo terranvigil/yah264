@@ -5919,6 +5919,14 @@ int main(int argc, char **argv)
     yah264_nal_t *nal;
     int count;
     int rc = 0;
+    /* --frame-stats on this path too (--dump-recon, an unsplittable input):
+     * one instance, so every record is GOP 0 with frames from 0. The
+     * by-display cache grows with the frames submitted, since the length of
+     * the input may not be known. Declared ahead of every `goto done`, which
+     * closes them. */
+    FILE *sfst = NULL;
+    yah264_frame_stats_t *sst_by = NULL;
+    long sst_cap = 0;
 
     if (g_api->encoder_headers(enc, &nal, &count) < 0) {
         fprintf(stderr, "yah264: headers failed\n");
@@ -5929,13 +5937,6 @@ int main(int argc, char **argv)
         fwrite(nal[i].payload, 1, nal[i].size, out);
 
     long frame = 0, returned = 0;
-    /* --frame-stats on this path too (--dump-recon, an unsplittable input):
-     * one instance, so every record is GOP 0 with frames from 0. The
-     * by-display cache grows with the frames submitted, since the length of
-     * the input may not be known. */
-    FILE *sfst = NULL;
-    yah264_frame_stats_t *sst_by = NULL;
-    long sst_cap = 0;
     if (g_frame_stats && hw == YAH264_HW_OFF) {
         sfst = fopen(g_frame_stats, "w");
         if (!sfst) fprintf(stderr, "yah264: cannot write --frame-stats %s\n", g_frame_stats);
@@ -5948,7 +5949,8 @@ int main(int argc, char **argv)
                 if (q) { memset(q + sst_cap, 0, (size_t)(nc - sst_cap) * sizeof *q); sst_by = q; sst_cap = nc; } \
             } \
             if (sst_cap >= frame + 1) \
-                frame_stats_emit(sfst, enc, (nal_), (cnt_), sst_by, (int)sst_cap, 0, 0, param.frame_threads); \
+                frame_stats_emit(sfst, enc, (nal_), (cnt_), sst_by, (int)sst_cap, 0, 0, \
+                                 param.frame_threads > 0 ? param.frame_threads : nthreads); \
         } \
     } while (0)
     while (max_frames == 0 || frame < max_frames) {
@@ -6026,8 +6028,6 @@ int main(int argc, char **argv)
         SERIAL_STATS(nal, count);
     }
 #undef SERIAL_STATS
-    if (sfst) fclose(sfst);
-    free(sst_by);
     /* The hardware mode counts what came back, not what went in: the session
  * may drop a frame (docs/hardware-mode.md). One slice per frame
  * there; our own streams can carry several NALs per frame, so the count is
@@ -6059,6 +6059,8 @@ int main(int argc, char **argv)
 
 done:
     progress_done();
+    if (sfst) fclose(sfst);
+    free(sst_by);
     if (rd_on && serial_rd_stop(&rd, rd_tid) != 0) {
         /* An error while the reader is inside a read, which on a stalled
          * pipe can last forever. Close everything that doesn't touch the

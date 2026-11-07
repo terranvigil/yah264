@@ -70,6 +70,7 @@ static const struct y264_hw_opt table[] = {
     { "--mastering-display", Y264_HW_IGNORED, "the hardware writes no HDR10 SEI" },
     { "--alternative-transfer", Y264_HW_IGNORED, "the hardware writes no SEI of ours" },
     { "--dump-recon",       Y264_HW_FATAL,   "no reconstruction to dump" },
+    { "--frame-stats",      Y264_HW_IGNORED, "no per-frame stats from the hardware" },
     { NULL, Y264_HW_MAPS, NULL }
 };
 
