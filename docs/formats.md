@@ -4,8 +4,9 @@ yah264 encodes 8-bit and 10-bit video at 4:2:0, 4:2:2 or 4:4:4. Each depth
 and each chroma format recon-matches ffmpeg's decoder across I, P and B frames
 on both entropy coders. One `yah264` binary handles both depths and picks the encoder
 from the input. The 8-bit 4:2:0 path is the tuned one. The 10-bit path keeps
-the 8-bit rate-distortion trades and picks the same frame types, and on the
-HDR10 test clips it is ahead of x264 High 10 on coding efficiency.
+the 8-bit rate-distortion trades, and 8-bit content coded at 10 bits gets its
+8-bit frame types. On the HDR10 test clips at 1080p it is ahead of x264 High
+10 on coding efficiency (`scripts/hdr_ladder.py`, under "Measuring it").
 
 ## How it works
 
@@ -53,6 +54,8 @@ are built at. CI builds `-Dbit_depth=10` and runs the unit tests there.
   High 10.
 - `--output-depth 8` on 10-bit input is refused. Dropping bits is a
   conversion, and that's ffmpeg's job.
+- A 16-bit input sample above the depth's maximum refuses the encode (exit
+  status 1). Such a file isn't 10-bit video.
 
 The ffmpeg wrapper makes the same choice from the input `pix_fmt` (see
 [ffmpeg.md](ffmpeg.md)).
@@ -95,6 +98,22 @@ Things that stay 4:2:0 only, or are limited elsewhere:
 Threading is format-agnostic. The GOP-parallel reader reads the subsampling
 from the Y4M `C` tag the same way the serial path does.
 
+### Keeping 10-bit on the 8-bit trades
+
+The tuning is all done at 8 bits, so 10-bit keeps the 8-bit trades by
+putting its costs on the 8-bit scale in two places:
+
+- **Lambdas.** The mode, trellis and motion lambdas are read at the QP plus
+  the depth's QP offset. A 10-bit sample's error is four times the 8-bit
+  one, so SATD grows 4x and SSD 16x, and an offset of six QP per extra bit
+  scales the lambdas by the same factors. The psy terms scale with the
+  sample scale for the same reason.
+- **The lookahead.** Its lowres planes hold 8-bit samples at every depth, so
+  B placement, scene cuts, mb-tree and CRF's complexity read the costs their
+  constants were fitted on. 8-bit content coded at 10 bits gets the frame
+  types of its 8-bit encode. ABR, VBV and two-pass frame complexity still
+  sums full-resolution SATD at the coded depth.
+
 ## What we chose and why
 
 | choice | why |
@@ -121,27 +140,6 @@ layout is the likelier cause than the dispatch itself.
 
 ## Open questions
 
-### 10-bit coding efficiency
-
-The tuning is all done at 8 bits, so 10-bit keeps the 8-bit trades by
-putting its costs on the 8-bit scale in two places:
-
-- **Lambdas.** The mode, trellis and motion lambdas are read at the QP plus
-  the depth's QP offset. A 10-bit sample's error is four times the 8-bit
-  one, so SATD grows 4x and SSD 16x, and an offset of six QP per extra bit
-  scales the lambdas by the same factors. The psy terms scale with the
-  sample scale for the same reason.
-- **The lookahead.** Its lowres planes hold 8-bit samples at every depth, so
-  B placement, scene cuts, mb-tree and CRF's complexity read the costs their
-  constants were fitted on. 8-bit content coded at 10 bits gets the frame
-  types of its 8-bit encode. ABR, VBV and two-pass frame complexity still
-  sums full-resolution SATD at the coded depth.
-
-Against x264 High 10 at medium, yah264 is ahead on both HDR10 test clips at
-1080p.
-
-### Other open items
-
 - **4:4:4 with the 8x8 transform.** Needs the 4:4:4 8x8 residual coders and
   the CABAC 8x8 chroma context init values.
 - **4:2:2 and 4:4:4 against x264.** Both recon-match, but no BD board exists
@@ -164,10 +162,16 @@ Against x264 High 10 at medium, yah264 is ahead on both HDR10 test clips at
 - **HDR clips score on VMAF v1's HDR models,** `hdr_vmaf_v1.1.8` (3d0h at
   1080p, 1d5h_2160 above, the hfr variant at 50 fps and up), never on its SDR
   models, which score PQ pictures as if they were SDR without a warning. Tag
-  both sides limited range, BT.2020 primaries and matrix, and PQ transfer;
-  the model scales to its own display resolution, so don't upscale first.
+  both sides limited range, BT.2020 primaries and matrix, and PQ transfer.
+  The HDR clips are 1080p and 2160p, so no extra scaling applies; a smaller
+  encode follows the project's rule and is scaled up to 1080p first.
   Read PSNR-Y on the 10-bit code values beside it, and check that the two CRF
   ladders overlap in bitrate before reading a BD figure.
+- **The HDR ladder:** `scripts/hdr_ladder.py SRC.y4m` runs CRF 18-34 on
+  yah264 and x264 High 10 at medium over a 10-bit HDR10 Y4M, scores each
+  rung as above, and prints BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over
+  the rungs both ladders cover (`--max-crf` drops the top rungs). It needs
+  `VMAF_HDR` and `VMAF_HDR_MODELS`. The 1080p test spans are 120 frames.
 - **Recon-match:** `make conformance` covers every format. By hand, decode the
   `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare `framemd5` hash
   columns Y4M against Y4M. Don't compare a Y4M's framemd5 with one taken
