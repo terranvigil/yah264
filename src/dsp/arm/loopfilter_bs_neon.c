@@ -6,8 +6,7 @@
  * The strength derivation reads the motion and coefficient grids and never a
  * sample, so one source serves both libraries: the 8-bit one compiles it as
  * y264_deblock_strength_neon and the 10-bit one, through symbols10.h, as
- * y264_deblock_strength_neon_10. It moved here from src/dsp/loopfilter_neon.c
- * unchanged.
+ * y264_deblock_strength_neon_10.
  */
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -133,8 +132,7 @@ static inline uint8x8_t db_bs8(const struct db_side8 *p, const struct db_side8 *
     uint16x8_t intra = vorrq_u16(vandq_u16(pn0, pn1), vandq_u16(qn0, qn1));
     uint16x8_t coeff = vorrq_u16(p->co, q->co);
 
-    uint16x8_t p0 = vmvnq_u16(pn0), q0 = vmvnq_u16(qn0);
-    uint16x8_t p1 = vmvnq_u16(pn1), q1 = vmvnq_u16(qn1);
+    uint16x8_t p0 = vmvnq_u16(pn0), p1 = vmvnq_u16(pn1);
     /* different list membership: the XOR of the two "negative" masks is the
      * XOR of their complements, so the mvn is not on this path. */
     uint16x8_t one = veorq_u16(pn0, qn0);
