@@ -67,9 +67,9 @@ ffmpeg -i master.y4m \
   -cll 1000,400 out.mp4
 ```
 
-The mastering display and light level SEI go out beside the first parameter
-sets and again at every IDR, so a player that starts or seeks at any keyframe
-finds them. MP4 and MPEG-TS files from the wrapper carry them the same way.
+The mastering display and light level SEI go in-band ahead of every IDR, and
+ahead of every recovery point under `--open-gop` or `--intra-refresh`, so a
+player that starts or seeks at any keyframe finds them. MP4 and MPEG-TS files from the wrapper carry them the same way.
 
 ## What a player reads
 

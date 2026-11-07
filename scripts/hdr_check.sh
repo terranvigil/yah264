@@ -11,7 +11,8 @@
 #   WORK=/scratch/hdr scripts/hdr_check.sh
 #
 # With `meta` it checks the signaling instead and scores nothing: short
-# spans of both clips as HDR10, Sol Levante as HLG and as SDR-compatible HLG,
+# spans of both clips as HDR10, Sol Levante as HLG and as SDR-compatible HLG
+# and as HDR10 again with --open-gop and with --intra-refresh,
 # each encoded by yah264 and by x264 with the same color, mastering-display
 # and light-level options, then what ffprobe and MediaInfo read from each,
 # field by field. FF names an ffmpeg built with libyah264; with it the cases
@@ -25,7 +26,7 @@
 # It exits 1 when a field that matters differs (marked !!). Level and
 # reference count print beside them (marked ~ when they differ) but don't
 # count. FRAMES (48), KEYINT (24) and THREADS set the spans. KEYINT below
-# FRAMES puts a second IDR in every stream, which is where a player that
+# FRAMES puts a second key in every stream, which is where a player that
 # seeks or joins late has to find the metadata.
 #
 # VMAF_HDR_BIN is a libvmaf `vmaf` tool built with -Denable_zimg=true, which
@@ -304,7 +305,9 @@ def run(cmd):
     return json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
 def share(n, of):
     return "all" if n == of and of else "none" if n == 0 else f"{n} of {of}"
-# What precedes each IDR picture in the elementary stream itself. A container
+# What precedes each random access point in the elementary stream itself: an
+# IDR picture, or one whose SEI carries a recovery point (--open-gop and
+# --intra-refresh keys). A container
 # can carry the same metadata in its own boxes, and ffprobe then shows it on
 # every frame whatever the stream holds, so this reads the bytes.
 def inband(f):
@@ -328,7 +331,7 @@ def inband(f):
                 sz += b[i]; i += 1 + sz
                 pend.add(pt)
         elif t in (1, 5):
-            if t == 5 and len(n) > 1 and n[1] & 0x80:   # first_mb_in_slice 0
+            if (t == 5 or 6 in pend) and len(n) > 1 and n[1] & 0x80:   # first_mb_in_slice 0
                 idrs.append(pend)
             pend = set()
     return idrs
@@ -346,8 +349,9 @@ def probe(f):
     idrs = inband(f)
     for name, pt in (("mastering display (137)", 137), ("light level (144)", 144),
                      ("alternative transfer (147)", 147)):
-        r[f"in-band {name} SEI at IDRs"] = share(sum(pt in x for x in idrs), len(idrs))
-    r["~in-band SPS at IDRs"] = share(sum("sps" in x for x in idrs), len(idrs))
+        r[f"in-band {name} SEI at keys"] = share(sum(pt in x for x in idrs), len(idrs))
+    r["~random access points"] = str(len(idrs))
+    r["~in-band SPS at keys"] = share(sum("sps" in x for x in idrs), len(idrs))
     r["stream side data"] = ",".join(sorted(d["side_data_type"] for d in j.get("side_data_list", []))) or "-"
     r["~level"] = str(j.get("level", "-"))
     want = {"Mastering display metadata": {
@@ -419,10 +423,15 @@ meta() {
   local HLGC=(--colorprim bt2020 --transfer bt2020-10 --colormatrix bt2020nc --range tv
               --alternative-transfer arib-std-b67)
   local src opts
-  for c in hdr10_sparks hdr10_sol hlg_sol hlgcompat_sol; do
+  # the last two put the keys on recovery points instead of IDRs
+  for c in hdr10_sparks hdr10_sol hlg_sol hlgcompat_sol hdr10open_sol hdr10ir_sol; do
     case $c in
       hdr10_*) src=meta/${c#hdr10_}.y4m
                opts=("${PQ[@]}" --mastering-display "$MD" --cll "$(cat ${c#hdr10_}.cll)") ;;
+      hdr10open_sol) src=meta/sol.y4m
+               opts=("${PQ[@]}" --mastering-display "$MD" --cll "$(cat sol.cll)" --open-gop) ;;
+      hdr10ir_sol) src=meta/sol.y4m
+               opts=("${PQ[@]}" --mastering-display "$MD" --cll "$(cat sol.cll)" --intra-refresh) ;;
       hlg_sol) src=meta/sol_hlg.y4m; opts=("${HLG[@]}") ;;
       hlgcompat_sol) src=meta/sol_hlg.y4m; opts=("${HLGC[@]}") ;;
     esac

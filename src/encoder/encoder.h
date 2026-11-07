@@ -866,10 +866,6 @@ struct yah264_encoder {
  * puts it). The first slice then skips its own opener; every later picture
  * opens its own. */
     int au_opened;
-    /* IDR access units opened since the headers were written. The first
- * one's display-metadata SEI went out with the headers; every later IDR
- * writes its own. */
-    long display_sei_idr;
     /* 1 = this encoder runs the tight DPB window and no staircase width,
  * because a forced level can't hold the wide one */
     int stair_narrow;

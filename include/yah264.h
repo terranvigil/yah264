@@ -686,8 +686,9 @@ typedef struct {
     unsigned mastering_max;      /* max display luminance, 0.0001 cd/m^2 */
     unsigned mastering_min;      /* min display luminance, same units */
     int alternative_transfer;    /* H.273 transfer code a display should prefer
- * over the VUI's. 0 = no SEI (0 is "reserved"
- * in H.273, so it is free to mean off). */
+ * over the VUI's. 0 or 2 = no SEI (0 is
+ * "reserved" in H.273, so it is free to mean
+ * off, and 2 says nothing a display can use). */
     int overscan;           /* 0 = not signalled, 1 = overscan_appropriate 0
  * (show the whole picture), 2 = 1 (crop is fine) */
     int video_format;       /* VUI video_format, 0..5. -1 and 0 differ: 0 is
@@ -960,13 +961,24 @@ typedef struct {
 } yah264_video_signal_t;
 YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *enc, const yah264_video_signal_t *vs);
 
-/* Retrieve the NAL units that open the stream (SPS and PPS, plus the AUD and
- * SEI those settings call for); write all of them, in order. On return *nal
+/* Retrieve the NAL units that open the stream; write all of them, in order.
+ * They are SPS and PPS, plus what the settings call for ahead of the first
+ * slice: the access unit delimiter (aud), the buffering period (nal_hrd), the
+ * settings record (sei) and frame packing (frame_packing). On return *nal
  * points at an array of *count NAL units owned by the encoder. Returns 0 on
  * success. The software encoder never emits SPS or PPS from encode, so a
- * stream starts with these NAL units. The hardware backend can't know them
- * before its first frame is coded: there this may return no NAL units, and
- * encode then puts SPS and PPS ahead of the first slice it returns. */
+ * stream starts with these NAL units.
+ *
+ * The display metadata (cll_*, mastering_*, alternative_transfer) is not
+ * here. encode writes it in-band ahead of every IDR and every recovery-point
+ * picture, the first IDR included, so a caller that keeps only SPS and PPS
+ * as a decoder configuration record (MP4, Matroska) loses none of it. Such
+ * a caller should still write this call's SEI in-band ahead of the first
+ * slice.
+ *
+ * The hardware backend can't know the parameter sets before its first frame
+ * is coded: there this may return no NAL units, and encode then puts SPS and
+ * PPS ahead of the first slice it returns. */
 YAH264_EXPORT int yah264_encoder_headers(yah264_encoder_t *enc,
                             yah264_nal_t **nal, int *count);
 

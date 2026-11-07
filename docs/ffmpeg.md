@@ -66,7 +66,7 @@ extradata and any SEI from the headers goes in-band ahead of the first
 packet. Without it they're all written in-band ahead of the first packet, so
 raw Annex-B output decodes, and the SPS and PPS are repeated ahead of every
 later IDR, so a transport stream can be joined or seeked there. The encoder
-repeats its HDR SEI at every IDR on its own.
+writes its HDR SEI in-band itself, ahead of every IDR and recovery point.
 
 ## Building it
 

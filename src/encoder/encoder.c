@@ -3246,13 +3246,20 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
 
 /* The static display-metadata SEI: content light level, mastering display
  * and alternative transfer. Each one holds only until the end of its coded
- * video sequence and every IDR starts a new one, so they are written beside
- * the parameter sets and again at every later IDR. Written once, a player
- * that starts or seeks at a scene-cut IDR finds no HDR metadata at all. */
+ * video sequence, and a player can start at any random access point, so they
+ * go in-band ahead of every IDR and every recovery-point picture (--open-gop,
+ * --intra-refresh), the first IDR included. Not in the headers: a caller
+ * that keeps those as a decoder configuration record, the usual MP4 and
+ * Matroska pattern, has nowhere to store an SEI. */
+static int alt_transfer_on(const yah264_param_t *pp)
+{
+    return pp->alternative_transfer > 0 && pp->alternative_transfer != 2;
+}
+
 static int display_sei_on(const yah264_encoder_t *e)
 {
     const yah264_param_t *pp = &e->param;
-    return pp->cll_max || pp->cll_avg || pp->mastering_set || pp->alternative_transfer;
+    return pp->cll_max || pp->cll_avg || pp->mastering_set || alt_transfer_on(pp);
 }
 
 static int append_display_sei(yah264_encoder_t *e, size_t *off)
@@ -3278,7 +3285,7 @@ static int append_display_sei(yah264_encoder_t *e, size_t *off)
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
-    if (pp->alternative_transfer) {
+    if (alt_transfer_on(pp)) {
         n = y264_sei_alt_transfer(msg, sizeof msg, pp->alternative_transfer);
         y264_bs_init(&bs, buf, sizeof buf);
         y264_sei_write(&bs, 147, msg, n);
@@ -3404,8 +3411,8 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
-    if (nal_type == YAH264_NAL_SLICE_IDR && display_sei_on(e) &&
-        e->display_sei_idr++ > 0 && append_display_sei(e, off) < 0)
+    if ((nal_type == YAH264_NAL_SLICE_IDR || recovery) && display_sei_on(e) &&
+        append_display_sei(e, off) < 0)
         return -1;
     /* The recovery_point, last of the messages because it is an SEI and the
  * delimiter is not, and after buffering_period because that one has to be
@@ -5944,12 +5951,11 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
             return -1;
     }
 
-    /* The static display-metadata messages. They describe the WHOLE stream and
- * never change, so they go beside the parameter sets rather than on every
- * picture, which is where the per-picture pic_timing lives; all but the
- * frame packing one are repeated at later IDRs (append_display_sei). Each
- * one is its own SEI NAL, so a decoder that does not know a payload type
- * skips that NAL rather than the group. */
+    /* The frame packing message describes the WHOLE stream and never changes,
+ * so it goes beside the parameter sets rather than on every picture, which
+ * is where the per-picture pic_timing lives. It is its own SEI NAL, so a
+ * decoder that does not know the payload type skips that NAL alone. The
+ * display-metadata ones go in-band instead (append_display_sei). */
     {
         uint8_t msg[64];
         size_t n;
@@ -5963,11 +5969,6 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
                 return -1;
         }
     }
-    if (append_display_sei(e, &off) < 0)
-        return -1;
-    /* these headers carry the display SEI for the IDR that follows them */
-    e->display_sei_idr = 0;
-
     e->headers_done = 1;
     *nal = e->nal;
     *count = e->nal_count;
