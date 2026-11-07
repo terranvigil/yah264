@@ -4112,6 +4112,21 @@ static void deblock_auto_resolve(yah264_param_t *p)
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
+/* An --open-gop key's leading B frames are coded as a hierarchy with no
+ * reference among them (code_b_hier, flat), so each one on the run's left
+ * spine waits in the DPB for the lower-POC pictures decoded after it, beside
+ * every reference the window holds. That is floor(log2(n)) pictures for a run
+ * of n, on top of max_num_ref_frames; the DPB has to be declared with them or
+ * a decoder that bumps on a full buffer outputs them early (out of order).
+ * Closed GOPs and flat runs have no such waiters. */
+static int open_lead_wait(int open_gop, int pyramid, int bframes)
+{
+    int w = 0;
+    if (open_gop && pyramid)
+        while ((2 << w) <= bframes) w++;
+    return w;
+}
+
 /* The DPB an encode with these settings declares, in frames: what the SPS
  * sizing in open computes for max_dec_frame_buffering, from the parameters
  * alone (keep the two in step). `narrow` is the tight window. */
@@ -4132,6 +4147,7 @@ static int dpb_need(const yah264_encoder_t *e, int ref, int bf, int pyr, int nar
     else reo = has_b;
     if (has_b && rc_decide && rcp_lag_for(e) > 0 && !vbv && wide)
         reo += rcp_lag_for(e);
+    mrf += open_lead_wait(e->open_gop, pyramid, bf);
     return mrf > reo ? mrf : reo;
 }
 
@@ -4888,8 +4904,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * rate cap alone, all of which the two encodes share. It costs a
  * higher declared level, and with it a wider MaxVmvR -- so a stitchable
  * stream really is a different encode, not only different bytes. */
+        int lead_wait = open_lead_wait(e->open_gop, e->b_pyramid, e->param.bframes);
         long dpb_mbs = (long)fs * (e->param.stitchable ? Y264_STITCH_DPB
-                                                       : e->sps.max_num_ref_frames);
+                                                       : e->sps.max_num_ref_frames + lead_wait);
         long br_kbps = e->param.rc.vbv_maxrate > e->param.rc.bitrate ? e->param.rc.vbv_maxrate : e->param.rc.bitrate;
         if (e->param.rc.method != YAH264_RC_ABR && e->param.rc.method != YAH264_RC_2PASS && e->param.rc.vbv_maxrate <= 0)
             br_kbps = 0;                                  /* CRF/CQP without a cap: no MaxBR constraint */
@@ -4957,8 +4974,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             && stair_wide_e(e))
             reo += rcp_lag_for(e);
         e->sps.max_num_reorder_frames = reo;
-        e->sps.max_dec_frame_buffering = e->sps.max_num_ref_frames > reo
-                                       ? e->sps.max_num_ref_frames : reo;
+        int dpb = e->sps.max_num_ref_frames +
+                  open_lead_wait(e->open_gop, e->b_pyramid, e->param.bframes);
+        if (dpb > 16) dpb = 16;     /* MaxDpbFrames; see open_lead_wait */
+        e->sps.max_dec_frame_buffering = dpb > reo ? dpb : reo;
         /* --stitchable: declare the level's own maximum instead of what this
  * encode needs, so two streams at the same geometry carry the same SPS
  * whatever --ref and --bframes were. A declared DPB is an upper bound

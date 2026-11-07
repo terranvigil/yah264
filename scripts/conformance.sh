@@ -1495,6 +1495,12 @@ add "open GOP" check_clip ogop_b3_cabac  "$S/syn_motion.y4m" "--open-gop --cabac
 add "open GOP" check_clip ogop_keyint5   "$S/syn_motion.y4m" "--open-gop --cabac --keyint 5"
 add "open GOP" check_clip ogop_cavlc     "$S/syn_motion.y4m" "--open-gop --cavlc --keyint 4"
 add "open GOP" check_clip ogop_mref5     "$S/syn_motion.y4m" "--open-gop --cabac --ref 5 --keyint 4"
+# Leading B frames under a 4-B pyramid: the key's run is coded as a hierarchy
+# with no reference among it, so two of the four wait in the DPB beside a full
+# reference window. Declared without them, a decoder that bumps on a full
+# buffer (the JM) output them swapped once the window filled. 60 frames is
+# what fills it.
+add "open GOP" check_clip ogop_b4_lead   "$S/syn_long.y4m"   "--open-gop --cabac --bframes 4 --keyint 10 --frames 60"
 add "open GOP" check_clip ogop_nob       "$S/syn_motion.y4m" "--open-gop --cabac --bframes 0 --keyint 4"
 add "open GOP" check_clip ogop_flat      "$S/syn_motion.y4m" "--open-gop --cabac --bframes 3 --b-pyramid none --keyint 4"
 add "open GOP" check_clip ogop_8x8       "$S/syn_motion.y4m" "--open-gop --cabac --transform-8x8 --keyint 4"
