@@ -12929,7 +12929,7 @@ void y264_mb_warm_statics(void)
     (void)tdir_why_on();
     y264_me_warm_statics();     /* + the motion-search env statics */
     /* Premultiplied MV-cost tables for every lambda ME can see: lambda_me over
- * the full QP range. */
+ * this depth's whole QP range, -QpBdOffsetY..51. */
     for (int qp = -Y264_QP_BD_OFFSET; qp <= 51; qp++)
         y264_me_prime_lambda(lambda_me(qp));
     y264_transform_warm_statics();

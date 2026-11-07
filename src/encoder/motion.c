@@ -104,11 +104,19 @@ void y264_me_set_subme(int subme)
  * indexed around the centre so a probe's rate is two loads and an add (no abs,
  * no multiply), offset by the predictor once per search. Identical integers to
  * lambda * (mv_bits(dx) + mv_bits(dy)): the table IS that product (lambda <=
- * ME_LAMBDA_MAX = 127, bits <= 25 -> fits uint16), and out-of-table |d| falls
+ * ME_LAMBDA_MAX, bits <= 25 -> fits uint16), and out-of-table |d| falls
  * back to the multiply path. Primed from y264_mb_warm_statics for every value
  * lambda_me can produce; CAS-published so a concurrent prime is a benign
- * lose-and-free, and unprimed lambdas just keep the multiply (still exact). */
+ * lose-and-free, and unprimed lambdas just keep the multiply (still exact).
+ * The bound is lambda_me at the top of this depth's QP range: 91 at 8 bits
+ * (kept at 127), 362 at 10 and 1448 at 12, and 1448 * 25 still fits. */
+#if Y264_BIT_DEPTH > 10
+#define ME_LAMBDA_MAX 1448
+#elif Y264_BIT_DEPTH > 8
+#define ME_LAMBDA_MAX 362
+#else
 #define ME_LAMBDA_MAX 127
+#endif
 static _Atomic(const uint16_t *) s_cmv_tab[ME_LAMBDA_MAX + 1];
 
 void y264_me_prime_lambda(int lambda)
