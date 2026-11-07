@@ -160,10 +160,11 @@ encoder has the most to gain on HDR.
 | Sparks 4K | 22 | 167.8 | 92.3 | 0.14 | 0.34 |
 | Sparks 4K | 26 | 101.5 | 84.5 | 0.20 | 0.47 |
 
-At 3840x2160 the default settings need Level 6.0, because the B-pyramid keeps
-more reference frames than Level 5.1 allows at that size. Many 4K TVs decode up
-to Level 5.1 or 5.2. `--b-pyramid none` brings a 4K encode down to 5.1 at
-24 fps and 5.2 at 60 fps.
+At 3840x2160 the default settings declare Level 6.0, because the encoder keeps
+more frames in the decoded picture buffer than Level 5.1 allows at that size.
+Many 4K TVs decode up to Level 5.1 or 5.2. `--level 5.1` (5.2 at 60 fps) fits
+the buffer to the level and keeps the B-pyramid and all three of the default
+references.
 
 ## The pictures
 

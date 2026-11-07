@@ -399,6 +399,15 @@ static int stair_wide_on(void)
     return v;
 }
 
+/* The same switch for one encoder. A forced --level the wide window can't fit
+ * turns width off for that encoder alone (see the DPB sizing in open), and
+ * every reader below has to agree with the window it sized: the clamps that
+ * make width safe arm on exactly this. */
+static int stair_wide_e(const yah264_encoder_t *e)
+{
+    return stair_wide_on() && !e->stair_narrow;
+}
+
 /* How many bursts may stay IN FLIGHT across an anchor's rcp decide. 0 = the
  * shipped zero-lag-anchor schedule -- stair_run_burst retires everything before
  * the launch, so an anchor decides on full actuals and nothing overlaps it.
@@ -663,7 +672,7 @@ static int stair_direct_blocks(const yah264_encoder_t *e)
  * != 1), since width is deferred retirement of an ASYNC chain. */
 static int stair_wide_capable(const yah264_encoder_t *e)
 {
-    return stair_wide_on()
+    return stair_wide_e(e)
         && e->b_pyramid && !stair_direct_blocks(e)
         && !e->vbv_on
         && e->wf_width >= Y264_MT_POOL_MIN;
@@ -1809,7 +1818,7 @@ static int stair_refbgate_elig(const yah264_encoder_t *e)
  * the whole ABR penalty: foreman 180f t12, 0 of 41 launches gated and 59 ms
  * of a 110 ms encode blocked on reference-B content, against 44 of 44 gated
  * and 12 ms under CRF (2026-09-04). */
-    return stair_bdepth_on() && stair_wide_on() &&
+    return stair_bdepth_on() && stair_wide_e(e) &&
            stair_clamp_on(e) && e->nref >= 2 &&
            (!e->rcp_on || e->rcp_lag > 0);
 }
@@ -2154,7 +2163,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * the condition width engages on. The two must never disagree: a wide burst
  * at --ref > 1 with the hop-2 clamp disarmed would search a reference that
  * is still streaming. */
-    int clamp0_hop2 = (clamp0_poc >= 0 && stair_wide_on() &&
+    int clamp0_hop2 = (clamp0_poc >= 0 && stair_wide_e(e) &&
                        e->nref >= 2 && !e->rcp_on)
                     ? e->prev_anchor_poc2 : -1;
     /* v6: and the live predecessors' REFERENCE B's, the pictures that actually
@@ -4751,6 +4760,32 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * the whole pair. Without the +1 a --ref N field stream would reach only
  * N-1 previous frames. */
         if (e->fields) mrf++;
+        /* A forced --level promises a decoder that the DPB fits it, so the
+ * encode shrinks to fit instead of declaring a level it breaks. The wide
+ * window goes first: it holds a slot per B frame for the threaded
+ * staircase, and the tight one measured within 0.1% BD on VMAF v1 at one and
+ * four threads (it does turn the overlap off for this encoder, a speed cost
+ * not yet measured). Then list-0 references, down to one.
+ * --stitchable declares the level's own DPB and is left alone. */
+        if (e->param.level_idc > 0 && !e->param.stitchable) {
+            int cap = level_max_dpb_frames(e->param.level_idc, e->width_in_mbs * e->height_in_mbs);
+            int tight = stair_plan_nrefb(e->param.bframes), was = e->nref;
+            if (mrf > cap && e->b_pyramid && nrefb > tight) {
+                mrf -= nrefb - tight;
+                nrefb = tight;
+                e->stair_narrow = 1;
+            }
+            while (mrf > cap && e->nref > 1) {
+                e->nref--;
+                mrf--;
+            }
+            /* once per process: a CLI run opens an encoder per GOP */
+            static atomic_int noted;
+            if (e->nref != was && !atomic_exchange(&noted, 1))
+                fprintf(stderr, "yah264: level %d.%d holds %d frames in the DPB at this size: "
+                        "coding with ref %d\n", e->param.level_idc / 10,
+                        e->param.level_idc % 10, cap, e->nref);
+        }
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;
         /* Auto-select the minimum conformant level from resolution/framerate/DPB
  * (Annex A). fps rounded up so MaxMBPS isn't under-counted; the DPB term
@@ -4834,7 +4869,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 || (param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0);
         int lag_vbv = param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
         if (has_b && lag_rc_decide && rcp_lag_for(e) > 0 && !lag_vbv
-            && stair_wide_on())
+            && stair_wide_e(e))
             reo += rcp_lag_for(e);
         e->sps.max_num_reorder_frames = reo;
         e->sps.max_dec_frame_buffering = e->sps.max_num_ref_frames > reo
@@ -14069,7 +14104,7 @@ static void stair_col_apply(yah264_encoder_t *e, struct stair_burst *B,
  * codebase already tracks in hpel_ensure_ws, and one of those is enough. */
 static void dpbp_open(yah264_encoder_t *e, size_t mvcount)
 {
-    if (!stair_wide_on() || !stair_wide_rc_ok(e))
+    if (!stair_wide_e(e) || !stair_wide_rc_ok(e))
         return;
     int nrefb = stair_plan_nrefb(e->param.bframes);
     int want = Y264_STAIR_K * (1 + nrefb);
@@ -14925,7 +14960,7 @@ static int stair_run_burst(yah264_encoder_t *e, size_t *off,
  * everything in flight before each decide, and deferred retirement is what
  * width IS. stair_wide_rc_ok carries the rule; Y264_RCP_LAG buys the
  * budget, at a rate-accuracy price that is the whole point of measuring it. */
-    int wide = async && stair_wide_on() && stair_wide_rc_ok(e);
+    int wide = async && stair_wide_e(e) && stair_wide_rc_ok(e);
     if (!async && stair_drain_all(e, off) < 0)
         return -2;
     /* The ring is the throttle: a launch waits only when the slot it needs is

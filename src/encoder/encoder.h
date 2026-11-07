@@ -870,6 +870,9 @@ struct yah264_encoder {
  * one's display-metadata SEI went out with the headers; every later IDR
  * writes its own. */
     long display_sei_idr;
+    /* 1 = this encoder runs the tight DPB window and no staircase width,
+ * because a forced level can't hold the wide one */
+    int stair_narrow;
 
     /* --- HRD (B-hrd, --nal-hrd). The declared Annex C model, and the ledger
  * that keeps it true. It is deliberately a SECOND ledger beside vbv_fill:
