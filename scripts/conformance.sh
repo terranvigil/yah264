@@ -1129,27 +1129,30 @@ check_twopass() {   # check_twopass <name> <src> [pass-2 args]
     echo "SUMMARY $RM_T $RM_F"
 }
 
-# --nal-hrd two-pass at four threads over scene cuts: both passes, then the
-# buffer model read back out of the stream. Threads are the point: the bug
-# was a threaded rule putting the encode back on the per-GOP path, which
-# leaves a scene-cut IDR without its buffering period. A stream with only
-# one IDR would pass vacuously, so the cell asks for more than one.
+# --nal-hrd two-pass over scene cuts, at one thread and at four: both passes,
+# then the buffer model read back out of the stream. Four threads is where a
+# rule once put the encode back on the per-GOP path, which leaves a scene-cut
+# IDR without its buffering period. A stream with only one IDR would pass
+# vacuously, so the cell asks for more than one.
 check_hrd_mt() {   # check_hrd_mt <name> <src> <spec>
-    local name="$1" src="$2" spec="$3" p="$work/hrdmt.$1" f=0
-    # shellcheck disable=SC2086
-    "$enc" --input-y4m "$src" $spec --threads 4 --pass 1 --stats "$p.stats" -o /dev/null 2>/dev/null || true
-    # shellcheck disable=SC2086
-    "$enc" --input-y4m "$src" $spec --threads 4 --pass 2 --stats "$p.stats" -o "$p.264" 2>/dev/null || true
-    local idrs
-    idrs=$(python3 -c "
+    local name="$1" src="$2" spec="$3" t f=0 n=0 p idrs
+    for t in 1 4; do
+        p="$work/hrdmt.$name.t$t"
+        n=$((n + 1))
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads $t --pass 1 --stats "$p.stats" -o /dev/null 2>/dev/null || true
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads $t --pass 2 --stats "$p.stats" -o "$p.264" 2>/dev/null || true
+        idrs=$(python3 -c "
 import sys; sys.path.insert(0, '$root/scripts'); import h264_syntax as H
 print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/dev/null || echo 0)
-    if [ "${idrs:-0}" -gt 1 ] && python3 "$root/scripts/hrd_check.py" "$p.264" --quiet >/dev/null 2>&1; then
-        echo "  ok   HRD clean over $idrs IDRs, two-pass at 4 threads ($spec)"
-    else
-        echo "  FAIL hrd_check over $idrs IDRs, two-pass at 4 threads ($spec)"; f=1
-    fi
-    echo "SUMMARY 1 $f"
+        if [ "${idrs:-0}" -gt 1 ] && python3 "$root/scripts/hrd_check.py" "$p.264" --quiet >/dev/null 2>&1; then
+            echo "  ok   HRD clean over $idrs IDRs, two-pass at $t thread(s) ($spec)"
+        else
+            echo "  FAIL hrd_check over $idrs IDRs, two-pass at $t thread(s) ($spec)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $n $f"
 }
 
 # --intra-refresh two-pass at four threads: one IDR in the whole stream. The
