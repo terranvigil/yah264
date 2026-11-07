@@ -259,6 +259,9 @@ static volatile int g_force_reject;
  * added back to a number in the file. -1 = the whole stream was one instance,
  * where the two already agree. */
 static volatile int g_force_reject_base = -1;
+/* Any other encode error inside a GOP worker, feed or flush: the GOP's
+ * output stops there, so the run must not exit 0 with a short stream. */
+static volatile int g_gop_encode_err;
 static int g_gop_threads;                 /* --gop-threads K: every GOP instance's frame_threads */
 static int g_threads_auto;                /* --threads was left to auto (0 / unset) */
 /* Y264_GOP_TRACE=1: one stderr line per GOP (worker, frame-thread share, start
@@ -1670,6 +1673,8 @@ static void *gop_worker(void *arg)
             } else if (g_nforces) {
                 g_force_reject = 1;             /* the qpfile named something unplaceable */
                 g_force_reject_base = start;
+            } else {
+                g_gop_encode_err = 1;
             }
 
             pthread_mutex_lock(&j->lock);
@@ -1680,7 +1685,18 @@ static void *gop_worker(void *arg)
         }
         for (;;) {                              /* flush (window + B reorder) */
             int fb = g_api->encoder_encode(e, &nal, &cnt, NULL);
-            if (fb < 0 || (fb == 0 && cnt == 0))
+            /* a force the encoder can only refuse once the frames behind it
+             * are coded surfaces here, in the flush, not in the feed above */
+            if (fb < 0) {
+                if (g_nforces) {
+                    g_force_reject = 1;
+                    g_force_reject_base = start;
+                } else {
+                    g_gop_encode_err = 1;
+                }
+                break;
+            }
+            if (fb == 0 && cnt == 0)
                 break;
             for (int k = 0; k < cnt; k++)
                 buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
@@ -5835,6 +5851,9 @@ int main(int argc, char **argv)
                     fprintf(stderr, "yah264: --qpfile: refused inside the GOP starting at input frame %d; "
                                     "add that to the frame number above\n", g_force_reject_base);
                 fprintf(stderr, "yah264: --qpfile: the encode was refused, the output is incomplete\n");
+                rc = 1;
+            } else if (g_gop_encode_err) {
+                fprintf(stderr, "yah264: an encode inside a GOP failed; the output is incomplete\n");
                 rc = 1;
             }
             if (in != stdin) fclose(in);

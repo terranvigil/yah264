@@ -1177,6 +1177,25 @@ print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/de
     echo "SUMMARY 1 $f"
 }
 
+# A --qpfile force the encoder refuses only once the frames behind it are
+# coded surfaces in a GOP worker's flush. That GOP's output stops there, so
+# the run must either fail or deliver every frame: an exit 0 with a short
+# stream is the failure this cell is for.
+check_qpfile_mt() {   # check_qpfile_mt <name> <src> <frames> <qpfile lines> <spec>
+    local name="$1" src="$2" n="$3" lines="$4" spec="$5" p="$work/qpmt.$1" rc got f=0
+    printf '%b' "$lines" > "$p.qp"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" $spec --frames "$n" --qpfile "$p.qp" --threads 4 -o "$p.264" 2>/dev/null
+    rc=$?
+    got=$(ffprobe -v error -count_frames -show_entries stream=nb_read_frames -of csv=p=0 "$p.264" 2>/dev/null)
+    if [ "$rc" -ne 0 ] || [ "${got:-0}" = "$n" ]; then
+        echo "  ok   exit $rc with $got of $n frames ($spec)"
+    else
+        echo "  FAIL exit 0 with $got of $n frames ($spec)"; f=1
+    fi
+    echo "SUMMARY 1 $f"
+}
+
 # ---------------------------------------------------------------------------
 # Worker mode: run one check into its own result file, then exit 0 (so xargs
 # never aborts the pool). Globals come from the exported environment.
@@ -1535,6 +1554,8 @@ add "open GOP" check_clip ogop_b4_lead   "$S/syn_long.y4m"   "--open-gop --cabac
 # H.264's 16: the encode is fitted to 16 instead (fewer references).
 add "open GOP" check_clip ogop_b4_ref16  "$S/syn_long.y4m"   "--open-gop --cabac --bframes 4 --ref 16 --b-adapt 0 --keyint 10 --frames 120"
 add "open GOP" check_clip ogop_b14_ref1  "$S/syn_long.y4m"   "--open-gop --cabac --bframes 14 --ref 1 --b-adapt 0 --keyint 30 --frames 120"
+add "open GOP" check_qpfile_mt ogop_qpfile_flush "$S/syn_long.y4m" 150 \
+    "30 I -1\\n61 K 24\\n45 P -1\\n20 B -1\\n90 - 30\\n" "--open-gop --cabac --bframes 3 --keyint 50"
 add "open GOP" check_clip ogop_nob       "$S/syn_motion.y4m" "--open-gop --cabac --bframes 0 --keyint 4"
 add "open GOP" check_clip ogop_flat      "$S/syn_motion.y4m" "--open-gop --cabac --bframes 3 --b-pyramid none --keyint 4"
 add "open GOP" check_clip ogop_8x8       "$S/syn_motion.y4m" "--open-gop --cabac --transform-8x8 --keyint 4"
