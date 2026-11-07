@@ -1744,7 +1744,8 @@ static inline int lambda_qp_index(int qp)
 }
 
 /* The standard H.264 model lambda = 0.85 * 2^((QP-12)/3), rounded to int,
- * on the scaled QP (0..75 covers every depth the build allows, up to 12). */
+ * on the scaled QP. The assert below checks that the table reaches the top
+ * QP of the depth this file is compiled at. */
 static const int lambda_mode_tab[76] = {
     0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,2,2,3,3,4,5,7,9,11,14,17,
     22,27,34,43,54,69,86,109,137,173,218,274,345,435,548,691,870,
@@ -1831,7 +1832,7 @@ static int lambda_trellis_smooth(int trel, int qp, const pixel *s, int ss, int n
  * Evaluated rather than tabulated, in integer arithmetic: split the exponent
  * into whole octaves and a remainder, take the remainder from six Q16
  * sixth-octave constants, and shift. Checked exact against a float
- * round(2^((qp-12)/6)) reference on all 64 scaled QPs, and the encoder's output is
+ * round(2^((qp-12)/6)) reference on every scaled QP up to 63, and the encoder's output is
  * byte-identical to the tabulated form it replaces. */
 static int lambda_me(int qp)
 {

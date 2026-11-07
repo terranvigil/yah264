@@ -108,11 +108,10 @@ void y264_me_set_subme(int subme)
  * back to the multiply path. Primed from y264_mb_warm_statics for every value
  * lambda_me can produce; CAS-published so a concurrent prime is a benign
  * lose-and-free, and unprimed lambdas just keep the multiply (still exact).
- * The bound is lambda_me at the top of this depth's QP range: 91 at 8 bits
- * (kept at 127), 362 at 10 and 1448 at 12, and 1448 * 25 still fits. */
-#if Y264_BIT_DEPTH > 10
-#define ME_LAMBDA_MAX 1448
-#elif Y264_BIT_DEPTH > 8
+ * The bound covers lambda_me at the top of the QP range of the depth this
+ * file is compiled at: 91 at 8 bits (kept at 127) and 362 at 10, and
+ * 362 * 25 still fits. */
+#if Y264_BIT_DEPTH > 8
 #define ME_LAMBDA_MAX 362
 #else
 #define ME_LAMBDA_MAX 127
