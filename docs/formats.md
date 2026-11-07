@@ -3,9 +3,9 @@
 yah264 encodes 8-bit and 10-bit video at 4:2:0, 4:2:2 or 4:4:4. Each depth
 and each chroma format recon-matches ffmpeg's decoder across I, P and B frames
 on both entropy coders. One `yah264` binary handles both depths and picks the encoder
-from the input. The 8-bit 4:2:0 path is the tuned one. The 10-bit path codes
-correctly but is well behind x264 High 10 on coding efficiency, and that gap
-is the main open item on this page.
+from the input. The 8-bit 4:2:0 path is the tuned one. The 10-bit path makes
+the same decisions as 8-bit on the same picture, and on HDR10 test clips it
+is ahead of x264 High 10 on coding efficiency.
 
 ## How it works
 
@@ -103,7 +103,7 @@ from the Y4M `C` tag the same way the serial path does.
 | Both libraries in every build, one binary | 10-bit became a property of the input instead of a rebuild. Over the ten board clips at CRF, CQP and ABR, at one and eight threads, 8-bit output is byte-identical to the single-library build. |
 | `--output-depth 8` on 10-bit input refused | Rounding samples away is a conversion. Silent truncation would hide it. |
 | The pixel-type change before any SIMD work | Widening `pixel` and `dctcoef` is the one change that would invalidate 8-bit kernels. Doing it first meant each kernel is written once per depth. |
-| 10-bit runs C only | The 10-bit path's efficiency gap comes first. 16-bit SIMD would only make a weaker encoder faster. |
+| 10-bit runs C only | Coding efficiency came first. 16-bit SIMD is the next 10-bit item. |
 | Recon-match against ffmpeg as the gate for each format | A format is accepted at open only once its whole chain decodes bit-exact. 4:2:0 output stayed byte-identical while each format went in. |
 
 The two-library dispatch costs the 8-bit path +0.3% to 0.6% wall time at one
@@ -121,32 +121,33 @@ layout is the likelier cause than the dispatch itself.
 
 ## Open questions
 
-### The 10-bit efficiency gap
+### 10-bit coding efficiency
 
-We scored eight BVI-AOM clips at 480x272, 64 frames each, by VMAF-NEG BD-rate
-at matched bytes against x264 High 10. The median is +21% and one clip is
-ahead. An 8-bit control shows where the gap comes from: the two worst clips,
-downconverted to 8 bits, read +3.5% and +0.3% against 8-bit x264 on the same
-scripts and byte targets. PSNR agrees. At the middle rung on
-BusyHongKongStreetVidevo we're about 1.9 dB behind after correcting for
-bytes.
+The tuning is all done at 8 bits, so 10-bit keeps every 8-bit trade by
+putting its costs on the 8-bit scale in two places:
 
-| clip | fps | BD-rate (VMAF-NEG) vs x264 High 10 |
-|---|--:|--:|
-| VeniceS1Harmonics | 60 | -6.66% |
-| AmericanFootballS2Harmonics | 60 | +0.35% |
-| SmokeSauna | 50 | +14.63% |
-| ChristmasRoomDareful | 29 | +17.11% |
-| CalmingWaterBVITexture | 120 | +25.53% |
-| BasketballS1YonseiUniversity | 30 | +29.73% |
-| BusyHongKongStreetVidevo | 25 | +45.61% |
-| JockeyHarmonics | 120 | +59.60% |
+- **Lambdas.** The mode, trellis and motion lambdas are read at the QP plus
+  the depth's QP offset. A 10-bit sample's error is four times the 8-bit
+  one, so SATD grows 4x and SSD 16x, and an offset of six QP per extra bit
+  scales the lambdas by the same factors. The psy terms scale with the
+  sample scale for the same reason.
+- **The lookahead.** Its lowres planes hold 8-bit samples at every depth, so
+  B placement, scene cuts, mb-tree and the rate control's complexity read
+  the costs their constants were fitted on. At 10 bits the frame types
+  match the 8-bit encode of the same source.
 
-Nothing in the coding tools is depth-specific. What is: anything that indexes
-a table with a QP that can now go to -12, the lambda tables and RD scale, the
-rate-control constants fitted on 8-bit, and the quant deadzone and rounding. A
-fixed-QP cell is the cheap first cut. If bytes against quality look sane at a
-pinned QP, the defect is in rate control. If not, it's in lambda or quant.
+Against x264 High 10 at medium, on 120 frames of two HDR10 1080p clips (PQ,
+BT.2020), CRF 18-34 on both encoders:
+
+| clip | fps | BD-rate (HDR-VMAF) | BD-rate (PSNR-Y) |
+|---|--:|--:|--:|
+| Sparks | 60 | -5.95% | -5.40% |
+| Sol Levante | 24 | -16.97% | -10.88% |
+
+Over CRF 18-30 only, the leads are smaller: Sparks -2.84% / -3.43%,
+Sol Levante -13.98% / -9.45%. At a fixed QP with AQ and mb-tree off, the
+10-bit gap to x264 is within about two points of the 8-bit gap on the same
+content, so what remains there is not depth-specific.
 
 ### Other open items
 
@@ -154,7 +155,7 @@ pinned QP, the defect is in rate control. If not, it's in lambda or quant.
   the CABAC 8x8 chroma context init values.
 - **4:2:2 and 4:4:4 against x264.** Both recon-match, but no BD board exists
   for them yet.
-- **16-bit SIMD** for the 10-bit library, after the efficiency gap closes.
+- **16-bit SIMD** for the 10-bit library.
 
 ## Measuring it
 
@@ -167,9 +168,14 @@ pinned QP, the defect is in rate control. If not, it's in lambda or quant.
   in the VUI, and when the Y4M muxer picks a different one ffmpeg drops frames
   to fit. The 120 fps clips once decoded 15 of 64 frames, and VMAF scored
   those against the first 15 of the reference.
-- **The clips are short.** 64 frames at 480x272 is below the project's
-  120-frame rule for a BD sweep. The 8-bit control shares that shape, which is
-  why the comparison still holds.
+- **The board's clips are short.** 64 frames at 480x272 is below the
+  project's 120-frame rule for a BD sweep, so read it as a smoke check.
+- **HDR clips score on HDR-VMAF,** not on VMAF v1, which is trained on SDR.
+  The HDR table above uses HDR-VMAF v1.1.8 (the 3d0h model at 1080p, its hfr
+  variant at 50 fps and up) with both sides tagged limited range, BT.2020
+  primaries and matrix, and PQ transfer, plus PSNR-Y on the 10-bit code
+  values. Check that the two CRF ladders overlap in bitrate before reading a
+  BD figure.
 - **Recon-match:** `make conformance` covers every format. By hand, decode the
   `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare `framemd5` hash
   columns Y4M against Y4M. Don't compare a Y4M's framemd5 with one taken
