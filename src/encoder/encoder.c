@@ -5921,10 +5921,20 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
  * SATD of the same picture at 8 bits. Rounding the samples down here puts
  * every cost the lookahead makes on that scale at once, where scaling each
  * consumer would leave any one missed to compare a 10-bit cost against an
- * 8-bit one. At 8 bits LR_SHIFT is 0 and the planes are unchanged. */
+ * 8-bit one. At 8 bits LR_SHIFT is 0 and the planes are unchanged. Above 8
+ * bits the rounding can reach 256 on near-white full-range samples, so the
+ * planes and every prediction built from them are clamped at 255 (LR_CLIP),
+ * the ceiling the 8-bit costs were fitted under. */
 #define LR_SHIFT (Y264_BIT_DEPTH - 8)
-#define LR_DOWN(sum4) ((pixel)(((sum4) + (2 << LR_SHIFT)) >> (2 + LR_SHIFT)))
-#define LR_NORM(v)    ((pixel)(((v) + ((1 << LR_SHIFT) >> 1)) >> LR_SHIFT))
+static inline pixel lr_clip(int v) { return (pixel)(v < 0 ? 0 : v > 255 ? 255 : v); }
+#define LR_CLIP(v)    lr_clip(v)
+#if Y264_BIT_DEPTH > 8
+#define LR_SAT(v)     (pixel)((v) > 255 ? 255 : (v))  /* the rounding's only overflow */
+#else
+#define LR_SAT(v)     (pixel)(v)                      /* an average of 8-bit samples */
+#endif
+#define LR_DOWN(sum4) LR_SAT(((sum4) + (2 << LR_SHIFT)) >> (2 + LR_SHIFT))
+#define LR_NORM(v)    LR_SAT(((v) + ((1 << LR_SHIFT) >> 1)) >> LR_SHIFT)
 
 /* The lowres half-pel samples taken from the source at one-pixel offsets (right,
  * down, both) with the same 2x2 average as the whole-pel plane, instead of
@@ -6129,6 +6139,11 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
         int b = (17 * H + 16) >> 5;
         int c2 = (17 * V + 16) >> 5;
         y264_intra8_dvhp(p4, top, left, dc, a, b, c2);
+#if Y264_BIT_DEPTH > 8
+        /* the kernel clamps the plane mode at the coded depth's ceiling;
+         * DC, V and H can't pass 255 on lowres edges */
+        for (int k = 0; k < 64; k++) p4[3][k] = LR_CLIP(p4[3][k]);
+#endif
         int sc[4];
         y264_dsp.satd_quad_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
         best = sc[0];
@@ -6162,7 +6177,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
                 int v = (a + b * (x - 3) + c2 * (y - 3) + 16) >> 5;
-                pred[y * 8 + x] = y264_clip_pixel(v);
+                pred[y * 8 + x] = LR_CLIP(v);
             }
         long c = y264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
     }
@@ -10292,7 +10307,7 @@ static int lr_wp_vote(const yah264_encoder_t *e, const struct la_entry *en, cons
             for (int y = 0; y < 8; y++)
                 for (int x = 0; x < 8; x++) {
                     int v = ((sb[y * lw + x] - o) * scale + w / 2) / w;
-                    ib[y * 8 + x] = (pixel)(v < 0 ? 0 : v > PIXEL_MAX ? PIXEL_MAX : v);
+                    ib[y * 8 + x] = LR_CLIP(v);     /* a lowres sample */
                 }
             int cand[2][2] = { { b->mvx, b->mvy }, { 0, 0 } };
             int vx, vy; long satd_p, satd_w;
