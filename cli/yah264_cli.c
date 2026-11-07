@@ -1754,7 +1754,8 @@ static void *y4m_reader(void *arg)
             len = read_line(r->in, line, sizeof(line));
             if (len < 0) break;                         /* EOF */
             if (strncmp(line, "FRAME", 5) != 0) {
-                fprintf(stderr, "yah264: expected FRAME header\n");
+                fprintf(stderr, "yah264: expected FRAME header at frame %ld\n",
+                        n + g_seek_frames);
                 reader_fail(j); return NULL;
             }
         } else {
@@ -1771,9 +1772,10 @@ static void *y4m_reader(void *arg)
             reader_fail(j); return NULL;
         }
         if (!g_raw_input && r->hdr_len >= 0 && len != r->hdr_len) {
-            fprintf(stderr, "yah264: frame %d has a %d-byte FRAME header where "
-                    "frame 0 had %d -- per-frame parameters make the frame count "
-                    "unreadable from the file length\n", n, len, r->hdr_len);
+            fprintf(stderr, "yah264: frame %ld has a %d-byte FRAME header where "
+                    "frame %ld had %d -- per-frame parameters make the frame count "
+                    "unreadable from the file length\n", n + g_seek_frames, len,
+                    g_seek_frames, r->hdr_len);
             reader_fail(j); return NULL;
         }
         pthread_mutex_lock(&j->lock);
@@ -1784,7 +1786,7 @@ static void *y4m_reader(void *arg)
         frame_t *slot = stop ? NULL : fs_slot(j, n);
         pthread_mutex_unlock(&j->lock);
         if (stop) break;
-        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %d\n", n);
+        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %ld\n", n + g_seek_frames);
                      reader_fail(j); return NULL; }
 
         frame_t f;
@@ -1792,7 +1794,7 @@ static void *y4m_reader(void *arg)
         f.u = malloc(r->cs * (size_t)g_enc_sample_sz);
         f.v = malloc(r->cs * (size_t)g_enc_sample_sz);
         if (!f.y || !f.u || !f.v) {
-            fprintf(stderr, "yah264: out of memory at frame %d\n", n);
+            fprintf(stderr, "yah264: out of memory at frame %ld\n", n + g_seek_frames);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
         unsigned bad = 0;
@@ -1821,7 +1823,7 @@ static void *y4m_reader(void *arg)
                                : (read_line(r->in, line, sizeof(line)) >= 0);
         if (more) {
             fprintf(stderr, "yah264: input has more frames than its length implied "
-                    "(read %d)\n", n);
+                    "(read through frame %ld)\n", n - 1 + g_seek_frames);
             reader_fail(j); return NULL;
         }
     }
@@ -1893,19 +1895,20 @@ static void *y4m_reader_seek(void *arg)
         int i = j->gop_rd[g];
         frame_t *slot = fs_slot(j, i);
         pthread_mutex_unlock(&j->lock);
-        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %d\n", i);
+        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %ld\n", i + g_seek_frames);
                      reader_fail(j); return NULL; }
 
         if (fseeko(r->in, r->base + (off_t)((uint64_t)i * r->rec), SEEK_SET) != 0) {
-            fprintf(stderr, "yah264: cannot seek to frame %d\n", i);
+            fprintf(stderr, "yah264: cannot seek to frame %ld\n", i + g_seek_frames);
             reader_fail(j); return NULL;
         }
         if (!g_raw_input) {
             int len = read_line(r->in, line, sizeof(line));
             if (len != r->hdr_len || strncmp(line, "FRAME", 5) != 0) {
-                fprintf(stderr, "yah264: frame %d has no %d-byte FRAME header where "
+                fprintf(stderr, "yah264: frame %ld has no %d-byte FRAME header where "
                         "the file length put one -- per-frame parameters make the "
-                        "frame count unreadable from the file length\n", i, r->hdr_len);
+                        "frame count unreadable from the file length\n", i + g_seek_frames,
+                        r->hdr_len);
                 reader_fail(j); return NULL;
             }
         }
@@ -1914,7 +1917,7 @@ static void *y4m_reader_seek(void *arg)
         f.u = malloc(r->cs * (size_t)g_enc_sample_sz);
         f.v = malloc(r->cs * (size_t)g_enc_sample_sz);
         if (!f.y || !f.u || !f.v) {
-            fprintf(stderr, "yah264: out of memory at frame %d\n", i);
+            fprintf(stderr, "yah264: out of memory at frame %ld\n", i + g_seek_frames);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
         unsigned bad = 0;
@@ -1941,7 +1944,7 @@ static void *y4m_reader_seek(void *arg)
                                 : (read_line(r->in, line, sizeof(line)) >= 0));
         if (more) {
             fprintf(stderr, "yah264: input has more frames than its length implied "
-                    "(read %ld)\n", r->stop_at);
+                    "(read through frame %ld)\n", r->stop_at - 1 + g_seek_frames);
             reader_fail(j); return NULL;
         }
     }
@@ -2399,12 +2402,12 @@ static int scan_frame_header(FILE *in, int n, int hdr_len)
     int len = read_line(in, line, sizeof line);
     if (len < 0) return 0;
     if (strncmp(line, "FRAME", 5) != 0) {
-        fprintf(stderr, "yah264: expected FRAME header\n");
+        fprintf(stderr, "yah264: expected FRAME header at frame %ld\n", n + g_seek_frames);
         return -1;
     }
     if (hdr_len >= 0 && len != hdr_len) {
-        fprintf(stderr, "yah264: frame %d has a %d-byte FRAME header where frame 0 "
-                "had %d\n", n, len, hdr_len);
+        fprintf(stderr, "yah264: frame %ld has a %d-byte FRAME header where frame %ld "
+                "had %d\n", n + g_seek_frames, len, g_seek_frames, hdr_len);
         return -1;
     }
     return 1;
@@ -5918,7 +5921,8 @@ int main(int argc, char **argv)
         if (s == 0)
             break;                                  /* clean EOF */
         if (s == -1) {
-            fprintf(stderr, "yah264: expected FRAME header, got '%s'\n", rd_on ? rd.line : line);
+            fprintf(stderr, "yah264: expected FRAME header at frame %ld, got '%s'\n",
+                    frame + g_seek_frames, rd_on ? rd.line : line);
             rc = 1;
             goto done;
         }
@@ -5951,7 +5955,7 @@ int main(int argc, char **argv)
         int bytes = g_api->encoder_encode(enc, &nal, &count, &pic);
         if (rd_on) serial_rd_release(&rd);
         if (bytes < 0) {
-            fprintf(stderr, "yah264: encode failed on frame %ld\n", frame);
+            fprintf(stderr, "yah264: encode failed on frame %ld\n", frame + g_seek_frames);
             rc = 1;
             goto done;
         }
