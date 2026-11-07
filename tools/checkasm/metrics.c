@@ -114,13 +114,15 @@ static int run_sad(const struct sadrow *rows, int n)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+        if (t == 0) memcpy(pb, pa, st * PLANE_H * sizeof(pixel));
+        if (t == 1) { memset(pa, 0, st * PLANE_H * sizeof(pixel));
+                      ca_fill_max(pb, st * PLANE_H); }
         for (int k = 0; k < n; k++) {
-            int r = ref.sad[rows[k].pu](pa, STRIDE, pb, STRIDE);
-            int o = rows[k].k(pa, STRIDE, pb, STRIDE);
+            int r = ref.sad[rows[k].pu](pa, st, pb, st);
+            int o = rows[k].k(pa, st, pb, st);
             if (r != o) {
                 if (!bad) ca_fail("%s: ref=%d opt=%d", rows[k].n, r, o);
                 bad++;
@@ -161,17 +163,19 @@ static int run_sad_quad(const struct sadquadrow *rows, int n)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 0) memcpy(pb, pa, st * PLANE_H * sizeof(pixel));
         for (int k = 0; k < n; k++) {
-            const pixel *r0 = pb, *r1 = pb + 1, *r2 = pb + STRIDE,
-                        *r3 = pb + STRIDE + 3;
+            const pixel *r0 = pb, *r1 = pb + 1, *r2 = pb + st,
+                        *r3 = pb + st + 3;
             int s[4];
-            rows[k].k(pa, STRIDE, r0, r1, r2, r3, STRIDE, s);
-            int e[4] = { ref.sad[rows[k].pu](pa, STRIDE, r0, STRIDE),
-                         ref.sad[rows[k].pu](pa, STRIDE, r1, STRIDE),
-                         ref.sad[rows[k].pu](pa, STRIDE, r2, STRIDE),
-                         ref.sad[rows[k].pu](pa, STRIDE, r3, STRIDE) };
+            rows[k].k(pa, st, r0, r1, r2, r3, st, s);
+            int e[4] = { ref.sad[rows[k].pu](pa, st, r0, st),
+                         ref.sad[rows[k].pu](pa, st, r1, st),
+                         ref.sad[rows[k].pu](pa, st, r2, st),
+                         ref.sad[rows[k].pu](pa, st, r3, st) };
             if (memcmp(s, e, sizeof(s))) {
                 if (!bad)
                     ca_fail("%s: {%d,%d,%d,%d} vs {%d,%d,%d,%d}", rows[k].n,
@@ -228,14 +232,16 @@ static int run_metric2(const char *name, pixfn2 kern, y264_satd_fn cref,
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
-        if (t == 2) for (int i = 0; i < STRIDE * PLANE_H; i++) {
+        if (t == 0) memcpy(pb, pa, st * PLANE_H * sizeof(pixel));
+        if (t == 1) { memset(pa, 0, st * PLANE_H * sizeof(pixel));
+                      ca_fill_max(pb, st * PLANE_H); }
+        if (t == 2) for (int i = 0; i < st * PLANE_H; i++) {
                         pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
-        int r = cref(pa, STRIDE, pb, STRIDE);
-        int o = kern(pa, STRIDE, pb, STRIDE);
+        int r = cref(pa, st, pb, st);
+        int o = kern(pa, st, pb, st);
         if (r != o) {
             if (!bad) ca_fail("%s: ref=%d opt=%d", name, r, o);
             bad++;
@@ -263,16 +269,18 @@ static int run_satd_quad(const char *name, satdx4fn kern)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
-        const pixel *r0 = pb, *r1 = pb + 1, *r2 = pb + STRIDE,
-                    *r3 = pb + STRIDE + 3;
+        if (t == 0) memcpy(pb, pa, st * PLANE_H * sizeof(pixel));
+        const pixel *r0 = pb, *r1 = pb + 1, *r2 = pb + st,
+                    *r3 = pb + st + 3;
         int s[4];
-        kern(pa, STRIDE, r0, r1, r2, r3, STRIDE, s);
-        int e[4] = { ref.satd8x8(pa, STRIDE, r0, STRIDE),
-                     ref.satd8x8(pa, STRIDE, r1, STRIDE),
-                     ref.satd8x8(pa, STRIDE, r2, STRIDE),
-                     ref.satd8x8(pa, STRIDE, r3, STRIDE) };
+        kern(pa, st, r0, r1, r2, r3, st, s);
+        int e[4] = { ref.satd8x8(pa, st, r0, st),
+                     ref.satd8x8(pa, st, r1, st),
+                     ref.satd8x8(pa, st, r2, st),
+                     ref.satd8x8(pa, st, r3, st) };
         if (memcmp(s, e, sizeof(s))) {
             if (!bad)
                 ca_fail("%s: {%d,%d,%d,%d} vs {%d,%d,%d,%d}", name,
@@ -299,11 +307,13 @@ static int run_hadamard_ac(const char *name, pixfn1 kern)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
-        long r = ref.hadamard_ac8x8(pa, STRIDE);
-        long o = kern(pa, STRIDE);
+        if (t == 0) memset(pa, 0, st * PLANE_H * sizeof(pixel));
+        if (t == 1) ca_fill_max(pa, st * PLANE_H);
+        long r = ref.hadamard_ac8x8(pa, st);
+        long o = kern(pa, st);
         if (r != o) {
             if (!bad) ca_fail("%s: ref=%ld opt=%ld", name, r, o);
             bad++;
@@ -327,13 +337,15 @@ static int run_texture_ac4(const char *name, pixfn1 kern)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 2) for (int i = 0; i < STRIDE * PLANE_H; i++)
+        if (t == 0) memset(pa, 0, st * PLANE_H * sizeof(pixel));
+        if (t == 1) ca_fill_max(pa, st * PLANE_H);
+        if (t == 2) for (int i = 0; i < st * PLANE_H; i++)
                         pa[i] = (pixel)(i & 1 ? 8 : 7);
-        long r = ref.texture_ac4_16x16(pa, STRIDE);
-        long o = kern(pa, STRIDE);
+        long r = ref.texture_ac4_16x16(pa, st);
+        long o = kern(pa, st);
         if (r != o) {
             if (!bad) ca_fail("%s: ref=%ld opt=%ld", name, r, o);
             bad++;
@@ -357,12 +369,14 @@ static int run_var16x16(const char *name, varfn kern)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 0) memset(pa, 0, st * PLANE_H * sizeof(pixel));
+        if (t == 1) ca_fill_max(pa, st * PLANE_H);
         uint32_t r[2], o[2];
-        ref.var16x16(pa, STRIDE, r);
-        kern(pa, STRIDE, o);
+        ref.var16x16(pa, st, r);
+        kern(pa, st, o);
         if (r[0] != o[0] || r[1] != o[1]) {
             if (!bad) ca_fail("%s: ref=%u/%u opt=%u/%u", name,
                               r[0], r[1], o[0], o[1]);
@@ -406,19 +420,21 @@ static int run_texture_ac48(const char *name, tex48fn kern)
     refs();
     plane();
     for (int t = 0; t < trials; t++) {
-        if (t & 1) for (int i = 0; i < STRIDE * PLANE_H; i++) pa[i] = ca_rnd_edge();
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
+        if (t & 1) for (int i = 0; i < st * PLANE_H; i++) pa[i] = ca_rnd_edge();
         else plane();
-        if (t == 0) memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 2) for (int i = 0; i < STRIDE * PLANE_H; i++)
+        if (t == 0) memset(pa, 0, st * PLANE_H * sizeof(pixel));
+        if (t == 2) for (int i = 0; i < st * PLANE_H; i++)
                         pa[i] = (pixel)(i & 1 ? 8 : 7);
-        if (t == 4) for (int i = 0; i < STRIDE * PLANE_H; i++) pa[i] = PIXEL_MAX;
+        if (t == 4) for (int i = 0; i < st * PLANE_H; i++) pa[i] = PIXEL_MAX;
         long ro[2], oo[2];
-        ref.texture_ac48_16x16(pa, STRIDE, ro);
-        kern(pa, STRIDE, oo);
-        long sep4 = ref.texture_ac4_16x16(pa, STRIDE), sep8 = 0;
+        ref.texture_ac48_16x16(pa, st, ro);
+        kern(pa, st, oo);
+        long sep4 = ref.texture_ac4_16x16(pa, st), sep8 = 0;
         for (int by = 0; by < 16; by += 8)
             for (int bx = 0; bx < 16; bx += 8)
-                sep8 += ref.hadamard_ac8x8(pa + by * STRIDE + bx, STRIDE);
+                sep8 += ref.hadamard_ac8x8(pa + by * st + bx, st);
         if (ro[0] != oo[0] || ro[1] != oo[1] || ro[0] != sep4 || ro[1] != sep8) {
             if (!bad)
                 ca_fail("%s: ref=%ld/%ld opt=%ld/%ld split=%ld/%ld", name,
@@ -492,7 +508,7 @@ static int run_intra4_mode_search(const char *name, i4x9fn kern, pixfn2 satd4)
         plane();
         if (t == 0) memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
         if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+                      ca_fill_max(pb, STRIDE * PLANE_H); }
         const pixel *rc = pa + PORG;
         for (int ht = 0; ht <= 1; ht++)
             for (int hl = 0; hl <= 1; hl++)
@@ -535,17 +551,19 @@ static int run_intra16_satd_trio(const char *name, x3fn kern, pixfn2 satd16)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
-        if (t == 0) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
-        if (t == 1) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
-        const pixel *top = pa + 3 * STRIDE + 5, *left = pa + 9 * STRIDE + 1;
+        if (t == 0) { memset(pa, 0, st * PLANE_H * sizeof(pixel));
+                      ca_fill_max(pb, st * PLANE_H); }
+        if (t == 1) { ca_fill_max(pa, st * PLANE_H);
+                      memset(pb, 0, st * PLANE_H * sizeof(pixel)); }
+        const pixel *top = pa + 3 * st + 5, *left = pa + 9 * st + 1;
         static const int dcs[] = { 0, 1, 128, PIXEL_MAX };
         for (unsigned k = 0; k < sizeof(dcs) / sizeof(dcs[0]); k++) {
             int rc3[3], oc3[3];
-            ref.intra16_satd_trio(pb, STRIDE, top, left, dcs[k], rc3);
-            kern(pb, STRIDE, top, left, dcs[k], oc3);
+            ref.intra16_satd_trio(pb, st, top, left, dcs[k], rc3);
+            kern(pb, st, top, left, dcs[k], oc3);
             for (int m = 0; m < 3; m++)
                 if (rc3[m] != oc3[m]) {
                     if (!bad)
@@ -660,7 +678,7 @@ static int ssdmap_group(ssdmapfn k, const char *tag)
         plane();
         if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
         if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+                      ca_fill_max(pb, STRIDE * PLANE_H); }
         uint32_t o[16];
         k((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, o);
         for (int b = 0; b < 16; b++) {
@@ -706,8 +724,8 @@ static int t_ssdsum4x4_neon(void)
         plane();
         if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
         if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
-        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+                      ca_fill_max(pb, STRIDE * PLANE_H); }
+        if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
                       memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
         for (int big = 0; big <= 1; big++) {
             int nb = big ? 4 : 2;
@@ -740,6 +758,9 @@ static int t_ssdsum4x4_neon(void)
     return bad;
 }
 
+#endif /* Y264_HAVE_NEON */
+
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
 /* SATD against the rounded average of two planes vs building the average and
  * running the reference SATD, over random, flat and full-swing planes and
  * offset plane pairs (the sub-pel probes read two planes a sample apart). */
@@ -750,8 +771,8 @@ static int t_satd_avg8x8_neon(void)
     refs();
     for (int t = 0; t < TRIALS && !bad; t++) {
         plane();
-        if (t == 1) memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 1) ca_fill_max(pb, STRIDE * PLANE_H);
+        if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
                       memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
         const pixel *p = pb + (t % 3), *q = pb + STRIDE * (1 + t % 2) + (t % 5);
         for (int y = 0; y < 8; y++)
@@ -801,9 +822,13 @@ static int t_satd_avg8x8_neon(void)
 }
 #endif
 
-/* ---- the rows: one thin function per kernel per tier ---------------------- */
+/* ---- the rows: one thin function per kernel per tier ----------------------
+ *
+ * The NEON rows serve both depths: at 10 bits the same names are the 16-bit
+ * lane kernels (src/dsp/arm/*_neon10.c), and the rows whose kernels exist at
+ * 8 bits only sit behind Y264_HAVE_NEON alone. */
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
 
 static int t_sad_neon(void)
 {
@@ -816,6 +841,7 @@ static int t_sad_neon(void)
     return run_sad(rows, 4);
 }
 
+#if Y264_HAVE_NEON
 static int t_sad_dotprod(void)
 {
     static const struct sadrow rows[] = {
@@ -825,6 +851,7 @@ static int t_sad_dotprod(void)
     return run_sad(rows, 2);
 }
 
+#endif
 static int t_sad_quad_neon(void)
 {
     static const struct sadquadrow rows[] = {
@@ -907,13 +934,16 @@ static int t_texture_ac48(void)
 { return run_texture_ac48("texture_ac48", y264_texture_ac48_16x16_neon); }
 static int t_var16x16(void)
 { return run_var16x16("var16x16", y264_var_16x16_neon); }
+#if Y264_HAVE_NEON
 static int t_var16x16_dotprod(void)
 { return run_var16x16("var16x16_dotprod", y264_var_16x16_neon_dotprod); }
 static int t_intra4_mode_search(void)
 { return run_intra4_mode_search("intra4_mode_search", y264_intra4_mode_search_neon, y264_satd_4x4_neon); }
+#endif
 static int t_intra16_satd_trio(void)
 { return run_intra16_satd_trio("intra16_satd_trio", y264_intra16_satd_trio_neon,
                               y264_satd_16x16_neon_ded); }
+#if Y264_HAVE_NEON
 static int t_ssd(void)
 { return ssd_group(y264_ssd_16xh_neon, y264_ssd_8xh_neon, ""); }
 static int t_ssd_dotprod(void)
@@ -924,7 +954,8 @@ static int t_ssdmap(void)
 static int t_ssdmap_dotprod(void)
 { return ssdmap_group(y264_ssd4x4_map16_neon_dotprod, "_dotprod"); }
 
-#endif /* Y264_HAVE_NEON */
+#endif
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 */
 
 #if Y264_HAVE_SSE4 || Y264_HAVE_SVE
 /* ---- x86-only group bodies -----------------------------------------------
@@ -945,8 +976,8 @@ static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
         plane();
         if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
         if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
-        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+                      ca_fill_max(pb, STRIDE * PLANE_H); }
+        if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
                       memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
         if (t >= 3 && t < 8) for (int i = 0; i < STRIDE * PLANE_H; i++) {
                         pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
@@ -1022,7 +1053,7 @@ static int run_sad_multi(const struct sadmultirow_x *rows, int n)
         plane();
         if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
         if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+                      ca_fill_max(pb, STRIDE * PLANE_H); }
         if (t == 2) for (int i = 0; i < STRIDE * PLANE_H; i++) {
                         pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
         for (int k = 0; k < n; k++) {
@@ -1129,8 +1160,8 @@ static int run_satd_avg(const struct satdavgrow *rows, int n)
     refs();
     for (int t = 0; t < TRIALS; t++) {
         plane();
-        if (t == 1) memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 1) ca_fill_max(pb, STRIDE * PLANE_H);
+        if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
                       memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
         if (t == 3) for (int i = 0; i < STRIDE * PLANE_H; i++) {
                         pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
@@ -1580,6 +1611,23 @@ const ca_test ca_pixel_tests[] = {
     { "ssdsum4x4",        "pixel", Y264_CPU_NEON,                    t_ssdsum4x4_neon },
     { "satd_avg8x8",      "pixel", Y264_CPU_NEON,                    t_satd_avg8x8_neon },
     { "ssd4x4_map_dotprod", "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssdmap_dotprod },
+#endif
+#if Y264_HAVE_NEON10
+    { "sad",              "pixel", Y264_CPU_NEON, t_sad_neon },
+    { "sad_quad",         "pixel", Y264_CPU_NEON, t_sad_quad_neon },
+    { "sad_trio_pair",    "pixel", Y264_CPU_NEON, t_sad_multi_neon },
+    { "satd4x4",          "pixel", Y264_CPU_NEON, t_satd4x4 },
+    { "satd8x8",          "pixel", Y264_CPU_NEON, t_satd8x8 },
+    { "satd16x16",        "pixel", Y264_CPU_NEON, t_satd16x16 },
+    { "satd_quad_8x8",    "pixel", Y264_CPU_NEON, t_satd_quad_8x8 },
+    { "sa8d8x8",          "pixel", Y264_CPU_NEON, t_sa8d8x8 },
+    { "sa8d16x16",        "pixel", Y264_CPU_NEON, t_sa8d16x16 },
+    { "hadamard_ac8x8",   "pixel", Y264_CPU_NEON, t_hadamard_ac },
+    { "texture_ac4",      "pixel", Y264_CPU_NEON, t_texture_ac4 },
+    { "texture_ac48",     "pixel", Y264_CPU_NEON, t_texture_ac48 },
+    { "var16x16",         "pixel", Y264_CPU_NEON, t_var16x16 },
+    { "intra16_satd_trio", "pixel", Y264_CPU_NEON, t_intra16_satd_trio },
+    { "satd_avg8x8",      "pixel", Y264_CPU_NEON, t_satd_avg8x8_neon },
 #endif
 #if Y264_HAVE_SSE4
     { "sad_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_sad_sse4 },

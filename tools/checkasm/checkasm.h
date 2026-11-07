@@ -95,6 +95,14 @@ static inline pixel ca_rnd_edge(void)
     return (ca_rnd() & 1) ? (pixel)PIXEL_MAX : (pixel)0;
 }
 
+/* Every sample at the depth's maximum. A byte fill of 0xff is that at 8 bits
+ * and 65535 at 10, which is not a 10-bit sample. */
+static inline void ca_fill_max(pixel *p, int n)
+{
+    for (int i = 0; i < n; i++)
+        p[i] = (pixel)PIXEL_MAX;
+}
+
 double ca_now_ns(void);
 /* Pin to a performance core at a ramped clock before timing anything. */
 void ca_bench_prep(void);

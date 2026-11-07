@@ -221,8 +221,8 @@ static int run_pixel_avg_wt(const char *name, avg_wt_fn kern)
     for (int t = 0; t < TRIALS; t++) {
         plane();
         if (t == 0) { memset(pa, 0, 256 * sizeof(pixel));
-                      memset(pb, 0xff, 256 * sizeof(pixel)); }
-        if (t == 1) { memset(pa, 0xff, 256 * sizeof(pixel));
+                      ca_fill_max(pb, 256); }
+        if (t == 1) { ca_fill_max(pa, 256);
                       memset(pb, 0, 256 * sizeof(pixel)); }
         for (int w1 = -64; w1 <= 128; w1++) {
             int w0 = 64 - w1;
@@ -263,8 +263,8 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
     for (int t = 0; t < TRIALS; t++) {
         plane();
         if (t == 0) { memset(pa, 0, 16 * BS * sizeof(pixel));
-                      memset(pb, 0xff, 16 * BS * sizeof(pixel)); }
-        if (t == 1) { memset(pa, 0xff, 16 * BS * sizeof(pixel));
+                      ca_fill_max(pb, 16 * BS); }
+        if (t == 1) { ca_fill_max(pa, 16 * BS);
                       memset(pb, 0, 16 * BS * sizeof(pixel)); }
         for (int w1 = -64; w1 <= 128; w1 += (t < 2 ? 1 : 7)) {
             int w0 = 64 - w1;

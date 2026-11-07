@@ -145,16 +145,26 @@ simd_tiers = {'NEON' : have_neon, 'SSE4' : have_sse4,
               'AVX2' : have_avx2, 'AVX512' : have_avx512,
               'SVE' : have_sve}
 
-# NEON kernels are uint8/int16-specific (8-bit only). At BD>8 the scalar C path
-# is used, so the NEON translation units are simply not compiled in. The test
-# is now per LIBRARY rather than per build directory, since both depths are
-# compiled here; 16-bit lanes are docs/formats.md.
+# These NEON kernels are uint8/int16-specific, so they go into the 8-bit
+# library only. The 10-bit library's NEON tier is its own files, below. The
+# test is per LIBRARY rather than per build directory, since both depths are
+# compiled here.
 neon_sources = []
 if have_neon
   # NEON is baseline on aarch64; no extra flags needed.
   neon_sources = ['src/dsp/metrics_neon.c', 'src/dsp/interp_neon.c',
                   'src/dsp/transform_neon.c', 'src/dsp/loopfilter_neon.c',
                   'src/dsp/intrapred_neon.c']
+endif
+# The 10-bit library's NEON tier: one file per family under src/dsp/arm/, on
+# 16-bit lanes, compiled into the 10-bit library only. A family is listed once
+# it has a kernel; what is not listed stays on C at 10 bits.
+neon10_families = ['metrics']
+neon10_sources = []
+if have_neon
+  foreach f : neon10_families
+    neon10_sources += 'src/dsp/arm/' + f + '_neon10.c'
+  endforeach
 endif
 # The SVE kernels, one file per family under src/dsp/arm/. A family is listed
 # once it has a kernel; metrics_sve.c also holds the vector-length probe that
@@ -184,8 +194,7 @@ endif
 # empty placeholder is that the shape -- three libraries, their flags, their
 # macros -- was compiled by every x86 build rather than written blind on the
 # day its first kernel landed. The
-# 10-bit library opts in to nothing, exactly as NEON does, because the lanes
-# are 8-bit.
+# 10-bit library opts in to nothing, because the x86 lanes are 8-bit.
 x86_all_families = ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter']
 x86_tier_families = {
   'sse4'   : ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter'],
@@ -217,6 +226,8 @@ foreach t, on : simd_tiers
   endif
   add_project_arguments('-DY264_HAVE_' + t + '=' + tv, language : 'c')
 endforeach
+add_project_arguments('-DY264_HAVE_NEON10=@0@'.format(
+  have_neon and not is_8bit ? 1 : 0), language : 'c')
 x86_families_built = []
 foreach f : x86_all_families
   foreach t : x86_tiers
@@ -293,10 +304,11 @@ depth_args = {}
 foreach d : [8, 10]
   srcs = lib_sources
   args = ['-UY264_BIT_DEPTH', '-DY264_BIT_DEPTH=@0@'.format(d)]
-  # Which tiers and which families THIS library holds. Every tier's kernels
-  # are 8-bit lanes today, so the 10-bit library is told it has none rather
+  # Which tiers and which families THIS library holds. The tiers above are
+  # 8-bit lanes, so the 10-bit library is told it has none of them rather
   # than being left to infer it from the architecture -- that inference is
-  # what made the old dispatch aarch64-only by construction.
+  # what made the old dispatch aarch64-only by construction. Its own NEON
+  # tier is Y264_HAVE_NEON10.
   foreach t, on : simd_tiers
     tv = '0'
     if on and d == 8
@@ -304,6 +316,8 @@ foreach d : [8, 10]
     endif
     args += ['-UY264_HAVE_' + t, '-DY264_HAVE_' + t + '=' + tv]
   endforeach
+  args += ['-UY264_HAVE_NEON10', '-DY264_HAVE_NEON10=@0@'.format(
+           have_neon and d == 10 ? 1 : 0)]
   foreach f : x86_all_families
     args += '-UY264_SIMD_' + f.to_upper()
     if d == 8 and f in x86_families_built
@@ -313,6 +327,7 @@ foreach d : [8, 10]
   if d == 8
     srcs += neon_sources
   else
+    srcs += neon10_sources
     # Every symbol this library defines carries a _10 suffix - the public API
     # through include/yah264.h (YAH264_API), the internals through this header -
     # so that both archives can be linked into one executable without a
