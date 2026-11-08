@@ -518,6 +518,11 @@ double           y264_aq_grain_share(const float *mean, const float *var, int wm
 double           y264_aq_dark_gate(double bright_share, double grain_share);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
+/* l = log2(variance + floor) on the 8-bit scale, and the divisor that puts a
+ * coded sample's variance there (1 at 8 bits) */
+double           y264_aq_vscale(void);
+double           y264_aq_l(double var, double floor);
+float            y264_aq_lf(double var, double floor);
 int              y264_rb_trace_on(void);
 
 #endif /* YAH264_MACROBLOCK_H */

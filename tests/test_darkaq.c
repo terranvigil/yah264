@@ -42,6 +42,7 @@ int main(void)
     unsetenv("Y264_AQ_DARK_B1");
     unsetenv("Y264_AQ_DARK_S0");
     unsetenv("Y264_AQ_DARK_S1");
+    unsetenv("Y264_AQ_D8");
 
     /* a dark gradient with faint grain: luma mean 30, standard deviation 1.4 */
     CHECK(y264_psy_dark_gain(M(30.0), V(2.0)) >= 3.0);
@@ -444,6 +445,12 @@ int main(void)
         CHECK(e[2] == 0 && e[3] == 0);
 #undef FILL
     }
+
+    /* the AQ energy is read on the 8-bit scale at every depth, so a block's
+     * offset doesn't move with the coded depth */
+    CHECK(fabs(y264_aq_l(V(30.0), 2.0) - log2(32.0)) < 1e-9);
+    CHECK(fabs(y264_aq_lf(V(30.0), 16.0) - log2f(46.0f)) < 1e-5);
+    CHECK(fabs(y264_aq_vscale() * SC * SC - 1.0) < 1e-12);
 
     if (fails) fprintf(stderr, "%d failure(s)\n", fails);
     else printf("darkaq: ok\n");

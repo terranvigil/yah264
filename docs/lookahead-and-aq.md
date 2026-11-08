@@ -45,8 +45,9 @@ per-macroblock value. Under CRF and ABR the boost isn't centered on zero. mb-tre
 with AQ, so `--qp N` means one QP for every macroblock.
 
 **Variance AQ.** Each macroblock's energy is `l = log2(variance + floor)` on
-luma. The offset is `strength * gain * (l - center)`. `--aq-strength` defaults
-to 0.4 in every rate-controlled mode and 0 at constant QP. `--aq-mode 2`, the
+luma, with the variance on the 8-bit scale at every depth. The offset is
+`strength * gain * (l - center)`. `--aq-strength` defaults to 0.4 in every
+rate-controlled mode and 0 at constant QP. `--aq-mode 2`, the
 default, adds a per-frame gain from the spread of `l` across the frame: a
 frame whose blocks all sit near one energy (a dark scene, a fade, a flat
 cartoon background) has little masking to exploit, so its gradient eases,
@@ -57,7 +58,7 @@ Where the center sits depends on the frame:
 
 | frames | center | variance floor |
 |---|---|---|
-| anchors and reference B (they carry an mb-tree field) | a fixed level, 4.5 at 8 bits, 8.5 at 10 bits | 2 |
+| anchors and reference B (they carry an mb-tree field) | a fixed level, 4.5 | 2 |
 | non-reference B | the frame mean, pulled 1.3x toward a fixed level of 6.0 | 16 (1 under two-pass) |
 
 **The frame-level DC term.** Centering the anchors' field on a constant

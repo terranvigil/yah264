@@ -303,6 +303,30 @@ static int aq_mode_env(void)
 double y264_aq_bfloor(int abr) { return aq_mode_env() >= 2 && !(abr & 2) ? AQ2_BFLOOR : 1.0; }
 double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? AQ2_AFLOOR : 1.0; }
 
+/* The block energy every AQ path reads, l = log2(variance + floor), taken on
+ * the 8-bit scale at every depth: a sample's variance grows 4x per extra bit,
+ * so the variance is divided by 4^(depth - 8) first. The constants the field
+ * is built from (both floors, the anchor and B-frame levels, the mode-2
+ * gain's reference mean, the frame DC's rate proxy) and the flat-content
+ * psy-trellis gate's variance limit were fitted at 8 bits, so on this scale a
+ * 10-bit encode gets the offsets its 8-bit encode gets. Read on the coded
+ * samples instead, the anchor level alone was shifted, and the floors, the
+ * B-frame level and the flat gate were all off by the factor. At 8 bits the
+ * divisor is 1 and nothing moves. Y264_AQ_D8=0 reads the coded samples (the
+ * previous output, dev builds). */
+static int aq_d8_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = y264_env("Y264_AQ_D8"); v = e ? atoi(e) != 0 : 1; }
+    return v;
+}
+double y264_aq_vscale(void)
+{
+    return aq_d8_env() ? 1.0 / (double)(1 << (2 * (Y264_BIT_DEPTH - 8))) : 1.0;
+}
+double y264_aq_l(double var, double floor) { return log2(var * y264_aq_vscale() + floor); }
+float y264_aq_lf(double var, double floor) { return log2f((float)(var * y264_aq_vscale() + floor)); }
+
 /* The per-frame gain aq-mode 2 puts on --aq-strength, from the frame's
  * per-MB l: x clamped to [gmin, gmax], x = sd / sref, the spread of l
  * against a reference spread. A frame whose blocks all sit near one energy (a
@@ -686,7 +710,7 @@ static void aq_analyze(y264_frame_t *f)
     aq_mb_stats(f, means, vars, dmeans, dvars);
     for (int i = 0; i < n; i++) {
         double mean = dmeans[i], var = dvars[i];
-        float l = log2f((float)(var + y264_aq_bfloor(f->aq_abr)));
+        float l = y264_aq_lf(var, y264_aq_bfloor(f->aq_abr));
         lv[i] = l;
         dk[i] = (float)y264_aq_dark(mean, var);
         nbright += y264_aq_bright(mean);
@@ -11074,7 +11098,7 @@ static int dark_skip_lift(y264_frame_t *f, int mbx, int mby)
     if (var < 0) var = 0;
     /* the cut the offset actually carries: on the flattest, darkest blocks
      * the variance term and the cut together pass aq_analyze's -8 clamp */
-    double v = f->aq_s * (log2f((float)(var + y264_aq_bfloor(f->aq_abr))) - f->aq_c);
+    double v = f->aq_s * (y264_aq_lf(var, y264_aq_bfloor(f->aq_abr)) - f->aq_c);
     double cut = f->dark_dg * y264_aq_dark(mean, var);
     double lo = v + cut < -8 ? -8 : v + cut > 8 ? 8 : v + cut;
     double hi = v < -8 ? -8 : v > 8 ? 8 : v;
@@ -12906,7 +12930,7 @@ void y264_frame_encode(y264_bs_t *bs, y264_frame_t *f)
 void y264_mb_warm_statics(void)
 {
     (void)diag_tdirlim(); (void)diag_colwatch(); (void)diag_directok();
-    (void)band_rows_env(); (void)band_precomp_on();
+    (void)band_rows_env(); (void)band_precomp_on(); (void)aq_d8_env();
     (void)lambda_me(26);
     (void)lambda_mode(26); (void)y264_rb_trace_on(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit();

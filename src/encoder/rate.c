@@ -652,9 +652,9 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
             y264_dsp.var16x16(s, stride, v2);
             double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
             if (var < 0) var = 0;
-            double l = log2(var + dfl);
+            double l = y264_aq_l(var, dfl);
             lv[mby * wmb + mbx] = l;
-            double lg = log2(var + y264_aq_afloor());
+            double lg = y264_aq_l(var, y264_aq_afloor());
             sum += lg; sum2 += lg * lg;
         }
     double fmean = sum / n, fsd2 = sum2 / n - fmean * fmean;
