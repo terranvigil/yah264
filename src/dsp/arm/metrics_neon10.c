@@ -611,6 +611,105 @@ void y264_intra16_satd_trio_neon(const pixel *src, int ss, const pixel *top,
     costs[2] = 2 * (int)vaddvq_u32(ad);
 }
 
+/* ---- the fused I4x4 nine-mode cost -----------------------------------------
+ *
+ * Every 4x4 prediction sample is an entry of one 64-entry table over the
+ * flat edge E = { l3, l3, l2, l1, l0, tl, t0..t7, t7 ... }: the 121 filter F
+ * (entries 0-15), the pair average H (16-31), E itself (32-47) and DC (48).
+ * The index rows restate the C builder's per-mode formulas. A byte lookup
+ * reaches 64 entries, so the u16 table is split into its low and high bytes,
+ * looked up with the same indices and zipped back; a mode's block comes out
+ * as rows 0-1 and rows 2-3. Two modes go through one SATD call side by
+ * side, under the 4x4 bounds above. */
+static const uint8_t i4_search_idx[9][16] = {
+    { 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41 }, /* V */
+    { 36, 36, 36, 36, 35, 35, 35, 35, 34, 34, 34, 34, 33, 33, 33, 33 }, /* H */
+    { 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48 }, /* DC */
+    {  6,  7,  8,  9,  7,  8,  9, 10,  8,  9, 10, 11,  9, 10, 11, 12 }, /* DDL */
+    {  4,  5,  6,  7,  3,  4,  5,  6,  2,  3,  4,  5,  1,  2,  3,  4 }, /* DDR */
+    { 21, 22, 23, 24,  4,  5,  6,  7,  3, 21, 22, 23,  2,  4,  5,  6 }, /* VR */
+    { 20,  4,  5,  6, 19,  3, 20,  4, 18,  2, 19,  3, 17,  1, 18,  2 }, /* HD */
+    { 22, 23, 24, 25,  6,  7,  8,  9, 23, 24, 25, 26,  7,  8,  9, 10 }, /* VL */
+    { 19,  2, 18,  1, 18,  1, 17,  0, 17,  0, 33, 33, 33, 33, 33, 33 }, /* HU */
+};
+
+/* SATDs of two predictions (rows 0-1 and 2-3 of each) against the source
+ * rows, one per half of the register. */
+static inline void satd_pair4x4(uint16x8_t a01, uint16x8_t a23, uint16x8_t b01,
+                                uint16x8_t b23, const uint16x4_t s[4],
+                                int *ca, int *cb)
+{
+#define R(lo_, x_, y_, k_) vreinterpretq_s16_u16(vsubq_u16(vcombine_u16(s[k_], s[k_]), \
+    vcombine_u16(lo_(x_), lo_(y_))))
+    uint16x8_t m = satd_4rows_half(R(vget_low_u16, a01, b01, 0), R(vget_high_u16, a01, b01, 1),
+                                   R(vget_low_u16, a23, b23, 2), R(vget_high_u16, a23, b23, 3));
+#undef R
+    uint32x4_t w = vpaddlq_u16(m);
+    uint32x4_t t = vpaddq_u32(w, w);                /* A, B, A, B */
+    *ca = 2 * (int)vgetq_lane_u32(t, 0);
+    *cb = 2 * (int)vgetq_lane_u32(t, 1);
+}
+
+void y264_intra4_mode_search_neon(const pixel *src, int ss, const pixel *rec, int rs,
+                                  int ht, int hl, int htl, int htr, int costs[9])
+{
+    pixel t[8], l[4], E[24];
+    int tl = 0, st = 0, sl = 0;
+    for (int i = 0; i < 4; i++) {
+        t[i] = ht ? rec[-rs + i] : 0;
+        l[i] = hl ? rec[i * rs - 1] : 0;
+        st += t[i];
+        sl += l[i];
+    }
+    for (int i = 4; i < 8; i++)
+        t[i] = htr ? rec[-rs + i] : t[3];
+    if (htl)
+        tl = rec[-rs - 1];
+
+    int dc;
+    if (ht && hl) dc = (st + sl + 4) >> 3;
+    else if (ht)  dc = (st + 2) >> 2;
+    else if (hl)  dc = (sl + 2) >> 2;
+    else          dc = 1 << (Y264_BIT_DEPTH - 1);
+
+    E[0] = l[3]; E[1] = l[3]; E[2] = l[2]; E[3] = l[1]; E[4] = l[0];
+    E[5] = (pixel)tl;
+    for (int i = 0; i < 8; i++) E[6 + i] = t[i];
+    for (int i = 14; i < 24; i++) E[i] = t[7];
+
+    uint16x8_t f[2], h[2], e[2];
+    for (int k = 0; k < 2; k++) {
+        uint16x8_t e0 = vld1q_u16(E + 8 * k), e1 = vld1q_u16(E + 8 * k + 1);
+        uint16x8_t e2 = vld1q_u16(E + 8 * k + 2);
+        f[k] = vrhaddq_u16(vhaddq_u16(e0, e2), e1);
+        h[k] = vrhaddq_u16(e0, e1);
+        e[k] = e0;
+    }
+    const uint16x8_t vdc = vdupq_n_u16((uint16_t)dc);
+    uint8x16x4_t lo, hi;
+#define B(v) vreinterpretq_u8_u16(v)
+    lo.val[0] = vuzp1q_u8(B(f[0]), B(f[1])); hi.val[0] = vuzp2q_u8(B(f[0]), B(f[1]));
+    lo.val[1] = vuzp1q_u8(B(h[0]), B(h[1])); hi.val[1] = vuzp2q_u8(B(h[0]), B(h[1]));
+    lo.val[2] = vuzp1q_u8(B(e[0]), B(e[1])); hi.val[2] = vuzp2q_u8(B(e[0]), B(e[1]));
+    lo.val[3] = vuzp1q_u8(B(vdc), B(vdc));   hi.val[3] = vuzp2q_u8(B(vdc), B(vdc));
+#undef B
+
+    uint16x8_t p01[9], p23[9];
+    for (int m = 0; m < 9; m++) {
+        uint8x16_t ix = vld1q_u8(i4_search_idx[m]);
+        uint8x16_t pl = vqtbl4q_u8(lo, ix), ph = vqtbl4q_u8(hi, ix);
+        p01[m] = vreinterpretq_u16_u8(vzip1q_u8(pl, ph));
+        p23[m] = vreinterpretq_u16_u8(vzip2q_u8(pl, ph));
+    }
+
+    const uint16x4_t sr[4] = { vld1_u16(src), vld1_u16(src + ss),
+                               vld1_u16(src + 2 * ss), vld1_u16(src + 3 * ss) };
+    for (int m = 0; m < 8; m += 2)
+        satd_pair4x4(p01[m], p23[m], p01[m + 1], p23[m + 1], sr, &costs[m], &costs[m + 1]);
+    int unused;
+    satd_pair4x4(p01[8], p23[8], p01[8], p23[8], sr, &costs[8], &unused);
+}
+
 /* ---- SSD -------------------------------------------------------------------
  *
  * A square of a 10-bit residual reaches 1023^2 = 1046529, past u16, so each

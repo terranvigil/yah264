@@ -298,6 +298,8 @@ long y264_hadamard_ac_8x8_neon(const pixel *, int);
 long y264_texture_ac4_16x16_neon(const pixel *, int);
 void y264_texture_ac48_16x16_neon(const pixel *, int, long[2]);
 void y264_var_16x16_neon(const pixel *, int, uint32_t[2]);
+void y264_intra4_mode_search_neon(const pixel *, int, const pixel *, int,
+                                  int, int, int, int, int[9]);
 /* SSD, dispatched from the macroblock code (no dot product form) */
 int  y264_ssd_16xh_neon(const pixel *a, int as, const pixel *b, int bs, int h);
 int  y264_ssd_8xh_neon(const pixel *a, int as, const pixel *b, int bs, int h);

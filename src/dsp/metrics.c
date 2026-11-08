@@ -621,8 +621,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
 
 #if Y264_HAVE_NEON10
     /* The 10-bit tier: the 8-bit block's entries that have a 16-bit-lane
-     * kernel. No dot-product twins, since UDOT takes bytes. The fused intra
-     * 4x4 search stays C. */
+     * kernel. No dot-product twins, since UDOT takes bytes. */
     if (cpu & Y264_CPU_NEON) {
         pf->sad[Y264_PU_16x16] = y264_sad_16x16_neon;
         pf->sad[Y264_PU_16x8]  = y264_sad_16x8_neon;
@@ -659,6 +658,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->texture_ac4_16x16  = y264_texture_ac4_16x16_neon;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_neon;
         pf->var16x16           = y264_var_16x16_neon;
+        pf->intra4_mode_search  = y264_intra4_mode_search_neon;
         pf->intra16_satd_trio   = y264_intra16_satd_trio_neon;
     }
 #endif

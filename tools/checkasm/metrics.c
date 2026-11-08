@@ -505,18 +505,24 @@ static int run_intra4_mode_search(const char *name, i4x9fn kern, pixfn2 satd4)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
         plane();
         if (t == 0) memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
         if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
                       ca_fill_max(pb, STRIDE * PLANE_H); }
-        const pixel *rc = pa + PORG;
+        if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
+                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+        if (t == 3) for (int i = 0; i < STRIDE * PLANE_H; i++) {
+                        pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
+        const pixel *rc = pa + 8 * st + 16;
         for (int ht = 0; ht <= 1; ht++)
             for (int hl = 0; hl <= 1; hl++)
                 for (int htl = 0; htl <= (ht && hl); htl++)
                     for (int htr = 0; htr <= ht; htr++) {
                         int rc9[9], oc9[9];
-                        ref.intra4_mode_search(pb, STRIDE, rc, STRIDE, ht, hl, htl, htr, rc9);
-                        kern(pb, STRIDE, rc, STRIDE, ht, hl, htl, htr, oc9);
+                        ref.intra4_mode_search(pb, st, rc, st, ht, hl, htl, htr, rc9);
+                        kern(pb, st, rc, st, ht, hl, htl, htr, oc9);
                         for (int m = 0; m < 9; m++)
                             if (rc9[m] != oc9[m]) {
                                 if (!bad)
@@ -961,9 +967,9 @@ static int t_var16x16(void)
 #if Y264_HAVE_NEON
 static int t_var16x16_dotprod(void)
 { return run_var16x16("var16x16_dotprod", y264_var_16x16_neon_dotprod); }
+#endif
 static int t_intra4_mode_search(void)
 { return run_intra4_mode_search("intra4_mode_search", y264_intra4_mode_search_neon, y264_satd_4x4_neon); }
-#endif
 static int t_intra16_satd_trio(void)
 { return run_intra16_satd_trio("intra16_satd_trio", y264_intra16_satd_trio_neon,
                               y264_satd_16x16_neon_ded); }
@@ -1650,6 +1656,7 @@ const ca_test ca_pixel_tests[] = {
     { "texture_ac4",      "pixel", Y264_CPU_NEON, t_texture_ac4 },
     { "texture_ac48",     "pixel", Y264_CPU_NEON, t_texture_ac48 },
     { "var16x16",         "pixel", Y264_CPU_NEON, t_var16x16 },
+    { "intra4_mode_search", "pixel", Y264_CPU_NEON, t_intra4_mode_search },
     { "intra16_satd_trio", "pixel", Y264_CPU_NEON, t_intra16_satd_trio },
     { "satd_avg8x8",      "pixel", Y264_CPU_NEON, t_satd_avg8x8_neon },
     { "ssd",              "pixel", Y264_CPU_NEON, t_ssd },
