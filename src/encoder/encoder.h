@@ -894,6 +894,12 @@ struct yah264_encoder {
     long     hrd_anchor_tick;   /* tick of the buffering period in force */
     long     hrd_disp_base;     /* display index of this segment's first picture */
     size_t   hrd_au_bytes;      /* bytes appended into the access unit being built */
+    /* the declared arrival schedule (C.1.2), seconds on this segment's clock:
+ * removal of the buffering period in force, and initial arrival and final
+ * arrival of the last access unit opened. A mid-stream buffering period
+ * declares the delay these leave it (C.3). */
+    double   hrd_tr_nb, hrd_tai, hrd_taf;
+    unsigned hrd_bp_init, hrd_bp_off;   /* the delay and offset in force */
     long     hrd_pad_bytes;     /* filler written, for the diagnostic line */
     /* The filler payload's own buffer. It cannot share e->rbsp: the padding is
  * written from inside the access-unit opener, which runs while e->rbsp still

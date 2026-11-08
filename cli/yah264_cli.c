@@ -1428,14 +1428,18 @@ static void buf_append(uint8_t **buf, size_t *sz, size_t *cap,
     *sz += n;
 }
 
-/* --nal-hrd across GOP segments. A segment's first picture counts its
- * cpb_removal_delay back to the buffering period before it, and that is the
- * last IDR of the previous segment, which only exists once the previous
- * segment has been coded. The writer emits segments in order, so it knows it
- * then: it reads the previous segment's last pic_timing and rewrites this
- * segment's first one. The access unit keeps its byte count (a start code
- * and trailing_zero_8bits absorb an emulation byte that comes or goes), so
- * the buffer the rate control planned is the one the stream declares. */
+/* --nal-hrd across GOP segments: a segment's first cpb_removal_delay and every
+ * later buffering period's initial delay depend on the segments before it, so
+ * the writer runs the stream's arrival schedule and rewrites them, sizes kept. */
+struct hrd_join {
+    double tc, bitrate;                 /* seconds per tick, declared bit/s */
+    unsigned full;                      /* the full-buffer delay, 90 kHz */
+    int cbr, tpp;
+    long aus;                           /* access units seen */
+    long next_cpb;                      /* ticks from the last period to the next AU */
+    double tr_nb, tai, taf;
+    unsigned init, off;                 /* the period in force */
+};
 
 /* the next start code at or after `from`: its first byte, with *hdr the NAL
  * header after it; n when there is none */
@@ -1464,133 +1468,190 @@ static size_t hrd_unescape(const uint8_t *b, size_t a, size_t e, uint8_t *r)
     return m;
 }
 
-/* Walks the SEI messages of one RBSP, calling back with each payload's type
- * and offset; a nonzero return stops the walk and is returned. */
-static int hrd_sei_walk(const uint8_t *r, size_t m,
-                        int (*fn)(void *, int, size_t, size_t), void *ctx)
+static unsigned hrd_bits(const uint8_t *r, size_t *bit, int n)
 {
-    while (m > 0 && r[m - 1] == 0) m--;             /* trailing_zero_8bits */
-    size_t i = 0;
-    while (i + 1 < m) {                              /* the last byte is the stop bit */
-        int t = 0; size_t sz = 0;
-        while (i < m && r[i] == 0xFF) { t += 255; i++; }
-        if (i >= m) return 0;
-        t += r[i++];
-        while (i < m && r[i] == 0xFF) { sz += 255; i++; }
-        if (i >= m) return 0;
-        sz += r[i++];
-        if (i + sz > m) return 0;
-        int rc = fn(ctx, t, i, sz);
-        if (rc) return rc;
-        i += sz;
+    unsigned v = 0;
+    for (int i = 0; i < n; i++, (*bit)++)
+        v = (v << 1) | ((r[*bit >> 3] >> (7 - (*bit & 7))) & 1u);
+    return v;
+}
+
+static void hrd_put_bits(uint8_t *r, size_t bit, int n, unsigned v)
+{
+    for (int i = n - 1; i >= 0; i--, bit++) {
+        uint8_t m = (uint8_t)(0x80 >> (bit & 7));
+        r[bit >> 3] = (uint8_t)(((v >> i) & 1) ? r[bit >> 3] | m : r[bit >> 3] & ~m);
     }
-    return 0;
 }
 
-struct hrd_scan { const uint8_t *r; int bp; long last; size_t pt_off; };
+static int hrd_is_vcl(int t) { return t >= 1 && t <= 5; }
 
-static long hrd_cpb_at(const uint8_t *r, size_t o)
-{
-    return ((long)r[o] << 16) | ((long)r[o + 1] << 8) | r[o + 2];
-}
+/* growable output */
+struct hrd_out { uint8_t *p; size_t n, cap; };
 
-static int hrd_scan_msg(void *ctx, int type, size_t off, size_t sz)
+static int hrd_put(struct hrd_out *o, const void *d, size_t n)
 {
-    struct hrd_scan *h = ctx;
-    if (type == 0) h->bp = 1;
-    if (type == 1 && sz >= 3) {
-        h->last = h->bp ? 0 : hrd_cpb_at(h->r, off);
-        h->bp = 0;
+    if (o->n + n > o->cap) {
+        size_t c = o->cap ? o->cap : 4096;
+        while (c < o->n + n) c *= 2;
+        uint8_t *q = realloc(o->p, c);
+        if (!q) return -1;
+        o->p = q; o->cap = c;
     }
+    memcpy(o->p + o->n, d, n);
+    o->n += n;
     return 0;
 }
 
-static int hrd_find_pt(void *ctx, int type, size_t off, size_t sz)
+/* a start code of sclen bytes (3 or 4), then n bytes of NAL */
+static int hrd_put_nal(struct hrd_out *o, long sclen, const uint8_t *nal, size_t n)
 {
-    struct hrd_scan *h = ctx;
-    if (type == 1 && sz >= 3) { h->pt_off = off; return 1; }
-    return 0;
+    static const uint8_t sc4[4] = { 0, 0, 0, 1 };
+    return hrd_put(o, sc4 + 4 - sclen, (size_t)sclen) < 0 || hrd_put(o, nal, n) < 0 ? -1 : 0;
 }
 
-/* Ticks from the last buffering period in b to the picture after its last
- * one, -1 when b carries no pic_timing. A buffering period message always
- * precedes its access unit's pic_timing. */
-static long hrd_ticks_after(const uint8_t *b, size_t n, int tpp)
+/* Rewrites one GOP's timing in *buf, and advances j over it. -1 when an
+ * access unit cannot keep its size or memory runs out. */
+static int hrd_join_gop(struct hrd_join *j, uint8_t **buf, size_t *sz)
 {
-    struct hrd_scan h = { NULL, 0, -1, 0 };
-    uint8_t *r = malloc(n ? n : 1);
-    if (!r) return -1;
-    h.r = r;
-    size_t hdr, sc = hrd_next_nal(b, n, 0, &hdr);
-    while (sc < n) {
-        size_t hdr2, nx = hrd_next_nal(b, n, hdr, &hdr2);
-        if (hdr < n && (b[hdr] & 0x1F) == 6)
-            hrd_sei_walk(r, hrd_unescape(b, hdr + 1, nx, r), hrd_scan_msg, &h);
+    const uint8_t *b = *buf;
+    size_t n = *sz, hdr, sc = hrd_next_nal(b, n, 0, &hdr);
+    struct hrd_out o = { NULL, 0, 0 };
+    uint8_t *r = NULL;
+    size_t rcap = 0;
+    int in_vcl = 0, au_open = 0, au_nals = 0, debt = 0, bp = 0, rc = 0, gop_aus = 0;
+    size_t au_start = 0;
+    double tr = 0.0;
+    for (;;) {
+        size_t hdr2 = n, nx = sc < n ? hrd_next_nal(b, n, hdr, &hdr2) : n;
+        int t = sc < n && hdr < n ? (b[hdr] & 0x1F) : -1;
+        /* an access unit ends before the first NAL that is neither VCL nor
+         * filler after its slices, and at the end of the GOP */
+        if (au_open && in_vcl && (t < 0 || (!hrd_is_vcl(t) && t != 12))) {
+            if (debt) { rc = -1; break; }
+            double bits = 8.0 * (double)(o.n - au_start);
+            j->taf = j->tai + bits / j->bitrate;
+            j->aus++;
+            gop_aus++;
+            au_open = in_vcl = au_nals = bp = 0;
+        }
+        if (t < 0) break;
+        if (!au_open) { au_open = 1; au_start = o.n; }
+        size_t ce = nx;
+        while (ce > hdr + 1 && b[ce - 1] == 0) ce--;   /* trailing_zero_8bits */
+        long sclen = (long)(hdr - sc), trail = (long)(nx - ce);
+        /* a NAL that is not the first of its access unit, nor a parameter
+         * set, may give back its zero_byte to an earlier NAL that grew */
+        if (debt && au_nals > 0 && t != 7 && t != 8 && sclen == 4) { sclen = 3; debt--; }
+        if (t == 6) {
+            if (nx - hdr > rcap) {
+                rcap = nx - hdr;
+                uint8_t *q = realloc(r, rcap);
+                if (!q) { rc = -1; break; }
+                r = q;
+            }
+            size_t m = hrd_unescape(b, hdr + 1, ce, r);
+            int changed = 0;
+            size_t i = 0;
+            while (i + 1 < m) {                     /* the last byte is the stop bit */
+                int pt = 0; size_t ps = 0;
+                while (i < m && r[i] == 0xFF) { pt += 255; i++; }
+                if (i >= m) break;
+                pt += r[i++];
+                while (i < m && r[i] == 0xFF) { ps += 255; i++; }
+                if (i >= m) break;
+                ps += r[i++];
+                if (i + ps > m) break;
+                if (pt == 0 && ps >= 7) {
+                    bp = 1;
+                    if (j->aus > 0) {
+                        size_t bit = 8 * i;
+                        int lz = 0;
+                        while (!hrd_bits(r, &bit, 1)) lz++;
+                        hrd_bits(r, &bit, lz);          /* sps_id */
+                        size_t at = bit;
+                        unsigned init = hrd_bits(r, &bit, 24), off = hrd_bits(r, &bit, 24);
+                        /* tr of this AU is known only at its pic_timing,
+                         * which follows; it is the previous removal plus
+                         * the cadence, and next_cpb holds the ticks */
+                        double trn = j->tr_nb + j->tc * (double)j->next_cpb;
+                        double d = ceil(90000.0 * (trn - j->taf) - 1e-6);
+                        unsigned want = d >= (double)j->full ? j->full : d < 1.0 ? 1u : (unsigned)d;
+                        if (want != init || off != j->full - want) {
+                            hrd_put_bits(r, at, 24, want);
+                            hrd_put_bits(r, at + 24, 24, j->full - want);
+                            changed = 1;
+                        }
+                        j->init = want; j->off = j->full - want;
+                    } else {
+                        size_t bit = 8 * i;
+                        int lz = 0;
+                        while (!hrd_bits(r, &bit, 1)) lz++;
+                        hrd_bits(r, &bit, lz);
+                        j->init = hrd_bits(r, &bit, 24);
+                        j->off = hrd_bits(r, &bit, 24);
+                    }
+                }
+                if (pt == 1 && ps >= 3) {
+                    long c = ((long)r[i] << 16) | ((long)r[i + 1] << 8) | r[i + 2];
+                    if (j->aus > 0 && gop_aus == 0 && j->next_cpb >= 0 && c != j->next_cpb) {
+                        c = j->next_cpb;
+                        r[i] = (uint8_t)(c >> 16); r[i + 1] = (uint8_t)(c >> 8); r[i + 2] = (uint8_t)c;
+                        changed = 1;
+                    }
+                    tr = j->aus == 0 ? (double)j->init / 90000.0 : j->tr_nb + j->tc * (double)c;
+                    double ear = tr - (double)(bp ? j->init : j->init + j->off) / 90000.0;
+                    j->tai = j->aus == 0 ? 0.0 : j->cbr || ear < j->taf ? j->taf : ear;
+                    if (j->aus == 0 || bp) j->tr_nb = tr;
+                    /* the next AU counts from here, or from this period */
+                    j->next_cpb = (bp ? 0 : c) + j->tpp;
+                }
+                i += ps;
+            }
+            if (changed) {
+                if (hrd_put_nal(&o, sclen, b + hdr, 1) < 0) { rc = -1; break; }
+                size_t before = o.n;
+                int z = 0;
+                for (size_t q = 0; q < m && rc == 0; q++) {
+                    uint8_t e3 = 3;
+                    if (z >= 2 && r[q] <= 3) { if (hrd_put(&o, &e3, 1) < 0) rc = -1; z = 0; }
+                    if (hrd_put(&o, &r[q], 1) < 0) rc = -1;
+                    z = r[q] == 0 ? z + 1 : 0;
+                }
+                if (rc) break;
+                long delta = (long)(o.n - before) - (long)(ce - hdr - 1);
+                /* growth: drop trailing zeros, then this NAL's own zero_byte
+                 * when it does not open its access unit, then later ones */
+                long tz = trail - delta;
+                if (tz < 0) {
+                    long need = -tz;
+                    tz = 0;
+                    if (need && au_nals > 0 && sclen == 4) {
+                        /* rewrite the start code in place: shift the NAL down */
+                        size_t s0 = before - 1 - 4;
+                        memmove(o.p + s0, o.p + s0 + 1, o.n - s0 - 1);
+                        o.n--; need--;
+                    }
+                    debt += (int)need;
+                }
+                uint8_t zz = 0;
+                for (long q = 0; q < tz; q++) if (hrd_put(&o, &zz, 1) < 0) { rc = -1; break; }
+                if (rc) break;
+            } else {
+                if (hrd_put_nal(&o, sclen, b + hdr, nx - hdr) < 0) { rc = -1; break; }
+            }
+        } else {
+            if (hrd_put_nal(&o, sclen, b + hdr, nx - hdr) < 0) { rc = -1; break; }
+        }
+        if (hrd_is_vcl(t)) in_vcl = 1;
+        au_nals++;
         sc = nx; hdr = hdr2;
     }
     free(r);
-    return h.last < 0 ? -1 : h.last + tpp;
-}
-
-/* Rewrites the cpb_removal_delay of the first pic_timing in *buf. 0 on
- * success or when nothing changes, -1 when the access unit can't keep its
- * size or memory runs out. */
-static int hrd_patch_first(uint8_t **buf, size_t *sz, long delay)
-{
-    uint8_t *b = *buf;
-    size_t n = *sz, hdr, sc = hrd_next_nal(b, n, 0, &hdr);
-    while (sc < n) {
-        size_t hdr2, nx = hrd_next_nal(b, n, hdr, &hdr2);
-        if (hdr >= n || (b[hdr] & 0x1F) != 6) { sc = nx; hdr = hdr2; continue; }
-        uint8_t *r = malloc(nx - hdr);
-        if (!r) return -1;
-        size_t m = hrd_unescape(b, hdr + 1, nx, r);
-        struct hrd_scan h = { r, 0, -1, 0 };
-        if (!hrd_sei_walk(r, m, hrd_find_pt, &h)) { free(r); sc = nx; hdr = hdr2; continue; }
-        size_t o = h.pt_off;
-        if (hrd_cpb_at(r, o) == delay) { free(r); return 0; }
-        r[o] = (uint8_t)(delay >> 16);
-        r[o + 1] = (uint8_t)(delay >> 8);
-        r[o + 2] = (uint8_t)delay;
-        /* the NAL ends at its last nonzero byte (the stop bit); zeros
-         * after it are trailing_zero_8bits */
-        size_t ce = nx;
-        while (ce > hdr + 1 && b[ce - 1] == 0) ce--;
-        while (m > 0 && r[m - 1] == 0) m--;
-        uint8_t *nb = malloc(2 + m + m / 2);
-        if (!nb) { free(r); return -1; }
-        size_t k = 0;
-        int z = 0;
-        nb[k++] = b[hdr];
-        for (size_t i = 0; i < m; i++) {
-            if (z >= 2 && r[i] <= 3) { nb[k++] = 3; z = 0; }
-            nb[k++] = r[i];
-            z = r[i] == 0 ? z + 1 : 0;
-        }
-        free(r);
-        /* a grown NAL drops its trailing zeros, then its own zero_byte (it
-         * never opens its access unit); a shrunk one pads with trailing
-         * zeros */
-        long delta = (long)k - (long)(ce - hdr);
-        long sclen = (long)(hdr - sc), newsc = sclen, newtrail = (long)(nx - ce) - delta;
-        if (newtrail < 0) { newsc += newtrail; newtrail = 0; }
-        if (newsc < 3) { free(nb); return -1; }
-        size_t nn = sc + (size_t)newsc + k + (size_t)newtrail + (n - nx);
-        uint8_t *out = malloc(nn);
-        if (!out) { free(nb); return -1; }
-        size_t q = sc;
-        memcpy(out, b, sc);
-        for (long i = 0; i < newsc - 1; i++) out[q++] = 0;
-        out[q++] = 1;
-        memcpy(out + q, nb, k); q += k;
-        for (long i = 0; i < newtrail; i++) out[q++] = 0;
-        memcpy(out + q, b + nx, n - nx);
-        free(nb);
-        free(*buf);
-        *buf = out;
-        *sz = nn;
-        return 0;
-    }
+    if (rc) { free(o.p); return -1; }
+    free(*buf);
+    *buf = o.p;
+    *sz = o.n;
     return 0;
 }
 
@@ -1795,7 +1856,7 @@ static void *gop_worker(void *arg)
  * cpb_removal_delay counts ticks back to the PREVIOUS period: the previous
  * GOP's first picture, two ticks per input frame, unless that GOP opened
  * one of its own at a scene cut. The writer rewrites it then
- * (hrd_patch_first), once the previous GOP is coded. */
+ * (hrd_join_gop), once the previous GOP is coded. */
         if (g > 0 && p.nal_hrd)
             p.rc.hrd_bp_ticks = 2 * (j->gop_start[g] - j->gop_start[g - 1]);
         /* ABR carry: the predecessor is the GOP handed out W places earlier
@@ -3889,8 +3950,19 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * behaviour for a streaming encoder and it is what the exit code is for;
  * the alternative is holding the whole stream to be able to withdraw it. */
     int emitted = 0, wr_err = 0;
-    long hrd_next = -1;
-    int hrd_tpp = param->interlaced ? 1 : 2;
+    struct hrd_join hj;
+    memset(&hj, 0, sizeof hj);
+    if (param->nal_hrd) {
+        double br = ceil((double)param->rc.vbv_maxrate * 1000.0 / 64.0) * 64.0;
+        double cpb = ceil((double)param->rc.vbv_bufsize * 1000.0 / 16.0) * 16.0;
+        hj.tc = (double)param->timebase.fps_den / (2.0 * (double)param->timebase.fps_num);
+        hj.bitrate = br;
+        hj.full = (unsigned)(90000.0 * cpb / br);
+        if (hj.full < 1) hj.full = 1;
+        hj.cbr = param->nal_hrd == YAH264_NAL_HRD_CBR;
+        hj.tpp = param->interlaced ? 1 : 2;
+        hj.next_cpb = -1;
+    }
     for (;;) {
         uint8_t *buf = NULL;
         size_t sz = 0;
@@ -3909,12 +3981,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
         pthread_mutex_unlock(&job.lock);
         if (fin) break;
-        if (param->nal_hrd && buf && sz) {
-            if (emitted > 0 && hrd_next >= 0 && hrd_patch_first(&buf, &sz, hrd_next) < 0) {
-                fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", emitted);
-                wr_err = 1;
-            }
-            hrd_next = hrd_ticks_after(buf, sz, hrd_tpp);
+        if (param->nal_hrd && buf && sz && hrd_join_gop(&hj, &buf, &sz) < 0) {
+            /* nothing after it could be timed right either: stop here */
+            fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", emitted);
+            wr_err = 1;
+            free(buf);
+            buf = NULL;
+            sz = 0;
         }
         if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
             fprintf(stderr, "yah264: error writing the output stream\n");

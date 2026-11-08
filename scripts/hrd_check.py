@@ -50,6 +50,7 @@ attributing it to the next picture would report an underflow the stream does not
 have.
 """
 import argparse
+import math
 import os
 import sys
 
@@ -78,6 +79,61 @@ def _delivered(ai, af, bits, t):
     if t <= ai:
         return 0.0
     return bits * (t - ai) / (af - ai) if af > ai else bits
+
+
+# DeltaTfiDivisor by pic_struct (Table E-6): field periods each picture spans.
+_TFI = {0: 2, 1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 6}
+
+
+def cadence(aus, sps, recs, tr, tc):
+    """E.2.1: under fixed_frame_rate_flag, consecutive pictures in output
+    order (POC order within each IDR period) are output DeltaTfiDivisor clock
+    ticks apart, the divisor coming from pic_struct when the stream carries it
+    (Table E-6) and otherwise from whether the picture is a field. Removal
+    times are not constrained this way, so they are not checked. POC is
+    rebuilt per IDR period from pic_order_cnt_lsb; an MMCO 5 reset is not
+    modelled."""
+    timing = sps["vui"]["timing"]
+    if not timing.get("fixed_frame_rate") or sps["pic_order_cnt_type"] != 0:
+        return []
+    if any(r["pt"] is None for r in recs):
+        return []                         # NOPT is simulate()'s to report
+    per = []
+    for n, au in enumerate(aus):
+        ps = recs[n]["pt"].get("pic_struct")
+        if ps is not None and ps in _TFI:
+            per.append(tc * _TFI[ps])
+        else:
+            fld = (au.get("first_slice") or {}).get("field_pic_flag")
+            per.append(tc * (1 if fld else 2))
+    out, key = [], []
+    period, msb, plsb = -1, 0, 0
+    M = 1 << sps["log2_max_poc_lsb"]
+    for n, au in enumerate(aus):
+        sh = au.get("first_slice") or {}
+        if au.get("nal_type") == 5:
+            period += 1
+            msb = plsb = 0
+        lsb = sh.get("poc_lsb") or 0
+        if lsb < plsb and plsb - lsb >= M // 2:
+            m = msb + M
+        elif lsb > plsb and lsb - plsb > M // 2:
+            m = msb - M
+        else:
+            m = msb
+        key.append((period, m + lsb))
+        vcl = [x for x in au.get("nals", []) if x["type"] in (1, 5)]
+        if not vcl or vcl[0]["ref_idc"]:
+            msb, plsb = m, lsb
+        out.append(tr[n] + tc * recs[n]["pt"]["dpb_output_delay"])
+    viols = []
+    order = sorted(range(len(aus)), key=lambda i: key[i])
+    for a, b in zip(order, order[1:]):
+        if abs(out[b] - out[a] - per[a]) > EPS:
+            viols.append(("OUTPUT", b, "output %.6fs after the picture before it in output "
+                          "order, not its DeltaTfiDivisor period (%.6fs)"
+                          % (out[b] - out[a], per[a])))
+    return viols
 
 
 def simulate(aus, sps, kind, idx, verbose=False):
@@ -154,6 +210,19 @@ def simulate(aus, sps, kind, idx, verbose=False):
             tai[n] = taf[n - 1] if cbr else max(taf[n - 1], earliest)
         taf[n] = tai[n] + r["bits"] / bitrate
 
+        # C.3: a later buffering period's initial delay may not reach back
+        # past the previous access unit's final arrival, and under cbr it is
+        # that gap exactly (to the 90 kHz grid either way).
+        if n > 0 and bp is not None and bp[kind]:
+            gap = 90000.0 * (tr[n] - taf[n - 1])
+            ini = bp[kind][idx]["initial"]
+            if (ini > math.ceil(gap + 1e-6)
+                    or (cbr and ini < math.floor(gap - 1e-6))):
+                viols.append(("INITDELAY", n,
+                              "initial_cpb_removal_delay %d against a gap of %.1f "
+                              "since the previous final arrival (%s)"
+                              % (ini, gap, "must equal it" if cbr else "may not exceed it")))
+
         if tr[n] < taf[n] - EPS:
             viols.append(("UNDERFLOW", n,
                           "removal at %.6fs but the last bit arrives at %.6fs "
@@ -206,6 +275,7 @@ def simulate(aus, sps, kind, idx, verbose=False):
             lines.append("  au %4d  b=%8.0f  tai=%9.6f  taf=%9.6f  tr=%9.6f  fill=%9.0f"
                          % (n, recs[n]["bits"], tai[n], taf[n], tr[n], fill))
 
+    viols.extend(cadence(aus, sps, recs, tr, tc))
     lines.append("  %s hrd sched %d: BitRate %.0f bit/s  CpbSize %.0f bit  cbr=%d  tc=%.6fs"
                  % (kind.upper(), idx, bitrate, cpbsize, cbr, tc))
     lines.append("  peak fullness %.0f bit (%.1f%% of CpbSize) at au %d; "
@@ -229,6 +299,69 @@ def _check(path, extra=(), want_code=None):
         return subprocess.run(cmd + ["--quiet"]).returncode
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode, (" %s " % want_code) in r.stdout + r.stderr
+
+
+def _escape(rb):
+    """RBSP to NAL payload bytes (7.4.1.1)."""
+    out = bytearray()
+    z = 0
+    for b in rb:
+        if z >= 2 and b <= 3:
+            out.append(3)
+            z = 0
+        out.append(b)
+        z = z + 1 if b == 0 else 0
+    return bytes(out)
+
+
+def _edit_sei(data, edit):
+    """Rewrite SEI messages in place: edit(kind, n, rbsp, offset) gets every
+    buffering period (kind 0) and pic_timing (kind 1) with the access-unit
+    count n of the pic_timing seen so far, and may change the bytearray.
+    Every NAL is written back with a four-byte start code."""
+    out = bytearray()
+    npt = 0
+    for nl in H.split_nals(data):
+        hdr = data[nl["start"]:nl["start"] + nl["size"]]
+        h = hdr.index(b"\x00\x00\x01") + 3
+        if nl["type"] != 6:
+            out += b"\x00\x00\x00\x01" + hdr[h:]
+            continue
+        rb = bytearray(nl["rbsp"])
+        i = 0
+        while i + 1 < len(rb):
+            t = 0
+            while rb[i] == 0xFF:
+                t += 255
+                i += 1
+            t += rb[i]
+            i += 1
+            sz = 0
+            while rb[i] == 0xFF:
+                sz += 255
+                i += 1
+            sz += rb[i]
+            i += 1
+            if t in (0, 1):
+                edit(t, npt, rb, i)
+            npt += t == 1
+            i += sz
+        out += b"\x00\x00\x00\x01" + hdr[h:h + 1] + _escape(rb)
+    return bytes(out)
+
+
+def _bits_add(rb, bit, width, delta):
+    """Add delta to the width-bit unsigned field at bit offset `bit`."""
+    v = 0
+    for k in range(width):
+        v = (v << 1) | ((rb[(bit + k) >> 3] >> (7 - ((bit + k) & 7))) & 1)
+    v = (v + delta) % (1 << width)
+    for k in range(width):
+        m = 0x80 >> ((bit + k) & 7)
+        if (v >> (width - 1 - k)) & 1:
+            rb[(bit + k) >> 3] |= m
+        else:
+            rb[(bit + k) >> 3] &= ~m & 0xFF
 
 
 def self_test(enc):
@@ -316,6 +449,40 @@ def self_test(enc):
                     continue
                 f.write(kdata[nl["start"]:nl["start"] + nl["size"]])
 
+        # Under cbr a later buffering period's initial delay is the gap since
+        # the previous final arrival exactly (C.3); two ticks more is wrong.
+        ycbk = y264("ycbk", "--nal-hrd", "cbr", "--keyint", "25")
+        cdata = H.read_stream(ycbk)
+        ihrd = H.split_aus(cdata)[0][0]["sps"]["vui"]["nal_hrd"]
+        iw = ihrd["initial_cpb_removal_delay_length"]
+
+        def lateinit(kind, n, rb, off):
+            if kind == 0 and n > 0:
+                bit, lz = 8 * off, 0
+                while not (rb[bit >> 3] >> (7 - (bit & 7))) & 1:
+                    lz += 1
+                    bit += 1
+                _bits_add(rb, bit + 1 + lz, iw, 2)      # past ue(sps_id)
+        badinit = os.path.join(tmp, "badinit.264")
+        with open(badinit, "wb") as f:
+            f.write(_edit_sei(cdata, lateinit))
+
+        # One picture's dpb_output_delay two ticks late: E.2.1's output cadence.
+        cw = ihrd["cpb_removal_delay_length"]
+
+        def lateout(kind, n, rb, off):
+            if kind == 1 and n == 30:
+                _bits_add(rb, 8 * off + cw, ihrd["dpb_output_delay_length"], 2)
+        badout = os.path.join(tmp, "badout.264")
+        with open(badout, "wb") as f:
+            f.write(_edit_sei(kdata, lateout))
+
+        # 3:2 pulldown: pic_struct sets each picture's output period, so the
+        # output cadence is uneven in frames and even in fields.
+        pull = x264("pull", "--nal-hrd", "vbr", "--vbv-maxrate", "1000",
+                    "--vbv-bufsize", "1000", "--bitrate", "600", "--pulldown", "32",
+                    "--fps", "24000/1001")
+
         data = H.read_stream(cbr)
         aus, _ = H.split_aus(data)
 
@@ -339,6 +506,7 @@ def self_test(enc):
             ("x264 --nal-hrd vbr",                   vbr,    (),     0),
             ("x264 --nal-hrd cbr, b-pyramid",        cbrb,   (),     0),
             ("x264 cbr, all SchedSelIdx",            cbr,    ("--sched", "all"), 0),
+            ("x264 --nal-hrd vbr, 3:2 pulldown",     pull,   (),     0),
             ("yah264 VBV (no HRD in the stream)",    yvbv,   (),     3),
             ("yah264 VBV with --allow-no-hrd",       yvbv,   ("--allow-no-hrd",), 0),
             ("yah264 --nal-hrd vbr",                 yvbr,   (),     0),
@@ -348,15 +516,18 @@ def self_test(enc):
             ("NEGATIVE: an IDR's buffering period removed", nobp, (), 1),
             ("NEGATIVE: cbr with the filler removed", nofill, (),    1),
             ("NEGATIVE: cbr with an access unit bloated", bloat, (), 1),
+            ("NEGATIVE: cbr, a later delay two ticks long", badinit, (), 1),
+            ("NEGATIVE: one dpb_output_delay two ticks late", badout, (), 1),
         ]
+        named_as = {nobp: "NOBPIDR", badinit: "INITDELAY", badout: "OUTPUT"}
         bad = 0
         for name, path, extra, want in cases:
             got = _check(path, extra)
             ok = got == want
-            if path == nobp:
-                got, named = _check(path, extra, "NOBPIDR")
+            if path in named_as:
+                got, named = _check(path, extra, named_as[path])
                 ok = got == want and named
-                name += "" if named else " (NOBPIDR not reported)"
+                name += "" if named else " (%s not reported)" % named_as[path]
             bad += 0 if ok else 1
             print("  %-44s want %d got %d  %s" % (name, want, got, "ok" if ok else "FAIL"))
         print("hrd_check --self-test: %s"

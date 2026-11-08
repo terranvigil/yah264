@@ -306,6 +306,7 @@ def parse_slice_header(rb, nal_type, sps):
         if sh["field_pic_flag"]:
             sh["bottom_field_flag"] = br.u1()
     sh["idr_pic_id"] = br.ue() if nal_type == 5 else None
+    sh["poc_lsb"] = br.u(sps["log2_max_poc_lsb"]) if sps["pic_order_cnt_type"] == 0 else None
     return sh
 
 

@@ -558,11 +558,17 @@ typedef struct {
  * ticks from the last buffering period before this segment to this
  * segment's first picture, two per input frame. That is the previous
  * segment's first picture unless it opened one of its own at a scene-cut
- * IDR; a caller that learns that only later can pass the count to the
- * segment start and rewrite the 24-bit cpb_removal_delay of this
- * segment's first pic_timing message afterwards, which is what the CLI
- * does. 0 = this segment starts the stream. Every later picture counts
- * from this segment's own buffering period and needs nothing. */
+ * IDR. 0 = this segment starts the stream. Every later picture counts from
+ * this segment's own buffering period and needs nothing.
+ *
+ * A caller that learns the previous segment's last buffering period only
+ * after this segment is coded can pass the count to the segment start and
+ * rewrite the 24-bit cpb_removal_delay of the segment's first pic_timing
+ * afterwards. With hrd_segmented 0 it must then also rewrite the initial
+ * delays of every buffering period after the stream's first, the
+ * segment's own (a full buffer under vbr) and its scene-cut ones alike:
+ * C.3 bounds each by the previous access unit's final arrival, which only
+ * the whole stream's schedule gives. */
         int hrd_bp_ticks;
         /* 1 = this encode is ONE OF SEVERAL segments concatenated into the
  * output. It suppresses the buffering period this encoder would otherwise
@@ -580,8 +586,8 @@ typedef struct {
  * starts, one per GOP, and they are exact. The cost is that a mid-segment
  * IDR is still a random access point for a decoder but not one the HRD can
  * be initialised at. A single-segment encode, or a caller that rewrites
- * each segment's first cpb_removal_delay (see hrd_bp_ticks), leaves this
- * 0 and gets a buffering period at every IDR. */
+ * the join timing (see hrd_bp_ticks), leaves this 0 and gets a buffering
+ * period at every IDR. */
         int hrd_segmented;
         int pass;           /* 2-pass: 1 = analysis (write stats), 2 = final (read) */
         const char *stats;  /* 2-pass stats file path */

@@ -3373,23 +3373,36 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
  * it beside the parameter sets, because a buffering period message has
  * to be the first SEI of its access unit and the settings message is
  * written there too. */
-        if (nal_type == YAH264_NAL_SLICE_IDR && e->hrd_pic > 0 &&
-            !e->param.rc.hrd_segmented) {
+        double tc = (double)e->param.timebase.fps_den / (2.0 * (double)e->param.timebase.fps_num);
+        double tr = e->hrd_pic == 0 ? (double)e->hrd_bp_init / 90000.0
+                                    : e->hrd_tr_nb + tc * (double)cpb_delay;
+        int bp_here = nal_type == YAH264_NAL_SLICE_IDR && e->hrd_pic > 0 &&
+                      !e->param.rc.hrd_segmented;
+        if (bp_here) {
             uint8_t msg[16];
-            /* A decoder joining HERE is told the buffer may be full, which is
- * the widest start the model allows and the one the encoder's own
- * loop assumes it can reach: the buffer law clamps the occupancy at the
- * buffer size and nowhere below it. The stream's own schedule is
- * unaffected either way -- a removal time is counted in ticks from
- * the period's start, never derived from this delay. */
+            /* C.3: no further back than the previous final arrival, at most a
+ * full buffer; the arrival schedule is the full-buffer one either way */
+            double d = ceil(90000.0 * (tr - e->hrd_taf) - 1e-6);
+            unsigned init = d >= (double)e->hrd_full_delay ? e->hrd_full_delay
+                          : d < 1.0 ? 1u : (unsigned)d;
             size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
-                                                 e->hrd_full_delay, 0);
+                                                 init, e->hrd_full_delay - init);
             y264_bs_init(&bs, buf, sizeof buf);
             y264_sei_write(&bs, 0, msg, n);
             if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
                                buf, (size_t)(bs.p - bs.start)) < 0)
                 return -1;
             e->hrd_anchor_tick = tick;
+            e->hrd_bp_init = init;
+            e->hrd_bp_off = e->hrd_full_delay - init;
+        }
+        if (e->hrd_pic == 0 || bp_here)
+            e->hrd_tr_nb = tr;
+        if (e->hrd_pic == 0) {
+            e->hrd_tai = 0.0;
+        } else {
+            double ear = tr - (double)(bp_here ? e->hrd_bp_init : e->hrd_bp_init + e->hrd_bp_off) / 90000.0;
+            e->hrd_tai = e->hrd_on == YAH264_NAL_HRD_CBR || ear < e->hrd_taf ? e->hrd_taf : ear;
         }
     }
     if (e->param.pic_struct || e->hrd_on) {
@@ -3566,6 +3579,7 @@ static int hrd_close_au(yah264_encoder_t *e, size_t *off)
         }
     }
     e->hrd_fill += e->hrd_rate_pic - bits;
+    e->hrd_taf = e->hrd_tai + bits / e->hrd_bitrate;
     e->hrd_au_bytes = 0;
     return 0;
 }
@@ -6087,6 +6101,8 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
         unsigned d0 = e->hrd_init_delay;
         if (e->param.rc.vbv_seg_join && e->hrd_on == YAH264_NAL_HRD_VBR)
             d0 = e->hrd_full_delay;
+        e->hrd_bp_init = d0;
+        e->hrd_bp_off = e->hrd_full_delay - d0;
         size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
                                              d0, e->hrd_full_delay - d0);
         y264_bs_init(&bs, e->rbsp, e->rbsp_cap);

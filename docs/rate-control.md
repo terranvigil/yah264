@@ -146,8 +146,10 @@ of phantom occupancy over a few hundred CBR pictures.
 `--nal-hrd vbr|cbr` writes the buffer model into the stream: `hrd_parameters`
 in the SPS, a `buffering_period` SEI at every IDR, `pic_timing` on every
 picture. `BitRate` and `CpbSize` are `--vbv-maxrate` and `--vbv-bufsize`
-rounded up to the syntax grid, and the initial removal delay is the occupancy
-the encoder started from. `vbr` moves no bit. `cbr` adds filler and nothing else.
+rounded up to the syntax grid. The first buffering period's initial removal
+delay is the occupancy the encoder started from; every later one is the gap
+between the previous picture's final arrival and this one's removal, at most
+a full buffer, as C.3 requires. `vbr` moves no bit. `cbr` adds filler and nothing else.
 `scripts/hrd_check.py` reads the declaration back and simulates Annex C.
 
 ### Two-pass
