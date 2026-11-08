@@ -343,7 +343,7 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
     return bad;
 }
 
-/* The bodies from here to the chroma window group have kernels at 8 bits
+/* The bodies from here to the luma window group have kernels at 8 bits
  * only. */
 #if Y264_HAVE_NEON || Y264_HAVE_SSE4
 typedef void (*bilin4_row_fn)(pixel *, const pixel *, const pixel *, int, int,
@@ -516,6 +516,9 @@ static int run_avg_mb420_flat(const char *name, avg_mb420_flat_fn kern)
     return bad;
 }
 
+#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 /* ---- the interpolation kernels ------------------------------------------- */
 
 /* The read window a luma kernel DECLARES, phase by phase: the block itself,
@@ -559,6 +562,13 @@ static int run_mc_luma_win(const char *name, mc_luma_fn k16, mc_luma_fn k8,
     int bad = 0;
     for (int t = 0; t < TRIALS / 4 + 1; t++) {
         mplane();
+        /* all max, then random extremes: the six-tap's two ends */
+        if (t == 1 || t == 2) {
+            for (int y = 0; y < MH; y++)
+                for (int x = 0; x < MW; x++)
+                    mref[(size_t)y * MST + x] = t == 1 ? (pixel)PIXEL_MAX : ca_rnd_edge();
+            replicate(mref, MST, MW, MH, MB);
+        }
         for (int ph = 0; ph < 16; ph++)
             for (int h = 4; h <= 16; h += 4)
                 for (int wsel = 0; wsel < 2; wsel++) {
@@ -606,7 +616,7 @@ static int run_mc_luma_win(const char *name, mc_luma_fn k16, mc_luma_fn k8,
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
 /* The chroma kernels, at the shapes the dispatcher routes to each of them.
  * `k8` is the fixed 8x8 form where a tier has one and NULL where the 8-wide
@@ -1022,13 +1032,11 @@ static int t_bilin4_row_neon(void)
 
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
-/* The NEON 8-wide form takes one sixteen-byte load from ix-2, so it declares
+/* The NEON 8-wide form takes one sixteen-sample load from ix-2, so it declares
  * five columns past the block where the 16-wide form declares two. */
-#if Y264_HAVE_NEON
 static int t_mc_luma_win_neon(void)
 { return run_mc_luma_win("mc_luma_win", y264_mc_luma_neon16,
                          y264_mc_luma_neon8, 2, 5); }
-#endif
 static int t_mc_chroma_win_neon(void)
 { return run_mc_chroma_win("mc_chroma_win", y264_mc_chroma_neon_w8h,
                            y264_mc_chroma_neon_w4h, y264_mc_chroma_neon8); }
@@ -1489,6 +1497,7 @@ const ca_test ca_mc_tests[] = {
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
+    { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
     { "lr_hp_row",         "mc", Y264_CPU_NEON, t_lr_hp_row_neon },
 #endif

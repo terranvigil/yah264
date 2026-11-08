@@ -342,6 +342,10 @@ void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
 
 /* motion compensation (src/dsp/arm/interp_neon10.c) */
+void y264_mc_luma_neon16(pixel *dst, int dstride, const pixel *ref,
+                         int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref,
+                        int rstride, int ix, int iy, int fx, int fy, int h);
 void y264_mc_chroma_neon8(pixel *dst, int dstride, const pixel *ref,
                           int rstride, int ix, int iy, int fx, int fy);
 void y264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,

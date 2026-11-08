@@ -151,7 +151,7 @@ static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
 #undef MB
 
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 /* Clamped source tile, so an out-of-window block can still run the kernel.
  *
  * The kernel path's guard is `ix >= 2 - Y264_LUMA_BORDER`: past that the six-tap
@@ -169,9 +169,17 @@ static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
  * six-tap -- and it turns ~36 clamped reads per output pixel into 2.75.
  *
  * The kernel reads rows iy-2..iy+h+3 and columns ix-2..ix+18, so the tile is
- * (h+6) rows of MCL_TS bytes with the block placed at (2,2). MCL_TS is 32 so
- * that the kernel's 16-byte loads cannot run off the end. */
+ * (h+6) rows of MCL_TS samples with the block placed at (2,2). MCL_TS is 32
+ * so that the kernel's sixteen-sample loads cannot run off the end. */
 #define MCL_TS 32
+static inline void mcl_fill(pixel *t, pixel v, int n)
+{
+#if Y264_BIT_DEPTH == 8
+    memset(t, v, (size_t)n);
+#else
+    for (int i = 0; i < n; i++) t[i] = v;
+#endif
+}
 static void mc_luma_tile(pixel *tile, const pixel *ref, int rstride,
                          int pw, int ph, int ix, int iy, int h)
 {
@@ -185,9 +193,9 @@ static void mc_luma_tile(pixel *tile, const pixel *ref, int rstride,
         sy = sy < 0 ? 0 : (sy > ph - 1 ? ph - 1 : sy);
         const pixel *row = ref + (size_t)sy * rstride;
         pixel *t = tile + (size_t)j * MCL_TS;
-        if (lft)         memset(t, row[0], (size_t)lft);
-        if (rgt > lft)   memcpy(t + lft, row + x0 + lft, (size_t)(rgt - lft));
-        if (rgt < MCL_TS) memset(t + rgt, row[pw - 1], (size_t)(MCL_TS - rgt));
+        if (lft)         mcl_fill(t, row[0], lft);
+        if (rgt > lft)   memcpy(t + lft, row + x0 + lft, (size_t)(rgt - lft) * sizeof(pixel));
+        if (rgt < MCL_TS) mcl_fill(t + rgt, row[pw - 1], MCL_TS - rgt);
     }
 }
 
@@ -460,7 +468,7 @@ void y264_mc_luma_b(pixel *dst, int dstride,
                     int bx, int by, int mvx, int mvy, int w, int h, int border)
 {
     NLED(mc_luma_call, 1); NLED(mc_luma_pix, (uint64_t)w*h);
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     /* y264_cpu_detect is warmed on the main thread at encoder open and returns
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by
