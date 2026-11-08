@@ -17,10 +17,10 @@ overflow-clamp count, and exits 1 on any underflow so gates can assert.
 Usage: vbv_check.py <stream.264> --maxrate KBPS --bufsize KBIT
        (--y4m SRC.y4m | --fps N[:D]) [--init F] [--quiet]
 
---init is the encoder's starting fill, read like --vbv-init: at most 1 a
-fraction of the buffer, above 1 kbit, and above 0. Pass the value the stream was coded
-with; a model that starts fuller than the encoder did forgives an early
-over-spend the real buffer would not.
+--init is the encoder's starting fill, read like --vbv-init: at most 1 is a
+fraction of the buffer, above 1 is kbit; it must be above 0. Pass the value
+the stream was coded with; a model that starts fuller than the encoder did
+forgives an early over-spend the real buffer would not.
 
 FRAME RATE IS NOT OPTIONAL AND NOT A CONSTANT. Both numbers this tool reports
 are fps-scaled: the bucket refills by maxrate/fps per frame, and the average
