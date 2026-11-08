@@ -5284,7 +5284,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     s.is_ref = 0;
                     int nf = sscanf(ln, "%d %lf %lf %d %d",
                                     &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
-                    if (nf < 4)
+                    if (nf < 4 || s.type < 0 || s.type > 2)
                         break;                      /* malformed: stop, as before */
                     if (e->tp_n == cap) {
                         cap *= 2;
@@ -16294,6 +16294,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->tp_qrec);
     free(e->tp_q);
     free(e->tp_ebits);
+    free(e->tp_qlo);
+    free(e->tp_elo);
     int pw[3] = { e->padded_w, e->padded_w / e->sub_w, e->padded_w / e->sub_w };
     int pb[3] = { Y264_LUMA_BORDER, Y264_CHROMA_BORDER, Y264_CHROMA_BORDER };
     for (int c = 0; c < 3; c++) {

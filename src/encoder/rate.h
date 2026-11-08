@@ -37,7 +37,7 @@ double abr_vbvov_frac(void);
 int frame_qp(const yah264_encoder_t *e, int type, int is_ref);
 int qp_bound(const yah264_encoder_t *e, int q);
 double tp_bits_at(const yah264_encoder_t *e, int i, double q);
-double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend);
+double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, double pend_lo);
 double tp_qscale2qp(double q);
 double anchor_leg_cost(const yah264_encoder_t *e);
 double crf_max_clip(const yah264_encoder_t *e, double base, double raised, int off);
