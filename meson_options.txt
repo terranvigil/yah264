@@ -1,4 +1,4 @@
-option('bit_depth', type : 'integer', min : 8, max : 12, value : 8,
+option('bit_depth', type : 'integer', min : 8, max : 10, value : 8,
   description : 'Pixel sample bit depth (8 or 10). Selects the pixel/dctcoef types and the High 10 code path at BD>8.')
 
 # The nextgpu offload (docs/gpu.md).
