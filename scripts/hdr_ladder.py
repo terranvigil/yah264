@@ -23,6 +23,8 @@ nothing frame-sized lands on disk; a step that fails or stalls for 10
 minutes stops the run with its own stderr. Every decode must be clean and hold
 exactly the source's frame count, or the run stops. Rungs must be distinct,
 and a metric whose quality doesn't rise with bitrate across a ladder gets no
+BD figure. A rung line shows how many frames sit at the VMAF model's clip
+bounds, and a ladder where more than 5% of any rung's frames do gets no VMAF
 BD figure. Read the printed rungs before trusting a BD figure; --max-crf
 leaves out the rungs above it, for a second read.
 
@@ -72,7 +74,7 @@ directory, and a second run on the same directory stops at once.
             at start: a build without them scores PQ as SDR and exits 0)
   VMAF_HDR_MODELS  the directory holding hdr_vmaf_v1.1.8[_hfr]/
 """
-import argparse, fcntl, glob, hashlib, json, math, os, re, shutil, signal, subprocess, sys, \
+import argparse, contextlib, fcntl, glob, hashlib, json, math, os, re, shutil, signal, subprocess, sys, \
     tempfile, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -95,9 +97,12 @@ YAH_DEFAULT_LOOKAHEAD = 40
 YAH_MAX_LOOKAHEAD = 64
 VBV_INIT = 0.9
 RATE_BAR = 10.0
+# a rung with more of its frames than this at the VMAF model's clip bounds
+# gets no VMAF BD; one clamped frame in a long rung is normal at CRF 18
+CLAMP_SHARE = 0.05
 # bump when the cached JSON's layout changes; a change to how a rung is
 # measured is caught by the script's md5 in the key
-RESULT_VERSION = 5
+RESULT_VERSION = 6
 KNOB_PREFIXES = ("Y264_", "YAH264_")
 LOCK = None
 
@@ -215,18 +220,48 @@ def yah_lookahead_limits(path):
     return YAH_DEFAULT_LOOKAHEAD, YAH_MAX_LOOKAHEAD
 
 
-def run(cmd, ok=(0,)):
-    # as in score(): a signal can't land between the fork and the bookkeeping
-    old = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP})
+# SIGTERM, SIGHUP and SIGINT stop the run through the same cleanup as a
+# failure. While a child is being started and recorded the handler only notes
+# the signal, and it is acted on once the child is known, so no process is
+# left that the cleanup can't see. (Blocking the signals instead would leave
+# every child with them blocked for life.)
+_HOLD = [0]
+_PENDING = []
+
+
+def _act_on(num):
+    if num == signal.SIGINT:
+        raise KeyboardInterrupt
+    sys.exit(128 + num)
+
+
+def _on_signal(num, frame):
+    if _HOLD[0]:
+        _PENDING.append(num)
+        return
+    _act_on(num)
+
+
+@contextlib.contextmanager
+def held():
+    _HOLD[0] += 1
     try:
-        p = subprocess.Popen(["nice", "-n", "10"] + cmd, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True)
+        yield
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, old)
+        _HOLD[0] -= 1
+        if not _HOLD[0] and _PENDING:
+            _act_on(_PENDING.pop(0))
+
+
+def run(cmd, ok=(0,)):
+    p = None
     try:
+        with held():
+            p = subprocess.Popen(["nice", "-n", "10"] + cmd, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
         so, se = p.communicate()
     finally:
-        if p.poll() is None:
+        if p is not None and p.poll() is None:
             p.kill()
             p.wait()
     r = subprocess.CompletedProcess(p.args, p.returncode, so, se)
@@ -276,13 +311,10 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
             p.kill()
 
     def spawn(name, cmd, **kw):
-        # SIGTERM and SIGHUP wait until the child is recorded, so the finally
-        # always knows every process that exists
-        old = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP})
-        try:
+        # a signal waits until the child is recorded, so the finally always
+        # knows every process that exists
+        with held():
             procs[name] = subprocess.Popen(cmd, **kw)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, old)
 
     stop = threading.Event()
     # the try opens before the first spawn, so a signal or a failed spawn at
@@ -404,13 +436,13 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
             sys.exit(f"hdr_ladder: {out} decodes with errors (exit {rc['dec']}):\n{dmsg[-1500:]}")
         if problem:
             sys.exit(f"hdr_ladder: {problem}")
-        if broken and rc["vmaf"] == 0 and not errtext("vmaf").strip():
+        said = {k: errtext(k) for k in ("vmaf", "dscale", "ref") if k in rc}
+        said["vmaf"] = "\n".join(ln for ln in said["vmaf"].splitlines()
+                                 if not VMAF_BENIGN.match(ln.strip())).strip()
+        if broken and rc["vmaf"] == 0 and not said["vmaf"]:
             sys.exit(f"hdr_ladder: vmaf exited 0 without reading the whole decode of {out}")
         # every failing step is named, vmaf first: a scaler's broken pipe is
         # usually vmaf's failure seen from upstream, but not always
-        said = {k: errtext(k) for k in ("vmaf", "dscale", "ref") if k in rc}
-        said["vmaf"] = "\n".join(ln for ln in said["vmaf"].splitlines()
-                                 if not VMAF_BENIGN.match(ln.strip()))
         failed = [f"the {k} step failed (exit {rc[k]}):\n{said[k][-1500:]}"
                   for k in ("vmaf", "dscale", "ref") if k in rc and (rc[k] != 0 or said[k])]
         if failed:
@@ -582,10 +614,18 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
     if not cambi:
         sys.exit(f"hdr_ladder: {model_path(w, h, fps)} computes no CAMBI feature")
     frames_cambi = [f["metrics"][cambi[0]] for f in vm["frames"]]
+    # the model clips each frame's score; a frame at a bound is a clamp, not
+    # a measurement, and the pooled mean can hide many of them
+    with open(model_path(w, h, fps)) as f:
+        lo, hi = json.load(f)["model_dict"].get("score_clip", [None, None])
+    clamped = sum(1 for f in vm["frames"]
+                  if (lo is not None and f["metrics"]["vmaf"] <= lo) or
+                  (hi is not None and f["metrics"]["vmaf"] >= hi))
     r = {"mode": mode, "q": q, "lookahead": lookahead, "lookahead_run": ran,
          "kbps": os.path.getsize(out) * 8 / (n / fps) / 1000,
          "vmaf": pooled["vmaf"]["mean"], "psnr_y": py, "psnr_yuv": pyuv,
          "cambi": pooled[cambi[0]]["mean"], "cambi_max": max(frames_cambi),
+         "clamped": clamped, "frames": n,
          "enc_key": enc_key, "score_key": score_key, "stream": out, "stream_md5": stream_md5,
          "rescored": reuse}
     if mode == "vbr":
@@ -656,8 +696,8 @@ def strictly_rising(xs):
 def main():
     global YAH, X264, VMAF, FFMPEG, LOCK
     # a kill runs the same cleanup as a failure: child processes and scratch
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, lambda num, frame: sys.exit(128 + num))
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, _on_signal)
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
     ap.add_argument("--crf", default=None, help="CRF rungs (default 18,22,26,30,34)")
@@ -756,6 +796,8 @@ def main():
             line = (f"{e:7s} {mode}{fmt(r['q']):<6} {r['kbps']:9.0f} kbps  vmaf {r['vmaf']:6.2f}  "
                     f"psnr-y {r['psnr_y']:6.2f}  psnr-yuv {r['psnr_yuv']:6.2f}  "
                     f"cambi {r['cambi']:.3f} (max {r['cambi_max']:.3f})")
+            if r["clamped"]:
+                line += f"  clamped {r['clamped']}/{r['frames']}"
             if mode == "vbr":
                 miss = abs(r["rate_err"]) > RATE_BAR
                 if miss:
@@ -796,11 +838,13 @@ def main():
     for m in ("vmaf", "psnr_y", "psnr_yuv"):
         head = f"BD-rate {m:8s} yah264 vs x264 High 10: "
         if m == "vmaf":
-            pinned = [f"{e} {mode}{fmt(r['q'])}" for e, rs in (("x264", b), ("yah264", t))
-                      for r in rs if r[m] <= 0 or r[m] >= 100]
+            pinned = [f"{e} {mode}{fmt(r['q'])} ({r['clamped']}/{r['frames']})"
+                      for e, rs in (("x264", b), ("yah264", t))
+                      for r in rs if r["clamped"] > CLAMP_SHARE * r["frames"]]
             if pinned:
-                print(head + "none, VMAF is clamped at 0 or 100 on " + ", ".join(pinned) +
-                      ", so the rung isn't a measurement; drop it from the ladder")
+                print(head + f"none, more than {CLAMP_SHARE:.0%} of the frames sit at the "
+                      "model's clip bounds on " + ", ".join(pinned) +
+                      ", so those rungs aren't measurements; drop them from the ladder")
                 continue
         bad = [e for e, rs in (("x264", b), ("yah264", t)) if not strictly_rising([r[m] for r in rs])]
         if bad:
@@ -813,4 +857,7 @@ def main():
                       else "no quality overlap"))
 
 
-main()
+try:
+    main()
+except KeyboardInterrupt:
+    sys.exit(128 + signal.SIGINT)
