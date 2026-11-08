@@ -19,7 +19,8 @@ dimensions is scored at display size, as the project's VMAF v1 rule says:
 the reference and the decode are both scaled up to fit 1920x1080 (bicubic,
 aspect kept) and CAMBI is told the coded size. PSNR is always taken at the
 coded size. The decode and any scaled picture are streamed to the scorer, so
-nothing frame-sized lands on disk. Every decode must be clean and hold
+nothing frame-sized lands on disk; a step that fails or stalls for 10
+minutes stops the run with its own stderr. Every decode must be clean and hold
 exactly the source's frame count, or the run stops. Rungs must be distinct,
 and a metric whose quality doesn't rise with bitrate across a ladder gets no
 BD figure. Read the printed rungs before trusting a BD figure; --max-crf
@@ -67,7 +68,8 @@ directory, and a second run on the same directory stops at once.
 
   YAH264    yah264 CLI (default build/cli/yah264)
   X264      x264 CLI (default x264)
-  VMAF_HDR  a vmaf CLI built with the HDR models' colour options
+  VMAF_HDR  a vmaf CLI built with the HDR models' colour options (checked
+            at start: a build without them scores PQ as SDR and exits 0)
   VMAF_HDR_MODELS  the directory holding hdr_vmaf_v1.1.8[_hfr]/
 """
 import argparse, fcntl, glob, hashlib, json, math, os, re, shutil, signal, subprocess, sys, \
@@ -220,6 +222,11 @@ def run(cmd, ok=(0,)):
     return r
 
 
+# a step that makes no progress for this long is killed and the rung fails;
+# a frame normally passes in well under a second
+STALL_SECONDS = 600
+
+
 def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
     """Decode out once and stream it: each frame is checked and added to the
     PSNR sums here, then handed on to vmaf (through a scaler when the source
@@ -228,11 +235,9 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
     Returns (frames, PSNR-Y, PSNR-YUV)."""
     import numpy as np
     fs = w * h * 3 // 2
-    col = []
-    for side in ("ref", "dist"):
-        col += [f"--color_range_{side}", "limited", f"--color_primaries_{side}", "bt2020",
-                f"--color_trc_{side}", "pq", f"--color_matrix_{side}", "bt2020nc"]
-    procs, errs = {}, {}
+    procs, errs, killed = {}, {}, set()
+    progress = [time.monotonic()]
+    stalled = []
 
     def err(name):
         errs[name] = open(os.path.join(tmp, name + ".err"), "w+")
@@ -245,6 +250,12 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
         errs[name].seek(0)
         return errs[name].read().strip()
 
+    def kill(name):
+        p = procs[name]
+        if p.poll() is None:
+            killed.add(name)
+            p.kill()
+
     scale = ["-vf", V1_SCALE_VF, "-pix_fmt", "yuv420p10le", "-strict", "-1",
              "-f", "yuv4mpegpipe"]
     ref = src
@@ -256,7 +267,7 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                         stderr=err("ref"))
     procs["vmaf"] = subprocess.Popen(nice([VMAF, "--reference", ref, "--distorted", "/dev/stdin",
-                                           "--threads", str(threads)] + col +
+                                           "--threads", str(threads)] + vmaf_colour_args() +
                                           ["--model", model_arg, "--json", "--output", vj]),
                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                      stderr=err("vmaf"))
@@ -279,20 +290,33 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
                                     stderr=err("dec"))
     stop = threading.Event()
 
-    def unblock_vmaf():
-        # a reference scaler that dies before opening its FIFO would leave
-        # vmaf blocked in open(); opening and closing the FIFO lets it see EOF
-        while not stop.wait(0.5):
-            if procs["ref"].poll() not in (None, 0) and procs["vmaf"].poll() is None:
-                try:
-                    os.close(os.open(ref, os.O_WRONLY | os.O_NONBLOCK))
-                except OSError:
-                    pass
-    if scaled:
-        threading.Thread(target=unblock_vmaf, daemon=True).start()
+    def watchdog():
+        while not stop.wait(0.2):
+            if scaled:
+                vm, rf = procs["vmaf"].poll(), procs["ref"].poll()
+                # either end of the reference FIFO can be left blocked in
+                # open() when the other exits first; opening the far end and
+                # closing it again lets the survivor see EOF or EPIPE
+                if vm is not None and rf is None:
+                    try:
+                        os.close(os.open(ref, os.O_RDONLY | os.O_NONBLOCK))
+                    except OSError:
+                        pass
+                if rf is not None and vm is None:
+                    try:
+                        os.close(os.open(ref, os.O_WRONLY | os.O_NONBLOCK))
+                    except OSError:
+                        pass
+            if time.monotonic() - progress[0] > STALL_SECONDS:
+                stalled.append(True)
+                for k in procs:
+                    kill(k)
+                return
+    threading.Thread(target=watchdog, daemon=True).start()
     sse = np.zeros(3)
     n = 0
-    problem = None
+    problem = None       # what this side found wrong with the decode
+    broken = False       # the scorer side stopped taking frames
     try:
         b = procs["dec"].stdout
         with open(src, "rb") as a:
@@ -320,33 +344,57 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
                         n += 1
                         sink.write(fl)
                         sink.write(db)
+                        progress[0] = time.monotonic()
                     else:
                         if b.readline():
                             problem = f"{out} is long: it decodes more than the source's {n} frames"
                 except BrokenPipeError:
-                    problem = "vmaf stopped reading the decode"
-        if problem:
-            procs["dec"].kill()
+                    broken = True
+        if problem or broken:
+            kill("dec")
         try:
             sink.close()
         except BrokenPipeError:
-            problem = problem or "vmaf stopped reading the decode"
-        rc = {k: p.wait() for k, p in procs.items()}
+            broken = True
+        rc = {}
+        for k in ("dec", "dscale", "vmaf", "ref"):
+            if k not in procs:
+                continue
+            # the watchdog's stall timer is the backstop for each wait too
+            while True:
+                try:
+                    rc[k] = procs[k].wait(timeout=1)
+                    break
+                except subprocess.TimeoutExpired:
+                    progress_age = time.monotonic() - progress[0]
+                    if stalled or progress_age > STALL_SECONDS + 5:
+                        kill(k)
         stop.set()
+        if stalled:
+            sys.exit(f"hdr_ladder: scoring {out} made no progress for {STALL_SECONDS} s; "
+                     "every step was killed")
+        # report the first cause: the decode, then what this side found, then
+        # the scorer and its scalers in the order a failure propagates
         dmsg = errtext("dec")
-        if rc["dec"] not in (0, -9) or (rc["dec"] == 0 and dmsg):
-            sys.exit(f"hdr_ladder: {out} decodes with errors:\n{dmsg[-1500:]}")
+        if (rc["dec"] != 0 and "dec" not in killed) or dmsg:
+            sys.exit(f"hdr_ladder: {out} decodes with errors (exit {rc['dec']}):\n{dmsg[-1500:]}")
         if problem:
             sys.exit(f"hdr_ladder: {problem}")
-        for k in ("ref", "dscale", "vmaf"):
-            if k in rc and (rc[k] != 0 or (k != "vmaf" and errtext(k))):
-                sys.exit(f"hdr_ladder: the {k} step failed (exit {rc[k]}):\n{errtext(k)[-1500:]}")
+        if broken and rc["vmaf"] == 0 and not errtext("vmaf"):
+            sys.exit(f"hdr_ladder: vmaf exited 0 without reading the whole decode of {out}")
+        # every failing step is named, vmaf first: a scaler's broken pipe is
+        # usually vmaf's failure seen from upstream, but not always
+        failed = [f"the {k} step failed (exit {rc[k]}):\n{errtext(k)[-1500:]}"
+                  for k in ("vmaf", "dscale", "ref")
+                  if k in rc and (rc[k] != 0 or errtext(k))]
+        if failed:
+            sys.exit("hdr_ladder: " + "\n".join(failed))
     finally:
         stop.set()
+        for k in procs:
+            kill(k)
         for p in procs.values():
-            if p.poll() is None:
-                p.kill()
-                p.wait()
+            p.wait()
         for f in errs.values():
             f.close()
     if n == 0:
@@ -354,6 +402,27 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
     mse = sse / (np.array([w * h, w * h / 4, w * h / 4]) * n)
     p = [10 * math.log10(1023 * 1023 / m) if m > 0 else 100.0 for m in mse]   # lossless caps
     return n, p[0], (6 * p[0] + p[1] + p[2]) / 8
+
+
+def vmaf_colour_args():
+    col = []
+    for side in ("ref", "dist"):
+        col += [f"--color_range_{side}", "limited", f"--color_primaries_{side}", "bt2020",
+                f"--color_trc_{side}", "pq", f"--color_matrix_{side}", "bt2020nc"]
+    return col
+
+
+def check_vmaf_build(path):
+    """A vmaf without the HDR colour options warns on stderr and scores the
+    PQ picture as SDR with exit 0, so the build is checked before any rung."""
+    r = subprocess.run([path], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    text = r.stdout + r.stderr
+    # the usage lists each option once for both sides, as --color_trc_ref/_dist
+    missing = [f"--color_{o}_ref" for o in ("range", "primaries", "trc", "matrix")
+               if f"--color_{o}_ref" not in text]
+    if missing:
+        sys.exit(f"hdr_ladder: {path} doesn't list {missing[0]} in its usage; VMAF_HDR must be "
+                 "a vmaf built with the HDR models' colour options")
 
 
 def y4m_shape(line):
@@ -612,6 +681,7 @@ def main():
     # every later run uses the path that is hashed here
     YAH, X264, VMAF, FFMPEG = (bins.get("yah264", YAH), bins.get("x264", X264),
                                bins["vmaf"], bins["ffmpeg"])
+    check_vmaf_build(VMAF)
     if not os.path.isfile(model_path(w, h, fps)):
         sys.exit(f"hdr_ladder: no HDR model at {model_path(w, h, fps)}")
     la_default = {"x264": None, "yah264": None}
