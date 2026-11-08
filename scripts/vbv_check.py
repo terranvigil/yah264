@@ -7,7 +7,7 @@ Parses an Annex-B H.264 elementary stream into access units (one slice NAL
 per frame in yah264; leading SPS/PPS/SEI bytes attach to the following AU),
 then simulates the decoder buffer with the encoder's own leaky-bucket law:
 
-    fill = bufsize                        # start full (encoder assumption)
+    fill = init                           # --init, default bufsize (full)
     per frame: fill = min(fill + maxrate/fps, bufsize); fill -= au_bits
     underflow when fill < 0 at any frame
 
@@ -15,7 +15,12 @@ Reports every underflow (frame index, magnitude) plus min-fill and the
 overflow-clamp count, and exits 1 on any underflow so gates can assert.
 
 Usage: vbv_check.py <stream.264> --maxrate KBPS --bufsize KBIT
-       (--y4m SRC.y4m | --fps N[:D]) [--quiet]
+       (--y4m SRC.y4m | --fps N[:D]) [--init F] [--quiet]
+
+--init is the encoder's starting fill, read like --vbv-init: at most 1 a
+fraction of the buffer, above 1 kbit. Pass the value the stream was coded
+with; a model that starts fuller than the encoder did forgives an early
+over-spend the real buffer would not.
 
 FRAME RATE IS NOT OPTIONAL AND NOT A CONSTANT. Both numbers this tool reports
 are fps-scaled: the bucket refills by maxrate/fps per frame, and the average
@@ -109,8 +114,13 @@ def main():
     ap.add_argument("--crf-max", type=float, default=None, dest="crf_max",
                     help="the QP ceiling the stream was coded with; an under-run "
                          "is then the documented cost of it, reported and not failed")
+    ap.add_argument("--init", type=float, default=1.0,
+                    help="initial fill: <=1 a fraction of --bufsize, above 1 kbit (default full)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+    if args.init < 0:
+        print(f"vbv_check: --init {args.init} is negative", file=sys.stderr)
+        return 2
 
     if args.y4m:
         try:
@@ -139,8 +149,8 @@ def main():
 
     size = args.bufsize * 1000.0
     rate = args.maxrate * 1000.0 / fps
-    fill = size
-    min_fill = size
+    fill = min(size * args.init if args.init <= 1 else args.init * 1000.0, size)
+    min_fill = fill
     underflows = []
     clamps = 0
     total_bits = 0
