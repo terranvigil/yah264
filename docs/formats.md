@@ -178,8 +178,8 @@ layout is the likelier cause than the dispatch itself.
   both sides limited range, BT.2020 primaries and matrix, and PQ transfer.
   The HDR clips are 1080p and 2160p, so no extra scaling applies; a smaller
   encode follows the project's rule and is scaled up to 1080p first.
-  Read PSNR-Y on the 10-bit code values beside it, and check that the two CRF
-  ladders overlap in bitrate before reading a BD figure.
+  Read PSNR-Y on the 10-bit code values beside it, and check that the two
+  ladders overlap in quality before reading a BD figure.
 - **The HDR ladder:** `scripts/hdr_ladder.py SRC.y4m` runs CRF 18-34 on
   yah264 and x264 High 10 at medium over a C420p10 HDR10 Y4M at 1920x1080 or
   3840x2160 (other sizes are refused), scores each rung as above, and prints
