@@ -53,7 +53,8 @@ static double frame_complexity(yah264_encoder_t *e, pixel *const src[3], int int
                 total += y264_dsp.satd4x4(sb, ss, r + y * rs + x, rs);
             }
         }
-    return (double)total + 1.0;
+    /* on the 8-bit scale, where the opening fits and the bits model were fitted */
+    return (double)(total >> (Y264_BIT_DEPTH - 8)) + 1.0;
 }
 
 /* ME-compensated frame complexity for CRF: the sum over MBs of the lowres
