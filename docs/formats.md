@@ -189,15 +189,16 @@ layout is the likelier cause than the dispatch itself.
   dimensions is scaled up to fit it, both sides, with CAMBI told the coded
   size), and prints BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over the quality
   range both ladders cover (`--max-crf` drops the top rungs), with each rung's
-  CAMBI beside it. It needs `VMAF_HDR` and `VMAF_HDR_MODELS`. Each rung keeps
-  its stream, keyed on the encoder binary, its libraries, command line and
-  `Y264_*` and `YAH264_*` environment and the source file, and its score,
-  keyed on the scorer chain and the script; a scorer change rescores the kept
-  stream ("rescored"), a reused rung prints "cached", `--fresh` ignores the
-  cache, and a run started while another holds the same work directory stops
-  at once. The 1080p test spans are 120 frames. `--vbr` runs a VBR ladder at
-  the listed targets (maxrate 1.5x, buffer 2x the target, initial fill 0.9, on
-  both encoders) and prints each rung's rate error, flagged outside the parity
+  CAMBI beside it. It needs `VMAF_HDR` and `VMAF_HDR_MODELS`, and every tool
+  path must name a binary, not a wrapper script. Each rung keeps its stream,
+  keyed on the encoder binary, its libraries, command line and `Y264_*` and
+  `YAH264_*` environment and the source file, and its score, keyed on the
+  scorer chain and the script; a scorer change rescores the kept stream
+  ("rescored"), a reused rung prints "cached", `--fresh` ignores the cache,
+  and a run started while another holds the same work directory stops at once.
+  The 1080p test spans are 120 frames. `--vbr` runs a VBR ladder at the listed
+  targets (maxrate 1.5x, buffer 2x the target, initial fill 0.9, on both
+  encoders) and prints each rung's rate error, flagged outside the parity
   spec's +-10% bar, and the VBV checker's verdict. `--encoders x264` runs one
   side alone, such as the reference's CRF ladder that sets the VBR targets.
   `--yah-lookahead` (at most 64) and `--x264-lookahead` (0 to 250) set each

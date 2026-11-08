@@ -68,9 +68,13 @@ side of the cached JSON, so bumping it rescores without re-encoding. Each
 binary runs by the path that was hashed, and is hashed again after every
 rung it took part in; a run stops if one changed underneath it. --fresh
 ignores the cache. A run holds a lock on its work directory, and a second
-run on the same directory stops at once. SIGTERM, SIGHUP or SIGINT kills
-every child and removes the run's scratch at once; a signal that was ignored
-when the run started (nohup) stays ignored.
+run on the same directory stops at once. SIGTERM, SIGHUP, SIGINT or SIGQUIT
+kills every child and removes the run's scratch at once, and the run then
+dies of that signal; a signal that was ignored when the run started (nohup)
+stays ignored. ^Z and fg stop and resume the children with the run. YAH264,
+X264, VMAF_HDR and ffmpeg must resolve to Mach-O or ELF executables, since
+the key hashes the file itself; HDR_LADDER_ALLOW_SCRIPTS=1 lets a test
+harness pass wrapper scripts, with no cached rung reused.
 
   YAH264    yah264 CLI (default build/cli/yah264)
   X264      x264 CLI (default x264)
@@ -78,8 +82,226 @@ when the run started (nohup) stays ignored.
             at start: a build without them scores PQ as SDR and exits 0)
   VMAF_HDR_MODELS  the directory holding hdr_vmaf_v1.1.8[_hfr]/
 """
+import signal
+# until the full handlers below are in place no child exists, so ^C may end
+# the run the plain way: by the signal, with no traceback from an import
+if signal.getsignal(signal.SIGINT) is signal.default_int_handler:
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 import argparse, contextlib, fcntl, glob, hashlib, json, math, os, re, shutil, signal, subprocess, sys, \
     tempfile, threading, time
+
+# SIGTERM, SIGHUP, SIGINT and SIGQUIT end the run at once: the handler ignores
+# any further one, stops and SIGKILLs every live child and everything under
+# it (found by parent pid, so a wrapper script's binary dies too), removes
+# the registered scratch and then dies of the same signal, so a shell loop
+# around the run sees it. It never raises, because a raise lands at an
+# arbitrary bytecode, and inside the standard library that can leave a lock
+# held or cut a cleanup short. Children stay in the run's process group, so
+# a terminal's ^C, ^Z and fg reach them too, and a kill of the whole group
+# takes them with it. The only window the handler can't see into is a child
+# that exists but isn't yet registered; a signal there is held and acted on
+# right after registering.
+_CHILDREN = {}         # pid -> Child, while it hasn't been reaped
+_SCRATCH = set()       # paths to remove on a signal
+_HANDLED = []          # the signals the handler is installed for
+_HOLD = [0]
+_PENDING = []
+_PROGRESS = [time.monotonic()]   # the stall timer's clock, reset on SIGCONT
+
+
+def _child_pids(pid):
+    """The direct children of pid, from the kernel's process table."""
+    if sys.platform == "darwin":
+        import ctypes
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+        buf = (ctypes.c_int * 4096)()
+        n = lib.proc_listchildpids(pid, buf, ctypes.sizeof(buf))
+        return [buf[i] for i in range(max(n, 0)) if buf[i] > 0]
+    kids = []
+    for d in os.listdir("/proc"):
+        if d.isdigit():
+            try:
+                with open(f"/proc/{d}/stat") as f:
+                    if int(f.read().rsplit(")", 1)[1].split()[1]) == pid:
+                        kids.append(int(d))
+            except (OSError, ValueError, IndexError):
+                pass
+    return kids
+
+
+def _tree(roots):
+    """roots and every process under them."""
+    seen, todo = [], list(roots)
+    while todo:
+        p = todo.pop()
+        if p in seen:
+            continue
+        seen.append(p)
+        try:
+            todo += _child_pids(p)
+        except OSError:
+            pass
+    return seen
+
+
+def _signal_tree(roots, sig):
+    for p in _tree(roots):
+        try:
+            os.kill(p, sig)
+        except OSError:
+            pass
+
+
+def _kill_tree(roots):
+    # stop the tree first and walk it again, so nothing forks away between
+    # the walk and the kill
+    stopped = set()
+    while True:
+        new = [p for p in _tree(roots) if p not in stopped]
+        if not new:
+            break
+        for p in new:
+            try:
+                os.kill(p, signal.SIGSTOP)
+            except OSError:
+                pass
+            stopped.add(p)
+    for p in stopped:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def _die(num):
+    for sig in _HANDLED:
+        signal.signal(sig, signal.SIG_IGN)
+    _kill_tree(list(_CHILDREN))
+    for path in list(_SCRATCH):
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+        except OSError:
+            pass
+    try:
+        os.write(2, f"hdr_ladder: stopped by signal {num}\n".encode())
+    except OSError:
+        pass
+    # die of the signal itself, so a caller (a shell loop) sees which one
+    signal.signal(num, signal.SIG_DFL)
+    os.kill(os.getpid(), num)
+    os._exit(128 + num)
+
+
+def _on_signal(num, frame):
+    if _HOLD[0]:
+        _PENDING.append(num)
+        return
+    _die(num)
+
+
+def _on_tstp(num, frame):
+    # a ^Z sent to this pid alone stops the children as well, and fg (or
+    # SIGCONT) resumes them
+    _signal_tree(list(_CHILDREN), signal.SIGSTOP)
+    # SIGSTOP, not SIGTSTP: the kernel drops a SIGTSTP aimed at an orphaned
+    # process group, and a run started from a script often is one
+    os.kill(os.getpid(), signal.SIGSTOP)
+    _on_cont(signal.SIGCONT, frame)
+
+
+def _on_cont(num, frame):
+    # time spent stopped isn't a stall
+    _PROGRESS[0] = time.monotonic()
+    _signal_tree(list(_CHILDREN), signal.SIGCONT)
+
+
+def _install_handlers():
+    # a signal ignored at start (nohup, a background job) stays ignored,
+    # here and in every child
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGQUIT):
+        if signal.getsignal(sig) is not signal.SIG_IGN:
+            _HANDLED.append(sig)
+            signal.signal(sig, _on_signal)
+    if signal.getsignal(signal.SIGTSTP) is not signal.SIG_IGN:
+        signal.signal(signal.SIGTSTP, _on_tstp)
+    signal.signal(signal.SIGCONT, _on_cont)
+
+
+@contextlib.contextmanager
+def held():
+    _HOLD[0] += 1
+    try:
+        yield
+    finally:
+        _HOLD[0] -= 1
+        if not _HOLD[0] and _PENDING:
+            _die(_PENDING[0])
+
+
+class Child(subprocess.Popen):
+    """A Popen that leaves the registry once it has been reaped, so a later
+    signal never aims at a pid that may have been reused."""
+
+    def poll(self):
+        rc = super().poll()
+        if rc is not None:
+            _CHILDREN.pop(self.pid, None)
+        return rc
+
+    def wait(self, timeout=None):
+        rc = super().wait(timeout)
+        _CHILDREN.pop(self.pid, None)
+        return rc
+
+
+def spawn_child(cmd, **kw):
+    with held():
+        p = Child(cmd, **kw)
+        _CHILDREN[p.pid] = p
+    return p
+
+
+def kill_child(p):
+    """SIGKILL a live child and everything under it."""
+    if p.poll() is None:
+        _kill_tree([p.pid])
+
+
+def scratch(path):
+    with held():
+        _SCRATCH.add(path)
+    return path
+
+
+def unscratch(path):
+    _SCRATCH.discard(path)
+
+
+def capture(cmd, **kw):
+    """Run cmd as a registered child and return its CompletedProcess."""
+    p = spawn_child(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
+    try:
+        so, se = p.communicate()
+    finally:
+        kill_child(p)
+        p.wait()
+    return subprocess.CompletedProcess(p.args, p.returncode, so, se)
+
+
+def run(cmd, ok=(0,)):
+    r = capture(["nice", "-n", "10"] + cmd)
+    if r.returncode not in ok:
+        sys.exit(f"hdr_ladder: failed: {' '.join(cmd)}\n{r.stderr[-1500:]}")
+    return r
+
+
+_install_handlers()
+# line-buffered, so what was printed survives an exit that skips the flush
+sys.stdout.reconfigure(line_buffering=True)
+
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bdcompare import bd_rate, v1_scaled, V1_SCALE_VF          # noqa: E402
@@ -139,6 +361,23 @@ def model_path(w, h, fps):
     return os.path.join(MODELS, d, f"{d}_{'1d5h_2160' if h > 1080 else '3d0h'}.json")
 
 
+# test harnesses stand wrappers in for the binaries; they may, with the
+# cache read off, since a wrapper's hash says nothing about what it runs
+ALLOW_ENV = "HDR_LADDER_ALLOW_SCRIPTS"
+ALLOW_SCRIPTS = os.environ.get(ALLOW_ENV) == "1"
+NATIVE_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe",
+                b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
+
+
+def is_native(path):
+    """A Mach-O (thin or universal) or ELF executable, by its magic bytes."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) in NATIVE_MAGIC
+    except OSError:
+        return False
+
+
 def which(b):
     p = b if os.sep in b else shutil.which(b)
     return os.path.realpath(p) if p else None
@@ -176,7 +415,7 @@ def linked_libs(path):
     while todo:
         p = todo.pop()
         try:
-            r = subprocess.run(tool + [p], capture_output=True, text=True)
+            r = capture(tool + [p])
         except OSError as e:
             sys.exit(f"hdr_ladder: can't list {p}'s libraries with {tool[0]}: {e}")
         if tool[0] == "ldd" and "not a dynamic executable" in r.stdout + r.stderr:
@@ -202,14 +441,14 @@ def linked_libs(path):
 def tool_id(path, version_args=None):
     t = {"md5": md5_of(path), "libs": linked_libs(path)}
     if version_args:
-        r = subprocess.run([path] + version_args, capture_output=True, text=True)
+        r = capture([path] + version_args)
         t["version"] = (r.stdout + r.stderr).strip()[:2000]
     return t
 
 
 def yah_lookahead_limits(path):
     """yah264's default and maximum lookahead, as its --help states them."""
-    r = subprocess.run([path, "--help"], capture_output=True, text=True)
+    r = capture([path, "--help"])
     text = r.stdout + r.stderr
     i = text.find("--rc-lookahead N")
     end = text.find("\n  --", i + 1) if i >= 0 else -1
@@ -222,118 +461,6 @@ def yah_lookahead_limits(path):
           f"(a build older than the one that prints them); assuming "
           f"{YAH_DEFAULT_LOOKAHEAD} and {YAH_MAX_LOOKAHEAD}")
     return YAH_DEFAULT_LOOKAHEAD, YAH_MAX_LOOKAHEAD
-
-
-# SIGTERM, SIGHUP and SIGINT end the run at once: the handler ignores any
-# further signal, SIGKILLs every live child's process group, removes the
-# registered scratch and leaves with os._exit. It never raises, because a
-# raise lands at an arbitrary bytecode, and inside the standard library
-# that can leave a lock held or cut a cleanup short. Each child runs in its
-# own session, so a wrapper script dies with the binary it started. The only
-# window the handler can't see into is a child that exists but isn't yet
-# registered; a signal there is held and acted on right after registering.
-_CHILDREN = {}         # pid -> Child, while it hasn't been reaped
-_SCRATCH = set()       # paths to remove on a signal
-_HANDLED = []          # the signals main() installed the handler for
-_HOLD = [0]
-_PENDING = []
-
-
-def _die(num):
-    for sig in _HANDLED:
-        signal.signal(sig, signal.SIG_IGN)
-    for pid in list(_CHILDREN):
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except OSError:
-            pass
-    for path in list(_SCRATCH):
-        try:
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                os.remove(path)
-        except OSError:
-            pass
-    try:
-        os.write(2, f"hdr_ladder: stopped by signal {num}\n".encode())
-    except OSError:
-        pass
-    os._exit(128 + num)
-
-
-def _on_signal(num, frame):
-    if _HOLD[0]:
-        _PENDING.append(num)
-        return
-    _die(num)
-
-
-@contextlib.contextmanager
-def held():
-    _HOLD[0] += 1
-    try:
-        yield
-    finally:
-        _HOLD[0] -= 1
-        if not _HOLD[0] and _PENDING:
-            _die(_PENDING[0])
-
-
-class Child(subprocess.Popen):
-    """A Popen that leaves the registry once it has been reaped, so a later
-    signal never aims at a pid that may have been reused."""
-
-    def poll(self):
-        rc = super().poll()
-        if rc is not None:
-            _CHILDREN.pop(self.pid, None)
-        return rc
-
-    def wait(self, timeout=None):
-        rc = super().wait(timeout)
-        _CHILDREN.pop(self.pid, None)
-        return rc
-
-
-def spawn_child(cmd, **kw):
-    with held():
-        p = Child(cmd, start_new_session=True, **kw)
-        _CHILDREN[p.pid] = p
-    return p
-
-
-def kill_child(p):
-    """SIGKILL a live child's whole process group."""
-    if p.poll() is None:
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except OSError:
-            pass
-
-
-def scratch(path):
-    with held():
-        _SCRATCH.add(path)
-    return path
-
-
-def unscratch(path):
-    _SCRATCH.discard(path)
-
-
-def run(cmd, ok=(0,)):
-    p = spawn_child(["nice", "-n", "10"] + cmd, stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE, text=True)
-    try:
-        so, se = p.communicate()
-    finally:
-        kill_child(p)
-        p.wait()
-    r = subprocess.CompletedProcess(p.args, p.returncode, so, se)
-    if r.returncode not in ok:
-        sys.exit(f"hdr_ladder: failed: {' '.join(cmd)}\n{r.stderr[-1500:]}")
-    return r
 
 
 # a step that makes no progress for this long is killed and the rung fails;
@@ -356,7 +483,8 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
     import numpy as np
     fs = w * h * 3 // 2
     procs, errs, killed = {}, {}, set()
-    progress = [time.monotonic()]
+    progress = _PROGRESS
+    progress[0] = time.monotonic()
     stalled = []
 
     def err(name):
@@ -536,7 +664,7 @@ def vmaf_colour_args():
 def check_vmaf_build(path):
     """A vmaf without the HDR colour options warns on stderr and scores the
     PQ picture as SDR with exit 0, so the build is checked before any rung."""
-    r = subprocess.run([path], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    r = capture([path], stdin=subprocess.DEVNULL)
     text = r.stdout + r.stderr
     # the usage lists each option once for both sides, as --color_trc_ref/_dist
     missing = [f"--color_{o}_ref" for o in ("range", "primaries", "trc", "matrix")
@@ -771,13 +899,6 @@ def strictly_rising(xs):
 
 def main():
     global YAH, X264, VMAF, FFMPEG, LOCK
-    # a kill runs the same cleanup as a failure: child processes and scratch
-    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        # a signal ignored at start (nohup, a background job) stays ignored,
-        # here and in every child
-        if signal.getsignal(sig) is not signal.SIG_IGN:
-            _HANDLED.append(sig)
-            signal.signal(sig, _on_signal)
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("src", help="the HDR10 source, a C420p10 Y4M")
@@ -834,6 +955,15 @@ def main():
         p = which(b)
         if not p or not os.access(p, os.X_OK):
             sys.exit(f"hdr_ladder: no {name} binary at '{b}'")
+        if not is_native(p):
+            if not ALLOW_SCRIPTS:
+                sys.exit(f"hdr_ladder: {name} at '{b}' resolves to {p}, which isn't a Mach-O or "
+                         "ELF executable. The cache keys on the hashed file, so a wrapper script "
+                         "would keep serving old numbers after the binary behind it changes; "
+                         "point at the binary itself")
+            print(f"hdr_ladder: warning: {name} at {p} is a script; "
+                  f"{ALLOW_ENV}=1 is set, so no cached rung is reused")
+            a.fresh = True
         bins[name] = p
     # every later run uses the path that is hashed here
     YAH, X264, VMAF, FFMPEG = (bins.get("yah264", YAH), bins.get("x264", X264),
@@ -951,4 +1081,7 @@ def main():
 try:
     main()
 except KeyboardInterrupt:
+    # only before the handlers were in place: die of SIGINT, as above
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGINT)
     sys.exit(128 + signal.SIGINT)
