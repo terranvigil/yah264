@@ -172,14 +172,15 @@ layout is the likelier cause than the dispatch itself.
   those against the first 15 of the reference.
 - **The board's clips are short.** 64 frames at 480x272 is below the
   project's 120-frame rule for a BD sweep, so read it as a smoke check.
-- **HDR clips score on VMAF v1's HDR models,** `hdr_vmaf_v1.1.8` (3d0h at
-  1080p, 1d5h_2160 above, the hfr variant at 50 fps and up), never on its SDR
-  models, which score PQ pictures as if they were SDR without a warning. Tag
-  both sides limited range, BT.2020 primaries and matrix, and PQ transfer.
-  The HDR clips are 1080p and 2160p, so no extra scaling applies; a smaller
-  encode follows the project's rule and is scaled up to 1080p first.
-  Read PSNR-Y on the 10-bit code values beside it, and check that the two
-  ladders overlap in quality before reading a BD figure.
+- **HDR clips score on VMAF v1's HDR models,** `hdr_vmaf_v1.1.8` (3d0h up to a
+  height of 1080, 1d5h_2160 above, the hfr variant at 50 fps and up), never on
+  its SDR models, which score PQ pictures as if they were SDR without a
+  warning. Tag both sides limited range, BT.2020 primaries and matrix, and PQ
+  transfer. A picture smaller than 1920x1080 in both dimensions follows the
+  project's rule and is scaled up to fit 1920x1080, aspect kept, on both
+  sides; anything else, 1080p and 2160p included, scores at its own size. Read
+  PSNR-Y on the 10-bit code values beside it, and check that the two ladders
+  overlap in quality before reading a BD figure.
 - **The HDR ladder:** `scripts/hdr_ladder.py SRC.y4m` runs CRF 18-34 on yah264
   and x264 High 10 at medium over a progressive, limited range C420p10 HDR10
   Y4M of any even size, scores each rung as above (1d5h_2160 when the height

@@ -10,19 +10,20 @@ yah264 against x264 High 10, scored with VMAF v1's HDR model and PSNR on the
                         [--encoders x264,yah264] [--threads 3] [--work DIR]
                         [--fresh]
 
-Both encoders run at medium. The source must be a progressive, limited
-range 4:2:0 10-bit Y4M (C420p10) of any even size. The model follows the
-source: 1d5h_2160 when its height is above 1080 (so 1440p and 3840x1600
-score on it), 3d0h otherwise (1920x1080, a 1920x800 scope picture), and the
-hfr variant of either at 50 fps and up. A source smaller than 1920x1080 in
-both dimensions is scored at display size, as the project's VMAF v1 rule
-says: the reference and the decode are both scaled up to fit 1920x1080
-(bicubic, aspect kept) and CAMBI is told the coded size. PSNR is always
-taken at the coded size. Every decode must be clean
-and hold exactly the source's frame count, or the run stops. Rungs must be
-distinct, and a metric whose quality doesn't rise with bitrate across a
-ladder gets no BD figure. Read the printed rungs before trusting a BD figure;
---max-crf leaves out the rungs above it, for a second read.
+Both encoders run at medium. The source must be a progressive, limited range
+4:2:0 10-bit Y4M (C420p10) of any even size. The model follows the source:
+1d5h_2160 when its height is above 1080 (so 1440p and 3840x1600 score on
+it), 3d0h otherwise (1920x1080, a 1920x800 scope picture), and the hfr
+variant of either at 50 fps and up. A source smaller than 1920x1080 in both
+dimensions is scored at display size, as the project's VMAF v1 rule says:
+the reference and the decode are both scaled up to fit 1920x1080 (bicubic,
+aspect kept) and CAMBI is told the coded size. PSNR is always taken at the
+coded size. The decode and any scaled picture are streamed to the scorer, so
+nothing frame-sized lands on disk. Every decode must be clean and hold
+exactly the source's frame count, or the run stops. Rungs must be distinct,
+and a metric whose quality doesn't rise with bitrate across a ladder gets no
+BD figure. Read the printed rungs before trusting a BD figure; --max-crf
+leaves out the rungs above it, for a second read.
 
 --vbr runs one rung per target K kbit/s instead of the CRF ladder, with
 --bitrate K, --vbv-maxrate 1.5K, --vbv-bufsize 2K and --vbv-init 0.9 on
@@ -53,23 +54,24 @@ HDR model computes in the same run.
 Each rung's result is cached in the work directory under two keys. The
 stream's key is the encoder binary and the non-system libraries it links,
 its full command line and, for yah264, every Y264_* and YAH264_* variable
-set, and the source's size, mtime, ctime, inode and sampled md5; a change
-to any of them re-encodes. The score's key is the scorer chain: the vmaf
-and ffmpeg binaries, their libraries and versions, the model file, the
-display scaling, this script's own md5 and, for VBR, vbv_check.py; a change
-there rescores the kept stream (printed "rescored") as long as its md5 is
-the one recorded. A reused rung prints "cached". RESULT_VERSION versions
-the cached JSON's layout. Each binary runs by the path that was hashed, and is hashed again
-after every rung it took part in; a run stops if one changed underneath it.
---fresh ignores the cache. A run holds a lock on its work directory,
-and a second run on the same directory stops at once.
+set, and the source's size, mtime, ctime, inode and sampled md5; a change to
+any of them re-encodes. The score's key is the scorer chain: the vmaf and
+ffmpeg binaries, their libraries and versions, the model file, the display
+scaling, this script's own md5 and, for VBR, vbv_check.py; a change there
+rescores the kept stream (printed "rescored") as long as its md5 is the one
+recorded. A reused rung prints "cached". RESULT_VERSION versions the cached
+JSON's layout. Each binary runs by the path that was hashed, and is hashed
+again after every rung it took part in; a run stops if one changed
+underneath it. --fresh ignores the cache. A run holds a lock on its work
+directory, and a second run on the same directory stops at once.
 
   YAH264    yah264 CLI (default build/cli/yah264)
   X264      x264 CLI (default x264)
   VMAF_HDR  a vmaf CLI built with the HDR models' colour options
   VMAF_HDR_MODELS  the directory holding hdr_vmaf_v1.1.8[_hfr]/
 """
-import argparse, fcntl, hashlib, json, math, os, re, shutil, subprocess, sys, time
+import argparse, fcntl, glob, hashlib, json, math, os, re, shutil, signal, subprocess, sys, \
+    tempfile, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bdcompare import bd_rate, v1_scaled, V1_SCALE_VF          # noqa: E402
@@ -218,27 +220,135 @@ def run(cmd, ok=(0,)):
     return r
 
 
-def psnr(src, dec, w, h):
+def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
+    """Decode out once and stream it: each frame is checked and added to the
+    PSNR sums here, then handed on to vmaf (through a scaler when the source
+    is scored at display size). The reference reaches vmaf as the source file
+    or, scaled, through a FIFO. No decode or scaled picture lands on disk.
+    Returns (frames, PSNR-Y, PSNR-YUV)."""
     import numpy as np
     fs = w * h * 3 // 2
+    col = []
+    for side in ("ref", "dist"):
+        col += [f"--color_range_{side}", "limited", f"--color_primaries_{side}", "bt2020",
+                f"--color_trc_{side}", "pq", f"--color_matrix_{side}", "bt2020nc"]
+    procs, errs = {}, {}
+
+    def err(name):
+        errs[name] = open(os.path.join(tmp, name + ".err"), "w+")
+        return errs[name]
+
+    def nice(cmd):
+        return ["nice", "-n", "10"] + cmd
+
+    def errtext(name):
+        errs[name].seek(0)
+        return errs[name].read().strip()
+
+    scale = ["-vf", V1_SCALE_VF, "-pix_fmt", "yuv420p10le", "-strict", "-1",
+             "-f", "yuv4mpegpipe"]
+    ref = src
+    if scaled:
+        ref = os.path.join(tmp, "ref.y4m")
+        os.mkfifo(ref)
+        procs["ref"] = subprocess.Popen(nice([FFMPEG, "-v", "error", "-nostdin", "-i", src] +
+                                             scale + ["-y", ref]),
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=err("ref"))
+    procs["vmaf"] = subprocess.Popen(nice([VMAF, "--reference", ref, "--distorted", "/dev/stdin",
+                                           "--threads", str(threads)] + col +
+                                          ["--model", model_arg, "--json", "--output", vj]),
+                                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                     stderr=err("vmaf"))
+    sink = procs["vmaf"].stdin
+    if scaled:
+        procs["dscale"] = subprocess.Popen(nice([FFMPEG, "-v", "error", "-nostdin", "-f",
+                                                 "yuv4mpegpipe", "-i", "pipe:0"] + scale +
+                                                ["pipe:1"]),
+                                           stdin=subprocess.PIPE, stdout=procs["vmaf"].stdin,
+                                           stderr=err("dscale"))
+        procs["vmaf"].stdin.close()
+        sink = procs["dscale"].stdin
+    # -xerror and explode turn a damaged stream into an error; anything
+    # ffmpeg says at -v error is treated the same, whatever its exit code
+    procs["dec"] = subprocess.Popen(nice([FFMPEG, "-v", "error", "-nostdin", "-xerror",
+                                          "-err_detect", "explode", "-i", out,
+                                          "-fps_mode", "passthrough", "-pix_fmt", "yuv420p10le",
+                                          "-strict", "-1", "-f", "yuv4mpegpipe", "pipe:1"]),
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=err("dec"))
+    stop = threading.Event()
+
+    def unblock_vmaf():
+        # a reference scaler that dies before opening its FIFO would leave
+        # vmaf blocked in open(); opening and closing the FIFO lets it see EOF
+        while not stop.wait(0.5):
+            if procs["ref"].poll() not in (None, 0) and procs["vmaf"].poll() is None:
+                try:
+                    os.close(os.open(ref, os.O_WRONLY | os.O_NONBLOCK))
+                except OSError:
+                    pass
+    if scaled:
+        threading.Thread(target=unblock_vmaf, daemon=True).start()
     sse = np.zeros(3)
     n = 0
-    with open(src, "rb") as a, open(dec, "rb") as b:
-        want, got = y4m_shape(a.readline()), y4m_shape(b.readline())
-        if want != got:
-            sys.exit(f"hdr_ladder: {dec} decodes as {got}, not the source's {want}")
-        while a.readline():
-            if not b.readline():
-                sys.exit(f"hdr_ladder: {dec} is short: the source has more than {n} frames")
-            s = np.frombuffer(a.read(2 * fs), dtype=np.uint16).astype(np.int64)
-            d = np.frombuffer(b.read(2 * fs), dtype=np.uint16).astype(np.int64)
-            if s.size != d.size:
-                sys.exit(f"hdr_ladder: {dec} ends inside frame {n}")
-            e = (s - d) ** 2
-            sse += [e[:w * h].sum(), e[w * h:w * h * 5 // 4].sum(), e[w * h * 5 // 4:].sum()]
-            n += 1
-        if b.readline():
-            sys.exit(f"hdr_ladder: {dec} is long: it decodes more than the source's {n} frames")
+    problem = None
+    try:
+        b = procs["dec"].stdout
+        with open(src, "rb") as a:
+            want, dhead = y4m_shape(a.readline()), b.readline()
+            got = y4m_shape(dhead)
+            if want != got:
+                problem = f"{out} decodes as {got}, not the source's {want}"
+            else:
+                try:
+                    sink.write(dhead)
+                    while a.readline():
+                        fl = b.readline()
+                        if not fl:
+                            problem = f"{out} is short: the source has more than {n} frames"
+                            break
+                        sb, db = a.read(2 * fs), b.read(2 * fs)
+                        if len(db) != len(sb):
+                            problem = f"{out} ends inside frame {n}"
+                            break
+                        s = np.frombuffer(sb, dtype=np.uint16).astype(np.int64)
+                        d = np.frombuffer(db, dtype=np.uint16).astype(np.int64)
+                        e = (s - d) ** 2
+                        sse += [e[:w * h].sum(), e[w * h:w * h * 5 // 4].sum(),
+                                e[w * h * 5 // 4:].sum()]
+                        n += 1
+                        sink.write(fl)
+                        sink.write(db)
+                    else:
+                        if b.readline():
+                            problem = f"{out} is long: it decodes more than the source's {n} frames"
+                except BrokenPipeError:
+                    problem = "vmaf stopped reading the decode"
+        if problem:
+            procs["dec"].kill()
+        try:
+            sink.close()
+        except BrokenPipeError:
+            problem = problem or "vmaf stopped reading the decode"
+        rc = {k: p.wait() for k, p in procs.items()}
+        stop.set()
+        dmsg = errtext("dec")
+        if rc["dec"] not in (0, -9) or (rc["dec"] == 0 and dmsg):
+            sys.exit(f"hdr_ladder: {out} decodes with errors:\n{dmsg[-1500:]}")
+        if problem:
+            sys.exit(f"hdr_ladder: {problem}")
+        for k in ("ref", "dscale", "vmaf"):
+            if k in rc and (rc[k] != 0 or (k != "vmaf" and errtext(k))):
+                sys.exit(f"hdr_ladder: the {k} step failed (exit {rc[k]}):\n{errtext(k)[-1500:]}")
+    finally:
+        stop.set()
+        for p in procs.values():
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+        for f in errs.values():
+            f.close()
     if n == 0:
         sys.exit("hdr_ladder: the decode has no frames")
     mse = sse / (np.array([w * h, w * h / 4, w * h / 4]) * n)
@@ -289,17 +399,8 @@ def load_json(js):
     return r if isinstance(r, dict) else None
 
 
-def scale_to_display(y4m, disp):
-    """y4m fitted to the v1 display (bicubic, aspect kept), written to disp."""
-    d = run([FFMPEG, "-v", "error", "-nostdin", "-i", y4m, "-vf", V1_SCALE_VF,
-             "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", "-y", disp])
-    if d.stderr.strip():
-        sys.exit(f"hdr_ladder: scaling {y4m} to the display failed:\n{d.stderr[-1500:]}")
-    return disp
-
-
 def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la_default,
-         fresh, ref_disp):
+         fresh, scaled):
     tag = f"{mode}{fmt(q)}" + (f"_la{lookahead}" if lookahead is not None else "")
     # two builds or thread counts in one work directory keep their own rungs
     tag += "_" + hashlib.md5(f"{enc_id['md5']} {threads}".encode()).hexdigest()[:8]
@@ -327,7 +428,7 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
     # scorer change rescores the kept stream instead of encoding it again
     enc_key = {"encoder": enc_id, "cmd": cmd, "src": ids["src"], "version": RESULT_VERSION}
     score_key = {k: v for k, v in ids.items() if k != "src"}
-    score_key.update(model=model_path(w, h, fps), display=V1_SCALE_VF if ref_disp else None,
+    score_key.update(model=model_path(w, h, fps), display=V1_SCALE_VF if scaled else None,
                      version=RESULT_VERSION)
     old = None if fresh else load_json(js)
     if old and old.get("enc_key") == enc_key and old.get("score_key") == score_key:
@@ -336,11 +437,17 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
     # a kept stream is reused only while its bytes are the ones the record names
     reuse = bool(old and old.get("enc_key") == enc_key and os.path.isfile(out)
                  and old.get("stream_md5") == md5_of(out))
-    for p in ((dec, vj) if reuse else (js, out, part, dec, vj)):
-        if os.path.exists(p):
+    # intermediates any earlier version or a killed run may have left
+    for p in [dec, stem + ".dec.disp.y4m", vj] + glob.glob(stem + ".score.*") + \
+            ([] if reuse else [js, out, part]):
+        if os.path.isdir(p):
+            shutil.rmtree(p, ignore_errors=True)
+        elif os.path.exists(p):
             os.remove(p)
     if reuse:
-        ran = old["lookahead_run"]
+        # read again, so a corrected reader isn't masked by the old record
+        ran = lookahead_in_stream(out) if enc == "x264" else \
+            (lookahead if lookahead is not None else la_default)
     else:
         # the stream is written under a temporary name and must appear fresh
         # and non-empty, so an encoder that exits 0 without writing can't hand
@@ -355,33 +462,20 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
         ran = lookahead_in_stream(out) if enc == "x264" else \
             (lookahead if lookahead is not None else la_default)
     stream_md5 = md5_of(out)
-    dec_disp = None
+    model = "path=" + model_path(w, h, fps)
+    if scaled:
+        # scored at display size; CAMBI judges banding at the coded size
+        model += f":cambi.enc_width={w}:cambi.enc_height={h}"
+    tmp = tempfile.mkdtemp(prefix=os.path.basename(stem) + ".score.", dir=work)
     try:
-        # -xerror and explode turn a damaged stream into an error; anything
-        # ffmpeg says at -v error is treated the same, whatever its exit code
-        d = run([FFMPEG, "-v", "error", "-nostdin", "-xerror", "-err_detect", "explode",
-                 "-i", out, "-fps_mode", "passthrough", "-pix_fmt", "yuv420p10le",
-                 "-strict", "-1", "-f", "yuv4mpegpipe", "-y", dec])
-        if d.stderr.strip():
-            sys.exit(f"hdr_ladder: {out} decodes with errors:\n{d.stderr[-1500:]}")
-        n, py, pyuv = psnr(src, dec, w, h)
-        col = []
-        for side in ("ref", "dist"):
-            col += [f"--color_range_{side}", "limited", f"--color_primaries_{side}", "bt2020",
-                    f"--color_trc_{side}", "pq", f"--color_matrix_{side}", "bt2020nc"]
-        model = "path=" + model_path(w, h, fps)
-        ref, dist = src, dec
-        if ref_disp:
-            # scored at display size; CAMBI judges banding at the coded size
-            dec_disp = scale_to_display(dec, stem + ".dec.disp.y4m")
-            ref, dist = ref_disp, dec_disp
-            model += f":cambi.enc_width={w}:cambi.enc_height={h}"
-        run([VMAF, "--reference", ref, "--distorted", dist, "--threads", str(threads)] + col +
-            ["--model", model, "--json", "--output", vj])
+        n, py, pyuv = score(out, src, w, h, threads, model, scaled, tmp, vj)
+    except BaseException:
+        # vmaf may have written a score for a decode that was cut short
+        if os.path.exists(vj):
+            os.remove(vj)
+        raise
     finally:
-        for p in (dec, dec_disp):
-            if p and os.path.exists(p):
-                os.remove(p)
+        shutil.rmtree(tmp, ignore_errors=True)
     if not os.path.exists(vj) or os.path.getmtime(vj) < os.path.getmtime(out):
         sys.exit(f"hdr_ladder: vmaf exited cleanly but wrote no fresh {vj}")
     with open(vj) as f:
@@ -466,6 +560,9 @@ def strictly_rising(xs):
 
 def main():
     global YAH, X264, VMAF, FFMPEG, LOCK
+    # a kill runs the same cleanup as a failure: child processes and scratch
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda num, frame: sys.exit(128 + num))
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
     ap.add_argument("--crf", default=None, help="CRF rungs (default 18,22,26,30,34)")
@@ -548,17 +645,15 @@ def main():
           + (", VBV maxrate 1.5K buffer 2K init 0.9" if mode == "vbr" else ""))
     if knobs and "yah264" in encs:
         print("yah264 environment: " + " ".join(knobs))
-    ref_disp = None
-    try:
-        if v1_scaled(w, h):
-            print(f"scored at display size: {w}x{h} scaled up to fit 1920x1080, CAMBI at {w}x{h}")
-            ref_disp = scale_to_display(a.src, os.path.join(work, ".ref.disp.y4m"))
-        lad = {e: [rung(e, a.src, mode, q, work, a.threads, w, h, fps, enc_id[e], ids, la[e],
-                        la_default[e], a.fresh, ref_disp)
-                   for q in qs] for e in encs}
-    finally:
-        if ref_disp and os.path.exists(ref_disp):
-            os.remove(ref_disp)
+    scaled = v1_scaled(w, h)
+    if scaled:
+        print(f"scored at display size: {w}x{h} scaled up to fit 1920x1080, CAMBI at {w}x{h}")
+    stale = os.path.join(work, ".ref.disp.y4m")    # an earlier version's scaled reference
+    if os.path.exists(stale):
+        os.remove(stale)
+    lad = {e: [rung(e, a.src, mode, q, work, a.threads, w, h, fps, enc_id[e], ids, la[e],
+                    la_default[e], a.fresh, scaled)
+               for q in qs] for e in encs}
     outside, underflow = [], []
     for e, rs in lad.items():
         for r in rs:
