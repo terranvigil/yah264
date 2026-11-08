@@ -3542,8 +3542,12 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
         uint32_t v2[2];
         const pixel *s0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
         y264_dsp.var16x16(s0, f->src_stride[0], v2);
-        long var = ((long)v2[1] - (((long)v2[0] * v2[0]) >> 8)) >> 8;   /* per-pixel variance */
-        if (var < I16_ADMIT_VAR) i16_ok = 1;
+        /* per-pixel variance against a limit on the 8-bit scale (variance
+         * grows 4x per extra bit); the mean term is floored on that scale
+         * too, so upshifted 8-bit content gets its 8-bit verdict exactly */
+        const int k = 2 * (Y264_BIT_DEPTH - 8);
+        long var = ((long)v2[1] - ((((long)v2[0] * v2[0]) >> (8 + k)) << k)) >> 8;
+        if (var < ((long)I16_ADMIT_VAR << k)) i16_ok = 1;
     }
     o->i16_refused = 0;
     int mode = 16; long best = i16_ok ? J16 : LONG_MAX;

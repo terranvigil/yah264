@@ -101,7 +101,7 @@ from the Y4M `C` tag the same way the serial path does.
 ### Keeping 10-bit on the 8-bit trades
 
 The tuning is all done at 8 bits, so 10-bit keeps the 8-bit trades by
-putting its costs on the 8-bit scale in three places:
+putting its costs on the 8-bit scale in four places:
 
 - **Lambdas.** The mode, trellis and motion lambdas are read at the QP plus
   the depth's QP offset. A 10-bit sample's error is four times the 8-bit
@@ -118,6 +118,9 @@ putting its costs on the 8-bit scale in three places:
   so the floors, the anchor and B-frame levels and the frame DC see the
   values they were fitted on, and the flat psy-trellis gate's variance limit
   is raised by the same factor.
+- **Fixed thresholds.** The variance limit under which a P or B macroblock
+  counts as flat for the I_16x16 screen is raised by the same factor, so
+  8-bit content coded at 10 bits gets the verdict of its 8-bit encode.
 
 ## What we chose and why
 
