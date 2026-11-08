@@ -216,7 +216,20 @@ def yah_lookahead_limits(path):
 
 
 def run(cmd, ok=(0,)):
-    r = subprocess.run(["nice", "-n", "10"] + cmd, capture_output=True, text=True)
+    # as in score(): a signal can't land between the fork and the bookkeeping
+    old = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP})
+    try:
+        p = subprocess.Popen(["nice", "-n", "10"] + cmd, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old)
+    try:
+        so, se = p.communicate()
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+    r = subprocess.CompletedProcess(p.args, p.returncode, so, se)
     if r.returncode not in ok:
         sys.exit(f"hdr_ladder: failed: {' '.join(cmd)}\n{r.stderr[-1500:]}")
     return r
@@ -225,6 +238,12 @@ def run(cmd, ok=(0,)):
 # a step that makes no progress for this long is killed and the rung fails;
 # a frame normally passes in well under a second
 STALL_SECONDS = 600
+# the HDR models' SpEED feature prints these when it falls back on a flat or
+# degenerate block; they are content-dependent and leave the score valid.
+# Anything else vmaf says fails the rung
+VMAF_BENIGN = re.compile(r"(libvmaf WARNING )?(est_params: covariance matrix is singular|"
+                         r"compute_eigenvalues_tridiagonal: max iterations reached, "
+                         r"possible non-convergence)$")
 
 
 def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
@@ -256,68 +275,72 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
             killed.add(name)
             p.kill()
 
-    scale = ["-vf", V1_SCALE_VF, "-pix_fmt", "yuv420p10le", "-strict", "-1",
-             "-f", "yuv4mpegpipe"]
-    ref = src
-    if scaled:
-        ref = os.path.join(tmp, "ref.y4m")
-        os.mkfifo(ref)
-        procs["ref"] = subprocess.Popen(nice([FFMPEG, "-v", "error", "-nostdin", "-i", src] +
-                                             scale + ["-y", ref]),
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                        stderr=err("ref"))
-    procs["vmaf"] = subprocess.Popen(nice([VMAF, "--reference", ref, "--distorted", "/dev/stdin",
-                                           "--threads", str(threads)] + vmaf_colour_args() +
-                                          ["--model", model_arg, "--json", "--output", vj]),
-                                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                     stderr=err("vmaf"))
-    sink = procs["vmaf"].stdin
-    if scaled:
-        procs["dscale"] = subprocess.Popen(nice([FFMPEG, "-v", "error", "-nostdin", "-f",
-                                                 "yuv4mpegpipe", "-i", "pipe:0"] + scale +
-                                                ["pipe:1"]),
-                                           stdin=subprocess.PIPE, stdout=procs["vmaf"].stdin,
-                                           stderr=err("dscale"))
-        procs["vmaf"].stdin.close()
-        sink = procs["dscale"].stdin
-    # -xerror and explode turn a damaged stream into an error; anything
-    # ffmpeg says at -v error is treated the same, whatever its exit code
-    procs["dec"] = subprocess.Popen(nice([FFMPEG, "-v", "error", "-nostdin", "-xerror",
-                                          "-err_detect", "explode", "-i", out,
-                                          "-fps_mode", "passthrough", "-pix_fmt", "yuv420p10le",
-                                          "-strict", "-1", "-f", "yuv4mpegpipe", "pipe:1"]),
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=err("dec"))
-    stop = threading.Event()
+    def spawn(name, cmd, **kw):
+        # SIGTERM and SIGHUP wait until the child is recorded, so the finally
+        # always knows every process that exists
+        old = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP})
+        try:
+            procs[name] = subprocess.Popen(cmd, **kw)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old)
 
-    def watchdog():
-        while not stop.wait(0.2):
-            if scaled:
-                vm, rf = procs["vmaf"].poll(), procs["ref"].poll()
-                # either end of the reference FIFO can be left blocked in
-                # open() when the other exits first; opening the far end and
-                # closing it again lets the survivor see EOF or EPIPE
-                if vm is not None and rf is None:
-                    try:
-                        os.close(os.open(ref, os.O_RDONLY | os.O_NONBLOCK))
-                    except OSError:
-                        pass
-                if rf is not None and vm is None:
-                    try:
-                        os.close(os.open(ref, os.O_WRONLY | os.O_NONBLOCK))
-                    except OSError:
-                        pass
-            if time.monotonic() - progress[0] > STALL_SECONDS:
-                stalled.append(True)
-                for k in procs:
-                    kill(k)
-                return
-    threading.Thread(target=watchdog, daemon=True).start()
-    sse = np.zeros(3)
-    n = 0
-    problem = None       # what this side found wrong with the decode
-    broken = False       # the scorer side stopped taking frames
+    stop = threading.Event()
+    # the try opens before the first spawn, so a signal or a failed spawn at
+    # any point still reaches the finally that kills what was started
     try:
+        scale = ["-vf", V1_SCALE_VF, "-pix_fmt", "yuv420p10le", "-strict", "-1",
+                 "-f", "yuv4mpegpipe"]
+        ref = src
+        if scaled:
+            ref = os.path.join(tmp, "ref.y4m")
+            os.mkfifo(ref)
+            spawn("ref", nice([FFMPEG, "-v", "error", "-nostdin", "-i", src] + scale + ["-y", ref]),
+                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err("ref"))
+        spawn("vmaf", nice([VMAF, "--reference", ref, "--distorted", "/dev/stdin",
+                            "--threads", str(threads)] + vmaf_colour_args() +
+                           ["--model", model_arg, "--json", "--output", vj]),
+              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err("vmaf"))
+        sink = procs["vmaf"].stdin
+        if scaled:
+            spawn("dscale", nice([FFMPEG, "-v", "error", "-nostdin", "-f", "yuv4mpegpipe",
+                                  "-i", "pipe:0"] + scale + ["pipe:1"]),
+                  stdin=subprocess.PIPE, stdout=procs["vmaf"].stdin, stderr=err("dscale"))
+            procs["vmaf"].stdin.close()
+            sink = procs["dscale"].stdin
+        # -xerror and explode turn a damaged stream into an error; anything
+        # ffmpeg says at -v error is treated the same, whatever its exit code
+        spawn("dec", nice([FFMPEG, "-v", "error", "-nostdin", "-xerror", "-err_detect", "explode",
+                           "-i", out, "-fps_mode", "passthrough", "-pix_fmt", "yuv420p10le",
+                           "-strict", "-1", "-f", "yuv4mpegpipe", "pipe:1"]),
+              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err("dec"))
+
+        def watchdog():
+            while not stop.wait(0.2):
+                if scaled:
+                    vm, rf = procs["vmaf"].poll(), procs["ref"].poll()
+                    # either end of the reference FIFO can be left blocked in
+                    # open() when the other exits first; opening the far end and
+                    # closing it again lets the survivor see EOF or EPIPE
+                    if vm is not None and rf is None:
+                        try:
+                            os.close(os.open(ref, os.O_RDONLY | os.O_NONBLOCK))
+                        except OSError:
+                            pass
+                    if rf is not None and vm is None:
+                        try:
+                            os.close(os.open(ref, os.O_WRONLY | os.O_NONBLOCK))
+                        except OSError:
+                            pass
+                if time.monotonic() - progress[0] > STALL_SECONDS:
+                    stalled.append(True)
+                    for k in list(procs):
+                        kill(k)
+                    return
+        threading.Thread(target=watchdog, daemon=True).start()
+        sse = np.zeros(3)
+        n = 0
+        problem = None       # what this side found wrong with the decode
+        broken = False       # the scorer side stopped taking frames
         b = procs["dec"].stdout
         with open(src, "rb") as a:
             want, dhead = y4m_shape(a.readline()), b.readline()
@@ -371,8 +394,9 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
                         kill(k)
         stop.set()
         if stalled:
+            said = "".join(f"\n{k}: {errtext(k)[-1500:]}" for k in errs if errtext(k))
             sys.exit(f"hdr_ladder: scoring {out} made no progress for {STALL_SECONDS} s; "
-                     "every step was killed")
+                     f"every step was killed{said}")
         # report the first cause: the decode, then what this side found, then
         # the scorer and its scalers in the order a failure propagates
         dmsg = errtext("dec")
@@ -380,13 +404,15 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
             sys.exit(f"hdr_ladder: {out} decodes with errors (exit {rc['dec']}):\n{dmsg[-1500:]}")
         if problem:
             sys.exit(f"hdr_ladder: {problem}")
-        if broken and rc["vmaf"] == 0 and not errtext("vmaf"):
+        if broken and rc["vmaf"] == 0 and not errtext("vmaf").strip():
             sys.exit(f"hdr_ladder: vmaf exited 0 without reading the whole decode of {out}")
         # every failing step is named, vmaf first: a scaler's broken pipe is
         # usually vmaf's failure seen from upstream, but not always
-        failed = [f"the {k} step failed (exit {rc[k]}):\n{errtext(k)[-1500:]}"
-                  for k in ("vmaf", "dscale", "ref")
-                  if k in rc and (rc[k] != 0 or errtext(k))]
+        said = {k: errtext(k) for k in ("vmaf", "dscale", "ref") if k in rc}
+        said["vmaf"] = "\n".join(ln for ln in said["vmaf"].splitlines()
+                                 if not VMAF_BENIGN.match(ln.strip()))
+        failed = [f"the {k} step failed (exit {rc[k]}):\n{said[k][-1500:]}"
+                  for k in ("vmaf", "dscale", "ref") if k in rc and (rc[k] != 0 or said[k])]
         if failed:
             sys.exit("hdr_ladder: " + "\n".join(failed))
     finally:
@@ -769,6 +795,13 @@ def main():
           "quality range printed with each figure)")
     for m in ("vmaf", "psnr_y", "psnr_yuv"):
         head = f"BD-rate {m:8s} yah264 vs x264 High 10: "
+        if m == "vmaf":
+            pinned = [f"{e} {mode}{fmt(r['q'])}" for e, rs in (("x264", b), ("yah264", t))
+                      for r in rs if r[m] <= 0 or r[m] >= 100]
+            if pinned:
+                print(head + "none, VMAF is clamped at 0 or 100 on " + ", ".join(pinned) +
+                      ", so the rung isn't a measurement; drop it from the ladder")
+                continue
         bad = [e for e, rs in (("x264", b), ("yah264", t)) if not strictly_rising([r[m] for r in rs])]
         if bad:
             print(head + f"none, {m} doesn't rise with bitrate on {' and '.join(bad)}")
