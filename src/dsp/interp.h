@@ -194,4 +194,10 @@ void y264_lr_hp_row(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
 void y264_lr_hp_row_c(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                       const pixel *r1, const pixel *r2, int n);
 
+#if Y264_HAVE_NEON10
+/* the same three planes on the 8-bit scale (src/dsp/arm/interp_neon10.c); n >= 8 */
+void y264_lr_hp_row_neon(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n);
+#endif
+
 #endif /* YAH264_MC_H */

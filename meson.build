@@ -165,7 +165,7 @@ endif
 # The 10-bit library's NEON tier: one file per family under src/dsp/arm/, on
 # 16-bit lanes, compiled into the 10-bit library only. A family is listed once
 # it has a kernel; what is not listed stays on C at 10 bits.
-neon10_families = ['metrics', 'transform', 'interp', 'loopfilter']
+neon10_families = ['metrics', 'transform', 'interp', 'loopfilter', 'intrapred']
 neon10_sources = []
 if have_neon
   foreach f : neon10_families

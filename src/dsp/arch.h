@@ -298,6 +298,17 @@ long y264_hadamard_ac_8x8_neon(const pixel *, int);
 long y264_texture_ac4_16x16_neon(const pixel *, int);
 void y264_texture_ac48_16x16_neon(const pixel *, int, long[2]);
 void y264_var_16x16_neon(const pixel *, int, uint32_t[2]);
+void y264_intra4_mode_search_neon(const pixel *, int, const pixel *, int,
+                                  int, int, int, int, int[9]);
+/* SSD, dispatched from the macroblock code (no dot product form) */
+int  y264_ssd_16xh_neon(const pixel *a, int as, const pixel *b, int bs, int h);
+int  y264_ssd_8xh_neon(const pixel *a, int as, const pixel *b, int bs, int h);
+void y264_ssd4x4_map16_neon(const pixel *a, int as, const pixel *b, int bs,
+                            uint32_t out[16]);
+void y264_ssdsum4x4_16_neon(const pixel *a, int as, const pixel *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_neon(const pixel *a, int as, const pixel *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
 void y264_intra16_satd_trio_neon(const pixel *, int, const pixel *,
                                  const pixel *, int, int[3]);
 
@@ -333,6 +344,10 @@ void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
 
 /* motion compensation (src/dsp/arm/interp_neon10.c) */
+void y264_mc_luma_neon16(pixel *dst, int dstride, const pixel *ref,
+                         int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref,
+                        int rstride, int ix, int iy, int fx, int fy, int h);
 void y264_mc_chroma_neon8(pixel *dst, int dstride, const pixel *ref,
                           int rstride, int ix, int iy, int fx, int fy);
 void y264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,
@@ -348,12 +363,29 @@ void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
 void y264_pixel_avg_wt_2d_neon(pixel *dst, int ds, const pixel *a, int as,
                                const pixel *b, int bs, int w, int h, int w0, int w1);
 void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_hpel_build_band_neon(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1);
 void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            const int32_t *s0, const int32_t *s1, const int32_t *s2,
                            const int32_t *s3, const int32_t *s4, const int32_t *s5,
                            const pixel *r0, const pixel *r1, const pixel *r2,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
+
+/* intra prediction (src/dsp/arm/intrapred_neon10.c) */
+void y264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left, int cw, int ch);
+void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
+void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
 
 /* deblocking (src/dsp/arm/loopfilter_neon10.c; the strength kernel is the
  * shared src/dsp/arm/loopfilter_bs_neon.c). The four-line luma forms are

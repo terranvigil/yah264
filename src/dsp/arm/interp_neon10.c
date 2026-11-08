@@ -6,8 +6,10 @@
  * The 10-bit twins of part of src/dsp/interp_neon.c, under the 8-bit kernels'
  * names (src/common/symbols10.h suffixes them): the half-pel plane fetch,
  * the weighted average, chroma MC at widths 8 and 4, and the two row kernels
- * of the half-pel plane build. The six-tap luma kernels, the fused band
- * build and the fused bi-prediction forms stay C at 10 bits for now.
+ * of the half-pel plane build. It also holds the row of the lowres half-pel
+ * planes on the 8-bit scale, which the 8-bit library leaves to the compiler.
+ * The six-tap luma kernels and the fused band build are here too. The fused
+ * bi-prediction forms stay C at 10 bits.
  *
  * A sample is a u16 lane. The six-tap filter of 10-bit samples reaches
  * 42*1023 = 42966, past int16, so the filters widen to int32 where the 8-bit
@@ -17,6 +19,7 @@
 #include "../interp.h"
 #include "../arch.h"
 #include <arm_neon.h>
+#include <string.h>
 
 #if Y264_BIT_DEPTH != 10
 #error "interp_neon10.c is the 10-bit library's NEON tier"
@@ -242,6 +245,291 @@ void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
         tap6_u16(vld1q_u16(r0 + x), vld1q_u16(r1 + x), vld1q_u16(r2 + x),
                  vld1q_u16(r3 + x), vld1q_u16(r4 + x), vld1q_u16(r5 + x), &v0, &v1);
         vst1q_u16(Vr + x, clip_s32x2(vrshrq_n_s32(v0, 5), vrshrq_n_s32(v1, 5)));
+    }
+}
+
+/* ---- six-tap luma ----------------------------------------------------------
+ *
+ * The 8-bit kernels' plane scheme: the half-pel planes G (whole), H, V and J
+ * (centre) over the block plus one column and row, then each quarter-pel
+ * phase as one plane or the rounding average of two. A six-tap of 10-bit
+ * samples spans [-10230, 42966], 53196 values, so it is formed in modular
+ * u16 arithmetic with 10240 = 320 * 32 added, which puts the exact sum in
+ * [10, 53206]. A half-pel sample is then ((sum + 16) >> 5) - 320, saturated
+ * at 0 and clipped at PIXEL_MAX. The centre keeps the offset horizontal
+ * sums in u16 and runs its vertical six-tap on int32 lanes, where the
+ * offset has grown to 32 * 10240 = 320 * 1024 and comes off after the
+ * >> 10 the same way. */
+#define MCL_ST 24   /* plane row stride */
+
+static inline uint16x8_t tap6_off(uint16x8_t a, uint16x8_t b, uint16x8_t c,
+                                  uint16x8_t d, uint16x8_t e, uint16x8_t f)
+{
+    uint16x8_t t = vaddq_u16(vaddq_u16(a, f), vdupq_n_u16(10240));
+    t = vmlaq_n_u16(t, vaddq_u16(c, d), 20);
+    return vmlsq_n_u16(t, vaddq_u16(b, e), 5);
+}
+
+static inline uint16x8_t half_clip(uint16x8_t sum)
+{
+    return vminq_u16(vqsubq_u16(vrshrq_n_u16(sum, 5), vdupq_n_u16(320)),
+                     vdupq_n_u16(PIXEL_MAX));
+}
+
+static inline uint16x8_t centre_clip(int32x4_t lo, int32x4_t hi)
+{
+    const int32x4_t k = vdupq_n_s32(320);
+    return clip_s32x2(vsubq_s32(vrshrq_n_s32(lo, 10), k),
+                      vsubq_s32(vrshrq_n_s32(hi, 10), k));
+}
+
+/* the offset horizontal sums of the eight samples from p + 2 */
+static inline uint16x8_t hsum8(const pixel *p)
+{
+    return tap6_off(vld1q_u16(p), vld1q_u16(p + 1), vld1q_u16(p + 2),
+                    vld1q_u16(p + 3), vld1q_u16(p + 4), vld1q_u16(p + 5));
+}
+
+/* the same from one sixteen-sample window, for the 8-wide kernel */
+static inline uint16x8_t hsum8_win(const pixel *p)
+{
+    uint16x8_t lo = vld1q_u16(p), hi = vld1q_u16(p + 8);
+    return tap6_off(lo, vextq_u16(lo, hi, 1), vextq_u16(lo, hi, 2),
+                    vextq_u16(lo, hi, 3), vextq_u16(lo, hi, 4), vextq_u16(lo, hi, 5));
+}
+
+static inline uint16x8_t vsum8(const pixel *p, int rs)
+{
+    return tap6_off(vld1q_u16(p - 2 * rs), vld1q_u16(p - rs), vld1q_u16(p),
+                    vld1q_u16(p + rs), vld1q_u16(p + 2 * rs), vld1q_u16(p + 3 * rs));
+}
+
+static inline uint16x8_t jsum8(const uint16_t *c, int k)
+{
+    int32x4_t lo, hi;
+    tap6_u16(vld1q_u16(c + k), vld1q_u16(c + MCL_ST + k), vld1q_u16(c + 2 * MCL_ST + k),
+             vld1q_u16(c + 3 * MCL_ST + k), vld1q_u16(c + 4 * MCL_ST + k),
+             vld1q_u16(c + 5 * MCL_ST + k), &lo, &hi);
+    return centre_clip(lo, hi);
+}
+
+/* the vertical half-pel sample one column past the block, which the
+ * shifted phases read */
+static inline pixel vcol(const pixel *q, int rs)
+{
+    int s = q[-2 * rs] - 5 * q[-rs] + 20 * q[0] + 20 * q[rs] - 5 * q[2 * rs] + q[3 * rs];
+    s = (s + 16) >> 5;
+    return (pixel)(s < 0 ? 0 : s > PIXEL_MAX ? PIXEL_MAX : s);
+}
+
+/* Eight output samples of a phase, from the planes at the same column. */
+static inline uint16x8_t mcl_out8(int fx, int fy, const pixel *G, const pixel *H,
+                                  const pixel *V, const pixel *J)
+{
+    switch (fy * 4 + fx) {
+    case 0*4+1: return vrhaddq_u16(vld1q_u16(G), vld1q_u16(H));
+    case 0*4+2: return vld1q_u16(H);
+    case 0*4+3: return vrhaddq_u16(vld1q_u16(G + 1), vld1q_u16(H));
+    case 1*4+0: return vrhaddq_u16(vld1q_u16(G), vld1q_u16(V));
+    case 2*4+0: return vld1q_u16(V);
+    case 3*4+0: return vrhaddq_u16(vld1q_u16(G + MCL_ST), vld1q_u16(V));
+    case 1*4+1: return vrhaddq_u16(vld1q_u16(H), vld1q_u16(V));
+    case 1*4+2: return vrhaddq_u16(vld1q_u16(H), vld1q_u16(J));
+    case 1*4+3: return vrhaddq_u16(vld1q_u16(H), vld1q_u16(V + 1));
+    case 2*4+1: return vrhaddq_u16(vld1q_u16(V), vld1q_u16(J));
+    case 2*4+2: return vld1q_u16(J);
+    case 2*4+3: return vrhaddq_u16(vld1q_u16(J), vld1q_u16(V + 1));
+    case 3*4+1: return vrhaddq_u16(vld1q_u16(V), vld1q_u16(H + MCL_ST));
+    case 3*4+2: return vrhaddq_u16(vld1q_u16(J), vld1q_u16(H + MCL_ST));
+    case 3*4+3: return vrhaddq_u16(vld1q_u16(V + 1), vld1q_u16(H + MCL_ST));
+    default:    return vld1q_u16(G);
+    }
+}
+
+/* The planes for a block of w = 8 * nh columns (nh = 1 or 2) and h rows.
+ * The 16-wide form reads [ix-2, ix+18] with unaligned eight-sample loads; the
+ * 8-wide form reads [ix-2, ix+13], one sixteen-sample window a row. Both read
+ * rows [iy-2, iy+h+3]. */
+static inline void mcl_luma(pixel *dst, int dstride, const pixel *ref, int rstride,
+                            int ix, int iy, int fx, int fy, int h, int nh)
+{
+    const int w = 8 * nh;
+    if (fx == 0 && fy == 0) {
+        for (int y = 0; y < h; y++)
+            for (int k = 0; k < w; k += 8)
+                vst1q_u16(dst + y * dstride + k, vld1q_u16(ref + (iy + y) * rstride + ix + k));
+        return;
+    }
+
+    pixel G[17 * MCL_ST], H[17 * MCL_ST], V[17 * MCL_ST], J[16 * MCL_ST];
+    uint16_t cc[21 * MCL_ST];
+
+    int needH = (fx != 0);
+    int needV = (fy != 0);
+    int needJ = (fx == 2 && fy != 0) || (fy == 2 && fx != 0);
+    int needG = ((fx & 1) && fy == 0) || (fx == 0 && (fy & 1));
+
+    if (needG)
+        for (int y = 0; y <= h; y++) {
+            const pixel *p = ref + (iy + y) * rstride + ix;
+            for (int k = 0; k < w; k += 8) vst1q_u16(G + y * MCL_ST + k, vld1q_u16(p + k));
+            G[y * MCL_ST + w] = p[w];
+        }
+    if (needH)
+        for (int y = 0; y <= h; y++) {
+            const pixel *p = ref + (iy + y) * rstride + ix - 2;
+            if (nh == 2) {
+                vst1q_u16(H + y * MCL_ST, half_clip(hsum8(p)));
+                vst1q_u16(H + y * MCL_ST + 8, half_clip(hsum8(p + 8)));
+            } else {
+                vst1q_u16(H + y * MCL_ST, half_clip(hsum8_win(p)));
+            }
+        }
+    if (needV)
+        for (int y = 0; y <= h; y++) {
+            const pixel *p = ref + (iy + y) * rstride + ix;
+            for (int k = 0; k < w; k += 8)
+                vst1q_u16(V + y * MCL_ST + k, half_clip(vsum8(p + k, rstride)));
+            V[y * MCL_ST + w] = vcol(p + w, rstride);
+        }
+    if (needJ) {
+        for (int y = -2; y <= h + 2; y++) {
+            const pixel *p = ref + (iy + y) * rstride + ix - 2;
+            uint16_t *c = cc + (y + 2) * MCL_ST;
+            if (nh == 2) {
+                vst1q_u16(c, hsum8(p));
+                vst1q_u16(c + 8, hsum8(p + 8));
+            } else {
+                vst1q_u16(c, hsum8_win(p));
+            }
+        }
+        for (int y = 0; y < h; y++)
+            for (int k = 0; k < w; k += 8)
+                vst1q_u16(J + y * MCL_ST + k, jsum8(cc + y * MCL_ST, k));
+    }
+
+    for (int y = 0; y < h; y++) {
+        const int o = y * MCL_ST;
+        for (int k = 0; k < w; k += 8)
+            vst1q_u16(dst + y * dstride + k,
+                      mcl_out8(fx, fy, G + o + k, H + o + k, V + o + k, J + o + k));
+    }
+}
+
+void y264_mc_luma_neon16(pixel *dst, int dstride, const pixel *ref, int rstride,
+                         int ix, int iy, int fx, int fy, int h)
+{
+    mcl_luma(dst, dstride, ref, rstride, ix, iy, fx, fy, h, 2);
+}
+
+void y264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref, int rstride,
+                        int ix, int iy, int fx, int fy, int h)
+{
+    mcl_luma(dst, dstride, ref, rstride, ix, iy, fx, fy, h, 1);
+}
+
+/* The whole half-pel build for a band of output rows, borders included, in
+ * one pass. Each source row is clamped into a padded copy once and its
+ * horizontal six-tap kept in u16 with the six-tap section's 10240 offset; a
+ * ring of six of each feeds the output rows:
+ *   H = the offset tap's half-pel clip
+ *   V = the same of the vertical tap over the padded rows
+ *   C = the vertical tap over the offset horizontal taps on int32 lanes,
+ *       less the offset after the >> 10
+ * Bit-exact with y264_mc_build_hpel_rows. `mem` must hold
+ * 12 * (W + 32) + 12 * W bytes, W = pw + 2 * border, and W >= 16. */
+void y264_hpel_build_band_neon(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1)
+{
+    const int W = pw + 2 * border, PW = W + 32;
+    pixel *P[6];
+    uint16_t *T[6];
+    for (int k = 0; k < 6; k++) {
+        P[k] = (pixel *)(void *)mem + (size_t)k * PW;
+        T[k] = (uint16_t *)(void *)(mem + (size_t)12 * PW) + (size_t)k * W;
+    }
+    const int sy0 = y0 - 2;
+    for (int y = sy0; y < y1 + 3; y++) {
+        int k = (y - sy0) % 6;
+        int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);
+        const pixel *row = ref + (size_t)cy * rstride;
+        pixel *pad = P[k];                   /* pad[j] = row[clamp(j - border - 2)] */
+        for (int j = 0; j < border + 2; j++) pad[j] = row[0];
+        memcpy(pad + border + 2, row, (size_t)pw * sizeof(pixel));
+        for (int j = border + 2 + pw; j < W + 5; j++) pad[j] = row[pw - 1];
+        uint16_t *t = T[k];
+        for (int j = 0; j < W; j += 8) {
+            if (j > W - 8) j = W - 8;        /* overlap tail */
+            /* only pad[j .. j + 12] reach a live lane (<= W + 4 at the last
+             * step); the load's last three samples lie in the pad's slack */
+            vst1q_u16(t + j, hsum8_win(pad + j));
+        }
+        if (y < y0 + 3) continue;
+        int oy = y - 3;                      /* rows oy-2 .. oy+3 are in the rings */
+        int k0 = (oy - 2 - sy0) % 6;
+        const pixel *p[6];
+        const uint16_t *s[6];
+        for (int i = 0; i < 6; i++) {
+            p[i] = P[(k0 + i) % 6] + 2;      /* pad column j + 2 is output column j */
+            s[i] = T[(k0 + i) % 6];
+        }
+        pixel *Hr = Hp + (ptrdiff_t)oy * stride - border;
+        pixel *Vr = Vp + (ptrdiff_t)oy * stride - border;
+        pixel *Cr = Cp + (ptrdiff_t)oy * stride - border;
+        for (int j = 0; j < W; j += 8) {
+            if (j > W - 8) j = W - 8;
+            uint16x8_t s2 = vld1q_u16(s[2] + j);
+            vst1q_u16(Hr + j, half_clip(s2));
+            vst1q_u16(Vr + j, half_clip(tap6_off(vld1q_u16(p[0] + j), vld1q_u16(p[1] + j),
+                                                 vld1q_u16(p[2] + j), vld1q_u16(p[3] + j),
+                                                 vld1q_u16(p[4] + j), vld1q_u16(p[5] + j))));
+            int32x4_t lo, hi;
+            tap6_u16(vld1q_u16(s[0] + j), vld1q_u16(s[1] + j), s2,
+                     vld1q_u16(s[3] + j), vld1q_u16(s[4] + j), vld1q_u16(s[5] + j),
+                     &lo, &hi);
+            vst1q_u16(Cr + j, centre_clip(lo, hi));
+        }
+    }
+}
+
+/* ---- the lowres half-pel planes ---------------------------------------------
+ *
+ * The lowres planes hold 8-bit samples at every depth. Each output is the
+ * rounded mean of two vertical pair means, where a pair mean of 10-bit
+ * samples rounds straight to the 8-bit scale, (a + b + 4) >> 3, and the
+ * final mean saturates at 255:
+ *
+ *   oh[x] = min(avg(m(r0[2x+1], r1[2x+1]), m(r0[2x+2], r1[2x+2])), 255)
+ *   ov[x] = min(avg(m(r1[2x],   r2[2x]),   m(r1[2x+1], r2[2x+1])), 255)
+ *   oc[x] = min(avg(m(r1[2x+1], r2[2x+1]), m(r1[2x+2], r2[2x+2])), 255)
+ *
+ * A pair sum is at most 2046, so it stays in u16. Eight outputs a step read
+ * a row deinterleaved from 2x (r1, r2) and from 2x + 1 (all three), which
+ * is r0[1 .. 2n] and r1, r2[0 .. 2n] over the row; the last step steps back
+ * to end on the span, so the caller hands it n >= 8. */
+static inline uint16x8_t lr_m(uint16x8_t a, uint16x8_t b)
+{
+    return vrshrq_n_u16(vaddq_u16(a, b), 3);
+}
+
+void y264_lr_hp_row_neon(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n)
+{
+    const uint16x8_t cap = vdupq_n_u16(255);
+    for (int x = 0; x < n; x += 8) {
+        if (x > n - 8) x = n - 8;
+        const int i = 2 * x;
+        /* from 2x + 1: the odd samples and the even ones a column on */
+        uint16x8x2_t a = vld2q_u16(r0 + i + 1);
+        uint16x8x2_t b = vld2q_u16(r1 + i), c = vld2q_u16(r2 + i);
+        uint16x8_t b2 = vld2q_u16(r1 + i + 1).val[1], c2 = vld2q_u16(r2 + i + 1).val[1];
+        uint16x8_t m01o = lr_m(a.val[0], b.val[1]), m01e2 = lr_m(a.val[1], b2);
+        uint16x8_t m12e = lr_m(b.val[0], c.val[0]), m12o = lr_m(b.val[1], c.val[1]);
+        uint16x8_t m12e2 = lr_m(b2, c2);
+        vst1q_u16(oh + x, vminq_u16(vrhaddq_u16(m01o, m01e2), cap));
+        vst1q_u16(ov + x, vminq_u16(vrhaddq_u16(m12e, m12o), cap));
+        vst1q_u16(oc + x, vminq_u16(vrhaddq_u16(m12o, m12e2), cap));
     }
 }
 

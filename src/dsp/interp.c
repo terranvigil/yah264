@@ -151,7 +151,7 @@ static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
 #undef MB
 
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 /* Clamped source tile, so an out-of-window block can still run the kernel.
  *
  * The kernel path's guard is `ix >= 2 - Y264_LUMA_BORDER`: past that the six-tap
@@ -169,9 +169,17 @@ static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
  * six-tap -- and it turns ~36 clamped reads per output pixel into 2.75.
  *
  * The kernel reads rows iy-2..iy+h+3 and columns ix-2..ix+18, so the tile is
- * (h+6) rows of MCL_TS bytes with the block placed at (2,2). MCL_TS is 32 so
- * that the kernel's 16-byte loads cannot run off the end. */
+ * (h+6) rows of MCL_TS samples with the block placed at (2,2). MCL_TS is 32
+ * so that the kernel's sixteen-sample loads cannot run off the end. */
 #define MCL_TS 32
+static inline void mcl_fill(pixel *t, pixel v, int n)
+{
+#if Y264_BIT_DEPTH == 8
+    memset(t, v, (size_t)n);
+#else
+    for (int i = 0; i < n; i++) t[i] = v;
+#endif
+}
 static void mc_luma_tile(pixel *tile, const pixel *ref, int rstride,
                          int pw, int ph, int ix, int iy, int h)
 {
@@ -185,9 +193,9 @@ static void mc_luma_tile(pixel *tile, const pixel *ref, int rstride,
         sy = sy < 0 ? 0 : (sy > ph - 1 ? ph - 1 : sy);
         const pixel *row = ref + (size_t)sy * rstride;
         pixel *t = tile + (size_t)j * MCL_TS;
-        if (lft)         memset(t, row[0], (size_t)lft);
-        if (rgt > lft)   memcpy(t + lft, row + x0 + lft, (size_t)(rgt - lft));
-        if (rgt < MCL_TS) memset(t + rgt, row[pw - 1], (size_t)(MCL_TS - rgt));
+        if (lft)         mcl_fill(t, row[0], lft);
+        if (rgt > lft)   memcpy(t + lft, row + x0 + lft, (size_t)(rgt - lft) * sizeof(pixel));
+        if (rgt < MCL_TS) mcl_fill(t + rgt, row[pw - 1], MCL_TS - rgt);
     }
 }
 
@@ -460,7 +468,7 @@ void y264_mc_luma_b(pixel *dst, int dstride,
                     int bx, int by, int mvx, int mvy, int w, int h, int border)
 {
     NLED(mc_luma_call, 1); NLED(mc_luma_pix, (uint64_t)w*h);
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     /* y264_cpu_detect is warmed on the main thread at encoder open and returns
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by
@@ -581,7 +589,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     const int sy0 = y0 - 2;
     int32_t *const sbase = scratch - (ptrdiff_t)sy0 * sstride - x0;   /* sy0 may be negative */
 
-    /* Interior columns (xm2>=0 and xp3<=pw-1) need no clamp; only the border
+    /* Interior columns (x-2 >= 0 and x+3 <= pw-1) need no clamp; only the border
  * columns do. Splitting out the interior avoids 6 clamps/pixel over the bulk
  * of the frame. Byte-identical (clamp is a no-op where coords are in range). */
     int xin0 = 2, xin1 = pw - 3;                    /* interior = [xin0, xin1) */
@@ -596,11 +604,11 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     int hpel_tier = (y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8)
                   ? y264_cpu_tier() : Y264_TIER_C;
 #endif
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     /* The whole band, borders included, in one pass when the scratch can hold
      * its two six-row rings (it holds y1 - y0 + 5 >= 6 int32 rows). */
     if (hpel_tier == Y264_TIER_NEON && x1 - x0 >= 16 &&
-        (size_t)6 * (size_t)(x1 - x0 + 32) + (size_t)12 * (size_t)(x1 - x0)
+        (size_t)6 * (size_t)(x1 - x0 + 32) * sizeof(pixel) + (size_t)12 * (size_t)(x1 - x0)
             <= (size_t)sstride * sizeof(int32_t) * (size_t)(y1 - y0 + 5)) {
         y264_hpel_build_band_neon(Hp, Vp, Cp, stride, ref, rstride, pw, ph, border,
                                   (uint8_t *)(void *)scratch, y0, y1);
@@ -637,12 +645,12 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             int32_t v = 32 * row[0];
             for (; x < -3; x++) srow[x] = v;
         }
-        for (; x < xin0; x++) {                          /* left border */
-            int xm2 = x-2 < 0 ? 0 : x-2, xm1 = x-1 < 0 ? 0 : x-1;
-            int xp1 = x+1 >= pw ? pw-1 : x+1, xp2 = x+2 >= pw ? pw-1 : x+2, xp3 = x+3 >= pw ? pw-1 : x+3;
-            int x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
-            srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
-        }
+        /* every tap clamps both ways: at x = -3 and -2 the right-hand taps
+         * are still left of column 0, and a tiny frame puts them past pw-1 */
+#define HPX(v) ((v) < 0 ? 0 : (v) >= pw ? pw - 1 : (v))
+        for (; x < xin0; x++)                            /* left border */
+            srow[x] = tap6(row[HPX(x-2)], row[HPX(x-1)], row[HPX(x)],
+                           row[HPX(x+1)], row[HPX(x+2)], row[HPX(x+3)]);
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
         if (hpel_tier == Y264_TIER_NEON) {
             y264_hpel_hrow_neon(srow, row, xin0, xin1);
@@ -665,11 +673,10 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             srow[x] = tap6(row[x-2], row[x-1], row[x], row[x+1], row[x+2], row[x+3]);
         int xr = x1;
         if (x1 > pw + 2 && xin1 <= pw + 2) xr = pw + 2;
-        for (x = xin1; x < xr; x++) {                    /* right border */
-            int xm2 = x-2 < 0 ? 0 : x-2, xm1 = x-1 < 0 ? 0 : x-1, x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
-            int xp1 = x+1 >= pw ? pw-1 : x+1, xp2 = x+2 >= pw ? pw-1 : x+2, xp3 = x+3 >= pw ? pw-1 : x+3;
-            srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
-        }
+        for (x = xin1; x < xr; x++)                      /* right border */
+            srow[x] = tap6(row[HPX(x-2)], row[HPX(x-1)], row[HPX(x)],
+                           row[HPX(x+1)], row[HPX(x+2)], row[HPX(x+3)]);
+#undef HPX
         if (xr < x1) {
             int32_t v = 32 * row[pw - 1];
             for (x = xr; x < x1; x++) srow[x] = v;

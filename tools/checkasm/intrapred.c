@@ -37,6 +37,19 @@ static void recplane(void)
     ca_fill(rec, STRIDE * PLANE_H);
 }
 
+/* Trial t's neighbours: all max, all zero and random extremes first (the
+ * plane modes' widest sums), then random; odd trials at an odd stride. */
+static const pixel *recplane_t(int t, int *st)
+{
+    recplane();
+    if (t == 0) ca_fill_max(rec, STRIDE * PLANE_H);
+    if (t == 2) memset(rec, 0, STRIDE * PLANE_H * sizeof(pixel));
+    if (t == 1 || t == 3)
+        for (int i = 0; i < STRIDE * PLANE_H; i++) rec[i] = ca_rnd_edge();
+    *st = (t & 1) ? STRIDE - 1 : STRIDE;
+    return rec + 8 * *st + 16;
+}
+
 /* The encoder's availability gate for the nine 4x4 / 8x8 directional modes. */
 static int i4_allowed(int mode, int ht, int hl)
 {
@@ -48,7 +61,7 @@ static int i4_allowed(int mode, int ht, int hl)
     }
 }
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 
 /* ---- one body per group, the kernel as an argument ----------------------- */
 
@@ -73,8 +86,8 @@ static int run_intra16x16(const char *name, i16_fn kern)
     pixel o2[256];
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
-        recplane();
-        const pixel *rc = rec + PORG;
+        int st;
+        const pixel *rc = recplane_t(t, &st);
         for (int ht = 0; ht <= 1; ht++)
             for (int hl = 0; hl <= 1; hl++)
                 for (int mode = 0; mode < 4; mode++) {
@@ -87,8 +100,8 @@ static int run_intra16x16(const char *name, i16_fn kern)
                     ca_guard_poison(o1, 256 * sizeof(pixel));
                     memset(o1, 0, 256 * sizeof(pixel));
                     memset(o2, 0, sizeof(o2));
-                    kern(o1, rc, STRIDE, mode, ht, hl);
-                    y264_intra16x16_c(o2, rc, STRIDE, mode, ht, hl);
+                    kern(o1, rc, st, mode, ht, hl);
+                    y264_intra16x16_c(o2, rc, st, mode, ht, hl);
                     if (memcmp(o1, o2, sizeof(o2))) {
                         if (!bad) ca_fail("%s: mode %d avail %d%d", name, mode, ht, hl);
                         bad++;
@@ -128,8 +141,8 @@ static int run_intra_chroma(const char *name, ichroma_fn kern)
     pixel o2[8 * 16];
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
-        recplane();
-        const pixel *rc = rec + PORG;
+        int st;
+        const pixel *rc = recplane_t(t, &st);
         for (int ht = 0; ht <= 1; ht++)
             for (int hl = 0; hl <= 1; hl++)
                 for (int mode = 0; mode < 4; mode++) {
@@ -143,8 +156,8 @@ static int run_intra_chroma(const char *name, ichroma_fn kern)
                         ca_guard_poison(o1, (size_t)(8 * ch) * sizeof(pixel));
                         memset(o1, 0, (size_t)(8 * ch) * sizeof(pixel));
                         memset(o2, 0, sizeof(o2));
-                        kern(o1, rc, STRIDE, mode, ht, hl, 8, ch);
-                        y264_intra_chroma_c(o2, rc, STRIDE, mode, ht, hl, 8, ch);
+                        kern(o1, rc, st, mode, ht, hl, 8, ch);
+                        y264_intra_chroma_c(o2, rc, st, mode, ht, hl, 8, ch);
                         if (memcmp(o1, o2, (size_t)(8 * ch) * sizeof(pixel))) {
                             if (!bad)
                                 ca_fail("%s: mode %d avail %d%d 8x%d",
@@ -187,8 +200,8 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
     pixel o2[64];
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
-        recplane();
-        const pixel *rc = rec + PORG;
+        int st;
+        const pixel *rc = recplane_t(t, &st);
         for (int ht = 0; ht <= 1; ht++)
             for (int hl = 0; hl <= 1; hl++)
                 for (int htl = 0; htl <= (ht && hl); htl++)
@@ -199,8 +212,8 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
                             ca_guard_poison(o1, 64 * sizeof(pixel));
                             memset(o1, 0, 64 * sizeof(pixel));
                             memset(o2, 0, sizeof(o2));
-                            kern(o1, rc, STRIDE, mode, ht, hl, htl, htr);
-                            y264_intra8x8_c(o2, rc, STRIDE, mode, ht, hl, htl, htr);
+                            kern(o1, rc, st, mode, ht, hl, htl, htr);
+                            y264_intra8x8_c(o2, rc, st, mode, ht, hl, htl, htr);
                             if (memcmp(o1, o2, sizeof(o2))) {
                                 if (!bad)
                                     ca_fail("%s: mode %d avail %d%d%d%d",
@@ -214,7 +227,7 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
                              * edge array; the reference takes the struct. */
                             {
                                 y264_i8_edge_t ed;
-                                y264_intra8x8_edge_c(&ed, rc, STRIDE, ht, hl, htl, htr);
+                                y264_intra8x8_edge_c(&ed, rc, st, ht, hl, htl, htr);
                                 memset(o1, 0, 64 * sizeof(pixel));
                                 edge_kern(o1, ed.f, mode);
                                 if (memcmp(o1, o2, sizeof(o2))) {
@@ -274,9 +287,9 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
 static int t_intra16x16_neon(void)
 {
     return run_intra16x16("intra16x16", y264_intra16x16_neon);
@@ -427,7 +440,7 @@ static int t_intra8x8_dir6_c(void)
     return bad;
 }
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 typedef void (*dir6_fn)(pixel (*)[64], const pixel *);
 typedef void (*dir6rec_fn)(pixel (*)[64], const pixel *, int);
 typedef void (*dvhp_fn)(pixel (*)[64], const pixel *, const pixel *, int, int, int, int);
@@ -442,20 +455,20 @@ static int run_intra8x8_dir6(const char *name, dir6_fn kern, dir6rec_fn kern_rec
     pixel (*out)[64] = ca_guard_alloc(6 * 64 * sizeof(pixel));
     int bad = 0;
     for (int t = 0; t < TRIALS && !bad; t++) {
-        recplane();
-        const pixel *rc = rec + PORG;
+        int st;
+        const pixel *rc = recplane_t(t, &st);
         for (int htr = 0; htr <= 1; htr++) {
             y264_i8_edge_t ed;
             pixel ref[64];
             ca_pg ge;
-            y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, htr);
+            y264_intra8x8_edge_c(&ed, rc, st, 1, 1, 1, htr);
             pixel *e = ca_pg_alloc(&ge, 32 * sizeof(pixel), t & 1);
             memcpy(e, ed.f, 32 * sizeof(pixel));
             for (int pass = 0; pass < 2; pass++) {
                 if (pass && htr) break;
                 ca_guard_poison(out, 6 * 64 * sizeof(pixel));
                 ca_pg_arm(name);
-                if (pass) kern_rec(out, rc, STRIDE);
+                if (pass) kern_rec(out, rc, st);
                 else      kern(out, e);
                 ca_pg_disarm();
                 for (int m = 3; m <= 8; m++) {
@@ -509,9 +522,14 @@ static int run_intra8_dvhp(const char *name, dvhp_fn kern)
         ca_pg gt, gl;
         pixel *top = ca_pg_alloc(&gt, 8 * sizeof(pixel), t & 1);
         pixel *left = ca_pg_alloc(&gl, 8 * sizeof(pixel), (t >> 1) & 1);
+        /* every eighth trial draws over the whole depth, which at 10 bits
+         * takes the plane past the kernel's int16 bound */
+        int wide = (t & 7) == 7;
         for (int i = 0; i < 8; i++) {
-            top[i]  = (pixel)(t == 0 ? 255 : t == 1 ? 0 : t == 2 ? (i & 1) * 255 : ca_below(256));
-            left[i] = (pixel)(t == 0 ? 0 : t == 1 ? 255 : t == 2 ? ((i + 1) & 1) * 255 : ca_below(256));
+            top[i]  = (pixel)(t == 0 ? 255 : t == 1 ? 0 : t == 2 ? (i & 1) * 255
+                              : wide ? ca_rnd() : ca_below(256));
+            left[i] = (pixel)(t == 0 ? 0 : t == 1 ? 255 : t == 2 ? ((i + 1) & 1) * 255
+                              : wide ? ca_rnd() : ca_below(256));
         }
         pixel tl = (pixel)(t < 3 ? 128 : ca_below(256));
         int dc = ca_below(256), H = 0, V = 0;
@@ -538,9 +556,9 @@ static int run_intra8_dvhp(const char *name, dvhp_fn kern)
     ca_guard_free(out);
     return bad;
 }
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
 static int t_intra8x8_dir6_neon(void)
 {
     return run_intra8x8_dir6("intra8x8_dir6", y264_intra8x8_dir6_neon,
@@ -636,7 +654,7 @@ static int t_intra8_dvhp_avx2(void)
 #endif
 
 const ca_test ca_predict_tests[] = {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     { "intra16x16",        "predict", Y264_CPU_NEON, t_intra16x16_neon },
     { "intra_chroma",      "predict", Y264_CPU_NEON, t_intra_chroma_neon },
     { "intra8x8",          "predict", Y264_CPU_NEON, t_intra8x8_neon },

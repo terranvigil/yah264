@@ -1207,6 +1207,14 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
                       : y264_ssd_8xh_neon(a, as, b, bs, h);
     }
 #endif
+#if Y264_HAVE_NEON10
+    if (y264_asm_on(Y264_ASM_SSD)) {
+        if (w == 16)
+            return y264_ssd_16xh_neon(a, as, b, bs, h);
+        if (w == 8)
+            return y264_ssd_8xh_neon(a, as, b, bs, h);
+    }
+#endif
 #if Y264_HAVE_SSE4
     /* The x86 tiers select through y264_cpu_tier(), which demands a tier's
      * WHOLE feature set before admitting a kernel out of it: an AVX2 box takes
@@ -1950,6 +1958,12 @@ static void ssd4x4_map16(const pixel *a, int as, const pixel *b, int bs, uint32_
         return;
     }
 #endif
+#if Y264_HAVE_NEON10
+    if (y264_asm_on(Y264_ASM_SSD)) {
+        y264_ssd4x4_map16_neon(a, as, b, bs, out);
+        return;
+    }
+#endif
 #if Y264_HAVE_SSE4
     if (y264_asm_on(Y264_ASM_SSD)) {
         int tier = y264_cpu_tier();
@@ -2073,6 +2087,10 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
     if (dp) y264_ssdsum4x4_16_neon_dotprod(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
     else if (neon) y264_ssdsum4x4_16_neon(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
 #endif
+#if Y264_HAVE_NEON10
+    neon = y264_asm_on(Y264_ASM_SSD);
+    if (neon) y264_ssdsum4x4_16_neon(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
+#endif
     int x86 = 0;
 #if Y264_HAVE_SSE4
     x86 = ssdsum4x4_x86(ys, f->src_stride[0], yr, f->rec_stride[0], 1, st->e4, st->s4);
@@ -2095,6 +2113,10 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
                                                   st->ec[c - 1], st->sc[c - 1]);
             else if (neon) y264_ssdsum4x4_8_neon(cs, f->src_stride[c], cr, f->rec_stride[c],
                                                  st->ec[c - 1], st->sc[c - 1]);
+#endif
+#if Y264_HAVE_NEON10
+            if (neon) y264_ssdsum4x4_8_neon(cs, f->src_stride[c], cr, f->rec_stride[c],
+                                            st->ec[c - 1], st->sc[c - 1]);
 #endif
 #if Y264_HAVE_SSE4
             if (x86) (void)ssdsum4x4_x86(cs, f->src_stride[c], cr, f->rec_stride[c], 0,
