@@ -6079,11 +6079,16 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
  * -- full for a stream that starts the output, the handoff level for a
  * segment that follows one -- so a receiver is told the buffer this encode
  * actually assumed rather than the widest one the syntax allows. */
+    /* ...except a vbr segment that follows another: the level it assumed
+ * is not the one the previous segment left, so it declares a full buffer,
+ * which bounds nothing, and the caller rewrites it to the real gap. */
     if (e->sps.hrd) {
         uint8_t msg[16];
+        unsigned d0 = e->hrd_init_delay;
+        if (e->param.rc.vbv_seg_join && e->hrd_on == YAH264_NAL_HRD_VBR)
+            d0 = e->hrd_full_delay;
         size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
-                                             e->hrd_init_delay,
-                                             e->hrd_full_delay - e->hrd_init_delay);
+                                             d0, e->hrd_full_delay - d0);
         y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
         y264_sei_write(&bs, 0, msg, n);
         if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,

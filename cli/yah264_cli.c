@@ -1425,6 +1425,172 @@ static void buf_append(uint8_t **buf, size_t *sz, size_t *cap,
     *sz += n;
 }
 
+/* --nal-hrd across GOP segments. A segment's first picture counts its
+ * cpb_removal_delay back to the buffering period before it, and that is the
+ * last IDR of the previous segment, which only exists once the previous
+ * segment has been coded. The writer emits segments in order, so it knows it
+ * then: it reads the previous segment's last pic_timing and rewrites this
+ * segment's first one. The access unit keeps its byte count (a start code
+ * and trailing_zero_8bits absorb an emulation byte that comes or goes), so
+ * the buffer the rate control planned is the one the stream declares. */
+
+/* the next start code at or after `from`: its first byte, with *hdr the NAL
+ * header after it; n when there is none */
+static size_t hrd_next_nal(const uint8_t *b, size_t n, size_t from, size_t *hdr)
+{
+    for (size_t i = from; i + 3 <= n; i++) {
+        if (b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1) {
+            *hdr = i + 3;
+            return i > from && b[i - 1] == 0 ? i - 1 : i;
+        }
+    }
+    *hdr = n;
+    return n;
+}
+
+/* NAL bytes [a, e) without their emulation bytes, into r; the length */
+static size_t hrd_unescape(const uint8_t *b, size_t a, size_t e, uint8_t *r)
+{
+    size_t m = 0;
+    int z = 0;
+    for (size_t i = a; i < e; i++) {
+        if (z >= 2 && b[i] == 3) { z = 0; continue; }
+        r[m++] = b[i];
+        z = b[i] == 0 ? z + 1 : 0;
+    }
+    return m;
+}
+
+/* Walks the SEI messages of one RBSP, calling back with each payload's type
+ * and offset; a nonzero return stops the walk and is returned. */
+static int hrd_sei_walk(const uint8_t *r, size_t m,
+                        int (*fn)(void *, int, size_t, size_t), void *ctx)
+{
+    while (m > 0 && r[m - 1] == 0) m--;             /* trailing_zero_8bits */
+    size_t i = 0;
+    while (i + 1 < m) {                              /* the last byte is the stop bit */
+        int t = 0; size_t sz = 0;
+        while (i < m && r[i] == 0xFF) { t += 255; i++; }
+        if (i >= m) return 0;
+        t += r[i++];
+        while (i < m && r[i] == 0xFF) { sz += 255; i++; }
+        if (i >= m) return 0;
+        sz += r[i++];
+        if (i + sz > m) return 0;
+        int rc = fn(ctx, t, i, sz);
+        if (rc) return rc;
+        i += sz;
+    }
+    return 0;
+}
+
+struct hrd_scan { const uint8_t *r; int bp; long last; size_t pt_off; };
+
+static long hrd_cpb_at(const uint8_t *r, size_t o)
+{
+    return ((long)r[o] << 16) | ((long)r[o + 1] << 8) | r[o + 2];
+}
+
+static int hrd_scan_msg(void *ctx, int type, size_t off, size_t sz)
+{
+    struct hrd_scan *h = ctx;
+    if (type == 0) h->bp = 1;
+    if (type == 1 && sz >= 3) {
+        h->last = h->bp ? 0 : hrd_cpb_at(h->r, off);
+        h->bp = 0;
+    }
+    return 0;
+}
+
+static int hrd_find_pt(void *ctx, int type, size_t off, size_t sz)
+{
+    struct hrd_scan *h = ctx;
+    if (type == 1 && sz >= 3) { h->pt_off = off; return 1; }
+    return 0;
+}
+
+/* Ticks from the last buffering period in b to the picture after its last
+ * one, -1 when b carries no pic_timing. A buffering period message always
+ * precedes its access unit's pic_timing. */
+static long hrd_ticks_after(const uint8_t *b, size_t n, int tpp)
+{
+    struct hrd_scan h = { NULL, 0, -1, 0 };
+    uint8_t *r = malloc(n ? n : 1);
+    if (!r) return -1;
+    h.r = r;
+    size_t hdr, sc = hrd_next_nal(b, n, 0, &hdr);
+    while (sc < n) {
+        size_t hdr2, nx = hrd_next_nal(b, n, hdr, &hdr2);
+        if (hdr < n && (b[hdr] & 0x1F) == 6)
+            hrd_sei_walk(r, hrd_unescape(b, hdr + 1, nx, r), hrd_scan_msg, &h);
+        sc = nx; hdr = hdr2;
+    }
+    free(r);
+    return h.last < 0 ? -1 : h.last + tpp;
+}
+
+/* Rewrites the cpb_removal_delay of the first pic_timing in *buf. 0 on
+ * success or when nothing changes, -1 when the access unit can't keep its
+ * size or memory runs out. */
+static int hrd_patch_first(uint8_t **buf, size_t *sz, long delay)
+{
+    uint8_t *b = *buf;
+    size_t n = *sz, hdr, sc = hrd_next_nal(b, n, 0, &hdr);
+    while (sc < n) {
+        size_t hdr2, nx = hrd_next_nal(b, n, hdr, &hdr2);
+        if (hdr >= n || (b[hdr] & 0x1F) != 6) { sc = nx; hdr = hdr2; continue; }
+        uint8_t *r = malloc(nx - hdr);
+        if (!r) return -1;
+        size_t m = hrd_unescape(b, hdr + 1, nx, r);
+        struct hrd_scan h = { r, 0, -1, 0 };
+        if (!hrd_sei_walk(r, m, hrd_find_pt, &h)) { free(r); sc = nx; hdr = hdr2; continue; }
+        size_t o = h.pt_off;
+        if (hrd_cpb_at(r, o) == delay) { free(r); return 0; }
+        r[o] = (uint8_t)(delay >> 16);
+        r[o + 1] = (uint8_t)(delay >> 8);
+        r[o + 2] = (uint8_t)delay;
+        /* the NAL ends at its last nonzero byte (the stop bit); zeros
+         * after it are trailing_zero_8bits */
+        size_t ce = nx;
+        while (ce > hdr + 1 && b[ce - 1] == 0) ce--;
+        while (m > 0 && r[m - 1] == 0) m--;
+        uint8_t *nb = malloc(2 + m + m / 2);
+        if (!nb) { free(r); return -1; }
+        size_t k = 0;
+        int z = 0;
+        nb[k++] = b[hdr];
+        for (size_t i = 0; i < m; i++) {
+            if (z >= 2 && r[i] <= 3) { nb[k++] = 3; z = 0; }
+            nb[k++] = r[i];
+            z = r[i] == 0 ? z + 1 : 0;
+        }
+        free(r);
+        /* a grown NAL drops its trailing zeros, then its own zero_byte (it
+         * never opens its access unit); a shrunk one pads with trailing
+         * zeros */
+        long delta = (long)k - (long)(ce - hdr);
+        long sclen = (long)(hdr - sc), newsc = sclen, newtrail = (long)(nx - ce) - delta;
+        if (newtrail < 0) { newsc += newtrail; newtrail = 0; }
+        if (newsc < 3) { free(nb); return -1; }
+        size_t nn = sc + (size_t)newsc + k + (size_t)newtrail + (n - nx);
+        uint8_t *out = malloc(nn);
+        if (!out) { free(nb); return -1; }
+        size_t q = sc;
+        memcpy(out, b, sc);
+        for (long i = 0; i < newsc - 1; i++) out[q++] = 0;
+        out[q++] = 1;
+        memcpy(out + q, nb, k); q += k;
+        for (long i = 0; i < newtrail; i++) out[q++] = 0;
+        memcpy(out + q, b + nx, n - nx);
+        free(nb);
+        free(*buf);
+        *buf = out;
+        *sz = nn;
+        return 0;
+    }
+    return 0;
+}
+
 /* Y264_RC_CARRY=0 disables the cross-GOP ABR carry (each GOP re-solves its
  * own rate problem from the seeds, the pre-2026-09-02 behaviour). */
 static int rc_carry_on(void)
@@ -1605,18 +1771,12 @@ static void *gop_worker(void *arg)
             p.rc.vbv_seg_join = 1;
         /* The same handoff, asked of the HRD clock instead of the buffer. This
  * GOP opens a buffering period at its first picture, and that picture's
- * cpb_removal_delay counts ticks back to the PREVIOUS period, which is
- * the previous GOP's first picture -- two ticks per input frame between
- * them. Static in the GOP split, like the flag above, so it does not
- * depend on which worker coded which GOP. */
+ * cpb_removal_delay counts ticks back to the PREVIOUS period: the previous
+ * GOP's first picture, two ticks per input frame, unless that GOP opened
+ * one of its own at a scene cut. The writer rewrites it then
+ * (hrd_patch_first), once the previous GOP is coded. */
         if (g > 0 && p.nal_hrd)
             p.rc.hrd_bp_ticks = 2 * (j->gop_start[g] - j->gop_start[g - 1]);
-        /* ...and tell the encoder that the count above is only meaningful if it
- * opens no buffering period of its own in between. Assume segmented
- * unless the split is FINAL and holds exactly one GOP: a streamed input
- * publishes boundaries as it reads them, so "one so far" is not "one". */
-        if (p.nal_hrd)
-            p.rc.hrd_segmented = (gops_final && n_gops == 1) ? 0 : 1;
         /* ABR carry: the predecessor is the GOP handed out W places earlier
  * (pull mode: pull index k - W; static mode: this worker's previous
  * GOP). Wait for its export, then credit the GOPs between at target. */
@@ -3708,6 +3868,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * behaviour for a streaming encoder and it is what the exit code is for;
  * the alternative is holding the whole stream to be able to withdraw it. */
     int emitted = 0, wr_err = 0;
+    long hrd_next = -1;
+    int hrd_tpp = param->interlaced ? 1 : 2;
     for (;;) {
         uint8_t *buf = NULL;
         size_t sz = 0;
@@ -3726,6 +3888,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
         pthread_mutex_unlock(&job.lock);
         if (fin) break;
+        if (param->nal_hrd && buf && sz) {
+            if (emitted > 0 && hrd_next >= 0 && hrd_patch_first(&buf, &sz, hrd_next) < 0) {
+                fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", emitted);
+                wr_err = 1;
+            }
+            hrd_next = hrd_ticks_after(buf, sz, hrd_tpp);
+        }
         if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
             fprintf(stderr, "yah264: error writing the output stream\n");
             wr_err = 1;
@@ -5761,12 +5930,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
-    /* --nal-hrd runs one continuous encoder (see the path choice below), and
- * these three exist only on the per-GOP path, so they would be dropped. */
-    if (nal_hrd && (g_cut_split || g_shot_table || g_shot_crf)) {
-        fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: a buffering period "
-                "at every IDR needs one continuous encoder, and that option splits the "
-                "stream into per-GOP encoders\n",
+    /* --nal-hrd two-pass and cbr run one continuous encoder (see the path
+ * choice below), and these three exist only on the per-GOP path. */
+    if (nal_hrd && (param.rc.method == YAH264_RC_2PASS || nal_hrd == YAH264_NAL_HRD_CBR)
+        && (g_cut_split || g_shot_table || g_shot_crf)) {
+        fprintf(stderr, "yah264: --nal-hrd %s cannot be combined with %s: it runs one "
+                "continuous encoder, and that option splits the stream into per-GOP encoders\n",
+                param.rc.method == YAH264_RC_2PASS ? "two-pass" : "cbr",
                 g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table" : "--cut-split");
         return 2;
     }
@@ -5872,17 +6042,25 @@ int main(int argc, char **argv)
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
-    /* --nal-hrd needs a buffering period at every IDR. A GOP segment can't
- * open one at a scene-cut IDR of its own: the next segment counts its
- * removal delay back to this segment's start, which it fixes before this
- * one has found its cuts (see hrd_segmented in yah264.h). One instance
- * knows every cut, so --nal-hrd runs one, its threads on the wavefront. */
-    if (nal_hrd) {
+    /* --nal-hrd at one thread runs one continuous encoder: one worker has
+ * no parallel GOPs to win back, and the per-GOP path would restart the
+ * rate control at every keyint boundary. The per-GOP options still take
+ * that path. Two-pass and cbr run one encoder at any thread count,
+ * because their per-GOP joins can miss the handoff level, and a declared
+ * HRD turns that into a stream failing its own declaration:
+ * two-pass on syn_shots, a GOP pinned at QP 51 leaving the next one
+ * 3.5 kbit short; cbr on bbb 720p at 500 kbit/s into a 375 kbit buffer,
+ * a join IDR underflowing in about a third of four-thread runs, HRD or
+ * not. */
+    int hrd_serial = nal_hrd && (nthreads <= 1 || param.rc.method == YAH264_RC_2PASS
+                                 || nal_hrd == YAH264_NAL_HRD_CBR)
+                  && !g_cut_split && !g_shot_table && !g_shot_crf;
+    if (hrd_serial) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
-            LOGF(LOG_INFO, "yah264: --nal-hrd puts a buffering period at every IDR, which "
-                 "needs one continuous encoder, so the %d threads run its row wavefront "
-                 "instead of parallel GOPs\n", nthreads);
+            LOGF(LOG_INFO, "yah264: --nal-hrd %s runs one continuous encoder, so the "
+                 "%d threads run its row wavefront instead of parallel GOPs\n",
+                 param.rc.method == YAH264_RC_2PASS ? "two-pass" : "cbr", nthreads);
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
@@ -5891,7 +6069,7 @@ int main(int argc, char **argv)
  * Only when the user asked explicitly for more than one thread. Unset means
  * "auto, every core", which is not a user asking for anything, and warning on
  * it would fire on all 252 --dump-recon runs of the conformance gate. */
-    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !nal_hrd))) {
+    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !hrd_serial))) {
         /* Ordered by what actually decided it, not by what is also true: with
  * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */
