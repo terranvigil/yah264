@@ -115,10 +115,9 @@ putting its costs on the 8-bit scale in three places:
   sums full-resolution SATD at the coded depth.
 - **Adaptive quantization.** Every AQ path reads a macroblock's energy as
   `log2(variance + floor)` with the variance divided by 4 per extra bit,
-  so the floors, the anchor and B-frame levels, the frame DC and the
-  flat-content psy-trellis gate see the values they were fitted on. Read on
-  the coded samples, those were off by a factor of 16 at 10 bits, and the
-  flat gate stayed shut on content whose 8-bit encode opens it.
+  so the floors, the anchor and B-frame levels and the frame DC see the
+  values they were fitted on, and the flat psy-trellis gate's variance limit
+  is raised by the same factor.
 
 ## What we chose and why
 

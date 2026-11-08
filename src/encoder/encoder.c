@@ -2876,7 +2876,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         /* var*256^2 domain, on the coded samples: the 8-bit limit times
          * 4^(depth - 8) (y264_aq_vscale) */
         int64_t t = (int64_t)(PSY_FLAT_VAR / y264_aq_vscale()) << 16;
-        int64_t tv = (int64_t)64 << 16;                  /* textured, for the log */
+        int64_t tv = (int64_t)(64 / y264_aq_vscale()) << 16;  /* textured, for the log */
         /* a frame picture's blocks are the AQ pass's blocks: keep the sums
          * (one encoding thread, so no other prep can overwrite them mid-read) */
         uint32_t *keep = (e->mbvar && !e->fld_pic && e->param.threads == 1)

@@ -303,17 +303,8 @@ static int aq_mode_env(void)
 double y264_aq_bfloor(int abr) { return aq_mode_env() >= 2 && !(abr & 2) ? AQ2_BFLOOR : 1.0; }
 double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? AQ2_AFLOOR : 1.0; }
 
-/* The block energy every AQ path reads, l = log2(variance + floor), taken on
- * the 8-bit scale at every depth: a sample's variance grows 4x per extra bit,
- * so the variance is divided by 4^(depth - 8) first. The constants the field
- * is built from (both floors, the anchor and B-frame levels, the mode-2
- * gain's reference mean, the frame DC's rate proxy) and the flat-content
- * psy-trellis gate's variance limit were fitted at 8 bits, so on this scale a
- * 10-bit encode gets the offsets its 8-bit encode gets. Read on the coded
- * samples instead, the anchor level alone was shifted, and the floors, the
- * B-frame level and the flat gate were all off by the factor. At 8 bits the
- * divisor is 1 and nothing moves. Y264_AQ_D8=0 reads the coded samples (the
- * previous output, dev builds). */
+/* l on the 8-bit scale: variance grows 4x per extra bit and the AQ constants
+ * were fitted at 8 bits. Y264_AQ_D8=0 reads the coded samples (dev builds). */
 static int aq_d8_env(void)
 {
     static int v = -1;
