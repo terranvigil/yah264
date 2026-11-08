@@ -1447,18 +1447,9 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         if (e->bm_rvbv.cplx[1] > 0 && e->rcp_arr_cvi * cj < e->bm_rvbv.cplx[1])
             tight = 1;
         /* The anchor at the current base QP (type-1 frame_qp offset is 0)... */
-        /* Under CRF+VBV and CBR, when the buffer raised the last anchor above
- * the rate factor's QP, the next decide starts from the rate factor and
- * may drop as far as the extrapolation guard allows (QPD under the
- * calibrated regime). Price the anchor there, and with the model's
- * downward-extrapolation error (about 2x per 6 QP) in place of r_hi when
- * that is larger. samsung at a 480 kbit cap on four threads: an anchor
- * raised from 26 to 44, the next decided at 30, priced by the gate at
- * 44, coded 300 kbit into 281. With this the share of frames on the
- * serial schedule over the 18 compliance cells at six threads goes from
- * 9.8% to 10.9%. CBR the same way: sintel at 1224 kbit on four threads,
- * a burst priced at the last anchor's raised QP while its rate factor sat
- * 5 QP lower took 443 kbit out of 438. */
+        /* under CRF+VBV and CBR, after a raised anchor the next decide may
+ * drop to the extrapolation guard (QPD under the regime): price the anchor
+ * there, with the model's error off its regime (about 2x per 6 QP). */
         double gq = e->qp, ext = 1.0;
         double rfq = e->crf_on && !e->abr_on ? e->crf_pre_qp
                    : e->vbv_cbr && e->abr_rf2 && e->abr_qp > 0 ? e->abr_qp + e->crf_dc : 0.0;
@@ -1468,7 +1459,11 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
             if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
         }
         double q = pow(2.0, (gq - 12) / 6.0);
+        /* r_hi and ext are independent errors, so they compound where a pool
+ * codes on predictions; one thread re-codes against the measured size */
         double mg = ext > rhi ? ext : rhi;
+        if (e->pool && ext > 1.0)
+            mg = ext * rhi;
         fill -= mg * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
         if (fill < 0) tight = 1;
         fill = rcbuf_refill(&e->vbv, fill);
