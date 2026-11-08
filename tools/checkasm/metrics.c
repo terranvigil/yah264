@@ -592,37 +592,44 @@ static int run_intra16_satd_trio(const char *name, x3fn kern, pixfn2 satd16)
  * Dispatched from the macroblock code rather than the pixel table, and one of
  * the four kernels the single-file harness never tested at all: a grep for
  * `ssd` in it returned only the dispatcher's own name. */
-static int ssd_ref(const pixel *a, const pixel *b, int w, int h)
+static int ssd_ref(const pixel *a, const pixel *b, int st, int w, int h)
 {
     int r = 0;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
-            int d = a[y * STRIDE + x] - b[y * STRIDE + x];
+            int d = a[y * st + x] - b[y * st + x];
             r += d * d;
         }
     return r;
 }
 
-static int ssd_group(int (*k16)(const uint8_t *, int, const uint8_t *, int, int),
-                     int (*k8)(const uint8_t *, int, const uint8_t *, int, int),
-                     const char *tag)
+/* The four planes every SSD group draws first: equal, both full-swing signs
+ * and random extremes; the rest are random. */
+static void ssd_planes(int t, int st)
+{
+    plane();
+    if (t == 0) memcpy(pb, pa, st * PLANE_H * sizeof(pixel));
+    if (t == 1) { memset(pa, 0, st * PLANE_H * sizeof(pixel));
+                  ca_fill_max(pb, st * PLANE_H); }
+    if (t == 2) { ca_fill_max(pa, st * PLANE_H);
+                  memset(pb, 0, st * PLANE_H * sizeof(pixel)); }
+    if (t == 3) for (int i = 0; i < st * PLANE_H; i++) {
+                    pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
+}
+
+typedef int (*ssdfn)(const pixel *, int, const pixel *, int, int);
+
+static int ssd_group(ssdfn k16, ssdfn k8, const char *tag)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
-        plane();
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
+        ssd_planes(t, st);
         for (int w = 8; w <= 16; w += 8)
             for (int h = 4; h <= 16; h += 4) {
-                int r = 0;
-                for (int y = 0; y < h; y++)
-                    for (int x = 0; x < w; x++) {
-                        int d = pa[y * STRIDE + x] - pb[y * STRIDE + x];
-                        r += d * d;
-                    }
-                int o = w == 16
-                    ? k16((const uint8_t *)pa, STRIDE,
-                          (const uint8_t *)pb, STRIDE, h)
-                    : k8((const uint8_t *)pa, STRIDE,
-                         (const uint8_t *)pb, STRIDE, h);
+                int r = ssd_ref(pa, pb, st, w, h);
+                int o = w == 16 ? k16(pa, st, pb, st, h) : k8(pa, st, pb, st, h);
                 if (r != o) {
                     if (!bad) ca_fail("ssd%s_%dx%d: ref=%d opt=%d", tag, w, h, r, o);
                     bad++;
@@ -642,9 +649,7 @@ static int ssd_group(int (*k16)(const uint8_t *, int, const uint8_t *, int, int)
                 ca_pg_fill_pix(&gb, win / sizeof(pixel));
                 snprintf(what, sizeof(what), "ssd%s_%dx%d", tag, w, h);
                 ca_pg_arm(what);
-                sink = w == 16
-                    ? k16((const uint8_t *)a, STRIDE, (const uint8_t *)b, STRIDE, h)
-                    : k8((const uint8_t *)a, STRIDE, (const uint8_t *)b, STRIDE, h);
+                sink = w == 16 ? k16(a, STRIDE, b, STRIDE, h) : k8(a, STRIDE, b, STRIDE, h);
                 ca_pg_disarm();
                 (void)sink;
                 ca_pg_free(&ga);
@@ -656,13 +661,11 @@ static int ssd_group(int (*k16)(const uint8_t *, int, const uint8_t *, int, int)
         char lab[32];
         plane();
         snprintf(lab, sizeof(lab), "ssd_16x16%s", tag);
-        CA_BENCH2(lab, s_ += k16((const uint8_t *)pa, STRIDE,
-                                 (const uint8_t *)pb, STRIDE, 16),
-                  s_ += ssd_ref(pa, pb, 16, 16));
+        CA_BENCH2(lab, s_ += k16(pa, STRIDE, pb, STRIDE, 16),
+                  s_ += ssd_ref(pa, pb, STRIDE, 16, 16));
         snprintf(lab, sizeof(lab), "ssd_8x8%s", tag);
-        CA_BENCH2(lab, s_ += k8((const uint8_t *)pa, STRIDE,
-                                (const uint8_t *)pb, STRIDE, 8),
-                  s_ += ssd_ref(pa, pb, 8, 8));
+        CA_BENCH2(lab, s_ += k8(pa, STRIDE, pb, STRIDE, 8),
+                  s_ += ssd_ref(pa, pb, STRIDE, 8, 8));
     }
     return bad;
 }
@@ -670,25 +673,19 @@ static int ssd_group(int (*k16)(const uint8_t *, int, const uint8_t *, int, int)
 /* The per-4x4 SSD map of a 16x16 block (the B skip screen's proof input):
  * sixteen outputs, each against the scalar sum, on random, equal, extreme
  * and all-max planes, then the page guard at both tails. */
-typedef void (*ssdmapfn)(const uint8_t *, int, const uint8_t *, int, uint32_t[16]);
+typedef void (*ssdmapfn)(const pixel *, int, const pixel *, int, uint32_t[16]);
 static int ssdmap_group(ssdmapfn k, const char *tag)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
-        plane();
-        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      ca_fill_max(pb, STRIDE * PLANE_H); }
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
+        ssd_planes(t, st);
         uint32_t o[16];
-        k((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, o);
+        k(pa, st, pb, st, o);
         for (int b = 0; b < 16; b++) {
-            uint32_t r = 0;
-            for (int y = 0; y < 4; y++)
-                for (int x = 0; x < 4; x++) {
-                    int d = pa[((b >> 2) * 4 + y) * STRIDE + (b & 3) * 4 + x]
-                          - pb[((b >> 2) * 4 + y) * STRIDE + (b & 3) * 4 + x];
-                    r += (uint32_t)(d * d);
-                }
+            uint32_t r = (uint32_t)ssd_ref(pa + (b >> 2) * 4 * st + (b & 3) * 4,
+                                           pb + (b >> 2) * 4 * st + (b & 3) * 4, st, 4, 4);
             if (r != o[b]) {
                 if (!bad) ca_fail("ssd4x4_map16%s: block %d ref=%u opt=%u", tag, b, r, o[b]);
                 bad++;
@@ -706,7 +703,7 @@ static int ssdmap_group(ssdmapfn k, const char *tag)
         ca_pg_fill_pix(&gb, win / sizeof(pixel));
         snprintf(what, sizeof(what), "ssd4x4_map16%s", tag);
         ca_pg_arm(what);
-        k((const uint8_t *)a, STRIDE, (const uint8_t *)b, STRIDE, o);
+        k(a, STRIDE, b, STRIDE, o);
         ca_pg_disarm();
         ca_pg_free(&ga);
         ca_pg_free(&gb);
@@ -714,51 +711,74 @@ static int ssdmap_group(ssdmapfn k, const char *tag)
     return bad;
 }
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
 /* Per-4x4 SSD and signed sum maps (16x16 and 8x8) against a scalar walk,
- * over random, equal and full-swing planes. */
+ * over random, equal and full-swing planes, with a sentinel past each
+ * output, then the read window at both tails. The dot product forms exist
+ * at 8 bits only. */
 static int t_ssdsum4x4_neon(void)
 {
+    typedef void (*sfn)(const pixel *, int, const pixel *, int, uint32_t *, int32_t *);
+    sfn k16[2] = { y264_ssdsum4x4_16_neon, NULL }, k8[2] = { y264_ssdsum4x4_8_neon, NULL };
+#if Y264_HAVE_NEON
+    if (y264_cpu_detect() & Y264_CPU_DOTPROD) {
+        k16[1] = y264_ssdsum4x4_16_neon_dotprod;
+        k8[1] = y264_ssdsum4x4_8_neon_dotprod;
+    }
+#endif
     int bad = 0;
     for (int t = 0; t < TRIALS && !bad; t++) {
-        plane();
-        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
-        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
-                      ca_fill_max(pb, STRIDE * PLANE_H); }
-        if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
-                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+        /* odd trials run at an odd stride */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
+        ssd_planes(t, st);
         for (int big = 0; big <= 1; big++) {
             int nb = big ? 4 : 2;
-            uint32_t e[16]; int32_t sm[16];
-          for (int dpv = 0; dpv <= ((y264_cpu_detect() & Y264_CPU_DOTPROD) ? 1 : 0); dpv++) {
-            if (dpv) {
-                if (big) y264_ssdsum4x4_16_neon_dotprod((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
-                else     y264_ssdsum4x4_8_neon_dotprod((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
-            } else {
-                if (big) y264_ssdsum4x4_16_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
-                else     y264_ssdsum4x4_8_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
-            }
-            for (int b = 0; b < nb * nb; b++) {
-                uint32_t re = 0; int32_t rs = 0;
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++) {
-                        int d = pa[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x]
-                              - pb[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x];
-                        re += (uint32_t)(d * d); rs += d;
-                    }
-                if (re != e[b] || rs != sm[b]) {
-                    if (!bad) ca_fail("ssdsum4x4_%d: block %d e %u/%u s %d/%d", big ? 16 : 8,
-                                      b, e[b], re, sm[b], rs);
+            for (int v = 0; v < 2 && (big ? k16 : k8)[v]; v++) {
+                uint32_t e[17]; int32_t sm[17];
+                e[nb * nb] = 0xdeadbeefu; sm[nb * nb] = 0x5a5a5a5a;
+                (big ? k16 : k8)[v](pa, st, pb, st, e, sm);
+                if (e[nb * nb] != 0xdeadbeefu || sm[nb * nb] != 0x5a5a5a5a) {
+                    if (!bad) ca_fail("ssdsum4x4_%d: wrote past its output", big ? 16 : 8);
                     bad++;
                 }
+                for (int b = 0; b < nb * nb; b++) {
+                    uint32_t re = 0; int32_t rs = 0;
+                    for (int y = 0; y < 4; y++)
+                        for (int x = 0; x < 4; x++) {
+                            int d = pa[((b / nb) * 4 + y) * st + (b % nb) * 4 + x]
+                                  - pb[((b / nb) * 4 + y) * st + (b % nb) * 4 + x];
+                            re += (uint32_t)(d * d); rs += d;
+                        }
+                    if (re != e[b] || rs != sm[b]) {
+                        if (!bad) ca_fail("ssdsum4x4_%d: block %d e %u/%u s %d/%d",
+                                          big ? 16 : 8, b, e[b], re, sm[b], rs);
+                        bad++;
+                    }
+                }
             }
-          }
+        }
+    }
+    for (int big = 0; big <= 1 && !bad; big++) {
+        int n = big ? 16 : 8;
+        size_t win = ca_pg_window_pix(STRIDE, n, n);
+        for (int tail = 0; tail <= 1; tail++) {
+            ca_pg ga, gb;
+            pixel *a = ca_pg_alloc(&ga, win, tail);
+            pixel *b = ca_pg_alloc(&gb, win, tail);
+            uint32_t e[16]; int32_t sm[16];
+            ca_pg_fill_pix(&ga, win / sizeof(pixel));
+            ca_pg_fill_pix(&gb, win / sizeof(pixel));
+            ca_pg_arm("ssdsum4x4");
+            (big ? k16 : k8)[0](a, STRIDE, b, STRIDE, e, sm);
+            ca_pg_disarm();
+            ca_pg_free(&ga);
+            ca_pg_free(&gb);
         }
     }
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 */
 
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
 /* SATD against the rounded average of two planes vs building the average and
@@ -947,14 +967,14 @@ static int t_intra4_mode_search(void)
 static int t_intra16_satd_trio(void)
 { return run_intra16_satd_trio("intra16_satd_trio", y264_intra16_satd_trio_neon,
                               y264_satd_16x16_neon_ded); }
-#if Y264_HAVE_NEON
 static int t_ssd(void)
 { return ssd_group(y264_ssd_16xh_neon, y264_ssd_8xh_neon, ""); }
+static int t_ssdmap(void)
+{ return ssdmap_group(y264_ssd4x4_map16_neon, ""); }
+#if Y264_HAVE_NEON
 static int t_ssd_dotprod(void)
 { return ssd_group(y264_ssd_16xh_neon_dotprod, y264_ssd_8xh_neon_dotprod,
                    "_dotprod"); }
-static int t_ssdmap(void)
-{ return ssdmap_group(y264_ssd4x4_map16_neon, ""); }
 static int t_ssdmap_dotprod(void)
 { return ssdmap_group(y264_ssd4x4_map16_neon_dotprod, "_dotprod"); }
 
@@ -1632,6 +1652,9 @@ const ca_test ca_pixel_tests[] = {
     { "var16x16",         "pixel", Y264_CPU_NEON, t_var16x16 },
     { "intra16_satd_trio", "pixel", Y264_CPU_NEON, t_intra16_satd_trio },
     { "satd_avg8x8",      "pixel", Y264_CPU_NEON, t_satd_avg8x8_neon },
+    { "ssd",              "pixel", Y264_CPU_NEON, t_ssd },
+    { "ssd4x4_map",       "pixel", Y264_CPU_NEON, t_ssdmap },
+    { "ssdsum4x4",        "pixel", Y264_CPU_NEON, t_ssdsum4x4_neon },
 #endif
 #if Y264_HAVE_SSE4
     { "sad_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_sad_sse4 },

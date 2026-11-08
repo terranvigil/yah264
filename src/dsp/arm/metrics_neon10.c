@@ -611,4 +611,118 @@ void y264_intra16_satd_trio_neon(const pixel *src, int ss, const pixel *top,
     costs[2] = 2 * (int)vaddvq_u32(ad);
 }
 
+/* ---- SSD -------------------------------------------------------------------
+ *
+ * A square of a 10-bit residual reaches 1023^2 = 1046529, past u16, so each
+ * square widens into a u32 lane as it accumulates. A lane takes one square
+ * per row, at most 16 (<= 16.7M), and a 16x16 block's total is <= 2.68e8,
+ * inside the int the callers take. The signed sum of a 4x4 stays in an s16
+ * lane: four rows of residuals are <= 4092 per lane, and a pair of lanes
+ * <= 8184, before the widening add. There is no dot product form: the
+ * instruction takes 8-bit elements. */
+static inline uint32x4_t sq_lo(uint32x4_t acc, uint16x8_t d)
+{
+    return vmlal_u16(acc, vget_low_u16(d), vget_low_u16(d));
+}
+static inline uint32x4_t sq_hi(uint32x4_t acc, uint16x8_t d)
+{
+    return vmlal_high_u16(acc, d, d);
+}
+
+int y264_ssd_16xh_neon(const pixel *a, int as, const pixel *b, int bs, int h)
+{
+    uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
+    uint32x4_t s2 = vdupq_n_u32(0), s3 = vdupq_n_u32(0);
+    for (int y = 0; y < h; y++, a += as, b += bs) {
+        uint16x8x2_t va = vld1q_u16_x2(a), vb = vld1q_u16_x2(b);
+        uint16x8_t d0 = vabdq_u16(va.val[0], vb.val[0]);
+        uint16x8_t d1 = vabdq_u16(va.val[1], vb.val[1]);
+        s0 = sq_lo(s0, d0);
+        s1 = sq_hi(s1, d0);
+        s2 = sq_lo(s2, d1);
+        s3 = sq_hi(s3, d1);
+    }
+    return (int)vaddvq_u32(vaddq_u32(vaddq_u32(s0, s1), vaddq_u32(s2, s3)));
+}
+
+int y264_ssd_8xh_neon(const pixel *a, int as, const pixel *b, int bs, int h)
+{
+    uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
+    for (int y = 0; y < h; y++, a += as, b += bs) {
+        uint16x8_t d = vabdq_u16(vld1q_u16(a), vld1q_u16(b));
+        s0 = sq_lo(s0, d);
+        s1 = sq_hi(s1, d);
+    }
+    return (int)vaddvq_u32(vaddq_u32(s0, s1));
+}
+
+/* Per-4x4 SSD of a 16x16 block, out[row4 * 4 + col4]: one accumulator per
+ * 4x4 column, folded to one lane per block with two pairwise adds. */
+void y264_ssd4x4_map16_neon(const pixel *a, int as, const pixel *b, int bs,
+                            uint32_t out[16])
+{
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t e0 = vdupq_n_u32(0), e1 = vdupq_n_u32(0);
+        uint32x4_t e2 = vdupq_n_u32(0), e3 = vdupq_n_u32(0);
+        for (int y = 0; y < 4; y++) {
+            const pixel *pa = a + (4 * r + y) * as, *pb = b + (4 * r + y) * bs;
+            uint16x8x2_t va = vld1q_u16_x2(pa), vb = vld1q_u16_x2(pb);
+            uint16x8_t d0 = vabdq_u16(va.val[0], vb.val[0]);
+            uint16x8_t d1 = vabdq_u16(va.val[1], vb.val[1]);
+            e0 = sq_lo(e0, d0);
+            e1 = sq_hi(e1, d0);
+            e2 = sq_lo(e2, d1);
+            e3 = sq_hi(e3, d1);
+        }
+        vst1q_u32(out + 4 * r, vpaddq_u32(vpaddq_u32(e0, e1), vpaddq_u32(e2, e3)));
+    }
+}
+
+/* The same map with the signed sum of a - b per 4x4 beside it, for the
+ * 16x16 block (sixteen entries) and the 8x8 block (four). */
+void y264_ssdsum4x4_16_neon(const pixel *a, int as, const pixel *b, int bs,
+                            uint32_t e[16], int32_t sum[16])
+{
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t e0 = vdupq_n_u32(0), e1 = vdupq_n_u32(0);
+        uint32x4_t e2 = vdupq_n_u32(0), e3 = vdupq_n_u32(0);
+        int16x8_t sl = vdupq_n_s16(0), sh = vdupq_n_s16(0);
+        for (int y = 0; y < 4; y++) {
+            const pixel *pa = a + (4 * r + y) * as, *pb = b + (4 * r + y) * bs;
+            uint16x8x2_t va = vld1q_u16_x2(pa), vb = vld1q_u16_x2(pb);
+            uint16x8_t d0 = vabdq_u16(va.val[0], vb.val[0]);
+            uint16x8_t d1 = vabdq_u16(va.val[1], vb.val[1]);
+            e0 = sq_lo(e0, d0);
+            e1 = sq_hi(e1, d0);
+            e2 = sq_lo(e2, d1);
+            e3 = sq_hi(e3, d1);
+            sl = vaddq_s16(sl, vreinterpretq_s16_u16(vsubq_u16(va.val[0], vb.val[0])));
+            sh = vaddq_s16(sh, vreinterpretq_s16_u16(vsubq_u16(va.val[1], vb.val[1])));
+        }
+        vst1q_u32(e + 4 * r, vpaddq_u32(vpaddq_u32(e0, e1), vpaddq_u32(e2, e3)));
+        vst1q_s32(sum + 4 * r, vpaddlq_s16(vpaddq_s16(sl, sh)));
+    }
+}
+
+void y264_ssdsum4x4_8_neon(const pixel *a, int as, const pixel *b, int bs,
+                           uint32_t e[4], int32_t sum[4])
+{
+    uint32x4_t e0 = vdupq_n_u32(0), e1 = vdupq_n_u32(0);
+    uint32x4_t e2 = vdupq_n_u32(0), e3 = vdupq_n_u32(0);
+    int16x8_t s01 = vdupq_n_s16(0), s23 = vdupq_n_s16(0);
+    for (int y = 0; y < 4; y++) {
+        uint16x8_t va = vld1q_u16(a + y * as), vb = vld1q_u16(b + y * bs);
+        uint16x8_t wa = vld1q_u16(a + (4 + y) * as), wb = vld1q_u16(b + (4 + y) * bs);
+        uint16x8_t d = vabdq_u16(va, vb), dd = vabdq_u16(wa, wb);
+        e0 = sq_lo(e0, d);
+        e1 = sq_hi(e1, d);
+        e2 = sq_lo(e2, dd);
+        e3 = sq_hi(e3, dd);
+        s01 = vaddq_s16(s01, vreinterpretq_s16_u16(vsubq_u16(va, vb)));
+        s23 = vaddq_s16(s23, vreinterpretq_s16_u16(vsubq_u16(wa, wb)));
+    }
+    vst1q_u32(e, vpaddq_u32(vpaddq_u32(e0, e1), vpaddq_u32(e2, e3)));
+    vst1q_s32(sum, vpaddlq_s16(vpaddq_s16(s01, s23)));
+}
+
 #endif /* __aarch64__ */
