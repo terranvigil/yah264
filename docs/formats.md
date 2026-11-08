@@ -186,10 +186,10 @@ layout is the likelier cause than the dispatch itself.
   BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over the quality range both ladders
   cover (`--max-crf` drops the top rungs), with each rung's CAMBI beside it.
   It needs `VMAF_HDR` and `VMAF_HDR_MODELS`. Rungs are cached, keyed on the
-  encoder binary, its libraries, command line and `Y264_*` environment, the
-  source file, the script and the scorer chain; a reused rung prints "cached",
-  `--fresh` ignores the cache, and a second run on the same work directory
-  stops at once. The 1080p test spans are 120 frames. `--vbr` runs a VBR
+  encoder binary, its libraries, command line and `Y264_*` and `YAH264_*`
+  environment, the source file, the script and the scorer chain; a reused
+  rung prints "cached", `--fresh` ignores the cache, and a run started while
+  another holds the same work directory stops at once. The 1080p test spans are 120 frames. `--vbr` runs a VBR
   ladder at the listed targets (maxrate 1.5x, buffer 2x the target, initial
   fill 0.9, on both encoders) and prints each rung's rate error, flagged
   outside the parity spec's +-10% bar, and the VBV checker's verdict.
