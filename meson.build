@@ -19,6 +19,9 @@ m_dep = cc.find_library('m', required : false)
 threads_dep = dependency('threads')
 
 add_project_arguments('-D_GNU_SOURCE', language : 'c')
+# an #if on an undefined macro reads 0 and silently drops the code behind it,
+# e.g. a Y264_HAVE_* test in a file that never included its header
+add_project_arguments(cc.get_supported_arguments('-Werror=undef'), language : 'c')
 add_project_arguments('-DY264_DEV_KNOBS=@0@'.format(get_option('dev_knobs') ? 1 : 0), language : 'c')
 
 # Item C3-10bit: the sample width is a compile-time type (src/common/
@@ -37,6 +40,9 @@ add_project_arguments('-DY264_DEV_KNOBS=@0@'.format(get_option('dev_knobs') ? 1 
 # checkasm's kernel families, the unit tests, the in-tree tools - and nothing
 # else. It no longer decides what the CLI can encode.
 bit_depth = get_option('bit_depth')
+if bit_depth != 8 and bit_depth != 10
+  error('bit_depth must be 8 or 10')
+endif
 add_project_arguments('-DY264_BIT_DEPTH=@0@'.format(bit_depth), language : 'c')
 is_8bit = bit_depth == 8
 symbols10_h = meson.current_source_dir() / 'src' / 'common' / 'symbols10.h'
