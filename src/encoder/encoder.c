@@ -11531,7 +11531,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             int bump = (int)ceil(6.0 * log2(bits / limit));
             if (bump < 1) bump = 1;
             int nq = e->qp + bump;
-            if (nq > 51) nq = 51;
+            int cap = fqp0 < qp0 ? 51 + qp0 - fqp0 : 51;   /* intra codes under its base */
+            if (nq > cap) nq = cap;
             nq = (int)crf_max_clip(e, qp0, nq, fqp0 - qp0);
             if (nq == e->qp)
                 break;                  /* already at the ceiling */

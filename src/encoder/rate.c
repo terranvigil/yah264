@@ -1383,7 +1383,12 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     newqp = crf_max_clip(e, e->qp, newqp, coded - e->qp);
     int q = (int)lround(newqp);
     if (q < 1) q = 1;              /* the VBV loop's own floor, below --qpmin */
-    q = qp_bound(e, q);
+    /* the bound is on the coded QP: an intra frame codes under its base, so
+ * its base may rise that far past the ceiling, or a starved all-intra
+ * stream stops 3 QP short of what the buffer needs */
+    int lift = coded < e->qp ? e->qp - coded : 0;
+    if (q < e->qp_min) q = e->qp_min;
+    if (q > e->qp_max + lift) q = e->qp_max + lift;
     /* An intra frame the buffer raised: the anchors that refine it are
  * the ones the bits model cannot price (see the burst gate). */
     if (type == 0 && e->crf_on && !e->abr_on)
