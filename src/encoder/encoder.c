@@ -1571,6 +1571,13 @@ static int fld_navail(const yah264_encoder_t *e)
  * --ref counts FIELDS here, because num_ref_idx_l0_active does. --ref 1
  * therefore still names exactly the nearest same-parity field, which is the
  * list PAFF-1 built, and only a deeper list reaches the other parity. */
+/* A field's POC over its frame's: the field coded first takes the frame
+ * POC and the other the one after it (emit_pair). */
+static inline int fld_poc_off(const yah264_encoder_t *e, int parity)
+{
+    return parity ^ (e->fields == 2);
+}
+
 static int build_field_list0(yah264_encoder_t *e, int is_ref,
                              const pixel *pl[16][3], int poc[16], int fn[16],
                              int par[16], int nframes)
@@ -1590,7 +1597,7 @@ static int build_field_list0(yah264_encoder_t *e, int is_ref,
  * other reasons (fpipe_ready, stair_clamp_on). Whoever re-arms one has
  * to hand the pair's recon base in rather than read it here. */
         for (int c = 0; c < 3; c++) cpl[nc][c] = e->rec[c];
-        cpoc[nc] = e->poc - cur;            /* the pair's frame POC (its top field's) */
+        cpoc[nc] = e->poc - fld_poc_off(e, cur);   /* the pair's frame POC */
         cfn[nc] = e->frame_num;             /* a pair shares one frame_num */
         chas[nc][cur] = 0;                  /* this field is the one being coded */
         chas[nc][opp] = 1;
@@ -1621,7 +1628,7 @@ static int build_field_list0(yah264_encoder_t *e, int is_ref,
         int k = idx[t]++;
         for (int c = 0; c < 3; c++)
             pl[n][c] = cpl[k][c] + (size_t)turn * e->pstride[c];
-        poc[n] = cpoc[k] + turn;
+        poc[n] = cpoc[k] + fld_poc_off(e, turn);
         fn[n] = cfn[k];
         par[n] = turn;
         n++;
@@ -2143,7 +2150,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * build_list0 already gave */
                 for (int c = 0; c < 3; c++)
                     l0p[i][c] += (size_t)e->fld_parity * e->pstride[c];
-                l0poc[i] += e->fld_parity;
+                l0poc[i] += fld_poc_off(e, e->fld_parity);
             }
     }
     /* v3 depth clamp eligibility for this slice: a P's list-0 searches against
@@ -2324,7 +2331,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * co-located picture, colpoc resolves each block's refIdx to a POC. */
     e->cur_l0n = (type != 0) ? active_ref : 0;
     for (int i = 0; i < e->cur_l0n; i++) e->cur_l0poc[i] = l0poc[i];
-    e->cur_l1poc0 = (type == 2) ? (e->ref1_poc + e->fld_parity) : -1;
+    e->cur_l1poc0 = (type == 2) ? (e->ref1_poc + fld_poc_off(e, e->fld_parity)) : -1;
     if (e->fld_pic) {                   /* ...and keep this field's, by parity */
         int p = e->fld_parity;
         e->fld_l0n[p] = e->cur_l0n;
@@ -2696,7 +2703,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             f.ref1_stride[c] *= 2;
         }
         f.poc_l0 = (type != 0) ? l0poc[0] : e->poc;
-        f.poc_l1 = (type == 2) ? e->ref1_poc + e->fld_parity : e->poc;
+        f.poc_l1 = (type == 2) ? e->ref1_poc + fld_poc_off(e, e->fld_parity) : e->poc;
         if (type == 0)
             for (int c = 0; c < 3; c++)
                 f.refs[0][c] = f.ref[c];
@@ -11585,8 +11592,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * mb-tree field, its place in coding order, and the DPB store that follows the
  * pair. What each field gets of its own is a parity, a POC and a reference
  * list. The two share one frame_num -- they are a complementary field pair --
- * and split the frame's POC 2n into 2n and 2n+1, so the top field precedes the
- * bottom in output order whichever is coded first.
+ * and split the frame's POC 2n into 2n for the field coded first and 2n+1 for
+ * the other, so output order follows the field order --tff/--bff declares.
  *
  * The second field of an I frame is coded as a P field predicting from the
  * first, which is the one place a field reads the OTHER parity and the whole
@@ -11612,7 +11619,9 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     for (int k = 0; k < 2 && r >= 0; k++) {
         e->fld_second = k;
         e->fld_parity = k ? !first_par : first_par;
-        e->poc = poc + e->fld_parity;
+        /* the coded-first field is the earlier one in time, so it takes the
+         * even POC: under --bff that is the bottom field */
+        e->poc = poc + k;
         /* A second field with a reference in front of it is a P field; one
  * whose pair is not a reference pair has nothing of its own to predict
  * from and stays whatever the frame is.
