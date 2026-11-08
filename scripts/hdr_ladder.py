@@ -10,11 +10,15 @@ yah264 against x264 High 10, scored with VMAF v1's HDR model and PSNR on the
                         [--encoders x264,yah264] [--threads 3] [--work DIR]
                         [--fresh]
 
-Both encoders run at medium. The source must be a 4:2:0 10-bit Y4M
-(C420p10) at exactly 1920x1080 or 3840x2160: the HDR model is scored at
-its own display size (3d0h at 1080p, 1d5h_2160 at 2160p, the hfr variant
-at 50 fps and up), and anything smaller would need the project's
-upscale-to-1080p rule first, so it is refused. Every decode must be clean
+Both encoders run at medium. The source must be a progressive, limited
+range 4:2:0 10-bit Y4M (C420p10) of any even size. The model follows the
+source: 1d5h_2160 when its height is above 1080 (so 1440p and 3840x1600
+score on it), 3d0h otherwise (1920x1080, a 1920x800 scope picture), and the
+hfr variant of either at 50 fps and up. A source smaller than 1920x1080 in
+both dimensions is scored at display size, as the project's VMAF v1 rule
+says: the reference and the decode are both scaled up to fit 1920x1080
+(bicubic, aspect kept) and CAMBI is told the coded size. PSNR is always
+taken at the coded size. Every decode must be clean
 and hold exactly the source's frame count, or the run stops. Rungs must be
 distinct, and a metric whose quality doesn't rise with bitrate across a
 ladder gets no BD figure. Read the printed rungs before trusting a BD figure;
@@ -46,14 +50,16 @@ help doesn't say), so a deeper --yah-lookahead is refused rather than
 printed as run. CAMBI is the pooled mean of the banding feature the
 HDR model computes in the same run.
 
-Each rung's result is cached in the work directory, keyed on the encoder
-binary and the non-system libraries it links, its full command line and,
-for yah264, every Y264_* and YAH264_* variable set; the source's size,
-mtime, ctime, inode and sampled md5; this script's own md5; and the scorer
-chain (the vmaf and ffmpeg binaries, their libraries and versions, the model
-file and, for VBR, vbv_check.py). A change to any of them re-encodes; a
-reused rung prints "cached". RESULT_VERSION versions the cached JSON's
-layout. Each binary runs by the path that was hashed, and is hashed again
+Each rung's result is cached in the work directory under two keys. The
+stream's key is the encoder binary and the non-system libraries it links,
+its full command line and, for yah264, every Y264_* and YAH264_* variable
+set, and the source's size, mtime, ctime, inode and sampled md5; a change
+to any of them re-encodes. The score's key is the scorer chain: the vmaf
+and ffmpeg binaries, their libraries and versions, the model file, the
+display scaling, this script's own md5 and, for VBR, vbv_check.py; a change
+there rescores the kept stream (printed "rescored") as long as its md5 is
+the one recorded. A reused rung prints "cached". RESULT_VERSION versions
+the cached JSON's layout. Each binary runs by the path that was hashed, and is hashed again
 after every rung it took part in; a run stops if one changed underneath it.
 --fresh ignores the cache. A run holds a lock on its work directory,
 and a second run on the same directory stops at once.
@@ -66,7 +72,7 @@ and a second run on the same directory stops at once.
 import argparse, fcntl, hashlib, json, math, os, re, shutil, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bdcompare import bd_rate                                   # noqa: E402
+from bdcompare import bd_rate, v1_scaled, V1_SCALE_VF          # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 YAH = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
@@ -77,7 +83,6 @@ MODELS = os.environ.get("VMAF_HDR_MODELS")
 VBV_CHECK = os.path.join(ROOT, "scripts", "vbv_check.py")
 
 
-SIZES = {(1920, 1080): "3d0h", (3840, 2160): "1d5h_2160"}
 # x264 takes up to 250 frames of lookahead
 MAX_LOOKAHEAD = 250
 # yah264's medium default and its cap, used only when its --help doesn't
@@ -88,7 +93,7 @@ VBV_INIT = 0.9
 RATE_BAR = 10.0
 # bump when the cached JSON's layout changes; a change to how a rung is
 # measured is caught by the script's md5 in the key
-RESULT_VERSION = 4
+RESULT_VERSION = 5
 KNOB_PREFIXES = ("Y264_", "YAH264_")
 LOCK = None
 
@@ -109,16 +114,16 @@ def y4m_info(path):
     if tok.get("C") != "420p10":
         sys.exit(f"hdr_ladder: {path} is C{tok.get('C', '420')}, not C420p10")
     w, h = int(tok["W"]), int(tok["H"])
-    if (w, h) not in SIZES:
-        sys.exit(f"hdr_ladder: {path} is {w}x{h}; the HDR models are scored at 1920x1080 "
-                 "or 3840x2160, and a smaller clip has to be scaled up to 1080p first")
+    if w % 2 or h % 2:
+        sys.exit(f"hdr_ladder: {path} is {w}x{h}; 4:2:0 needs an even width and height")
     num, den = map(int, tok["F"].split(":"))
     return w, h, num / den
 
 
 def model_path(w, h, fps):
+    """The model follows the source: "above 1080p" means a height above 1080."""
     d = "hdr_vmaf_v1.1.8" + ("_hfr" if fps >= 50 else "")
-    return os.path.join(MODELS, d, f"{d}_{SIZES[(w, h)]}.json")
+    return os.path.join(MODELS, d, f"{d}_{'1d5h_2160' if h > 1080 else '3d0h'}.json")
 
 
 def which(b):
@@ -275,19 +280,26 @@ def fmt(q):
     return str(int(q)) if q == int(q) else f"{q:g}"
 
 
-def load_cached(js, key):
+def load_json(js):
     try:
         with open(js) as f:
             r = json.load(f)
     except (OSError, ValueError):
         return None
-    if not isinstance(r, dict) or r.get("key") != key:
-        return None
-    r["cached"] = True
-    return r
+    return r if isinstance(r, dict) else None
 
 
-def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la_default, fresh):
+def scale_to_display(y4m, disp):
+    """y4m fitted to the v1 display (bicubic, aspect kept), written to disp."""
+    d = run([FFMPEG, "-v", "error", "-nostdin", "-i", y4m, "-vf", V1_SCALE_VF,
+             "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", "-y", disp])
+    if d.stderr.strip():
+        sys.exit(f"hdr_ladder: scaling {y4m} to the display failed:\n{d.stderr[-1500:]}")
+    return disp
+
+
+def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la_default,
+         fresh, ref_disp):
     tag = f"{mode}{fmt(q)}" + (f"_la{lookahead}" if lookahead is not None else "")
     # two builds or thread counts in one work directory keep their own rungs
     tag += "_" + hashlib.md5(f"{enc_id['md5']} {threads}".encode()).hexdigest()[:8]
@@ -311,26 +323,39 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
     else:
         cmd = [X264, "--preset", "medium", "--profile", "high10", "--output-depth", "10"] + rc + \
               ["--threads", str(threads), "--log-level", "error", "-o", part, src]
-    key = {"encoder": enc_id, "cmd": cmd, "model": model_path(w, h, fps),
-           "version": RESULT_VERSION, **ids}
-    if not fresh:
-        r = load_cached(js, key)
-        if r is not None:
-            return r
-    for p in (js, out, part, dec, vj):
+    # the stream is keyed on what makes it, the score on what reads it, so a
+    # scorer change rescores the kept stream instead of encoding it again
+    enc_key = {"encoder": enc_id, "cmd": cmd, "src": ids["src"], "version": RESULT_VERSION}
+    score_key = {k: v for k, v in ids.items() if k != "src"}
+    score_key.update(model=model_path(w, h, fps), display=V1_SCALE_VF if ref_disp else None,
+                     version=RESULT_VERSION)
+    old = None if fresh else load_json(js)
+    if old and old.get("enc_key") == enc_key and old.get("score_key") == score_key:
+        old["cached"] = True
+        return old
+    # a kept stream is reused only while its bytes are the ones the record names
+    reuse = bool(old and old.get("enc_key") == enc_key and os.path.isfile(out)
+                 and old.get("stream_md5") == md5_of(out))
+    for p in ((dec, vj) if reuse else (js, out, part, dec, vj)):
         if os.path.exists(p):
             os.remove(p)
-    # the stream is written under a temporary name and must appear fresh and
-    # non-empty, so an encoder that exits 0 without writing can't hand an old
-    # stream to the scorer
-    start = time.time_ns()
-    run(cmd)
-    if not os.path.exists(part) or os.path.getsize(part) == 0 or os.stat(part).st_mtime_ns < start - 10**9:
-        sys.exit(f"hdr_ladder: {enc} exited cleanly but wrote no stream: {' '.join(cmd)}")
-    os.replace(part, out)
-    # read before the decode and scoring, so a misread costs one encode
-    ran = lookahead_in_stream(out) if enc == "x264" else \
-        (lookahead if lookahead is not None else la_default)
+    if reuse:
+        ran = old["lookahead_run"]
+    else:
+        # the stream is written under a temporary name and must appear fresh
+        # and non-empty, so an encoder that exits 0 without writing can't hand
+        # an old stream to the scorer
+        start = time.time_ns()
+        run(cmd)
+        if not os.path.exists(part) or os.path.getsize(part) == 0 or \
+                os.stat(part).st_mtime_ns < start - 10**9:
+            sys.exit(f"hdr_ladder: {enc} exited cleanly but wrote no stream: {' '.join(cmd)}")
+        os.replace(part, out)
+        # read before the decode and scoring, so a misread costs one encode
+        ran = lookahead_in_stream(out) if enc == "x264" else \
+            (lookahead if lookahead is not None else la_default)
+    stream_md5 = md5_of(out)
+    dec_disp = None
     try:
         # -xerror and explode turn a damaged stream into an error; anything
         # ffmpeg says at -v error is treated the same, whatever its exit code
@@ -344,11 +369,19 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
         for side in ("ref", "dist"):
             col += [f"--color_range_{side}", "limited", f"--color_primaries_{side}", "bt2020",
                     f"--color_trc_{side}", "pq", f"--color_matrix_{side}", "bt2020nc"]
-        run([VMAF, "--reference", src, "--distorted", dec, "--threads", str(threads)] + col +
-            ["--model", "path=" + model_path(w, h, fps), "--json", "--output", vj])
+        model = "path=" + model_path(w, h, fps)
+        ref, dist = src, dec
+        if ref_disp:
+            # scored at display size; CAMBI judges banding at the coded size
+            dec_disp = scale_to_display(dec, stem + ".dec.disp.y4m")
+            ref, dist = ref_disp, dec_disp
+            model += f":cambi.enc_width={w}:cambi.enc_height={h}"
+        run([VMAF, "--reference", ref, "--distorted", dist, "--threads", str(threads)] + col +
+            ["--model", model, "--json", "--output", vj])
     finally:
-        if os.path.exists(dec):
-            os.remove(dec)
+        for p in (dec, dec_disp):
+            if p and os.path.exists(p):
+                os.remove(p)
     if not os.path.exists(vj) or os.path.getmtime(vj) < os.path.getmtime(out):
         sys.exit(f"hdr_ladder: vmaf exited cleanly but wrote no fresh {vj}")
     with open(vj) as f:
@@ -363,8 +396,9 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
     r = {"mode": mode, "q": q, "lookahead": lookahead, "lookahead_run": ran,
          "kbps": os.path.getsize(out) * 8 / (n / fps) / 1000,
          "vmaf": pooled["vmaf"]["mean"], "psnr_y": py, "psnr_yuv": pyuv,
-         "cambi": pooled[cambi[0]]["mean"], "cambi_max": max(frames_cambi), "key": key,
-         "stream": out}
+         "cambi": pooled[cambi[0]]["mean"], "cambi_max": max(frames_cambi),
+         "enc_key": enc_key, "score_key": score_key, "stream": out, "stream_md5": stream_md5,
+         "rescored": reuse}
     if mode == "vbr":
         maxrate, bufsize = vbv_args(q)
         v = run([sys.executable, VBV_CHECK, out, "--maxrate", str(maxrate),
@@ -378,6 +412,8 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
         r["vbv"] = verdict
         r["vbv_ok"] = v.returncode == 0
     check_unchanged({cmd[0]: enc_id["md5"], VMAF: ids["vmaf"]["md5"], FFMPEG: ids["ffmpeg"]["md5"]})
+    if md5_of(out) != stream_md5:
+        sys.exit(f"hdr_ladder: {out} changed while it was scored")
     with open(js + ".tmp", "w") as f:
         json.dump(r, f)
     os.replace(js + ".tmp", js)
@@ -508,13 +544,21 @@ def main():
     if mode == "vbr":
         ids["vbv_check_md5"] = md5_of(VBV_CHECK)
     print(f"{os.path.basename(a.src)} {w}x{h} {fps:.3f} fps, {mode.upper()}, medium, "
-          f"--threads {a.threads}"
+          f"--threads {a.threads}, {os.path.basename(model_path(w, h, fps))}"
           + (", VBV maxrate 1.5K buffer 2K init 0.9" if mode == "vbr" else ""))
     if knobs and "yah264" in encs:
         print("yah264 environment: " + " ".join(knobs))
-    lad = {e: [rung(e, a.src, mode, q, work, a.threads, w, h, fps, enc_id[e], ids, la[e],
-                    la_default[e], a.fresh)
-               for q in qs] for e in encs}
+    ref_disp = None
+    try:
+        if v1_scaled(w, h):
+            print(f"scored at display size: {w}x{h} scaled up to fit 1920x1080, CAMBI at {w}x{h}")
+            ref_disp = scale_to_display(a.src, os.path.join(work, ".ref.disp.y4m"))
+        lad = {e: [rung(e, a.src, mode, q, work, a.threads, w, h, fps, enc_id[e], ids, la[e],
+                        la_default[e], a.fresh, ref_disp)
+                   for q in qs] for e in encs}
+    finally:
+        if ref_disp and os.path.exists(ref_disp):
+            os.remove(ref_disp)
     outside, underflow = [], []
     for e, rs in lad.items():
         for r in rs:
@@ -526,7 +570,8 @@ def main():
                 if miss:
                     outside.append(f"{e} {fmt(r['q'])}")
                 line += f"  rate {r['rate_err']:+.1f}%" + (f" OUTSIDE +-{RATE_BAR:g}%" if miss else "")
-            print(line + ("  (cached)" if r.get("cached") else ""))
+            print(line + ("  (cached)" if r.get("cached") else
+                          "  (rescored)" if r.get("rescored") else ""))
             if mode == "vbr":
                 if not r["vbv_ok"]:
                     underflow.append(f"{e} {fmt(r['q'])}")
