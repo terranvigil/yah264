@@ -366,7 +366,8 @@ def model_path(w, h, fps):
 ALLOW_ENV = "HDR_LADDER_ALLOW_SCRIPTS"
 ALLOW_SCRIPTS = os.environ.get(ALLOW_ENV) == "1"
 NATIVE_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe",
-                b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
+                b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+                b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca")
 
 
 def is_native(path):
@@ -538,7 +539,13 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err("dec"))
 
         def watchdog():
+            last = time.monotonic()
             while not stop.wait(0.2):
+                # a long oversleep means the whole job was stopped, not stalled
+                now = time.monotonic()
+                if now - last > 5:
+                    progress[0] = now
+                last = now
                 if scaled:
                     vm, rf = procs["vmaf"].poll(), procs["ref"].poll()
                     # either end of the reference FIFO can be left blocked in
@@ -607,12 +614,17 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
             if k not in procs:
                 continue
             # the watchdog's stall timer is the backstop for each wait too
+            last = time.monotonic()
             while True:
                 try:
                     rc[k] = procs[k].wait(timeout=1)
                     break
                 except subprocess.TimeoutExpired:
-                    progress_age = time.monotonic() - progress[0]
+                    now = time.monotonic()
+                    if now - last > 5:
+                        progress[0] = now
+                    last = now
+                    progress_age = now - progress[0]
                     if stalled or progress_age > STALL_SECONDS + 5:
                         kill(k)
         stop.set()
