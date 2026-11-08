@@ -182,26 +182,26 @@ layout is the likelier cause than the dispatch itself.
   PSNR-Y on the 10-bit code values beside it, and check that the two ladders
   overlap in quality before reading a BD figure.
 - **The HDR ladder:** `scripts/hdr_ladder.py SRC.y4m` runs CRF 18-34 on yah264
-  and x264 High 10 at medium over a progressive, limited range C420p10 HDR10
-  Y4M of any even size, scores each rung as above (1d5h_2160 when the height
-  is above 1080, so 3840x1600 and 4096x2160 score on it; a source smaller than
-  1920x1080 in both dimensions is scaled up to fit it, both sides, with CAMBI
-  told the coded size), and prints BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV
-  over the quality range both ladders cover (`--max-crf` drops the top rungs),
-  with each rung's CAMBI beside it. It needs `VMAF_HDR` and `VMAF_HDR_MODELS`.
-  Each rung keeps its stream, keyed on the encoder binary, its libraries,
-  command line and `Y264_*` and `YAH264_*` environment and the source file,
-  and its score, keyed on the scorer chain and the script; a scorer change
-  rescores the kept stream ("rescored"), a reused rung prints "cached",
-  `--fresh` ignores the cache, and a run started while another holds the same
-  work directory stops at once. The 1080p test spans are 120 frames. `--vbr`
-  runs a VBR ladder at the listed targets (maxrate 1.5x, buffer 2x the target,
-  initial fill 0.9, on both encoders) and prints each rung's rate error,
-  flagged outside the parity spec's +-10% bar, and the VBV checker's verdict.
-  `--encoders x264` runs one side alone, such as the reference's CRF ladder
-  that sets the VBR targets. `--yah-lookahead` (at most 64) and
-  `--x264-lookahead` (0 to 250) set each side's depth, and every reading
-  prints the depth each side ran with.
+  and x264 High 10 at medium, both streams tagged HDR10 (BT.2020, PQ, limited
+  range), over a progressive, limited range C420p10 HDR10 Y4M of any even
+  size, scores each rung as above (1d5h_2160 when the height is above 1080, so
+  3840x1600 and 4096x2160 score on it; a source smaller than 1920x1080 in both
+  dimensions is scaled up to fit it, both sides, with CAMBI told the coded
+  size), and prints BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over the quality
+  range both ladders cover (`--max-crf` drops the top rungs), with each rung's
+  CAMBI beside it. It needs `VMAF_HDR` and `VMAF_HDR_MODELS`. Each rung keeps
+  its stream, keyed on the encoder binary, its libraries, command line and
+  `Y264_*` and `YAH264_*` environment and the source file, and its score,
+  keyed on the scorer chain and the script; a scorer change rescores the kept
+  stream ("rescored"), a reused rung prints "cached", `--fresh` ignores the
+  cache, and a run started while another holds the same work directory stops
+  at once. The 1080p test spans are 120 frames. `--vbr` runs a VBR ladder at
+  the listed targets (maxrate 1.5x, buffer 2x the target, initial fill 0.9, on
+  both encoders) and prints each rung's rate error, flagged outside the parity
+  spec's +-10% bar, and the VBV checker's verdict. `--encoders x264` runs one
+  side alone, such as the reference's CRF ladder that sets the VBR targets.
+  `--yah-lookahead` (at most 64) and `--x264-lookahead` (0 to 250) set each
+  side's depth, and every reading prints the depth each side ran with.
 - **Recon-match:** `make conformance` covers every format. By hand, decode the
   `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare `framemd5` hash
   columns Y4M against Y4M. Don't compare a Y4M's framemd5 with one taken

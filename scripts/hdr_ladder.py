@@ -10,23 +10,24 @@ yah264 against x264 High 10, scored with VMAF v1's HDR model and PSNR on the
                         [--encoders x264,yah264] [--threads 3] [--work DIR]
                         [--fresh]
 
-Both encoders run at medium. The source must be a progressive, limited range
-4:2:0 10-bit Y4M (C420p10) of any even size. The model follows the source:
-1d5h_2160 when its height is above 1080 (so 1440p and 3840x1600 score on
-it), 3d0h otherwise (1920x1080, a 1920x800 scope picture), and the hfr
-variant of either at 50 fps and up. A source smaller than 1920x1080 in both
-dimensions is scored at display size, as the project's VMAF v1 rule says:
-the reference and the decode are both scaled up to fit 1920x1080 (bicubic,
-aspect kept) and CAMBI is told the coded size. PSNR is always taken at the
-coded size. The decode and any scaled picture are streamed to the scorer, so
-nothing frame-sized lands on disk; a step that fails or stalls for 10
-minutes stops the run with its own stderr. Every decode must be clean and hold
-exactly the source's frame count, or the run stops. Rungs must be distinct,
-and a metric whose quality doesn't rise with bitrate across a ladder gets no
-BD figure. A rung line shows how many frames sit at the VMAF model's clip
-bounds, and a ladder where more than 5% of any rung's frames do gets no VMAF
-BD figure. Read the printed rungs before trusting a BD figure; --max-crf
-leaves out the rungs above it, for a second read.
+Both encoders run at medium, with the stream tagged HDR10 (BT.2020 primaries
+and matrix, PQ transfer, limited range). The source must be a progressive,
+limited range 4:2:0 10-bit Y4M (C420p10) of any even size. The model follows
+the source: 1d5h_2160 when its height is above 1080 (so 1440p and 3840x1600
+score on it), 3d0h otherwise (1920x1080, a 1920x800 scope picture), and the
+hfr variant of either at 50 fps and up. A source smaller than 1920x1080 in
+both dimensions is scored at display size, as the project's VMAF v1 rule
+says: the reference and the decode are both scaled up to fit 1920x1080
+(bicubic, aspect kept) and CAMBI is told the coded size. PSNR is always
+taken at the coded size. The decode and any scaled picture are streamed to
+the scorer, so nothing frame-sized lands on disk; a step that fails or
+stalls for 10 minutes stops the run with its own stderr. Every decode must
+be clean and hold exactly the source's frame count, or the run stops. Rungs
+must be distinct, and a metric whose quality doesn't rise with bitrate
+across a ladder gets no BD figure. A rung line shows how many frames sit at
+the VMAF model's clip bounds, and a ladder where more than 5% of any rung's
+frames do gets no VMAF BD figure. Read the printed rungs before trusting a
+BD figure; --max-crf leaves out the rungs above it, for a second read.
 
 --vbr runs one rung per target K kbit/s instead of the CRF ladder, with
 --bitrate K, --vbv-maxrate 1.5K, --vbv-bufsize 2K and --vbv-init 0.9 on
@@ -62,11 +63,14 @@ any of them re-encodes. The score's key is the scorer chain: the vmaf and
 ffmpeg binaries, their libraries and versions, the model file, the display
 scaling, this script's own md5 and, for VBR, vbv_check.py; a change there
 rescores the kept stream (printed "rescored") as long as its md5 is the one
-recorded. A reused rung prints "cached". RESULT_VERSION versions the cached
-JSON's layout. Each binary runs by the path that was hashed, and is hashed
-again after every rung it took part in; a run stops if one changed
-underneath it. --fresh ignores the cache. A run holds a lock on its work
-directory, and a second run on the same directory stops at once.
+recorded. A reused rung prints "cached". RESULT_VERSION versions the score
+side of the cached JSON, so bumping it rescores without re-encoding. Each
+binary runs by the path that was hashed, and is hashed again after every
+rung it took part in; a run stops if one changed underneath it. --fresh
+ignores the cache. A run holds a lock on its work directory, and a second
+run on the same directory stops at once. SIGTERM, SIGHUP or SIGINT kills
+every child and removes the run's scratch at once; a signal that was ignored
+when the run started (nohup) stays ignored.
 
   YAH264    yah264 CLI (default build/cli/yah264)
   X264      x264 CLI (default x264)
@@ -220,26 +224,49 @@ def yah_lookahead_limits(path):
     return YAH_DEFAULT_LOOKAHEAD, YAH_MAX_LOOKAHEAD
 
 
-# SIGTERM, SIGHUP and SIGINT stop the run through the same cleanup as a
-# failure. While a child is being started and recorded the handler only notes
-# the signal, and it is acted on once the child is known, so no process is
-# left that the cleanup can't see. (Blocking the signals instead would leave
-# every child with them blocked for life.)
+# SIGTERM, SIGHUP and SIGINT end the run at once: the handler ignores any
+# further signal, SIGKILLs every live child's process group, removes the
+# registered scratch and leaves with os._exit. It never raises, because a
+# raise lands at an arbitrary bytecode, and inside the standard library
+# that can leave a lock held or cut a cleanup short. Each child runs in its
+# own session, so a wrapper script dies with the binary it started. The only
+# window the handler can't see into is a child that exists but isn't yet
+# registered; a signal there is held and acted on right after registering.
+_CHILDREN = {}         # pid -> Child, while it hasn't been reaped
+_SCRATCH = set()       # paths to remove on a signal
+_HANDLED = []          # the signals main() installed the handler for
 _HOLD = [0]
 _PENDING = []
 
 
-def _act_on(num):
-    if num == signal.SIGINT:
-        raise KeyboardInterrupt
-    sys.exit(128 + num)
+def _die(num):
+    for sig in _HANDLED:
+        signal.signal(sig, signal.SIG_IGN)
+    for pid in list(_CHILDREN):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    for path in list(_SCRATCH):
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+        except OSError:
+            pass
+    try:
+        os.write(2, f"hdr_ladder: stopped by signal {num}\n".encode())
+    except OSError:
+        pass
+    os._exit(128 + num)
 
 
 def _on_signal(num, frame):
     if _HOLD[0]:
         _PENDING.append(num)
         return
-    _act_on(num)
+    _die(num)
 
 
 @contextlib.contextmanager
@@ -250,20 +277,59 @@ def held():
     finally:
         _HOLD[0] -= 1
         if not _HOLD[0] and _PENDING:
-            _act_on(_PENDING.pop(0))
+            _die(_PENDING[0])
+
+
+class Child(subprocess.Popen):
+    """A Popen that leaves the registry once it has been reaped, so a later
+    signal never aims at a pid that may have been reused."""
+
+    def poll(self):
+        rc = super().poll()
+        if rc is not None:
+            _CHILDREN.pop(self.pid, None)
+        return rc
+
+    def wait(self, timeout=None):
+        rc = super().wait(timeout)
+        _CHILDREN.pop(self.pid, None)
+        return rc
+
+
+def spawn_child(cmd, **kw):
+    with held():
+        p = Child(cmd, start_new_session=True, **kw)
+        _CHILDREN[p.pid] = p
+    return p
+
+
+def kill_child(p):
+    """SIGKILL a live child's whole process group."""
+    if p.poll() is None:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def scratch(path):
+    with held():
+        _SCRATCH.add(path)
+    return path
+
+
+def unscratch(path):
+    _SCRATCH.discard(path)
 
 
 def run(cmd, ok=(0,)):
-    p = None
+    p = spawn_child(["nice", "-n", "10"] + cmd, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True)
     try:
-        with held():
-            p = subprocess.Popen(["nice", "-n", "10"] + cmd, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, text=True)
         so, se = p.communicate()
     finally:
-        if p is not None and p.poll() is None:
-            p.kill()
-            p.wait()
+        kill_child(p)
+        p.wait()
     r = subprocess.CompletedProcess(p.args, p.returncode, so, se)
     if r.returncode not in ok:
         sys.exit(f"hdr_ladder: failed: {' '.join(cmd)}\n{r.stderr[-1500:]}")
@@ -308,13 +374,10 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
         p = procs[name]
         if p.poll() is None:
             killed.add(name)
-            p.kill()
+            kill_child(p)
 
     def spawn(name, cmd, **kw):
-        # a signal waits until the child is recorded, so the finally always
-        # knows every process that exists
-        with held():
-            procs[name] = subprocess.Popen(cmd, **kw)
+        procs[name] = spawn_child(cmd, **kw)
 
     stop = threading.Event()
     # the try opens before the first spawn, so a signal or a failed spawn at
@@ -546,14 +609,19 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
               "--vbv-init", str(VBV_INIT)]
     if lookahead is not None:
         rc += ["--rc-lookahead", str(lookahead)]
+    # tag both streams HDR10, as a real HDR encode would be: an encoder that
+    # reads the VUI then behaves as it would in the field
+    vui = ["--colorprim", "bt2020", "--transfer", "smpte2084", "--colormatrix", "bt2020nc"]
     if enc == "yah264":
-        cmd = [YAH, "--input-y4m", src] + rc + ["--threads", str(threads), "-o", part]
+        cmd = [YAH, "--input-y4m", src] + rc + vui + ["--range", "limited",
+                                                      "--threads", str(threads), "-o", part]
     else:
         cmd = [X264, "--preset", "medium", "--profile", "high10", "--output-depth", "10"] + rc + \
-              ["--threads", str(threads), "--log-level", "error", "-o", part, src]
+              vui + ["--range", "tv", "--threads", str(threads), "--log-level", "error",
+                     "-o", part, src]
     # the stream is keyed on what makes it, the score on what reads it, so a
     # scorer change rescores the kept stream instead of encoding it again
-    enc_key = {"encoder": enc_id, "cmd": cmd, "src": ids["src"], "version": RESULT_VERSION}
+    enc_key = {"encoder": enc_id, "cmd": cmd, "src": ids["src"]}
     score_key = {k: v for k, v in ids.items() if k != "src"}
     score_key.update(model=model_path(w, h, fps), display=V1_SCALE_VF if scaled else None,
                      version=RESULT_VERSION)
@@ -580,11 +648,13 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
         # and non-empty, so an encoder that exits 0 without writing can't hand
         # an old stream to the scorer
         start = time.time_ns()
+        scratch(part)
         run(cmd)
         if not os.path.exists(part) or os.path.getsize(part) == 0 or \
                 os.stat(part).st_mtime_ns < start - 10**9:
             sys.exit(f"hdr_ladder: {enc} exited cleanly but wrote no stream: {' '.join(cmd)}")
         os.replace(part, out)
+        unscratch(part)
         # read before the decode and scoring, so a misread costs one encode
         ran = lookahead_in_stream(out) if enc == "x264" else \
             (lookahead if lookahead is not None else la_default)
@@ -593,7 +663,9 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
     if scaled:
         # scored at display size; CAMBI judges banding at the coded size
         model += f":cambi.enc_width={w}:cambi.enc_height={h}"
-    tmp = tempfile.mkdtemp(prefix=os.path.basename(stem) + ".score.", dir=work)
+    with held():
+        tmp = scratch(tempfile.mkdtemp(prefix=os.path.basename(stem) + ".score.", dir=work))
+    scratch(vj)
     try:
         n, py, pyuv = score(out, src, w, h, threads, model, scaled, tmp, vj)
     except BaseException:
@@ -603,6 +675,7 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
         raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        unscratch(tmp)
     if not os.path.exists(vj) or os.path.getmtime(vj) < os.path.getmtime(out):
         sys.exit(f"hdr_ladder: vmaf exited cleanly but wrote no fresh {vj}")
     with open(vj) as f:
@@ -643,9 +716,12 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la
     check_unchanged({cmd[0]: enc_id["md5"], VMAF: ids["vmaf"]["md5"], FFMPEG: ids["ffmpeg"]["md5"]})
     if md5_of(out) != stream_md5:
         sys.exit(f"hdr_ladder: {out} changed while it was scored")
+    scratch(js + ".tmp")
     with open(js + ".tmp", "w") as f:
         json.dump(r, f)
     os.replace(js + ".tmp", js)
+    unscratch(js + ".tmp")
+    unscratch(vj)
     return r
 
 
@@ -697,17 +773,30 @@ def main():
     global YAH, X264, VMAF, FFMPEG, LOCK
     # a kill runs the same cleanup as a failure: child processes and scratch
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        signal.signal(sig, _on_signal)
-    ap = argparse.ArgumentParser()
-    ap.add_argument("src")
-    ap.add_argument("--crf", default=None, help="CRF rungs (default 18,22,26,30,34)")
-    ap.add_argument("--vbr", default=None, help="kbit/s targets; replaces the CRF ladder")
-    ap.add_argument("--max-crf", type=float, default=None)
-    ap.add_argument("--yah-lookahead", type=lookahead_value, default=None)
-    ap.add_argument("--x264-lookahead", type=lookahead_value, default=None)
-    ap.add_argument("--encoders", default="x264,yah264")
-    ap.add_argument("--threads", type=int, default=3)
-    ap.add_argument("--work", default=None)
+        # a signal ignored at start (nohup, a background job) stays ignored,
+        # here and in every child
+        if signal.getsignal(sig) is not signal.SIG_IGN:
+            _HANDLED.append(sig)
+            signal.signal(sig, _on_signal)
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("src", help="the HDR10 source, a C420p10 Y4M")
+    ap.add_argument("--crf", default=None,
+                    help="CRF rungs, multiples of 0.1 (default 18,22,26,30,34)")
+    ap.add_argument("--vbr", default=None,
+                    help="VBR targets in whole kbit/s; replaces the CRF ladder")
+    ap.add_argument("--max-crf", type=float, default=None,
+                    help="leave out the CRF rungs above this")
+    ap.add_argument("--yah-lookahead", type=lookahead_value, default=None,
+                    help="yah264's --rc-lookahead (at most its 64-frame cap)")
+    ap.add_argument("--x264-lookahead", type=lookahead_value, default=None,
+                    help="x264's --rc-lookahead, 0 to 250")
+    ap.add_argument("--encoders", default="x264,yah264",
+                    help="x264, yah264 or both (the default); BD needs both")
+    ap.add_argument("--threads", type=int, default=3,
+                    help="threads per encode and per vmaf (default 3; the spec runs 6)")
+    ap.add_argument("--work", default=None,
+                    help="cache and scratch directory (default local/hdr_ladder/<source>)")
     ap.add_argument("--fresh", action="store_true", help="ignore cached rungs")
     a = ap.parse_args()
     if not VMAF or not MODELS:
@@ -726,6 +815,8 @@ def main():
                                       "--crf", crf_value)
         if a.max_crf is not None:
             qs = [q for q in qs if q <= a.max_crf]
+    if mode == "crf" and "yah264" in encs and qs and qs[0] < 0.1:
+        sys.exit(f"hdr_ladder: CRF {fmt(qs[0])} is below yah264's 0.1 minimum")
     left = f"{len(qs)} rung(s) left to run" + \
         (f" after --max-crf {fmt(a.max_crf)}" if mode == "crf" and a.max_crf is not None else "")
     if len(encs) == 2 and len(qs) < 2:
