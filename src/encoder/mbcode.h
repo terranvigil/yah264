@@ -305,7 +305,7 @@ typedef struct {
     float aq_strength;          /* variance-AQ strength (0 = off) */
     int   aq_abr;               /* AQ under a bitrate target (not CRF/CQP): mode 2's ABR gain */
     float aq_pull;              /* how far aq_analyze's centre moves from the frame mean to aq_anchor */
-    float aq_anchor;            /* the absolute AQ anchor, in log2(variance + 1) */
+    float aq_anchor;            /* the absolute AQ anchor, in l (y264_aq_l) */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
     int   psy4k;                /* the 2160p tier's cheaper psy-RD form (pre-ME skip bound) */
     int   size_class;           /* y264_size_class of the picture */
@@ -518,6 +518,11 @@ double           y264_aq_grain_share(const float *mean, const float *var, int wm
 double           y264_aq_dark_gate(double bright_share, double grain_share);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
+/* l = log2(variance + floor) on the 8-bit scale, and the factor a coded
+ * sample's variance is multiplied by to get there (1 at 8 bits) */
+double           y264_aq_vscale(void);
+double           y264_aq_l(double var, double floor);
+float            y264_aq_lf(double var, double floor);
 int              y264_rb_trace_on(void);
 
 #endif /* YAH264_MACROBLOCK_H */

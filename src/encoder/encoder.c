@@ -305,7 +305,10 @@ static int mbt_bref_probe(void)
  * sound here even though the two are paired for the CRF SCALE match. */
 static double aq_anchor_default(void)
 {
-    return 4.5 + 2.0 * (Y264_BIT_DEPTH - 8);
+    /* l is on the 8-bit scale (y264_aq_l), so the 8-bit level holds at every
+     * depth; with Y264_AQ_D8=0 it is read on the coded samples and the level
+     * moves with them */
+    return 4.5 + (y264_aq_vscale() < 1.0 ? 0.0 : 2.0 * (Y264_BIT_DEPTH - 8));
 }
 
 
@@ -2870,8 +2873,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.mbvar = NULL;
     {
         int wmb = e->width_in_mbs, hmb = e->height_in_mbs, flat = 0, tex = 0;
-        int64_t t = (int64_t)PSY_FLAT_VAR << 16;         /* var*256^2 domain */
-        int64_t tv = (int64_t)64 << 16;                  /* textured, for the log */
+        /* var*256^2 domain, on the coded samples: the 8-bit limit times
+         * 4^(depth - 8) (y264_aq_vscale) */
+        int64_t t = (int64_t)(PSY_FLAT_VAR / y264_aq_vscale()) << 16;
+        int64_t tv = (int64_t)(64 / y264_aq_vscale()) << 16;  /* textured, for the log */
         /* a frame picture's blocks are the AQ pass's blocks: keep the sums
          * (one encoding thread, so no other prep can overwrite them mid-read) */
         uint32_t *keep = (e->mbvar && !e->fld_pic && e->param.threads == 1)
@@ -6675,7 +6680,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             uint32_t s1 = v2[0], s2 = v2[1];
             double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
             if (var < 0) var = 0;
-            double l = log2(var + y264_aq_afloor());
+            double l = y264_aq_l(var, y264_aq_afloor());
             invq[mby * wmb + mbx] = l;
             if (dk) dk[mby * wmb + mbx] = (float)y264_aq_dark(mean, var);
             nbright += y264_aq_bright(mean);

@@ -101,7 +101,7 @@ from the Y4M `C` tag the same way the serial path does.
 ### Keeping 10-bit on the 8-bit trades
 
 The tuning is all done at 8 bits, so 10-bit keeps the 8-bit trades by
-putting its costs on the 8-bit scale in two places:
+putting its costs on the 8-bit scale in three places:
 
 - **Lambdas.** The mode, trellis and motion lambdas are read at the QP plus
   the depth's QP offset. A 10-bit sample's error is four times the 8-bit
@@ -113,6 +113,11 @@ putting its costs on the 8-bit scale in two places:
   constants were fitted on. 8-bit content coded at 10 bits gets the frame
   types of its 8-bit encode. ABR, VBV and two-pass frame complexity still
   sums full-resolution SATD at the coded depth.
+- **Adaptive quantization.** Every AQ path reads a macroblock's energy as
+  `log2(variance + floor)` with the variance divided by 4 per extra bit,
+  so the floors, the anchor and B-frame levels and the frame DC see the
+  values they were fitted on, and the flat psy-trellis gate's variance limit
+  is raised by the same factor.
 
 ## What we chose and why
 
