@@ -5370,8 +5370,8 @@ int main(int argc, char **argv)
     /* the library caps the window at 64 frames; say so rather than let a
      * deeper request read as if it ran */
     if (rc_lookahead > 64 && hw == YAH264_HW_OFF)
-        fprintf(stderr, "yah264: --rc-lookahead %d is above the 64-frame cap; the window "
-                "runs at 64\n", rc_lookahead);
+        fprintf(stderr, "yah264: warning: --rc-lookahead %d is above the 64-frame cap; "
+                "the window runs at 64\n", rc_lookahead);
     if (badapt >= 0)
         param.badapt = badapt;
     /* --tune sets content-adaptive defaults; explicit --psy-rd/--psy-trellis
