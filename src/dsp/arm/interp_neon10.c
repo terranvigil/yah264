@@ -8,7 +8,7 @@
  * the weighted average, chroma MC at widths 8 and 4, and the two row kernels
  * of the half-pel plane build. It also holds the row of the lowres half-pel
  * planes on the 8-bit scale, which the 8-bit library leaves to the compiler.
- * The six-tap luma kernels are here too. The fused band build and the fused
+ * The six-tap luma kernels and the fused band build are here too. The fused
  * bi-prediction forms stay C at 10 bits.
  *
  * A sample is a u16 lane. The six-tap filter of 10-bit samples reaches
@@ -19,6 +19,7 @@
 #include "../interp.h"
 #include "../arch.h"
 #include <arm_neon.h>
+#include <string.h>
 
 #if Y264_BIT_DEPTH != 10
 #error "interp_neon10.c is the 10-bit library's NEON tier"
@@ -425,6 +426,71 @@ void y264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref, int rstride,
                         int ix, int iy, int fx, int fy, int h)
 {
     mcl_luma(dst, dstride, ref, rstride, ix, iy, fx, fy, h, 1);
+}
+
+/* The whole half-pel build for a band of output rows, borders included, in
+ * one pass. Each source row is clamped into a padded copy once and its
+ * horizontal six-tap kept in u16 with the six-tap section's 10240 offset; a
+ * ring of six of each feeds the output rows:
+ *   H = the offset tap's half-pel clip
+ *   V = the same of the vertical tap over the padded rows
+ *   C = the vertical tap over the offset horizontal taps on int32 lanes,
+ *       less the offset after the >> 10
+ * Bit-exact with y264_mc_build_hpel_rows. `mem` must hold
+ * 12 * (W + 32) + 12 * W bytes, W = pw + 2 * border, and W >= 16. */
+void y264_hpel_build_band_neon(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1)
+{
+    const int W = pw + 2 * border, PW = W + 32;
+    pixel *P[6];
+    uint16_t *T[6];
+    for (int k = 0; k < 6; k++) {
+        P[k] = (pixel *)(void *)mem + (size_t)k * PW;
+        T[k] = (uint16_t *)(void *)(mem + (size_t)12 * PW) + (size_t)k * W;
+    }
+    const int sy0 = y0 - 2;
+    for (int y = sy0; y < y1 + 3; y++) {
+        int k = (y - sy0) % 6;
+        int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);
+        const pixel *row = ref + (size_t)cy * rstride;
+        pixel *pad = P[k];                   /* pad[j] = row[clamp(j - border - 2)] */
+        for (int j = 0; j < border + 2; j++) pad[j] = row[0];
+        memcpy(pad + border + 2, row, (size_t)pw * sizeof(pixel));
+        for (int j = border + 2 + pw; j < W + 5; j++) pad[j] = row[pw - 1];
+        uint16_t *t = T[k];
+        for (int j = 0; j < W; j += 8) {
+            if (j > W - 8) j = W - 8;        /* overlap tail */
+            /* only pad[j .. j + 12] reach a live lane (<= W + 4 at the last
+             * step); the load's last three samples lie in the pad's slack */
+            vst1q_u16(t + j, hsum8_win(pad + j));
+        }
+        if (y < y0 + 3) continue;
+        int oy = y - 3;                      /* rows oy-2 .. oy+3 are in the rings */
+        int k0 = (oy - 2 - sy0) % 6;
+        const pixel *p[6];
+        const uint16_t *s[6];
+        for (int i = 0; i < 6; i++) {
+            p[i] = P[(k0 + i) % 6] + 2;      /* pad column j + 2 is output column j */
+            s[i] = T[(k0 + i) % 6];
+        }
+        pixel *Hr = Hp + (ptrdiff_t)oy * stride - border;
+        pixel *Vr = Vp + (ptrdiff_t)oy * stride - border;
+        pixel *Cr = Cp + (ptrdiff_t)oy * stride - border;
+        for (int j = 0; j < W; j += 8) {
+            if (j > W - 8) j = W - 8;
+            uint16x8_t s2 = vld1q_u16(s[2] + j);
+            vst1q_u16(Hr + j, half_clip(s2));
+            vst1q_u16(Vr + j, half_clip(tap6_off(vld1q_u16(p[0] + j), vld1q_u16(p[1] + j),
+                                                 vld1q_u16(p[2] + j), vld1q_u16(p[3] + j),
+                                                 vld1q_u16(p[4] + j), vld1q_u16(p[5] + j))));
+            int32x4_t lo, hi;
+            tap6_u16(vld1q_u16(s[0] + j), vld1q_u16(s[1] + j), s2,
+                     vld1q_u16(s[3] + j), vld1q_u16(s[4] + j), vld1q_u16(s[5] + j),
+                     &lo, &hi);
+            vst1q_u16(Cr + j, centre_clip(lo, hi));
+        }
+    }
 }
 
 /* ---- the lowres half-pel planes ---------------------------------------------

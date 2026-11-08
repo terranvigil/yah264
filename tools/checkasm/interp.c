@@ -805,6 +805,8 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
 
 #if Y264_HAVE_SSE4 || Y264_HAVE_NEON10
 
+/* ---- the bodies the x86 tiers and the 10-bit NEON tier have rows for ------ */
+
 typedef void (*lr_hp_row_fn)(pixel *, pixel *, pixel *, const pixel *,
                              const pixel *, const pixel *, int);
 
@@ -896,12 +898,6 @@ static int run_lr_hp_row(const char *name, lr_hp_row_fn kern, lr_hp_row_fn cref)
     return bad;
 }
 
-#endif /* Y264_HAVE_SSE4 || Y264_HAVE_NEON10 */
-
-#if Y264_HAVE_SSE4
-
-/* ---- the bodies only the x86 tiers have rows for -------------------------- */
-
 typedef void (*hpel_band_fn)(pixel *, pixel *, pixel *, int, const pixel *, int,
                              int, int, int, uint8_t *, int, int);
 
@@ -916,7 +912,7 @@ static int hpel_band_geom(const char *name, hpel_band_fn kern, int pw, int ph,
 {
     const int W = pw + 2 * B, RST = pw + 7, ST = W + 5, rows = ph + 2 * B;
     const size_t osz = (size_t)rows * ST * sizeof(pixel);
-    const size_t msz = (size_t)6 * (W + 32) + (size_t)12 * W;
+    const size_t msz = (size_t)6 * (W + 32) * sizeof(pixel) + (size_t)12 * W;
     const size_t win = ca_pg_window_pix(RST, pw, ph);
     int bad = 0;
     for (int tail = 0; tail <= 1 && !bad; tail++) {
@@ -1008,7 +1004,7 @@ static int run_hpel_band(const char *name, hpel_band_fn kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_NEON10 */
 
 /* ---- the rows, one thin function per tier -------------------------------- */
 
@@ -1046,6 +1042,8 @@ static int t_hpel_rows_neon(void)
 #if Y264_HAVE_NEON10
 static int t_lr_hp_row_neon(void)
 { return run_lr_hp_row("lr_hp_row", y264_lr_hp_row_neon, lr_hp_row8_ref); }
+static int t_hpel_band_neon(void)
+{ return run_hpel_band("hpel_band", y264_hpel_build_band_neon); }
 #endif
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 */
@@ -1500,6 +1498,7 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
     { "lr_hp_row",         "mc", Y264_CPU_NEON, t_lr_hp_row_neon },
+    { "hpel_band",         "mc", Y264_CPU_NEON, t_hpel_band_neon },
 #endif
 #if Y264_HAVE_SSE4
     { "pred_copy_sse4",    "mc", Y264_CPU_SSE4_ALL, t_pred_copy_sse4 },

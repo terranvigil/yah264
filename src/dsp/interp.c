@@ -604,11 +604,11 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     int hpel_tier = (y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8)
                   ? y264_cpu_tier() : Y264_TIER_C;
 #endif
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     /* The whole band, borders included, in one pass when the scratch can hold
      * its two six-row rings (it holds y1 - y0 + 5 >= 6 int32 rows). */
     if (hpel_tier == Y264_TIER_NEON && x1 - x0 >= 16 &&
-        (size_t)6 * (size_t)(x1 - x0 + 32) + (size_t)12 * (size_t)(x1 - x0)
+        (size_t)6 * (size_t)(x1 - x0 + 32) * sizeof(pixel) + (size_t)12 * (size_t)(x1 - x0)
             <= (size_t)sstride * sizeof(int32_t) * (size_t)(y1 - y0 + 5)) {
         y264_hpel_build_band_neon(Hp, Vp, Cp, stride, ref, rstride, pw, ph, border,
                                   (uint8_t *)(void *)scratch, y0, y1);
