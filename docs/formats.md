@@ -122,7 +122,9 @@ putting its costs on the 8-bit scale in five places:
   is raised by the same factor.
 - **Fixed thresholds.** The variance limit under which a P or B macroblock
   counts as flat for the I_16x16 screen is raised by the same factor, so
-  8-bit content coded at 10 bits gets the verdict of its 8-bit encode.
+  8-bit content coded at 10 bits gets the verdict of its 8-bit encode. The
+  motion search's per-pixel early-out bound doubles per extra bit, like
+  the SAD it is compared with.
 
 ## What we chose and why
 
