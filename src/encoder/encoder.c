@@ -32,6 +32,7 @@
 #include "../common/ledger.h"
 #include "../dsp/transform.h"
 #include "../dsp/intrapred.h"
+#include "../dsp/arch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>

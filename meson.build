@@ -19,6 +19,10 @@ m_dep = cc.find_library('m', required : false)
 threads_dep = dependency('threads')
 
 add_project_arguments('-D_GNU_SOURCE', language : 'c')
+# an #if on a macro nobody defined reads 0 and silently drops the code
+# behind it, as a test of a header-defined Y264_HAVE_* does in a file that
+# never included the header
+add_project_arguments(cc.get_supported_arguments('-Werror=undef'), language : 'c')
 add_project_arguments('-DY264_DEV_KNOBS=@0@'.format(get_option('dev_knobs') ? 1 : 0), language : 'c')
 
 # Item C3-10bit: the sample width is a compile-time type (src/common/
