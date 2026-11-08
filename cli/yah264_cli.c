@@ -1439,6 +1439,8 @@ struct hrd_join {
     long next_cpb;                      /* ticks from the last period to the next AU */
     double tr_nb, tai, taf;
     unsigned init, off;                 /* the period in force */
+    int pad;                            /* re-pad filler on the stream's ledger */
+    double cpb, fill;                   /* CpbSize; bits before the next removal */
 };
 
 /* the next start code at or after `from`: its first byte, with *hdr the NAL
@@ -1512,7 +1514,7 @@ static int hrd_put_nal(struct hrd_out *o, long sclen, const uint8_t *nal, size_t
 
 /* Rewrites one GOP's timing in *buf, and advances j over it. -1 when an
  * access unit cannot keep its size or memory runs out. */
-static int hrd_join_gop(struct hrd_join *j, uint8_t **buf, size_t *sz)
+static int hrd_join_gop(struct hrd_join *j, uint8_t **buf, size_t *sz, int more)
 {
     const uint8_t *b = *buf;
     size_t n = *sz, hdr, sc = hrd_next_nal(b, n, 0, &hdr);
@@ -1530,6 +1532,24 @@ static int hrd_join_gop(struct hrd_join *j, uint8_t **buf, size_t *sz)
         if (au_open && in_vcl && (t < 0 || (!hrd_is_vcl(t) && t != 12))) {
             if (debt) { rc = -1; break; }
             double bits = 8.0 * (double)(o.n - au_start);
+            double rpic = j->bitrate * j->tc * (double)j->tpp;
+            /* the encoder's padding rule on the stream's own ledger: pad until
+             * the buffer before the next removal sits strictly inside CpbSize;
+             * the stream's last access unit is never padded */
+            double want = j->fill + rpic - j->cpb - bits;
+            if (j->pad && (t >= 0 || more) && want > 0.0) {
+                size_t need = (size_t)(want / 8.0) + 1, ff = need > 6 ? need - 6 : 0;
+                static const uint8_t fh[5] = { 0, 0, 0, 1, 12 };
+                uint8_t ffb[256], stop = 0x80;
+                memset(ffb, 0xFF, sizeof ffb);
+                if (hrd_put(&o, fh, 5) < 0) { rc = -1; break; }
+                for (size_t q = 0; q < ff && rc == 0; q += sizeof ffb)
+                    if (hrd_put(&o, ffb, ff - q < sizeof ffb ? ff - q : sizeof ffb) < 0) rc = -1;
+                if (rc || hrd_put(&o, &stop, 1) < 0) { rc = -1; break; }
+                bits = 8.0 * (double)(o.n - au_start);
+            }
+            if (j->pad)
+                j->fill += rpic - bits;
             j->taf = j->tai + bits / j->bitrate;
             j->aus++;
             gop_aus++;
@@ -1600,6 +1620,8 @@ static int hrd_join_gop(struct hrd_join *j, uint8_t **buf, size_t *sz)
                         changed = 1;
                     }
                     tr = j->aus == 0 ? (double)j->init / 90000.0 : j->tr_nb + j->tc * (double)c;
+                    if (j->aus == 0)
+                        j->fill = j->bitrate * (double)j->init / 90000.0;
                     double ear = tr - (double)(bp ? j->init : j->init + j->off) / 90000.0;
                     j->tai = j->aus == 0 ? 0.0 : j->cbr || ear < j->taf ? j->taf : ear;
                     if (j->aus == 0 || bp) j->tr_nb = tr;
@@ -1640,7 +1662,7 @@ static int hrd_join_gop(struct hrd_join *j, uint8_t **buf, size_t *sz)
             } else {
                 if (hrd_put_nal(&o, sclen, b + hdr, nx - hdr) < 0) { rc = -1; break; }
             }
-        } else {
+        } else if (!(t == 12 && j->pad)) {
             if (hrd_put_nal(&o, sclen, b + hdr, nx - hdr) < 0) { rc = -1; break; }
         }
         if (hrd_is_vcl(t)) in_vcl = 1;
@@ -3160,6 +3182,30 @@ static void gop_order_horizon(int *order, const int *gstart, int n_gops, long ho
  * value outside both is free; -2 keeps -1 meaning failure. */
 #define Y264_GO_SERIAL (-2)
 
+/* One finished GOP to the output, its --segment-out file and its
+ * --frame-stats lines. Frees buf. */
+static void gop_emit(gop_job_t *job, FILE *out, int idx, uint8_t *buf, size_t sz, int *wr_err)
+{
+    if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
+        fprintf(stderr, "yah264: error writing the output stream\n");
+        *wr_err = 1;
+    }
+    if (g_segment_out && buf && sz) {               /* one file per GOP, the segment-aligned output */
+        char path[1024]; const char *pc = strstr(g_segment_out, "%d");
+        if (pc) snprintf(path, sizeof path, "%.*s%d%s", (int)(pc - g_segment_out), g_segment_out, idx, pc + 2);
+        else    snprintf(path, sizeof path, "%s.%d", g_segment_out, idx);
+        FILE *sf = fopen(path, "wb");
+        if (!sf || fwrite(buf, 1, sz, sf) != sz) { fprintf(stderr, "yah264: cannot write segment %s\n", path); *wr_err = 1; }
+        if (sf) fclose(sf);
+    }
+    if (job->gop_fst && job->gop_fst[idx]) {
+        FILE *ff = fopen(g_frame_stats, idx ? "a" : "w");
+        if (ff) { fputs(job->gop_fst[idx], ff); fclose(ff); }
+        free(job->gop_fst[idx]); job->gop_fst[idx] = NULL;
+    }
+    free(buf);
+}
+
 static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                            long max_frames, int nthreads)
 {
@@ -3962,7 +4008,15 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         hj.cbr = param->nal_hrd == YAH264_NAL_HRD_CBR;
         hj.tpp = param->interlaced ? 1 : 2;
         hj.next_cpb = -1;
+        hj.cpb = cpb;
+        hj.pad = param->filler == YAH264_FILLER_OFF ? 0
+               : param->filler > 0 ? 1 : param->nal_hrd == YAH264_NAL_HRD_CBR;
     }
+    /* padded: a GOP is held until we know another GOP follows, since the
+     * stream's last access unit is never padded */
+    uint8_t *held = NULL;
+    size_t held_sz = 0;
+    int held_idx = 0;
     for (;;) {
         uint8_t *buf = NULL;
         size_t sz = 0;
@@ -3980,33 +4034,47 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             job.held -= sz;
         }
         pthread_mutex_unlock(&job.lock);
-        if (fin) break;
-        if (param->nal_hrd && buf && sz && hrd_join_gop(&hj, &buf, &sz) < 0) {
-            /* nothing after it could be timed right either: stop here */
-            fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", emitted);
-            wr_err = 1;
-            free(buf);
-            buf = NULL;
-            sz = 0;
+        if (fin) {
+            /* on an abort too: the held GOP is finished, and it ends the output */
+            if (held) {
+                if (hrd_join_gop(&hj, &held, &held_sz, 0) < 0) {
+                    fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", held_idx);
+                    wr_err = 1;
+                    free(held);
+                    held = NULL;
+                }
+                gop_emit(&job, out, held_idx, held, held ? held_sz : 0, &wr_err);
+            }
+            held = NULL;
+            break;
         }
-        if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
-            fprintf(stderr, "yah264: error writing the output stream\n");
-            wr_err = 1;
+        if (hj.pad && buf && sz) {
+            if (held) {
+                if (hrd_join_gop(&hj, &held, &held_sz, 1) < 0) {
+                    /* nothing after it could be timed right either: stop here */
+                    fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", held_idx);
+                    wr_err = 1;
+                    free(held);
+                    gop_emit(&job, out, held_idx, NULL, 0, &wr_err);   /* its stats lines */
+                } else
+                    gop_emit(&job, out, held_idx, held, held_sz, &wr_err);
+            }
+            held = buf; held_sz = sz; held_idx = emitted;
+            if (wr_err) {
+                free(held);
+                held = NULL;
+                gop_emit(&job, out, held_idx, NULL, 0, &wr_err);
+            }
+        } else {
+            if (param->nal_hrd && buf && sz && hrd_join_gop(&hj, &buf, &sz, 1) < 0) {
+                fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", emitted);
+                wr_err = 1;
+                free(buf);
+                buf = NULL;
+                sz = 0;
+            }
+            gop_emit(&job, out, emitted, buf, sz, &wr_err);
         }
-        if (g_segment_out && buf && sz) {               /* one file per GOP, the segment-aligned output */
-            char path[1024]; const char *pc = strstr(g_segment_out, "%d");
-            if (pc) snprintf(path, sizeof path, "%.*s%d%s", (int)(pc - g_segment_out), g_segment_out, emitted, pc + 2);
-            else    snprintf(path, sizeof path, "%s.%d", g_segment_out, emitted);
-            FILE *sf = fopen(path, "wb");
-            if (!sf || fwrite(buf, 1, sz, sf) != sz) { fprintf(stderr, "yah264: cannot write segment %s\n", path); wr_err = 1; }
-            if (sf) fclose(sf);
-        }
-        if (job.gop_fst && job.gop_fst[emitted]) {
-            FILE *ff = fopen(g_frame_stats, emitted ? "a" : "w");
-            if (ff) { fputs(job.gop_fst[emitted], ff); fclose(ff); }
-            free(job.gop_fst[emitted]); job.gop_fst[emitted] = NULL;
-        }
-        free(buf);
         emitted++;
         /* Frames written, not frames read: the progress a viewer cares about is
  * output that exists. gop_start[emitted] is the first frame of the next
@@ -4014,6 +4082,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         progress(job.gop_start && emitted <= job.n_gops ? job.gop_start[emitted] : 0,
                  job.gops_final ? (long)job.gop_start[job.n_gops] : 0);
         if (wr_err) {
+            if (held) gop_emit(&job, out, held_idx, NULL, 0, &wr_err);
+            free(held);
+            held = NULL;
             pthread_mutex_lock(&job.lock);
             job.abort_ = 1;
             pthread_cond_broadcast(&job.cv_space);
@@ -6024,13 +6095,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
-    /* --nal-hrd two-pass and cbr run one continuous encoder (see the path
- * choice below), and these three exist only on the per-GOP path. */
-    if (nal_hrd && (param.rc.method == YAH264_RC_2PASS || nal_hrd == YAH264_NAL_HRD_CBR)
-        && (g_cut_split || g_shot_table || g_shot_crf)) {
-        fprintf(stderr, "yah264: --nal-hrd %s cannot be combined with %s: it runs one "
+    /* --nal-hrd two-pass runs one continuous encoder (see the path choice
+ * below), and these three exist only on the per-GOP path */
+    if (nal_hrd && param.rc.method == YAH264_RC_2PASS && (g_cut_split || g_shot_table || g_shot_crf)) {
+        fprintf(stderr, "yah264: --nal-hrd two-pass cannot be combined with %s: it runs one "
                 "continuous encoder, and that option splits the stream into per-GOP encoders\n",
-                param.rc.method == YAH264_RC_2PASS ? "two-pass" : "cbr",
                 g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table" : "--cut-split");
         return 2;
     }
@@ -6139,22 +6208,17 @@ int main(int argc, char **argv)
     /* --nal-hrd at one thread runs one continuous encoder: one worker has
  * no parallel GOPs to win back, and the per-GOP path would restart the
  * rate control at every keyint boundary. The per-GOP options still take
- * that path. Two-pass and cbr run one encoder at any thread count,
- * because their per-GOP joins can miss the handoff level, and a declared
- * HRD turns that into a stream failing its own declaration:
- * two-pass on syn_shots, a GOP pinned at QP 51 leaving the next one
- * 3.5 kbit short; cbr on bbb 720p at 500 kbit/s into a 375 kbit buffer,
- * a join IDR underflowing in about a third of four-thread runs, HRD or
- * not. */
-    int hrd_serial = nal_hrd && (nthreads <= 1 || param.rc.method == YAH264_RC_2PASS
-                                 || nal_hrd == YAH264_NAL_HRD_CBR)
+ * that path. Two-pass runs one encoder at any thread count, because its
+ * per-GOP joins can miss the handoff level, and a declared HRD turns that
+ * into a stream failing its own declaration (syn_shots, a GOP pinned at
+ * QP 51 leaving the next one 3.5 kbit short). */
+    int hrd_serial = nal_hrd && (nthreads <= 1 || param.rc.method == YAH264_RC_2PASS)
                   && !g_cut_split && !g_shot_table && !g_shot_crf;
     if (hrd_serial) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
-            LOGF(LOG_INFO, "yah264: --nal-hrd %s runs one continuous encoder, so the "
-                 "%d threads run its row wavefront instead of parallel GOPs\n",
-                 param.rc.method == YAH264_RC_2PASS ? "two-pass" : "cbr", nthreads);
+            LOGF(LOG_INFO, "yah264: --nal-hrd two-pass runs one continuous encoder, so the "
+                 "%d threads run its row wavefront instead of parallel GOPs\n", nthreads);
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
