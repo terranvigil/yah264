@@ -645,12 +645,12 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             int32_t v = 32 * row[0];
             for (; x < -3; x++) srow[x] = v;
         }
-        for (; x < xin0; x++) {                          /* left border */
-            int xm2 = x-2 < 0 ? 0 : x-2, xm1 = x-1 < 0 ? 0 : x-1;
-            int xp1 = x+1 >= pw ? pw-1 : x+1, xp2 = x+2 >= pw ? pw-1 : x+2, xp3 = x+3 >= pw ? pw-1 : x+3;
-            int x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
-            srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
-        }
+        /* every tap clamps both ways: at x = -3 and -2 the right-hand taps
+         * are still left of column 0, and a tiny frame puts them past pw-1 */
+#define HPX(v) ((v) < 0 ? 0 : (v) >= pw ? pw - 1 : (v))
+        for (; x < xin0; x++)                            /* left border */
+            srow[x] = tap6(row[HPX(x-2)], row[HPX(x-1)], row[HPX(x)],
+                           row[HPX(x+1)], row[HPX(x+2)], row[HPX(x+3)]);
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
         if (hpel_tier == Y264_TIER_NEON) {
             y264_hpel_hrow_neon(srow, row, xin0, xin1);
@@ -673,11 +673,10 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             srow[x] = tap6(row[x-2], row[x-1], row[x], row[x+1], row[x+2], row[x+3]);
         int xr = x1;
         if (x1 > pw + 2 && xin1 <= pw + 2) xr = pw + 2;
-        for (x = xin1; x < xr; x++) {                    /* right border */
-            int xm2 = x-2 < 0 ? 0 : x-2, xm1 = x-1 < 0 ? 0 : x-1, x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
-            int xp1 = x+1 >= pw ? pw-1 : x+1, xp2 = x+2 >= pw ? pw-1 : x+2, xp3 = x+3 >= pw ? pw-1 : x+3;
-            srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
-        }
+        for (x = xin1; x < xr; x++)                      /* right border */
+            srow[x] = tap6(row[HPX(x-2)], row[HPX(x-1)], row[HPX(x)],
+                           row[HPX(x+1)], row[HPX(x+2)], row[HPX(x+3)]);
+#undef HPX
         if (xr < x1) {
             int32_t v = 32 * row[pw - 1];
             for (x = xr; x < x1; x++) srow[x] = v;

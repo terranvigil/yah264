@@ -505,8 +505,9 @@ static int run_intra4_mode_search(const char *name, i4x9fn kern, pixfn2 satd4)
     int bad = 0;
     refs();
     for (int t = 0; t < TRIALS; t++) {
-        /* odd trials run at an odd stride */
-        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
+        /* odd trials run at an odd stride, and every other pair of trials
+         * gives the source its own, so swapped strides show */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE, ss = (t & 2) ? st + 3 : st;
         plane();
         if (t == 0) memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
         if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
@@ -521,8 +522,8 @@ static int run_intra4_mode_search(const char *name, i4x9fn kern, pixfn2 satd4)
                 for (int htl = 0; htl <= (ht && hl); htl++)
                     for (int htr = 0; htr <= ht; htr++) {
                         int rc9[9], oc9[9];
-                        ref.intra4_mode_search(pb, st, rc, st, ht, hl, htl, htr, rc9);
-                        kern(pb, st, rc, st, ht, hl, htl, htr, oc9);
+                        ref.intra4_mode_search(pb, ss, rc, st, ht, hl, htl, htr, rc9);
+                        kern(pb, ss, rc, st, ht, hl, htl, htr, oc9);
                         for (int m = 0; m < 9; m++)
                             if (rc9[m] != oc9[m]) {
                                 if (!bad)
@@ -598,12 +599,12 @@ static int run_intra16_satd_trio(const char *name, x3fn kern, pixfn2 satd16)
  * Dispatched from the macroblock code rather than the pixel table, and one of
  * the four kernels the single-file harness never tested at all: a grep for
  * `ssd` in it returned only the dispatcher's own name. */
-static int ssd_ref(const pixel *a, const pixel *b, int st, int w, int h)
+static int ssd_ref(const pixel *a, int as, const pixel *b, int bs, int w, int h)
 {
     int r = 0;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
-            int d = a[y * st + x] - b[y * st + x];
+            int d = a[y * as + x] - b[y * bs + x];
             r += d * d;
         }
     return r;
@@ -611,15 +612,15 @@ static int ssd_ref(const pixel *a, const pixel *b, int st, int w, int h)
 
 /* The four planes every SSD group draws first: equal, both full-swing signs
  * and random extremes; the rest are random. */
-static void ssd_planes(int t, int st)
+static void ssd_planes(int t)
 {
     plane();
-    if (t == 0) memcpy(pb, pa, st * PLANE_H * sizeof(pixel));
-    if (t == 1) { memset(pa, 0, st * PLANE_H * sizeof(pixel));
-                  ca_fill_max(pb, st * PLANE_H); }
-    if (t == 2) { ca_fill_max(pa, st * PLANE_H);
-                  memset(pb, 0, st * PLANE_H * sizeof(pixel)); }
-    if (t == 3) for (int i = 0; i < st * PLANE_H; i++) {
+    if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+    if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
+                  ca_fill_max(pb, STRIDE * PLANE_H); }
+    if (t == 2) { ca_fill_max(pa, STRIDE * PLANE_H);
+                  memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+    if (t == 3) for (int i = 0; i < STRIDE * PLANE_H; i++) {
                     pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
 }
 
@@ -629,13 +630,14 @@ static int ssd_group(ssdfn k16, ssdfn k8, const char *tag)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
-        /* odd trials run at an odd stride */
-        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
-        ssd_planes(t, st);
+        /* odd trials run at an odd stride, and every other pair of trials
+         * gives the second plane its own, so swapped strides show */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE, sb = (t & 2) ? st + 3 : st;
+        ssd_planes(t);
         for (int w = 8; w <= 16; w += 8)
             for (int h = 4; h <= 16; h += 4) {
-                int r = ssd_ref(pa, pb, st, w, h);
-                int o = w == 16 ? k16(pa, st, pb, st, h) : k8(pa, st, pb, st, h);
+                int r = ssd_ref(pa, st, pb, sb, w, h);
+                int o = w == 16 ? k16(pa, st, pb, sb, h) : k8(pa, st, pb, sb, h);
                 if (r != o) {
                     if (!bad) ca_fail("ssd%s_%dx%d: ref=%d opt=%d", tag, w, h, r, o);
                     bad++;
@@ -668,10 +670,10 @@ static int ssd_group(ssdfn k16, ssdfn k8, const char *tag)
         plane();
         snprintf(lab, sizeof(lab), "ssd_16x16%s", tag);
         CA_BENCH2(lab, s_ += k16(pa, STRIDE, pb, STRIDE, 16),
-                  s_ += ssd_ref(pa, pb, STRIDE, 16, 16));
+                  s_ += ssd_ref(pa, STRIDE, pb, STRIDE, 16, 16));
         snprintf(lab, sizeof(lab), "ssd_8x8%s", tag);
         CA_BENCH2(lab, s_ += k8(pa, STRIDE, pb, STRIDE, 8),
-                  s_ += ssd_ref(pa, pb, STRIDE, 8, 8));
+                  s_ += ssd_ref(pa, STRIDE, pb, STRIDE, 8, 8));
     }
     return bad;
 }
@@ -684,14 +686,15 @@ static int ssdmap_group(ssdmapfn k, const char *tag)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
-        /* odd trials run at an odd stride */
-        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
-        ssd_planes(t, st);
+        /* odd trials run at an odd stride, and every other pair of trials
+         * gives the second plane its own, so swapped strides show */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE, sb = (t & 2) ? st + 3 : st;
+        ssd_planes(t);
         uint32_t o[16];
-        k(pa, st, pb, st, o);
+        k(pa, st, pb, sb, o);
         for (int b = 0; b < 16; b++) {
-            uint32_t r = (uint32_t)ssd_ref(pa + (b >> 2) * 4 * st + (b & 3) * 4,
-                                           pb + (b >> 2) * 4 * st + (b & 3) * 4, st, 4, 4);
+            uint32_t r = (uint32_t)ssd_ref(pa + (b >> 2) * 4 * st + (b & 3) * 4, st,
+                                           pb + (b >> 2) * 4 * sb + (b & 3) * 4, sb, 4, 4);
             if (r != o[b]) {
                 if (!bad) ca_fail("ssd4x4_map16%s: block %d ref=%u opt=%u", tag, b, r, o[b]);
                 bad++;
@@ -734,15 +737,16 @@ static int t_ssdsum4x4_neon(void)
 #endif
     int bad = 0;
     for (int t = 0; t < TRIALS && !bad; t++) {
-        /* odd trials run at an odd stride */
-        const int st = (t & 1) ? STRIDE - 1 : STRIDE;
-        ssd_planes(t, st);
+        /* odd trials run at an odd stride, and every other pair of trials
+         * gives the second plane its own, so swapped strides show */
+        const int st = (t & 1) ? STRIDE - 1 : STRIDE, sb = (t & 2) ? st + 3 : st;
+        ssd_planes(t);
         for (int big = 0; big <= 1; big++) {
             int nb = big ? 4 : 2;
             for (int v = 0; v < 2 && (big ? k16 : k8)[v]; v++) {
                 uint32_t e[17]; int32_t sm[17];
                 e[nb * nb] = 0xdeadbeefu; sm[nb * nb] = 0x5a5a5a5a;
-                (big ? k16 : k8)[v](pa, st, pb, st, e, sm);
+                (big ? k16 : k8)[v](pa, st, pb, sb, e, sm);
                 if (e[nb * nb] != 0xdeadbeefu || sm[nb * nb] != 0x5a5a5a5a) {
                     if (!bad) ca_fail("ssdsum4x4_%d: wrote past its output", big ? 16 : 8);
                     bad++;
@@ -752,7 +756,7 @@ static int t_ssdsum4x4_neon(void)
                     for (int y = 0; y < 4; y++)
                         for (int x = 0; x < 4; x++) {
                             int d = pa[((b / nb) * 4 + y) * st + (b % nb) * 4 + x]
-                                  - pb[((b / nb) * 4 + y) * st + (b % nb) * 4 + x];
+                                  - pb[((b / nb) * 4 + y) * sb + (b % nb) * 4 + x];
                             re += (uint32_t)(d * d); rs += d;
                         }
                     if (re != e[b] || rs != sm[b]) {
