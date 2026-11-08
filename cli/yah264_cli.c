@@ -1285,6 +1285,9 @@ typedef struct {
      * display order, and its cursor indexes whichever order is current */
     int order_gen;
     int lost;                       /* a GOP's frames were never read: fail */
+    /* run[g]: one-frame GOPs straight before GOP g, filled in order as
+     * workers ask, so the idr_pic_id base costs O(1) per GOP */
+    int *idr_run, idr_run_n, idr_run_cap;
     size_t held;                    /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
     int gops_final, gops_cap;
@@ -1640,7 +1643,7 @@ static void *gop_worker(void *arg)
     int W = j->width;                   /* the INPUT frame width; the coded one is p.width */
     int scan = 0;
     for (;;) {
-        int g, start, end;
+        int g, start, end, idr_base = 0;
         double tpull = g_gop_trace ? gop_trace_now() : 0;
         pthread_mutex_lock(&j->lock);
         int k = -1;                             /* pull index (pull-queue mode) */
@@ -1684,10 +1687,27 @@ static void *gop_worker(void *arg)
  * boundary restarted the ABR ledger, the VBV occupancy and the opening
  * fit (at one thread, nine GOPs of twelve on a 3000-frame pipe). */
             if (j->pull_gop) j->pull_gop[k] = g;
+            idr_base = j->keyint == 1 ? g & 1 : 0;
         } else {
             if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
             start = j->gop_start[g];
             end   = j->gop_start[g + 1];
+            /* a one-frame GOP ends on its IDR, so the next GOP's IDR must
+             * take the other id: alternate along a run of them */
+            if (g >= j->idr_run_cap) {
+                int nc = j->idr_run_cap ? j->idr_run_cap : 64;
+                while (nc <= g) nc *= 2;
+                int *q = realloc(j->idr_run, (size_t)nc * sizeof(int));
+                if (q) { j->idr_run = q; j->idr_run_cap = nc; }
+            }
+            if (g < j->idr_run_cap) {
+                for (; j->idr_run_n <= g; j->idr_run_n++) {
+                    int i = j->idr_run_n;
+                    j->idr_run[i] = i > 0 && j->gop_start[i] - j->gop_start[i - 1] == 1
+                                  ? j->idr_run[i - 1] + 1 : 0;
+                }
+                idr_base = j->idr_run[g] & 1;
+            }
             if (k >= 0 && j->pull_gop) j->pull_gop[k] = g;   /* a GOP waited for is a pull like any other */
         }
         /* Wait for the GOP's FIRST frame, not for all of it. Blocking until
@@ -1769,6 +1789,7 @@ static void *gop_worker(void *arg)
  * depend on which worker coded the GOP or on how many threads ran. */
         if (g > 0 && p.rc.vbv_maxrate > 0 && p.rc.vbv_bufsize > 0)
             p.rc.vbv_seg_join = 1;
+        p.idr_pic_id_base = idr_base;
         /* The same handoff, asked of the HRD clock instead of the buffer. This
  * GOP opens a buffering period at its first picture, and that picture's
  * cpb_removal_delay counts ticks back to the PREVIOUS period: the previous
@@ -3969,7 +3990,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
     for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
     free(job.seg); free(tid);
-    free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start); free(job.gop_rd); free(job.gop_cons);
+    free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start); free(job.gop_rd); free(job.gop_cons); free(job.idr_run);
     job_rc_free(&job);
     pthread_mutex_destroy(&job.lock);
     pthread_cond_destroy(&job.cv_space);

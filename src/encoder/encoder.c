@@ -15906,7 +15906,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         e->poc = poc;
         e->cur_b_depth = 0;                          /* anchor: base temporal layer */
         if (is_idr)
-            e->idr_pic_id = (int)(e->frame_count & 0xffff);
+            e->idr_pic_id = (int)((e->frame_count + (unsigned)e->param.idr_pic_id_base) & 0xffff);
         e->cur_disp = (int)e->frame_count;
         if (e->mbtree_on && !e->mbtree_skip && (e->nbuf > 0 || e->la_depth > 0)) {
             /* mb-tree walks the window up to the NEWEST push (its typed flags
@@ -16014,7 +16014,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     e->frame_num = e->anchor_fn;
     e->poc = poc;
     if (is_idr)
-        e->idr_pic_id = (int)(e->frame_count & 0xffff);
+        e->idr_pic_id = (int)((e->frame_count + (unsigned)e->param.idr_pic_id_base) & 0xffff);
     e->cur_disp = (int)e->frame_count;
     if (e->mbtree_on && !e->mbtree_skip && (e->nbuf > 0 || e->la_depth > 0)) {
         if (!RCR_PLAY(e)) {

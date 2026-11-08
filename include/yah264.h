@@ -843,6 +843,13 @@ typedef struct {
  * limit, the key-frame interval and scene cuts are untouched. Read only
  * with adaptive placement (badapt non-zero). 0 = the measured default. */
     int b_bias;
+
+    /* Added to every idr_pic_id this encode writes (low 16 bits). Two IDR
+ * pictures in consecutive access units must carry different ids (7.4.3),
+ * and an encode numbers its own from 0, so a caller that concatenates
+ * segments sets this where the segment before ended on an IDR of id 0: a
+ * one-frame segment. 0 = the default. */
+    int idr_pic_id_base;
 } yah264_param_t;
 
 /* param.weightp: 0 is unset (= 1), so off needs a value of its own. */
