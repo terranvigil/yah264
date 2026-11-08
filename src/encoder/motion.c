@@ -1017,8 +1017,9 @@ static int me_search_core(const pixel *src, int ss,
      * with the quantiser step, so the residual a start may carry and still
      * end the integer stage grows with what the quantiser will discard. */
     const int hq = eff_on ? me_hq() : 0;
+    /* K is per pixel on the 8-bit scale; a SAD grows 2x per extra bit */
     const int et_hit = (et_keff
-                     && (long)bcost <= (long)et_keff * w * h)
+                     && (long)bcost <= ((long)et_keff * w * h << (Y264_BIT_DEPTH - 8)))
                      || (hq && (long)bcost <= ((long)hq * lambda * w * h >> 8));
     /* Y264_ME_AGREE: every seed coincided with the predictor start (all
      * deduplicated away), so the neighbourhood agrees on this vector: one
@@ -1369,7 +1370,8 @@ static int me_search_core(const pixel *src, int ss,
  * per pixel, and record what the integer stages after it bought. */
     if (etst) {
         int area = w * h;
-        int b = area ? (int)((long)et_seed / area) : ETB - 1;
+        /* per pixel on the 8-bit scale, the one K is set on */
+        int b = area ? (int)((long)et_seed / ((long)area << (Y264_BIT_DEPTH - 8))) : ETB - 1;
         if (b < 0) b = 0;
         if (b >= ETB) b = ETB - 1;
         int d = (abs(bmx - et_sx) + abs(bmy - et_sy)) >> 2;   /* qpel -> integer */
