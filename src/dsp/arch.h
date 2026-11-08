@@ -364,6 +364,20 @@ void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
 
+/* intra prediction (src/dsp/arm/intrapred_neon10.c) */
+void y264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left, int cw, int ch);
+void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
+void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
+
 /* deblocking (src/dsp/arm/loopfilter_neon10.c; the strength kernel is the
  * shared src/dsp/arm/loopfilter_bs_neon.c). The four-line luma forms are
  * 8-bit only: the whole-edge ones serve every NEON call site. */
