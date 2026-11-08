@@ -6,8 +6,10 @@
  * The 10-bit twins of part of src/dsp/interp_neon.c, under the 8-bit kernels'
  * names (src/common/symbols10.h suffixes them): the half-pel plane fetch,
  * the weighted average, chroma MC at widths 8 and 4, and the two row kernels
- * of the half-pel plane build. The six-tap luma kernels, the fused band
- * build and the fused bi-prediction forms stay C at 10 bits for now.
+ * of the half-pel plane build. It also holds the row of the lowres half-pel
+ * planes on the 8-bit scale, which the 8-bit library leaves to the compiler.
+ * The six-tap luma kernels, the fused band build and the fused bi-prediction
+ * forms stay C at 10 bits for now.
  *
  * A sample is a u16 lane. The six-tap filter of 10-bit samples reaches
  * 42*1023 = 42966, past int16, so the filters widen to int32 where the 8-bit
@@ -242,6 +244,46 @@ void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
         tap6_u16(vld1q_u16(r0 + x), vld1q_u16(r1 + x), vld1q_u16(r2 + x),
                  vld1q_u16(r3 + x), vld1q_u16(r4 + x), vld1q_u16(r5 + x), &v0, &v1);
         vst1q_u16(Vr + x, clip_s32x2(vrshrq_n_s32(v0, 5), vrshrq_n_s32(v1, 5)));
+    }
+}
+
+/* ---- the lowres half-pel planes ---------------------------------------------
+ *
+ * The lowres planes hold 8-bit samples at every depth. Each output is the
+ * rounded mean of two vertical pair means, where a pair mean of 10-bit
+ * samples rounds straight to the 8-bit scale, (a + b + 4) >> 3, and the
+ * final mean saturates at 255:
+ *
+ *   oh[x] = min(avg(m(r0[2x+1], r1[2x+1]), m(r0[2x+2], r1[2x+2])), 255)
+ *   ov[x] = min(avg(m(r1[2x],   r2[2x]),   m(r1[2x+1], r2[2x+1])), 255)
+ *   oc[x] = min(avg(m(r1[2x+1], r2[2x+1]), m(r1[2x+2], r2[2x+2])), 255)
+ *
+ * A pair sum is at most 2046, so it stays in u16. Eight outputs a step read
+ * a row deinterleaved from 2x (r1, r2) and from 2x + 1 (all three), which
+ * is r0[1 .. 2n] and r1, r2[0 .. 2n] over the row; the last step steps back
+ * to end on the span, so the caller hands it n >= 8. */
+static inline uint16x8_t lr_m(uint16x8_t a, uint16x8_t b)
+{
+    return vrshrq_n_u16(vaddq_u16(a, b), 3);
+}
+
+void y264_lr_hp_row_neon(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n)
+{
+    const uint16x8_t cap = vdupq_n_u16(255);
+    for (int x = 0; x < n; x += 8) {
+        if (x > n - 8) x = n - 8;
+        const int i = 2 * x;
+        /* from 2x + 1: the odd samples and the even ones a column on */
+        uint16x8x2_t a = vld2q_u16(r0 + i + 1);
+        uint16x8x2_t b = vld2q_u16(r1 + i), c = vld2q_u16(r2 + i);
+        uint16x8_t b2 = vld2q_u16(r1 + i + 1).val[1], c2 = vld2q_u16(r2 + i + 1).val[1];
+        uint16x8_t m01o = lr_m(a.val[0], b.val[1]), m01e2 = lr_m(a.val[1], b2);
+        uint16x8_t m12e = lr_m(b.val[0], c.val[0]), m12o = lr_m(b.val[1], c.val[1]);
+        uint16x8_t m12e2 = lr_m(b2, c2);
+        vst1q_u16(oh + x, vminq_u16(vrhaddq_u16(m01o, m01e2), cap));
+        vst1q_u16(ov + x, vminq_u16(vrhaddq_u16(m12e, m12o), cap));
+        vst1q_u16(oc + x, vminq_u16(vrhaddq_u16(m12o, m12e2), cap));
     }
 }
 

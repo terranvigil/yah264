@@ -793,12 +793,31 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
 
-#if Y264_HAVE_SSE4
-
-/* ---- the bodies only the x86 tiers have rows for -------------------------- */
+#if Y264_HAVE_SSE4 || Y264_HAVE_NEON10
 
 typedef void (*lr_hp_row_fn)(pixel *, pixel *, pixel *, const pixel *,
                              const pixel *, const pixel *, int);
+
+#if Y264_HAVE_NEON10
+/* The 10-bit row's scalar form, on the 8-bit scale the lowres planes hold:
+ * each pair mean rounds to the 8-bit scale and the result saturates at 255,
+ * as the encoder's own lowres build does. */
+static void lr_hp_row8_ref(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                           const pixel *r1, const pixel *r2, int n)
+{
+#define M(a, b) (((a) + (b) + 4) >> 3)
+#define F(a, b, c, d) (pixel)((((M(a, b) + M(c, d) + 1) >> 1) > 255) ? 255 \
+                              : ((M(a, b) + M(c, d) + 1) >> 1))
+    for (int x = 0; x < n; x++) {
+        int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
+        oh[x] = F(r0[x1], r1[x1], r0[x2], r1[x2]);
+        ov[x] = F(r1[x0], r2[x0], r1[x1], r2[x1]);
+        oc[x] = F(r1[x1], r2[x1], r1[x2], r2[x2]);
+    }
+#undef F
+#undef M
+}
+#endif
 
 /* One row of the three lowres half-pel planes against the C row, at every
  * length class the step-back tail has (a multiple of the register, one over,
@@ -806,7 +825,7 @@ typedef void (*lr_hp_row_fn)(pixel *, pixel *, pixel *, const pixel *,
  * three outputs are guarded separately and the three source rows are mapped to
  * exactly the columns the row declares: r0 from column 1, r1 and r2 from
  * column 0, all three through column 2n. */
-static int run_lr_hp_row(const char *name, lr_hp_row_fn kern)
+static int run_lr_hp_row(const char *name, lr_hp_row_fn kern, lr_hp_row_fn cref)
 {
     static const int ns[] = { 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 47, 61 };
     enum { NMAX = 61 };
@@ -817,6 +836,7 @@ static int run_lr_hp_row(const char *name, lr_hp_row_fn kern)
         plane();
         if (t % 5 == 1)
             for (int i = 0; i < STRIDE * 8; i++) { pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
+        if (t % 5 == 3) { ca_fill_max(pa, STRIDE * 8); ca_fill_max(pb, STRIDE * 8); }
         const pixel *r0 = pa + (t & 3), *r1 = pa + 4 * STRIDE + (t % 3), *r2 = pb + (t % 5);
         for (unsigned k = 0; k < sizeof(ns) / sizeof(ns[0]); k++) {
             int n = ns[k];
@@ -825,7 +845,7 @@ static int run_lr_hp_row(const char *name, lr_hp_row_fn kern)
                 ca_guard_poison(o[j], (size_t)n * sizeof(pixel));
             }
             kern(o[0], o[1], o[2], r0, r1, r2, n);
-            y264_lr_hp_row_c(ref[0], ref[1], ref[2], r0, r1, r2, n);
+            cref(ref[0], ref[1], ref[2], r0, r1, r2, n);
             for (int j = 0; j < 3; j++) {
                 if (memcmp(o[j], ref[j], (size_t)n * sizeof(pixel))) {
                     if (!bad) ca_fail("%s: plane %d n=%d", name, j, n);
@@ -849,7 +869,7 @@ static int run_lr_hp_row(const char *name, lr_hp_row_fn kern)
             ca_pg_arm(name);
             kern(o[0], o[1], o[2], s0 - 1, s1, s2, n);
             ca_pg_disarm();
-            y264_lr_hp_row_c(ref[0], ref[1], ref[2], s0 - 1, s1, s2, n);
+            cref(ref[0], ref[1], ref[2], s0 - 1, s1, s2, n);
             for (int j = 0; j < 3; j++)
                 if (memcmp(o[j], ref[j], (size_t)n * sizeof(pixel))) {
                     if (!bad) ca_fail("%s: guarded plane %d n=%d", name, j, n);
@@ -861,10 +881,16 @@ static int run_lr_hp_row(const char *name, lr_hp_row_fn kern)
         }
     }
     CA_BENCH2(name, kern(o[0], o[1], o[2], pa, pa + 4 * STRIDE, pb, NMAX),
-                    y264_lr_hp_row_c(ref[0], ref[1], ref[2], pa, pa + 4 * STRIDE, pb, NMAX));
+                    cref(ref[0], ref[1], ref[2], pa, pa + 4 * STRIDE, pb, NMAX));
     for (int k = 0; k < 3; k++) ca_guard_free(o[k]);
     return bad;
 }
+
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_NEON10 */
+
+#if Y264_HAVE_SSE4
+
+/* ---- the bodies only the x86 tiers have rows for -------------------------- */
 
 typedef void (*hpel_band_fn)(pixel *, pixel *, pixel *, int, const pixel *, int,
                              int, int, int, uint8_t *, int, int);
@@ -1009,6 +1035,11 @@ static int t_mc_chroma_win_neon(void)
 static int t_hpel_rows_neon(void)
 { return run_hpel_rows("hpel_rows", y264_hpel_hrow_neon, y264_hpel_outrow_neon); }
 
+#if Y264_HAVE_NEON10
+static int t_lr_hp_row_neon(void)
+{ return run_lr_hp_row("lr_hp_row", y264_lr_hp_row_neon, lr_hp_row8_ref); }
+#endif
+
 #endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 */
 
 #if Y264_HAVE_SSE4
@@ -1033,7 +1064,7 @@ static int t_hpel_band_sse4(void)
 static int t_bilin4_row_sse4(void)
 { return run_bilin4_row("bilin4_row_sse4", y264_bilin4_row_sse4); }
 static int t_lr_hp_row_sse4(void)
-{ return run_lr_hp_row("lr_hp_row_sse4", y264_lr_hp_row_sse4); }
+{ return run_lr_hp_row("lr_hp_row_sse4", y264_lr_hp_row_sse4, y264_lr_hp_row_c); }
 static int t_pixel_avg_wt_2d_sse4(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d_sse4", y264_pixel_avg_wt_2d_sse4); }
 static int t_mc_chroma_bi8_sse4(void)
@@ -1065,7 +1096,7 @@ static int t_hpel_band_avx2(void)
 static int t_bilin4_row_avx2(void)
 { return run_bilin4_row("bilin4_row_avx2", y264_bilin4_row_avx2); }
 static int t_lr_hp_row_avx2(void)
-{ return run_lr_hp_row("lr_hp_row_avx2", y264_lr_hp_row_avx2); }
+{ return run_lr_hp_row("lr_hp_row_avx2", y264_lr_hp_row_avx2, y264_lr_hp_row_c); }
 static int t_pixel_avg_wt_2d_avx2(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d_avx2", y264_pixel_avg_wt_2d_avx2); }
 static int t_mc_chroma_bi8_avx2(void)
@@ -1459,6 +1490,7 @@ const ca_test ca_mc_tests[] = {
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
+    { "lr_hp_row",         "mc", Y264_CPU_NEON, t_lr_hp_row_neon },
 #endif
 #if Y264_HAVE_SSE4
     { "pred_copy_sse4",    "mc", Y264_CPU_SSE4_ALL, t_pred_copy_sse4 },

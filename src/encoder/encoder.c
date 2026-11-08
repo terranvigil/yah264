@@ -6155,6 +6155,9 @@ static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, in
     /* the clamps only ever bite on the last column (x2 = 2*lw) and the last
      * row (y2 = 2*lh), so the body runs clamp-free and vectorises */
     int xe = 2 * lw <= pw - 1 ? lw : lw - 1;
+#if Y264_HAVE_NEON10
+    const int hp_neon = y264_asm_on(Y264_ASM_MC) && xe >= 8;
+#endif
     for (int y = 0; y < lh; y++) {
         int y0 = 2 * y, y1 = y0 + 1 < ph ? y0 + 1 : ph - 1, y2 = y0 + 2 < ph ? y0 + 2 : ph - 1;
         const pixel *r0 = src + y0 * ss, *r1 = src + y1 * ss, *r2 = src + y2 * ss;
@@ -6164,6 +6167,12 @@ static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, in
          * 8 bits the loop below runs, since its rows round to the 8-bit scale */
         y264_lr_hp_row(oh, ov, oc, r0, r1, r2, xe);
 #else
+#if Y264_HAVE_NEON10
+        /* the 10-bit kernel rounds to the 8-bit scale as the loop does */
+        if (hp_neon)
+            y264_lr_hp_row_neon(oh, ov, oc, r0, r1, r2, xe);
+        else
+#endif
         for (int x = 0; x < xe; x++) {
             int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
             oh[x] = LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
