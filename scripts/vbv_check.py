@@ -18,7 +18,7 @@ Usage: vbv_check.py <stream.264> --maxrate KBPS --bufsize KBIT
        (--y4m SRC.y4m | --fps N[:D]) [--init F] [--quiet]
 
 --init is the encoder's starting fill, read like --vbv-init: at most 1 a
-fraction of the buffer, above 1 kbit. Pass the value the stream was coded
+fraction of the buffer, above 1 kbit, and above 0. Pass the value the stream was coded
 with; a model that starts fuller than the encoder did forgives an early
 over-spend the real buffer would not.
 
@@ -40,6 +40,7 @@ for streams whose source y4m is not to hand, and one of the two is required --
 there is deliberately no default, because a default framerate is the bug.
 """
 import argparse
+import math
 import sys
 
 
@@ -118,8 +119,10 @@ def main():
                     help="initial fill: <=1 a fraction of --bufsize, above 1 kbit (default full)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
-    if args.init < 0:
-        print(f"vbv_check: --init {args.init} is negative", file=sys.stderr)
+    # 0 is refused rather than read as empty: the encoders' --vbv-init 0
+    # means "unset", which is full
+    if not math.isfinite(args.init) or args.init <= 0:
+        print(f"vbv_check: --init {args.init} must be a finite number above 0", file=sys.stderr)
         return 2
 
     if args.y4m:

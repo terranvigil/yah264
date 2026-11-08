@@ -37,24 +37,29 @@ same clip; get them with --encoders x264 --crf 20,23,26,29,32.
 ladders at 6 threads, so pass --threads 6 for a reading that matches it.
 
 Both encoders run their preset's lookahead depth unless --yah-lookahead or
---x264-lookahead (0 to 250) passes --rc-lookahead to that side. The depth
-printed for x264 is the one its stream's options SEI records, which is what
-it ran with; yah264 runs the depth it is given. CAMBI is the pooled mean of
-the banding feature the HDR model computes in the same run.
+--x264-lookahead passes --rc-lookahead to that side. x264 takes 0 to 250 and
+the depth printed for it is the one its stream's options SEI records, which
+is what it ran with. yah264 caps its window at 64 frames (read from its
+--help, like its default), so a deeper --yah-lookahead is refused rather
+than printed as run. CAMBI is the pooled mean of the banding feature the
+HDR model computes in the same run.
 
 Each rung's result is cached in the work directory, keyed on the encoder
-binary's md5 and full command line, the source's size, mtime and sampled
-md5, and the scorer chain (the vmaf and ffmpeg binaries and versions, the
-model file and, for VBR, vbv_check.py). A change to any of them re-encodes;
-a reused rung prints "cached". Bump RESULT_VERSION when this script changes
-how a rung is measured. --fresh ignores the cache.
+binary and the non-system libraries it links, its full command line and,
+for yah264, every Y264_* and YAH264_* variable set; the source's size,
+mtime, ctime, inode and sampled md5; this script's own md5; and the scorer
+chain (the vmaf and ffmpeg binaries, their libraries and versions, the model
+file and, for VBR, vbv_check.py). A change to any of them re-encodes; a
+reused rung prints "cached". RESULT_VERSION versions the cached JSON's
+layout. --fresh ignores the cache. A run holds a lock on its work directory,
+and a second run on the same directory stops at once.
 
   YAH264    yah264 CLI (default build/cli/yah264)
   X264      x264 CLI (default x264)
   VMAF_HDR  a vmaf CLI built with the HDR models' colour options
   VMAF_HDR_MODELS  the directory holding hdr_vmaf_v1.1.8[_hfr]/
 """
-import argparse, hashlib, json, math, os, re, shutil, subprocess, sys
+import argparse, fcntl, hashlib, json, math, os, re, shutil, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bdcompare import bd_rate                                   # noqa: E402
@@ -68,13 +73,19 @@ VBV_CHECK = os.path.join(ROOT, "scripts", "vbv_check.py")
 
 
 SIZES = {(1920, 1080): "3d0h", (3840, 2160): "1d5h_2160"}
-# both encoders' medium preset runs a 40-frame mb-tree window
-PRESET_LOOKAHEAD = 40
+# x264 takes up to 250 frames of lookahead
 MAX_LOOKAHEAD = 250
+# yah264's medium default and its cap, used only when its --help doesn't
+# state them (it prints both on the --rc-lookahead line)
+YAH_DEFAULT_LOOKAHEAD = 40
+YAH_MAX_LOOKAHEAD = 64
 VBV_INIT = 0.9
 RATE_BAR = 10.0
-# bump when this script changes how a rung is measured, so older cached rungs re-run
-RESULT_VERSION = 3
+# bump when the cached JSON's layout changes; a change to how a rung is
+# measured is caught by the script's md5 in the key
+RESULT_VERSION = 4
+KNOB_PREFIXES = ("Y264_", "YAH264_")
+LOCK = None
 
 
 def y4m_info(path):
@@ -112,21 +123,60 @@ def md5_of(path):
 
 
 def source_id(path):
-    """Size, mtime and the md5 of the first and last 8 MiB: hashing a whole
-    2160p excerpt on every run costs more than the check is worth, and an
-    overwrite changes at least one of the three."""
+    """Size, inode, mtime, ctime and the md5 of the first and last 8 MiB:
+    hashing a whole 2160p excerpt on every run costs more than the check is
+    worth, and a re-cut or recopy changes at least one of them (restoring the
+    mtime still moves the ctime)."""
     st = os.stat(path)
     m = hashlib.md5()
     with open(path, "rb") as f:
         m.update(f.read(8 << 20))
         f.seek(max(0, st.st_size - (8 << 20)))
         m.update(f.read())
-    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "md5_ends": m.hexdigest()}
+    return {"size": st.st_size, "ino": st.st_ino, "mtime_ns": st.st_mtime_ns,
+            "ctime_ns": st.st_ctime_ns, "md5_ends": m.hexdigest()}
 
 
-def tool_id(path, version_args):
-    r = subprocess.run([path] + version_args, capture_output=True, text=True)
-    return {"md5": md5_of(path), "version": (r.stdout + r.stderr).strip()[:2000]}
+def linked_libs(path):
+    """The non-system shared libraries a binary loads, followed through the
+    libraries they load. Paths the loader resolves at run time (@rpath and
+    friends) are kept by name only."""
+    seen, todo = {}, [path]
+    while todo:
+        p = todo.pop()
+        if sys.platform == "darwin":
+            r = subprocess.run(["otool", "-L", p], capture_output=True, text=True)
+            deps = [ln.split(" (")[0].strip() for ln in r.stdout.splitlines()[1:]]
+        else:
+            r = subprocess.run(["ldd", p], capture_output=True, text=True)
+            deps = [ln.split("=>")[-1].split(" (")[0].strip() for ln in r.stdout.splitlines()]
+        for d in deps:
+            if not d or d in seen or d == p or d.startswith(("/usr/lib/", "/System/", "/lib/", "/lib64/")):
+                continue
+            if os.path.isabs(d) and os.path.isfile(d):
+                seen[d] = md5_of(os.path.realpath(d))
+                todo.append(d)
+            else:
+                seen[d] = None
+    return dict(sorted(seen.items()))
+
+
+def tool_id(path, version_args=None):
+    t = {"md5": md5_of(path), "libs": linked_libs(path)}
+    if version_args:
+        r = subprocess.run([path] + version_args, capture_output=True, text=True)
+        t["version"] = (r.stdout + r.stderr).strip()[:2000]
+    return t
+
+
+def yah_lookahead_limits(path):
+    """yah264's default and maximum lookahead, as its --help states them."""
+    r = subprocess.run([path, "--help"], capture_output=True, text=True)
+    text = re.sub(r"\s+", " ", r.stdout + r.stderr)
+    m = re.search(r"--rc-lookahead N .*?\(default (\d+).*?at most (\d+)", text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return YAH_DEFAULT_LOOKAHEAD, YAH_MAX_LOOKAHEAD
 
 
 def run(cmd, ok=(0,)):
@@ -142,7 +192,9 @@ def psnr(src, dec, w, h):
     sse = np.zeros(3)
     n = 0
     with open(src, "rb") as a, open(dec, "rb") as b:
-        a.readline(); b.readline()
+        want, got = y4m_shape(a.readline()), y4m_shape(b.readline())
+        if want != got:
+            sys.exit(f"hdr_ladder: {dec} decodes as {got}, not the source's {want}")
         while a.readline():
             if not b.readline():
                 sys.exit(f"hdr_ladder: {dec} is short: the source has more than {n} frames")
@@ -160,6 +212,11 @@ def psnr(src, dec, w, h):
     mse = sse / (np.array([w * h, w * h / 4, w * h / 4]) * n)
     p = [10 * math.log10(1023 * 1023 / m) if m > 0 else 100.0 for m in mse]   # lossless caps
     return n, p[0], (6 * p[0] + p[1] + p[2]) / 8
+
+
+def y4m_shape(line):
+    tok = {t[0]: t[1:] for t in line.decode("latin-1").split()[1:]}
+    return tuple(tok.get(k) for k in "WHC")
 
 
 def vbv_args(kbps):
@@ -192,11 +249,15 @@ def load_cached(js, key):
     return r
 
 
-def rung(enc, src, mode, q, work, threads, w, h, fps, bin_md5, ids, lookahead, fresh):
+def rung(enc, src, mode, q, work, threads, w, h, fps, enc_id, ids, lookahead, la_default, fresh):
     tag = f"{mode}{fmt(q)}" + (f"_la{lookahead}" if lookahead is not None else "")
+    if enc_id.get("env"):
+        # a knob A/B keeps both arms' rungs side by side
+        tag += "_env" + hashlib.md5(" ".join(enc_id["env"]).encode()).hexdigest()[:8]
     stem = os.path.join(work, f"{enc}_{tag}")
     js = stem + ".json"
     out, dec, vj = stem + ".264", stem + ".dec.y4m", stem + ".vmaf.json"
+    part = stem + ".part.264"
     if mode == "crf":
         rc = ["--crf", fmt(q)]
     else:
@@ -206,20 +267,27 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, bin_md5, ids, lookahead, f
     if lookahead is not None:
         rc += ["--rc-lookahead", str(lookahead)]
     if enc == "yah264":
-        cmd = [YAH, "--input-y4m", src] + rc + ["--threads", str(threads), "-o", out]
+        cmd = [YAH, "--input-y4m", src] + rc + ["--threads", str(threads), "-o", part]
     else:
         cmd = [X264, "--preset", "medium", "--profile", "high10", "--output-depth", "10"] + rc + \
-              ["--threads", str(threads), "--log-level", "error", "-o", out, src]
-    key = {"bin_md5": bin_md5, "cmd": cmd, "model": model_path(w, h, fps),
+              ["--threads", str(threads), "--log-level", "error", "-o", part, src]
+    key = {"encoder": enc_id, "cmd": cmd, "model": model_path(w, h, fps),
            "version": RESULT_VERSION, **ids}
     if not fresh:
         r = load_cached(js, key)
         if r is not None:
             return r
-    for p in (dec, vj):
+    for p in (js, out, part, dec, vj):
         if os.path.exists(p):
             os.remove(p)
+    # the stream is written under a temporary name and must appear fresh and
+    # non-empty, so an encoder that exits 0 without writing can't hand an old
+    # stream to the scorer
+    start = time.time_ns()
     run(cmd)
+    if not os.path.exists(part) or os.path.getsize(part) == 0 or os.stat(part).st_mtime_ns < start - 10**9:
+        sys.exit(f"hdr_ladder: {enc} exited cleanly but wrote no stream: {' '.join(cmd)}")
+    os.replace(part, out)
     try:
         # -xerror and explode turn a damaged stream into an error; anything
         # ffmpeg says at -v error is treated the same, whatever its exit code
@@ -250,11 +318,12 @@ def rung(enc, src, mode, q, work, threads, w, h, fps, bin_md5, ids, lookahead, f
         sys.exit(f"hdr_ladder: {model_path(w, h, fps)} computes no CAMBI feature")
     frames_cambi = [f["metrics"][cambi[0]] for f in vm["frames"]]
     ran = lookahead_in_stream(out) if enc == "x264" else \
-        (lookahead if lookahead is not None else PRESET_LOOKAHEAD)
+        (lookahead if lookahead is not None else la_default)
     r = {"mode": mode, "q": q, "lookahead": lookahead, "lookahead_run": ran,
          "kbps": os.path.getsize(out) * 8 / (n / fps) / 1000,
          "vmaf": pooled["vmaf"]["mean"], "psnr_y": py, "psnr_yuv": pyuv,
-         "cambi": pooled[cambi[0]]["mean"], "cambi_max": max(frames_cambi), "key": key}
+         "cambi": pooled[cambi[0]]["mean"], "cambi_max": max(frames_cambi), "key": key,
+         "stream": out}
     if mode == "vbr":
         maxrate, bufsize = vbv_args(q)
         v = run([sys.executable, VBV_CHECK, out, "--maxrate", str(maxrate),
@@ -330,12 +399,16 @@ def main():
             sys.exit("hdr_ladder: --vbr replaces the CRF ladder; drop --crf and --max-crf")
         mode, qs = "vbr", ladder_list(a.vbr, "--vbr", kbps_value)
     else:
-        mode, qs = "crf", ladder_list(a.crf or "18,22,26,30,34", "--crf", crf_value)
+        mode, qs = "crf", ladder_list(a.crf if a.crf is not None else "18,22,26,30,34",
+                                      "--crf", crf_value)
         if a.max_crf is not None:
             qs = [q for q in qs if q <= a.max_crf]
-    need = 2 if len(encs) == 2 else 1
-    if len(qs) < need:
-        sys.exit(f"hdr_ladder: {len(qs)} rung(s) left to run; a BD figure needs at least 2 per side")
+    left = f"{len(qs)} rung(s) left to run" + \
+        (f" after --max-crf {fmt(a.max_crf)}" if mode == "crf" and a.max_crf is not None else "")
+    if len(encs) == 2 and len(qs) < 2:
+        sys.exit(f"hdr_ladder: {left}; a BD figure needs at least 2 per side")
+    if not qs:
+        sys.exit(f"hdr_ladder: {left}")
     la = {"yah264": a.yah_lookahead, "x264": a.x264_lookahead}
     if any(la[e] is not None for e in la if e not in encs):
         sys.exit("hdr_ladder: a lookahead was given for an encoder this run leaves out")
@@ -350,21 +423,42 @@ def main():
         bins[name] = p
     if not os.path.isfile(model_path(w, h, fps)):
         sys.exit(f"hdr_ladder: no HDR model at {model_path(w, h, fps)}")
-    bin_md5 = {e: md5_of(bins[e]) for e in encs}
-    ids = {"src": source_id(a.src), "vmaf": tool_id(bins["vmaf"], ["--version"]),
+    la_default = {"x264": None, "yah264": None}
+    if "yah264" in encs:
+        la_default["yah264"], yah_max = yah_lookahead_limits(bins["yah264"])
+        if la["yah264"] is not None and la["yah264"] > yah_max:
+            sys.exit(f"hdr_ladder: --yah-lookahead {la['yah264']} is above yah264's "
+                     f"{yah_max}-frame cap")
+    work = a.work or os.path.join(ROOT, "local", "hdr_ladder",
+                                  os.path.splitext(os.path.basename(a.src))[0])
+    os.makedirs(work, exist_ok=True)
+    # one run per work directory: two runs sharing it would score and cache
+    # each other's streams
+    global LOCK
+    LOCK = open(os.path.join(work, ".lock"), "w")
+    try:
+        fcntl.flock(LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(f"hdr_ladder: another run holds {work}; wait for it or pass another --work")
+    knobs = sorted(f"{k}={v}" for k, v in os.environ.items() if k.startswith(KNOB_PREFIXES))
+    enc_id = {e: tool_id(bins[e]) for e in encs}
+    if "yah264" in enc_id:
+        enc_id["yah264"]["env"] = knobs
+    ids = {"src": source_id(a.src), "script_md5": md5_of(os.path.abspath(__file__)),
+           "vmaf": tool_id(bins["vmaf"], ["--version"]),
            "ffmpeg": tool_id(bins["ffmpeg"], ["-version"]),
            "model_md5": md5_of(model_path(w, h, fps))}
     if mode == "vbr":
         ids["vbv_check_md5"] = md5_of(VBV_CHECK)
-    work = a.work or os.path.join(ROOT, "local", "hdr_ladder",
-                                  os.path.splitext(os.path.basename(a.src))[0])
-    os.makedirs(work, exist_ok=True)
     print(f"{os.path.basename(a.src)} {w}x{h} {fps:.3f} fps, {mode.upper()}, medium, "
           f"--threads {a.threads}"
           + (", VBV maxrate 1.5K buffer 2K init 0.9" if mode == "vbr" else ""))
-    lad = {e: [rung(e, a.src, mode, q, work, a.threads, w, h, fps, bin_md5[e], ids, la[e], a.fresh)
+    if knobs and "yah264" in encs:
+        print("yah264 environment: " + " ".join(knobs))
+    lad = {e: [rung(e, a.src, mode, q, work, a.threads, w, h, fps, enc_id[e], ids, la[e],
+                    la_default[e], a.fresh)
                for q in qs] for e in encs}
-    outside = []
+    outside, underflow = [], []
     for e, rs in lad.items():
         for r in rs:
             line = (f"{e:7s} {mode}{fmt(r['q']):<6} {r['kbps']:9.0f} kbps  vmaf {r['vmaf']:6.2f}  "
@@ -377,8 +471,13 @@ def main():
                 line += f"  rate {r['rate_err']:+.1f}%" + (f" OUTSIDE +-{RATE_BAR:g}%" if miss else "")
             print(line + ("  (cached)" if r.get("cached") else ""))
             if mode == "vbr":
+                if not r["vbv_ok"]:
+                    underflow.append(f"{e} {fmt(r['q'])}")
+                # the checker's line starts "STATUS STREAM: "; drop the
+                # stream by its known path, which may itself hold ": "
                 status, _, rest = r["vbv"].partition(" ")
-                print(f"          vbv {status}: {rest.partition(': ')[2] or rest}")
+                rest = rest[len(r["stream"]) + 2:] if rest.startswith(r["stream"] + ": ") else rest
+                print(f"          vbv {status}: {rest}")
     print("lookahead as run: " + ", ".join(
         f"{e} " + "/".join(str(d) for d in sorted({r['lookahead_run'] for r in rs}))
         for e, rs in lad.items()))
@@ -387,6 +486,8 @@ def main():
         print(f"rate tracking, +-{RATE_BAR:g}% bar: " +
               (f"{len(outside)} of {n} rungs outside ({', '.join(outside)})" if outside
                else f"all {n} rungs within"))
+        print("vbv: " + (f"{len(underflow)} of {n} rungs UNDERFLOW ({', '.join(underflow)})"
+                         if underflow else f"all {n} rungs OK"))
     for e, rs in lad.items():
         kb = [r["kbps"] for r in rs]   # rs is in rung order
         rising = strictly_rising(kb) if mode == "vbr" else strictly_rising(kb[::-1])
