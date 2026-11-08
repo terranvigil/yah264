@@ -589,7 +589,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     const int sy0 = y0 - 2;
     int32_t *const sbase = scratch - (ptrdiff_t)sy0 * sstride - x0;   /* sy0 may be negative */
 
-    /* Interior columns (xm2>=0 and xp3<=pw-1) need no clamp; only the border
+    /* Interior columns (x-2 >= 0 and x+3 <= pw-1) need no clamp; only the border
  * columns do. Splitting out the interior avoids 6 clamps/pixel over the bulk
  * of the frame. Byte-identical (clamp is a no-op where coords are in range). */
     int xin0 = 2, xin1 = pw - 3;                    /* interior = [xin0, xin1) */
