@@ -169,7 +169,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
 | `--aq-mode` | 1 or 2 | 2 | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
 | `--abr-model` | `default`, `rf` | `default` | ABR bit allocation without mb-tree (`--bframes 0 --rc-lookahead 0`). With mb-tree, both use the rate-factor ledger. `rf` is also accepted under its older spelling `x264`. See below. |
-| `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
+| `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window, at most 64 frames (a larger value runs at 64 and the CLI warns). 0 turns the window off. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
 | `--ipratio`, `--pbratio` | float | 1.4, 1.3 | **Two-pass only.** The I-to-P and P-to-B qscale factors of the offline allocator. They keep x264's names, numbers and defaults. The single-pass modes anchor I and B their own way and never read these. |
 | `--cplxblur` | | 20 | **Two-pass only.** Width of the planner's complexity blur: a gaussian over neighboring frames' costs with sigma `--cplxblur`/2 frames. 0 turns it off. `--qblur` is accepted for compatibility and ignored, with a warning: the planner has no quantiser blur. |

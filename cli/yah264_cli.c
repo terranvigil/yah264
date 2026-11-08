@@ -840,7 +840,8 @@ static void usage(const char *argv0)
         "  --aq-strength F    variance adaptive quantization strength (0 = off;\n"
         "                     default 0.4 for CRF/ABR/2-pass, off for pure CQP;\n"
         "                     x264's default is 1.0)\n"   /* x264-ok */
-        "  --rc-lookahead N   mb-tree lookahead window in frames (default 40, 0 = off)\n"
+        "  --rc-lookahead N   mb-tree lookahead window in frames (default 40, 0 = off,\n"
+        "                     at most 64; a larger value runs at 64)\n"
         "  --sync-lookahead N frames of input buffered so the lookahead runs on\n"
         "                     its own thread ahead of the encode. Costs exactly N\n"
         "                     frames of latency and never changes a bit. Default\n"
@@ -5366,6 +5367,11 @@ int main(int argc, char **argv)
     param.cqm = cqm;
     if (rc_lookahead >= 0)
         param.rc.lookahead = rc_lookahead;
+    /* the library caps the window at 64 frames; say so rather than let a
+     * deeper request read as if it ran */
+    if (rc_lookahead > 64 && hw == YAH264_HW_OFF)
+        fprintf(stderr, "yah264: --rc-lookahead %d is above the 64-frame cap; the window "
+                "runs at 64\n", rc_lookahead);
     if (badapt >= 0)
         param.badapt = badapt;
     /* --tune sets content-adaptive defaults; explicit --psy-rd/--psy-trellis
