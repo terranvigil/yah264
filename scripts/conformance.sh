@@ -1725,6 +1725,12 @@ add "10-bit" check_clip p10_444    "$S/syn_p10_444.y4m" "--cabac --bframes 1" "2
 # --output-depth 10 on 8-bit input: the upshift path, which is the only read
 # path that converts rather than copying.
 add "10-bit" check_clip p10_up     "$S/syn_motion.y4m" "--cabac --bframes 3 --output-depth 10"
+# CQP leaves AQ off, so the rate-controlled cells are what reach the AQ paths
+# (block energy, floors, the flat psy-trellis gate) at 10 bits.
+add "10-bit" check_rc p10_crf     "$S/syn_p10_420.y4m" "--cabac --bframes 3 --crf 26"
+add "10-bit" check_rc p10_crf_aq2 "$S/syn_p10_420.y4m" "--cabac --bframes 3 --crf 26 --aq-mode 2"
+add "10-bit" check_rc p10_cvbr    "$S/syn_p10_420.y4m" "--cabac --bframes 3 --bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400"
+add "10-bit" check_rc p10_up_crf  "$S/syn_motion.y4m" "--cabac --bframes 3 --crf 26 --output-depth 10"
 add "10-bit" check_determinism p10_b3 "$S/syn_p10_420.y4m" "--cabac --bframes 3 --qp 26"
 add "10-bit" check_threading p10 "$S/syn_p10_420.y4m" "--cabac --transform-8x8 --bframes 2"
 
