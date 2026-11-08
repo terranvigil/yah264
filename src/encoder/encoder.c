@@ -1460,6 +1460,7 @@ static int build_list0(yah264_encoder_t *e, int type,
             return 1;
         }
         int n = e->nref_valid < 1 ? 1 : (e->nref_valid > e->nref ? e->nref : e->nref_valid);
+        if (type == 2 && n > e->nref_b0) n = e->nref_b0;
         /* --open-gop: the ring is most-recent-first, so cutting it at the first
  * entry below the bound is the whole of the restriction. Inert at bound
  * -1, which is every encode that is not an open GOP. */
@@ -4924,10 +4925,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * the anchor ring, which holds nref pictures whatever the window says,
  * so the ring has to shrink with the window: at --ref 16 it named a
  * picture the decoder's sliding window had already dropped. (The
- * pyramid draws its lists from the DPB itself and is bounded by it.) */
+ * pyramid draws its lists from the DPB itself and is bounded by it.)
+ * Only a flat B pays for its future anchor's slot: a P is decoded with
+ * every slot holding a past anchor, so it keeps the whole window and
+ * the B's list 0 stops one short. */
+        e->nref_b0 = e->nref;
         if (mrf > 15 && !e->b_pyramid) {
-            e->nref -= mrf - 15;
-            if (e->nref < 1) e->nref = 1;
+            e->nref_b0 = e->nref - (mrf - 15);
+            if (e->nref_b0 < 1) e->nref_b0 = 1;
+            int pmax = 15 - (e->fields != 0);
+            if (e->nref > pmax) e->nref = pmax;
+            if (e->nref_b0 > e->nref) e->nref_b0 = e->nref;
             mrf = 15;
         }
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;

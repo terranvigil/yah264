@@ -1473,6 +1473,8 @@ add "multiple references (CAVLC IPPP)" check_clip mref2_aq        "$S/syn_motion
 # sliding window has dropped. 120 frames fill the window.
 add "multiple references (CAVLC IPPP)" check_clip mref16_ippp     "$S/syn_long.y4m"    "--cabac --bframes 0 --ref 16 --keyint 40 --frames 120"
 add "multiple references (CAVLC IPPP)" check_clip mref16_flatb    "$S/syn_long.y4m"    "--cabac --bframes 1 --ref 16 --keyint 40 --frames 120"
+# flat B keeps all 15 for its P frames and stops its own list 0 at 14
+add "multiple references (CAVLC IPPP)" check_clip mref15_flatb    "$S/syn_long.y4m"    "--cabac --bframes 1 --ref 15 --keyint 40 --frames 120"
 add "multiple references (CAVLC IPPP)" check_clip mref3_cabac     "$S/syn_motion.y4m"  "--cabac --ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref5_cabac     "$S/syn_motion.y4m"  "--cabac --ref 5"
 add "multiple references (CAVLC IPPP)" check_clip mref4_cabac_8x8 "$S/syn_motion.y4m"  "--cabac --ref 4 --transform-8x8"

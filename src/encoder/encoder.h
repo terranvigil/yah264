@@ -297,6 +297,7 @@ struct yah264_encoder {
  * aliases ref[]. nref is the configured count; nref_valid grows as refs
  * accumulate after an IDR (min(nref, frames since IDR)). */
     int      nref;
+    int      nref_b0;      /* a flat B's list-0 cap: its future anchor takes a DPB slot */
     int      nref_valid;
     pixel   *refring[16][3];
     int      refring_fn[16];
