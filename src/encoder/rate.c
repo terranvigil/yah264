@@ -29,6 +29,13 @@ static int rc_cplx_wanted(const yah264_encoder_t *e)
     return e->abr_on || e->vbv_on || e->tp_pass || e->tp_fp;
 }
 
+static int tp_floor_bound(const yah264_encoder_t *e, int i);
+static int tp_floor_content(const yah264_encoder_t *e, int i);
+
+/* Pass-1 bits per macroblock under which a frame is nearly all skip: its
+ * bits do not scale with the quantiser (the plan bias and the floor). */
+#define TP_LOBITS     4.0
+
 /* Cheap per-frame complexity: summed 4x4 SATD of the source against a flat
  * per-block DC (intra frames, spatial texture) or against the list-0 reference at
  * zero motion (inter frames, temporal residual). A lookahead-lite proxy for how
@@ -1047,9 +1054,14 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * BD and the lowest worst rate error over the band (sintel -8.8%,
  * akiyo -0.55%; 8 put touchdown +0.9% and akiyo's error to 2.4%). */
             int mbs = e->width_in_mbs * e->height_in_mbs;
-            if (e->tp_stats[p->tp_rec].bits >= 4.0 * mbs) {
+            if (e->tp_stats[p->tp_rec].bits >= TP_LOBITS * mbs) {
                 e->tp_kact += p->bits;
                 e->tp_kmod += p->pred;
+            }
+            else if (tp_floor_content(e, p->tp_rec)) {
+                e->tp_lact += p->bits;
+                e->tp_lmod += p->pred;
+                e->tp_lcnt++;
             }
         }
     }
@@ -1684,7 +1696,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * The seq bound in rcp_pop_ready carries the lag instead, on every path. */
     if (type != 2 && e->rcp_lag == 0)
         rcp_commit_filled(e);
-    double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0;
+    double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0, pend_lo = 0.0;
     int np = e->rcp_n;
     /* A5b (always on): under the rate-factor controller
      * an in-flight frame (decided, not yet coded) is predicted from ITS OWN
@@ -1719,6 +1731,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                    ? abr_scale_for(e, p->type) * p->rceq
                      / pow(2.0, (p->fqp - 12) / 6.0)
                    : p->pred;
+        if (!e->abr_on && p->tp_rec >= 0 && tp_floor_bound(e, p->tp_rec))
+            pend_lo += p->pred;
         pend_cq += p->cq;
     }
     struct rcp_pend en;
@@ -1977,7 +1991,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * lagged -- it is a function of the stats file alone -- so only
  * the bounded correction moves, and it moves identically at
  * every thread count because pend_pred is a decide-order fact. */
-                qp = tp_qscale2qp(tp_plan_qscale(e, idx, e->tp_actual, pend_pred));
+                qp = tp_qscale2qp(tp_plan_qscale(e, idx, e->tp_actual, pend_pred, pend_lo));
                 en.tp_rec = idx;
             } else {
                 /* The plan-less 2-pass share against the virtual remainder: in-flight frames
@@ -2133,6 +2147,22 @@ double yah264_2pass_stat_weight(double bits, int qp)
  * stays in step with this. */
 
 static double tp_qp2qscale(double qp)  { return pow(2.0, (qp - 12.0) / 6.0); }
+
+/* A frame the low-evidence floor holds (tp_floor_plan): pass 1 coded it at
+ * under TP_LOBITS a macroblock, in a plan the floor engaged on. */
+static int tp_floor_bound(const yah264_encoder_t *e, int i)
+{
+    return e->tp_qlo && e->tp_qlo[i] > 0;
+}
+
+/* ...and it has texture, so its bits say something about the quantiser. A
+ * black frame costs nothing at any QP and would only ever ask for more. */
+static int tp_floor_content(const yah264_encoder_t *e, int i)
+{
+    return tp_floor_bound(e, i)
+        && e->tp_stats[i].cplx >= (double)e->width_in_mbs * e->height_in_mbs;
+}
+
 double tp_qscale2qp(double q)   { return 12.0 + 6.0 * log2(q); }
 
 /* Modelled bits for record i at qscale q: the model the greedy loop used,
@@ -2159,6 +2189,12 @@ double tp_bits_at(const yah264_encoder_t *e, int i, double q)
 #define TP_IWIN       8
 #define TP_BLUR_SIGMA 0.5
 #define TP_CWARM      4
+#define TP_LOFAR      (12.0 + 6.0 * (Y264_BIT_DEPTH - 8))
+#define TP_LODEPTH    (15.0 + 6.0 * (Y264_BIT_DEPTH - 8))
+#define TP_LOSHARE    0.3
+#define TP_LOWARM     2
+#define TP_LOHI       8.0
+#define TP_LOSLEW     6.0
 
 /* Frame-type shaping. The complexity curve decides the P frames; the I and B
  * frames are placed relative to them, because a frame's own coding cost does
@@ -2193,6 +2229,7 @@ static void tp_shape_types(const yah264_encoder_t *e, double *q, double seed_q,
     double prev = 0;
     for (int i = 0; i < n; i++) {
         if (s[i].type != 1) continue;
+        if (e->tp_qlo && q[i] < e->tp_qlo[i]) q[i] = e->tp_qlo[i];
         if (prev > 0) q[i] = rcstep_qscale(q[i], prev, lstep, 0, 0);
         prev = q[i];
     }
@@ -2306,6 +2343,67 @@ static void tp_blur_cost(const yah264_encoder_t *e, double *cplx, double sigma)
     }
 }
 
+static double tp_bisect(yah264_encoder_t *e, const double *cplx, double seed, double step_mult)
+{
+    double rf = 0;
+    for (double step = 1e4 * step_mult; step > 1e-7 * step_mult; step *= 0.5) {
+        rf += step;
+        if (tp_solve(e, rf, cplx, e->tp_q, seed) > e->tp_target)
+            rf -= step;
+    }
+    if (rf <= 0) rf = step_mult > 0 ? step_mult : 1.0;
+    tp_solve(e, rf, cplx, e->tp_q, seed);
+    return rf;
+}
+
+/* The low-evidence floor. A frame pass 1 coded at under TP_LOBITS a
+ * macroblock is nearly all skip: its texture sits under the pass-1 quantiser,
+ * so its cost says nothing about what a finer one would spend, and the
+ * 1/qscale model extrapolates it to almost nothing. Grain quantised away at
+ * QP 26 plans QP 1-6 and then codes the grain: pqdark8 (640x360, 24 frames)
+ * at -B 500 landed 4893 kbit/s, sintel's black-then-fade opening at -B 800
+ * +167%. The floor engages when textured frames of this kind that the plan
+ * puts more than TP_LOFAR QP under their pass-1 QP carry over TP_LOSHARE of
+ * the non-I planned bits (an I frame's planned bits would hide them: dark
+ * grain over 120 frames read under the share with the I in it). The P frames
+ * are then held at most TP_LODEPTH under their pass-1 QP and the plan is
+ * re-solved; I and B frames follow through the type shaping. Every corpus
+ * ladder cell reads under the share and is bit-exact, as is an all-black
+ * clip, which has no textured frames. Both depths move with the bit depth:
+ * a 10-bit QP has the step of the 8-bit QP 12 under it, so 10-bit grain
+ * sits 12 QP further down before the model stops holding. */
+static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, double step_mult)
+{
+    int n = e->tp_n;
+    double lim = TP_LOBITS * e->width_in_mbs * e->height_in_mbs;
+    double tex = (double)e->width_in_mbs * e->height_in_mbs;
+    double lo = 0, all = 0;
+    for (int i = 0; i < n; i++) {
+        if (e->tp_stats[i].type == 0)
+            continue;
+        double b = tp_bits_at(e, i, e->tp_q[i]);
+        all += b;
+        if (e->tp_stats[i].bits < lim && e->tp_stats[i].cplx >= tex
+            && e->tp_q[i] < e->tp_qrec[i] * pow(2.0, -TP_LOFAR / 6.0))
+            lo += b;
+    }
+    if (!(lo > TP_LOSHARE * all))
+        return;
+    e->tp_qlo = malloc((size_t)n * sizeof(*e->tp_qlo));
+    e->tp_elo = malloc((size_t)(n + 1) * sizeof(*e->tp_elo));
+    if (!e->tp_qlo || !e->tp_elo) {
+        free(e->tp_qlo); free(e->tp_elo);
+        e->tp_qlo = e->tp_elo = NULL;
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        e->tp_qlo[i] = e->tp_stats[i].bits < lim ? e->tp_qrec[i] * pow(2.0, -TP_LODEPTH / 6.0) : 0.0;
+    tp_bisect(e, cplx, seed, step_mult);
+    e->tp_elo[0] = 0;
+    for (int i = 0; i < n; i++)
+        e->tp_elo[i + 1] = e->tp_elo[i] + (tp_floor_bound(e, i) ? tp_bits_at(e, i, e->tp_q[i]) : 0.0);
+}
+
 /* Build the plan. Called once at open, on the API thread, after the records
  * are read. Deterministic function of (records, target, gates) alone -- no
  * thread count, no clock, no coding state -- which is what keeps the threaded
@@ -2359,14 +2457,8 @@ void tp_build_plan(yah264_encoder_t *e)
         e1 += tp_bits_at(e, i, pow(cplx[i], 1.0 - e->crf_qcomp));
     double step_mult = e->tp_target / e1;
 
-    double rf = 0;
-    for (double step = 1e4 * step_mult; step > 1e-7 * step_mult; step *= 0.5) {
-        rf += step;
-        if (tp_solve(e, rf, cplx, e->tp_q, seed) > e->tp_target)
-            rf -= step;
-    }
-    if (rf <= 0) rf = step_mult > 0 ? step_mult : 1.0;
-    tp_solve(e, rf, cplx, e->tp_q, seed);
+    tp_bisect(e, cplx, seed, step_mult);
+    tp_floor_plan(e, cplx, seed, step_mult);
 
     e->tp_ebits[0] = 0;
     for (int i = 0; i < n; i++)
@@ -2377,7 +2469,7 @@ void tp_build_plan(yah264_encoder_t *e)
 }
 
 
-double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
+double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, double pend_lo)
 {
     double q = e->tp_q[idx];
     if (!e->tp_corr)
@@ -2432,6 +2524,44 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
  * 1.4-2.9%, samsung low rates -1.8%). k itself is read only on
  * frames with content (tp_kact / tp_kmod, see the accounting). */
         double rem_t = e->tp_target - spent - k * pend - e->tp_framing;
+        /* Under the floor, the floored frames are priced at their own measured
+ * bias kl, in flight as well as still to come (at more than one thread
+ * the in-flight ones otherwise read cheap until they land). Until
+ * TP_LOWARM of them have landed the band only raises the QP; after
+ * that it may lower it as far as TP_LOHI asks, so a high target can
+ * walk well under the floor. An overspent ledger raises them to the
+ * band's top. Each floored frame moves at most TP_LOSLEW QP from the
+ * last floored frame of its type; unbounded, the first evidence opened
+ * an 18-QP swing on grain. */
+        double rem_lo = e->tp_elo ? e->tp_elo[e->tp_n] - e->tp_elo[idx] : 0.0;
+        if (rem_lo > 0) {
+            int warm = e->tp_lcnt >= TP_LOWARM && e->tp_lmod >= 1 && e->tp_lact > 0;
+            double kl = warm ? e->tp_lact / e->tp_lmod : 1.0;
+            double rem_hi = rem_m - rem_lo;
+            double rt = e->tp_target - spent - k * (pend - pend_lo) - kl * pend_lo - e->tp_framing;
+            double eff = k * rem_hi + kl * rem_lo;
+            int bound = tp_floor_bound(e, idx);
+            double kw = kl > k ? kl : k;
+            double hi = warm ? TP_LOHI : 1.0;
+            double lo = 0.5 / (kw > 1.0 ? (kw < 4.0 ? kw : 4.0) : 1.0);
+            if (eff > 1 && rt > 1) {
+                double s = rt / eff;
+                if (s < lo) s = lo;
+                if (s > hi) s = hi;
+                q /= s;
+            } else if (rt <= 1 && bound)
+                q /= lo;
+            int ty = e->tp_stats[idx].type;
+            if (bound && e->tp_lastq[ty] > 0) {
+                double sl = pow(2.0, TP_LOSLEW / 6.0);
+                if (q < e->tp_lastq[ty] / sl) q = e->tp_lastq[ty] / sl;
+                if (q > e->tp_lastq[ty] * sl) q = e->tp_lastq[ty] * sl;
+            }
+            double qa = tp_qp2qscale(1), qb = tp_qp2qscale(51);
+            q = q < qa ? qa : q > qb ? qb : q;
+            if (bound) e->tp_lastq[ty] = q;
+            return q;
+        }
         if (rem_m > 1 && rem_t > 1 && k > 0) {
             /* Bounded to [0.5, 2]: one frame moves at most 6 QP off plan on
  * the budget's say-so; near the last records rem_m goes to zero and
