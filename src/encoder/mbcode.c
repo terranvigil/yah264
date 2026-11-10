@@ -13043,6 +13043,7 @@ void y264_mb_warm_statics(void)
     (void)aq_dark_env(0);
     (void)skip_clift_env();
     (void)psy_dark_env();
+    (void)direct_why_on();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
  * is a lazy env static read from analyse on wavefront workers, so first
