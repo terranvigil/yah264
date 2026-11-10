@@ -793,12 +793,14 @@ def audit(sources):
             if re.search(r"\b" + mname + r"\s*\(", b):
                 out |= set(CALL.findall(mbody))
         depth = 0
-        for m in re.finditer(r"[()]|[A-Za-z_]\w*", b):
+        for m in re.finditer(r"[()]|(?:->|\.)\s*[A-Za-z_]\w*|[A-Za-z_]\w*", b):
             t = m.group(0)
             if t == "(":
                 depth += 1
             elif t == ")":
                 depth -= 1
+            elif t[0] in "-.":
+                pass                                     # a member, not a function
             elif depth <= 0:
                 out.add(t)
                 out |= tables.get(rel, {}).get(t, set())
@@ -1385,7 +1387,8 @@ static int g_bg(void)
     if (v < 0) { const char *s = y264_env("SYN_BG"); v = s ? atoi(s) : 0; }
     return v;
 }
-void ntp_pool_create(void) { (void)g_pool(); }
+struct st { int g_fld; };
+void ntp_pool_create(struct st *p) { (void)g_pool(); p->g_fld = 1; }
 void ntp_bg_create(void) { (void)g_bg(); }
 static int g_twin2(void)
 {
@@ -1483,6 +1486,14 @@ static int g_elseonly(void)
     return v;
 }
 
+/* 47: a gate whose name is also a struct field a warm root writes */
+static int g_fld(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_FLD"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1548,7 +1559,7 @@ SELF_TEST_WANT = {
     "SYN_ATLOAD": ("latches", False),
     "SYN_UNMAC": ("latches", False), "SYN_OTHMAC": ("latches", False),
     "SYN_CONDS": ("latches", False), "SYN_COND2": ("latches", False),
-    "SYN_ELSEONLY": ("TRAP", False),
+    "SYN_ELSEONLY": ("TRAP", False), "SYN_FLD": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
