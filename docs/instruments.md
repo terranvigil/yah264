@@ -131,7 +131,7 @@ make test                                   # unit tests (checkasm is one of the
 make conformance                            # recon-match (YAH264_CONF_FAST)
 python3 scripts/stress_threads.py           # hang/determinism under load
 scripts/tsan_catch.sh                       # TSan; the floor is 0 reports
-python3 scripts/env_gate_audit.py           # every lazy env static in src/ and cli/: exits 1 on TRAP, COLD or undetermined
+python3 scripts/env_gate_audit.py           # every lazy env static in src/ and cli/: exits 1 on TRAP, COLD, undetermined or a waiver error
 ARM='<env>' scripts/recon_sweep.sh          # recon-match ONE ARM across a config matrix
 scripts/determ_repeat.sh                    # SAME config, N times -> how many bitstreams (STRICT=1 fails)
 scripts/identity_ab.sh OLD NEW              # two binaries, ~100 configs, md5 per cell -> PASS/DIFF table
@@ -171,8 +171,8 @@ walks the call graph from `warm_lr_statics` / `ntp_pool_create` /
 satisfies its guard, so the gate rewrites its static on every call, a perpetual
 writer no warm can quiet (resolving "unset" to `-2` under a `v < 0` guard does
 exactly this). A **COLD** gate latches and is never warmed. Run the audit after
-adding a knob. Two things it can't see: a static resolved **inline inside a hot
-function** is unreachable by any warm and must be hoisted into an accessor
+adding a knob. Two things no warm can fix: a static resolved **inline inside a
+hot function** is unreachable by any warm and must be hoisted into an accessor
 first; and an **unconditional store** in a warm function
 (`y264_tl_on = trprof_on();`) is a perpetual writer that isn't a getenv guard
 at all. In anything a warm touches, use read-compare-write instead of a plain
@@ -194,7 +194,8 @@ or not at all:
 - Yoda guards, `~0u` sentinels, while-guards, reads in an else branch, and a
   guard on a local copied from a plain static;
 - latch flags set by `atomic_exchange` or `++` (read as never assigned);
-- whether the CLI's main touches a gate before the workers start;
+- whether a warm runs before the workers start, for the library's warms and the
+  CLI's alike;
 - a thread entry only ever passed through a variable or field (never named as
   a `pthread_create` or `ntp_*` argument) reads as warm when a warm function
   names it.
