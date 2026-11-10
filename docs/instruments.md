@@ -190,7 +190,8 @@ or not at all:
 - function-like macros that wrap the reader;
 - latches on a struct member, a non-static or extern variable, or filled
   through a helper that reads a literal knob;
-- Yoda guards, `~0u` sentinels, while-guards and reads in an else branch;
+- Yoda guards, `~0u` sentinels, while-guards, reads in an else branch, and a
+  guard on a local copied from a plain static;
 - latch flags set by `atomic_exchange` or `++` (read as never assigned);
 - whether the CLI's main touches a gate before the workers start;
 - a thread entry only ever passed through a variable or field (never named as

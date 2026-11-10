@@ -54,7 +54,8 @@ Known limits, each read wrongly or not at all:
   variable, or filled through a helper that reads a literal knob itself
   is not read as a gate;
 - a Yoda guard (-1 == v), a ~0u sentinel and a while-guard are not read
-  as guards, nor is a read in an if's else branch;
+  as guards, nor is a read in an if's else branch, nor a guard on a local
+  copied from a plain static (int v = cached; if (v < 0) ...);
 - a latch flag set by atomic_exchange or ++ reads as never assigned;
 - whether main's touch of a CLI gate comes before the workers start;
 - a thread entry never named as a pthread_create or ntp_* argument (only
