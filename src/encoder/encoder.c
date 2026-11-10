@@ -2485,9 +2485,9 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                        ^ ((unsigned)(uint16_t)fw->colmvy[i] << 16);
             h = (h ^ v) * 1099511628211UL;
         }
-        fprintf(stderr, "] colhash=%016lx tdir_mb=%ld/%ld\n", h,
-                y264_tdir_mb[0], y264_tdir_mb[1]);
-        y264_tdir_mb[0] = y264_tdir_mb[1] = 0;
+        long un = __atomic_exchange_n(&y264_tdir_mb[0], 0L, __ATOMIC_RELAXED);
+        long tot = __atomic_exchange_n(&y264_tdir_mb[1], 0L, __ATOMIC_RELAXED);
+        fprintf(stderr, "] colhash=%016lx tdir_mb=%ld/%ld\n", h, un, tot);
     }
     h.direct_spatial = !direct_temporal;
     h.active_ref = active_ref;
