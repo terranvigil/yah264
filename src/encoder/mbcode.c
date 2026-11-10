@@ -11706,13 +11706,13 @@ static int p_part_rd_t(void)
     return v;
 }
 
-/* Y264_P_INTRA_CABAC=1: price the CABAC P intra candidate with the CABAC
- * estimate, as the inter candidates are: the CAVLC count overprices intra
- * against them. default off. */
+/* price the CABAC P intra candidate with the CABAC estimate, as the inter
+ * candidates are: the CAVLC count overprices intra against them.
+ * Y264_P_INTRA_CABAC=0 restores the CAVLC count. */
 static int p_intra_cabac_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = y264_env("Y264_P_INTRA_CABAC"); v = e ? atoi(e) != 0 : 0; }
+    if (v < 0) { const char *e = y264_env("Y264_P_INTRA_CABAC"); v = e ? atoi(e) != 0 : 1; }
     return v;
 }
 

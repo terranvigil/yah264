@@ -94,6 +94,9 @@ In order, at `--subme 8` and below:
    no transform. Intra gets a full encode and an RD trial only when that cost
    is under 1.5x the inter winner's SATD (0.75x on B macroblocks).
 
+At every `--subme`, the intra trial of a CABAC P macroblock is priced with the
+CABAC rate estimate, as its inter candidates are.
+
 The transform size is also pre-decided at medium (SA8D against SATD), so only
 one size is encoded. `--subme 9` and up encode both and let RD pick.
 

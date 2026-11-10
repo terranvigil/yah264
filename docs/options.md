@@ -1690,7 +1690,7 @@ already been tested and rejected. They are listed so you know what you are
 looking at if you find one in a script, not as a tuning surface.
 
 **Motion and mode decision:** `Y264_DCTDEC`, `Y264_PART_EARLYTERM`,
-`Y264_PROBE_TRELLIS`.
+`Y264_PROBE_TRELLIS`, `Y264_P_INTRA_CABAC`.
 
 **Rate control:** `Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`.
 
