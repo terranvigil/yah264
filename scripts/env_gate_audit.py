@@ -129,9 +129,12 @@ def drop_if0(text):
 
 
 def blank_attributes(text):
-    """The text with every __attribute__((...)) group blanked to spaces."""
+    """The text with every __attribute__((...)) group, and every group of
+    another declaration word (__typeof__(int), _Alignas(16)), blanked to
+    spaces."""
     out, i = [], 0
-    for m in re.finditer(r"__attribute__\s*\(", text):
+    rx = r"\b(?:" + "|".join(sorted(DECL_WORDS)) + r")\s*\("
+    for m in re.finditer(rx, text):
         if m.start() < i:
             continue
         end = balanced(text, m.end() - 1)
@@ -381,7 +384,7 @@ def eval_unset(expr, region, envl, readers, macros, depth=0):
         return None
     while True:
         m = re.fullmatch(r"\(\s*(\w+\s*\**)\s*\)\s*(.+)", e, re.S)   # a cast
-        if m and not re.fullmatch(r"\(.*\)", e, re.S):
+        if m and balanced(e, 0) != len(e):
             e = m.group(2).strip(); continue
         if e.startswith("(") and balanced(e, 0) == len(e):
             e = e[1:-1].strip(); continue
