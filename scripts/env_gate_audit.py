@@ -1666,6 +1666,8 @@ def self_test(inject_fail=False):
             if r.returncode != 1:
                 bad.append(f"main() on a TRAP tree exits {r.returncode}")
             (pathlib.Path(d) / "src" / "trap.c").write_text(SELF_TEST_CLEAN)
+            (pathlib.Path(d) / "src" / ".#lock.c").symlink_to("nowhere@123:456")
+            (pathlib.Path(d) / "src" / "latin1.c").write_bytes(b"/* caf\xe9 */\n")
             r = subprocess.run([sys.executable, __file__, "--root", d], capture_output=True)
             if r.returncode != 0:
                 bad.append(f"main() on a clean tree exits {r.returncode}")
@@ -1723,8 +1725,11 @@ def main():
     if "--self-test-failing" in sys.argv:          # a self-test with one wrong case
         return self_test(inject_fail=True)
     root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1]) if "--root" in sys.argv else ROOT
-    files = sorted(str(p) for d in ("src", "cli") for p in (root / d).rglob("*.[ch]"))
-    sources = {str(pathlib.Path(f).relative_to(root)): pathlib.Path(f).read_text() for f in files}
+    # is_file drops a dangling symlink (an editor's .#lock file); a stray
+    # byte never stops the run
+    files = sorted(str(p) for d in ("src", "cli") for p in (root / d).rglob("*.[ch]") if p.is_file())
+    sources = {str(pathlib.Path(f).relative_to(root)):
+               pathlib.Path(f).read_text(encoding="utf-8", errors="replace") for f in files}
     rows, _allfuncs = audit(sources)
     if "--json" in sys.argv:
         json.dump(rows, open(sys.argv[sys.argv.index("--json") + 1], "w"), indent=1)
