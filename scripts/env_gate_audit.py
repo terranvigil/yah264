@@ -29,6 +29,7 @@ and has to be hoisted into an accessor first.
     python3 scripts/env_gate_audit.py            # cold + trap gates
     python3 scripts/env_gate_audit.py --all      # every gate, with verdicts
     python3 scripts/env_gate_audit.py --json out.json
+    python3 scripts/env_gate_audit.py --self-test   # every gate shape, synthetic
 
 Exits nonzero if any TRAP is found. Run it after adding a knob.
 """
@@ -167,7 +168,7 @@ def as_int(s):
 
 
 def satisfies(val, op, sent):
-    return {"<": val < sent, "<=": val <= sent,
+    return {"<": val < sent, "<=": val <= sent, ">": val > sent, ">=": val >= sent,
             "==": val == sent, "!=": val != sent}.get(op)
 
 
@@ -222,6 +223,108 @@ def split_args(text):
     return out
 
 
+def balanced(text, start):
+    """Index just past the bracket that closes the one at text[start]."""
+    pairs = {"(": ")", "{": "}", "[": "]"}
+    want, depth = pairs[text[start]], 0
+    for i in range(start, len(text)):
+        if text[i] == text[start]:
+            depth += 1
+        elif text[i] == want:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(text)
+
+
+def num(tok, macros):
+    """An integer constant, a same-file #define of one, or None."""
+    tok = tok.strip()
+    for _ in range(4):
+        m = re.fullmatch(r"\(\s*(.+?)\s*\)", tok)
+        if m:
+            tok = m.group(1)
+            continue
+        if tok in macros:
+            tok = macros[tok].strip()
+            continue
+        break
+    v = as_int(tok)
+    if v is None:
+        try:
+            v = float(tok)
+        except ValueError:
+            return None
+    return v
+
+
+CMP = re.compile(r"(?<![\w.>])([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*(<=|>=|==|!=|<|>)\s*(\(?-?\w+\)?)")
+NOT = re.compile(r"!\s*([A-Za-z_]\w*)\b(?!\s*[(\[.])")
+NEG = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}
+
+
+def unset_of(var, region, readers, macros):
+    """The value `var` holds after `region` runs with the knob unset: the
+    first assignment to it, read as its ternary's unset branch, a helper's
+    default argument, or a constant."""
+    m = re.search(r"\b" + re.escape(var) + r"(?:\[[^\]]*\])?\s*=(?!=)\s*([^;]+);", region)
+    if not m:
+        return None
+    rhs = m.group(1).strip()
+    rhs = re.sub(r"^\(\s*\w+\s*\)\s*", "", rhs)          # a leading cast
+    depth = 0
+    for i, ch in enumerate(rhs):                         # top-level ternary
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch == ":" and depth == 0 and "?" in rhs[:i]:
+            return num(rhs[i + 1:], macros)
+    for r, idx in readers.items():
+        mm = re.match(re.escape(r) + r"\s*\(", rhs)
+        if mm and idx is not None:
+            args = split_args(rhs[mm.end():])
+            return num(args[idx], macros) if len(args) > idx else None
+    return num(rhs, macros)
+
+
+def find_guard(body, rx_read, readers, macros):
+    """(var, op, sentinel, unset) of the latch guarding the body's first env
+    read, or None when the read is not behind one. A guard is an `if` whose
+    condition compares a variable (`v < 0`, `v == UNSET`, `!done`, either
+    side of a compound) and whose statement holds the read, or an early
+    `if (...) return` ahead of it, read negated."""
+    rd = rx_read.search(body)
+    if not rd:
+        return None
+    pos, best = rd.start(), None
+    for m in re.finditer(r"\bif\s*\(", body):
+        if m.start() >= pos:
+            break
+        c0 = m.end() - 1
+        c1 = balanced(body, c0)
+        cond = body[c0 + 1:c1 - 1]
+        rest = body[c1:]
+        st = len(rest) - len(rest.lstrip())
+        if rest.lstrip().startswith("{"):
+            s1 = c1 + balanced(rest, st)
+        else:
+            s1 = c1 + rest.find(";") + 1
+        early = rest.lstrip().startswith("return")
+        if not (c1 <= pos < s1) and not (early and s1 <= pos):
+            continue
+        cmps = [(v, op, t) for v, op, t in CMP.findall(cond)]
+        cmps += [(v, "==", "0") for v in NOT.findall(cond)]
+        if not cmps:
+            continue
+        var, op, tok = cmps[0]
+        if early:
+            op = NEG[op]
+        region = body[c1:s1] if not early else body[s1:]
+        best = (var, op, num(tok, macros), unset_of(var, region, readers, macros))
+    return best
+
+
 def audit(sources):
     """sources: {relative path: text}. Returns (gate rows, {function: [bodies]})."""
     defs = []
@@ -229,6 +332,9 @@ def audit(sources):
         for name, line, body, sig in functions(text):
             defs.append((name, line, body, sig, rel))
     readers = find_readers(defs)
+    macros = {rel: {m.group(1): m.group(2) for m in
+                    re.finditer(r"^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+(.+?)[ \t]*$", text, re.M)}
+              for rel, text in sources.items()}
     rx_read = re.compile(r"\b(" + "|".join(map(re.escape, readers)) + r')\s*\(\s*"([^"]+)"')
     rows, allfuncs = [], {}
     for name, line, body, sig, rel in defs:
@@ -239,29 +345,10 @@ def audit(sources):
         knobs = [k for _r, k in reads]
         if not knobs or name in NOT_A_GATE:
             continue
-        guards = GUARD.findall(body)
-        if not guards:
+        g = find_guard(body, rx_read, readers, macros.get(rel, {}))
+        if g is None:
             continue                          # per-call read, not a latch
-        gname, gop, gsent = guards[0]
-        gsent = int(gsent)
-
-        unset = None
-        for tn, _set, tunset in TERN.findall(body):
-            if tn == gname:
-                unset = as_int(tunset)
-                break
-        if unset is None:
-            # a helper's default: v = env_int("Y264_X", D)
-            for r, idx in readers.items():
-                if idx is None:
-                    continue
-                m = re.search(r"\b" + re.escape(gname) + r"(?:\[[^\]]*\])?\s*=\s*(?:\(\w+\)\s*)?"
-                              + r + r"\s*\(", body)
-                if m:
-                    args = split_args(body[m.end():])
-                    if len(args) > idx:
-                        unset = as_int(args[idx])
-                    break
+        gname, gop, gsent, unset = g
         if unset is None:
             # the resolve branch's default array, e.g. int p[3] = { 75, .. }
             stripped = re.sub(r"static\s+[^;]*;", "", body)
@@ -270,7 +357,7 @@ def audit(sources):
                 if unset is not None:
                     break
 
-        if unset is None:
+        if unset is None or gsent is None:
             v, why = "latches?", f"guard `{gname} {gop} {gsent}`, unset value not statically readable"
         elif satisfies(unset, gop, gsent):
             v, why = "TRAP", (f"unset resolves {gname}={unset}, which still satisfies "
@@ -294,7 +381,149 @@ def audit(sources):
     return rows, allfuncs
 
 
+# --self-test: one case per gate shape the audit has to read. Each knob maps
+# to (verdict, warmed), or None for a read that is not a gate.
+SELF_TEST_SRC = r"""
+#include <stdlib.h>
+#include "env.h"
+static int env_int(const char *name, int dflt)
+{
+    const char *e = y264_env(name);
+    return e ? atoi(e) : dflt;
+}
+/* 1: gate through a helper, never warmed */
+static int g_helper(void) { static int v = -1; if (v < 0) v = env_int("Y264_SYN_HELPER", 0); return v; }
+
+/* 2: macro sentinel, never warmed */
+#define UNSET (-1000)
+static int g_macro(void)
+{
+    static int v = UNSET;
+    if (v == UNSET) { const char *s = y264_env("Y264_SYN_MACRO"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
+/* 3: trailing comment on the signature, never warmed */
+static int g_comment(void)          /* warmed somewhere */
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("Y264_SYN_COMMENT"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
+/* 4: boolean latch, never warmed */
+static int g_bool(void)
+{
+    static int done, v;
+    if (!done) { const char *s = y264_env("Y264_SYN_BOOL"); v = s ? atoi(s) : 0; done = 1; }
+    return v;
+}
+
+/* 5: multi-line signature, never warmed */
+static int g_wrapped(int a,
+                     int b)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("Y264_SYN_WRAP"); v = s ? atoi(s) : 0; }
+    return v + a + b;
+}
+
+/* 6: brace on the signature line, never warmed */
+static int g_knr(void) {
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("Y264_SYN_KNR"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
+/* 7: TRAP through the helper: unset resolves -2 under v < 0 */
+static int g_trap_helper(void)
+{
+    static int v = -1;
+    if (v < 0) v = env_int("Y264_SYN_TRAPH", -2);
+    return v;
+}
+
+/* 8: compound guard, never warmed */
+static int g_compound(int on)
+{
+    static int v = -1;
+    if (v < 0 && on) { const char *s = y264_env("Y264_SYN_COMPOUND"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
+/* 9: a cold gate, called only from a one-line if in a hot function */
+static int g_cold_inif(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("Y264_SYN_INIF"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static void hot_worker(int *x,
+                       int y)
+{
+    if (*x > 0) { if (g_cold_inif()) x[1]++; }
+}
+
+/* 10: inline static in a hot function, written on one indented line */
+static void hot_inline(int *x)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("Y264_SYN_INLINE"); v = s ? atoi(s) : 0; }
+    x[0] += v;
+}
+
+/* 11: early return ahead of the read, warmed */
+static int g_early_n = -2;
+static void g_early(void)
+{
+    if (g_early_n != -2) return;
+    g_early_n = -1;
+    const char *p = y264_env("Y264_SYN_EARLY");
+    if (p) g_early_n = atoi(p);
+}
+
+static void warm_lr_statics(void)
+{
+    int n = 0;
+    if (n == 0) { n = 1; }
+    g_early();
+}
+"""
+SELF_TEST_WANT = {
+    "Y264_SYN_HELPER": ("latches", False), "Y264_SYN_MACRO": ("latches", False),
+    "Y264_SYN_COMMENT": ("latches", False), "Y264_SYN_BOOL": ("latches", False),
+    "Y264_SYN_WRAP": ("latches", False), "Y264_SYN_KNR": ("latches", False),
+    "Y264_SYN_TRAPH": ("TRAP", False), "Y264_SYN_COMPOUND": ("latches", False),
+    "Y264_SYN_INIF": ("latches", False), "Y264_SYN_INLINE": ("latches", False),
+    "Y264_SYN_EARLY": ("latches", True),
+}
+
+
+def self_test():
+    rows, funcs = audit({"src/synth.c": SELF_TEST_SRC})
+    got = {}
+    for r in rows:
+        for k in r["knobs"]:
+            got[k] = (r["verdict"], r["warm"])
+    bad = []
+    for k, want in SELF_TEST_WANT.items():
+        if got.get(k) != want:
+            bad.append(f"{k}: want {want}, got {got.get(k)}")
+    for k in set(got) - set(SELF_TEST_WANT):
+        bad.append(f"{k}: not a gate, read as {got[k]}")
+    fake = sorted(set(funcs) & KEYWORDS)
+    if fake:
+        bad.append(f"statement keywords read as functions: {fake}")
+    for b in bad:
+        print("env_gate_audit --self-test: FAIL " + b)
+    print(f"env_gate_audit --self-test: {len(SELF_TEST_WANT) - len(bad)}/{len(SELF_TEST_WANT)} "
+          f"cases {'PASS' if not bad else 'FAIL'}")
+    return 1 if bad else 0
+
+
 def main():
+    if "--self-test" in sys.argv:
+        return self_test()
     files = sorted(str(p) for p in (ROOT / "src").rglob("*.[ch]"))
     sources = {str(pathlib.Path(f).relative_to(ROOT)): pathlib.Path(f).read_text() for f in files}
     rows, _allfuncs = audit(sources)
