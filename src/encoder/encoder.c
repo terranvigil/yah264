@@ -5882,6 +5882,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->rbsp = malloc(e->rbsp_cap);
     /* Annex-B worst case: start code + header + rbsp + one emu byte per 2 bytes. */
     e->out_cap = e->rbsp_cap + e->rbsp_cap / 2 + 64;
+    /* cbr filler rides the same buffer, up to a picture period's arrival
+     * for each access unit one call can close */
+    if (e->hrd_filler)
+        e->out_cap += (size_t)(e->param.bframes + 3) * (e->hrd_pad_cap + 16);
     e->out = malloc(e->out_cap);
 
     if (!e->plane[0] || !e->plane[1] || !e->plane[2] ||
