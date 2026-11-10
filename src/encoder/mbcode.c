@@ -11701,6 +11701,85 @@ static long est_commit_i(y264_frame_t *f, int mbx, int mby, const struct intra_m
     return bits;
 }
 
+/* Y264_P_PART_RD: RD-score the P partition shapes at the medium tier
+ * instead of letting SATD pick one, since the SATD pick under-splits: =1
+ * scores every shape, =2 the 16x16 and those of 16x8/8x16/8x8 near the best
+ * SATD. both need p8x8, which medium (subme 7) drops at 1080p and up under
+ * rate control: there =2 is inert and =1 is the 16x16 RD alone. =1 has no
+ * inter SATD, so intra runs unscreened, as at subme 9. default off. */
+static int p_part_rd_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = y264_env("Y264_P_PART_RD"); v = e ? atoi(e) : 0; if (v < 0 || v > 2) v = 0; }
+    return v;
+}
+/* the =2 form's margin over the best SATD, in sixteenths */
+static int p_part_rd_t(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = y264_env("Y264_P_PART_RD_T"); v = e ? atoi(e) : 1; if (v < 0) v = 0; }
+    return v;
+}
+
+/* Y264_P_INTRA_CABAC=1: price the CABAC P intra candidate with the CABAC
+ * estimate, as the inter candidates are: the CAVLC count overprices intra
+ * against them. default off. */
+static int p_intra_cabac_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = y264_env("Y264_P_INTRA_CABAC"); v = e ? atoi(e) != 0 : 0; }
+    return v;
+}
+
+/* out of line so its candidates stay off analyze_p_mb's frame */
+static __attribute__((noinline)) long p_part_rd2(y264_frame_t *f, int mbx, int mby,
+                                                 int mlam, long lam,
+                                                 struct inter_result *i0,
+                                                 struct inter_result *out,
+                                                 pixel *snap_inter, long *best_satd,
+                                                 int *won, uint64_t *pp_loc,
+                                                 uint64_t *pp_last, int *pp_stage)
+{
+    struct inter_result c[3];
+    long ps[3];
+    long best = eval_inter_part(f, mbx, mby, 0, mlam, lam, i0, 0);
+    y264_me_set_ref16(1, i0->mvx[0], i0->mvy[0]);
+    tl_ref16 = i0->ref[0];
+    tl_mixref_only = mixref_slot(f, i0->ref[0]);
+    for (int k = 0; k < 3; k++) {
+        ps[k] = eval_inter_part(f, mbx, mby, k + 1, mlam, lam, &c[k], 0);
+        if (ps[k] < best) best = ps[k];
+    }
+    tl_ref16 = -1;
+    tl_mixref_only = -1;
+    if (pp_loc) {               /* bill the RD below to the RD stage */
+        uint64_t nw = bp_now();
+        pp_loc[*pp_stage] += nw - *pp_last;
+        *pp_last = nw;
+        *pp_stage = 3;
+    }
+    long thr = best + best * p_part_rd_t() / 16;
+    long j_best = inter_rd_score(f, mbx, mby, 0, i0->mvx, i0->mvy,
+                                 i0->pmvx, i0->pmvy, i0->ref, i0->sub, i0, lam, 0);
+    j_best = qpel_rd_nudge(f, mbx, mby, 0, i0->mvx, i0->mvy,
+                           i0->pmvx, i0->pmvy, i0->ref, i0->sub, i0, lam, j_best);
+    save_mb_rec(f, mbx, mby, snap_inter);
+    int win = -1;
+    for (int k = 0; k < 3; k++) {
+        if (ps[k] > thr) continue;
+        struct inter_result *r = &c[k];
+        long j = inter_rd_score(f, mbx, mby, r->part, r->mvx, r->mvy,
+                                r->pmvx, r->pmvy, r->ref, r->sub, r, lam, 0);
+        j = qpel_rd_nudge(f, mbx, mby, r->part, r->mvx, r->mvy,
+                          r->pmvx, r->pmvy, r->ref, r->sub, r, lam, j);
+        if (j < j_best) { j_best = j; win = k; save_mb_rec(f, mbx, mby, snap_inter); }
+    }
+    if (win >= 0) *out = c[win];
+    *won = win >= 0;
+    *best_satd = best;
+    return j_best;
+}
+
 /* Analyse one P macroblock: RD mode decision (skip / inter / intra), leaving the
  * winner's reconstruction in f->rec and mb_tr8 set. No grid authoring beyond the
  * intra trial's self-restored scratch, and no bitstream. Fills *out. Shared by
@@ -11840,11 +11919,12 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     }
     if (p_unsaved) p_skip_cost();   /* the probe said no */
 
-    /* --- inter candidates. subme>=9: full RD on every partition (max
- * quality). subme<=8 (the subme-7 model): SATD picks the partition
- * shape, full RD scores it + 16x16 (insurance against SATD
- * over-splitting at low bitrate) -- 1-2 RDs instead of four. --- */
-    if (f->subme >= 9) {
+    /* --- inter candidates. subme>=9, or Y264_P_PART_RD=1: full RD on every
+ * partition. subme<=8 (the subme-7 model): SATD picks the partition shape,
+ * full RD scores it + 16x16 (insurance against SATD over-splitting at low
+ * bitrate) -- 1-2 RDs instead of four; Y264_P_PART_RD=2 RD-scores every
+ * shape near the best SATD instead. --- */
+    if (f->subme >= 9 || p_part_rd_on() == 1) {
         PPCUT(3);
         j_inter = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires, 1);
         save_mb_rec(f, mbx, mby, snap_inter);
@@ -11856,6 +11936,13 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             if (j < j_inter) { j_inter = j; IRES_TAKE_CAND(); save_mb_rec(f, mbx, mby, snap_inter); }
         }
         tl_mixref_only = -1;
+    } else if (p_part_rd_on() == 2 && (f->partitions & YAH264_PART_P8X8)) {
+        PPCUT(2);
+        int won = 0;
+        j_inter = p_part_rd2(f, mbx, mby, mlam, lam, pi0, &ires_s1, snap_inter,
+                             &best_satd, &won, pp_on ? pp_loc : NULL,
+                             &pp_last, &pp_stage);
+        pires = won ? &ires_s1 : pi0;
     } else {
         PPCUT(2);
         tl_rx_hit = 0;
@@ -11950,13 +12037,18 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         NLED_SITE(Y264_LED_SITE_PINTRA);
         analyze_intra_g(f, mbx, mby, &intra, best_satd);
         NLED_SITE(Y264_LED_SITE_PME);
-        {   /* intra priced on the CAVLC syntax, also under CABAC: CABAC-RD
-             * for intra here was net-negative on motion (refused) */
+        {
             save_mb_nnz(f, mbx, mby, nzbuf);
             struct qp_chain qc; qp_save(f, &qc);
-            y264_bs_init_count(&sb);        /* pricing only */
-            write_intra_syntax(&sb, f, mbx, mby, 5, &intra);
-            j_intra = dist_mb(f, mbx, mby) + Y264_LAMJ(lam, y264_bs_pos_bits(&sb));
+            long ibits;
+            if (f->cabac && p_intra_cabac_on()) {
+                ibits = est_intra_mb_bits(f, mbx, mby, &intra, f->slice_type) >> 8;
+            } else {
+                y264_bs_init_count(&sb);    /* pricing only */
+                write_intra_syntax(&sb, f, mbx, mby, 5, &intra);
+                ibits = y264_bs_pos_bits(&sb);
+            }
+            j_intra = dist_mb(f, mbx, mby) + Y264_LAMJ(lam, ibits);
             load_mb_nnz(f, mbx, mby, nzbuf);
             qp_load(f, &qc);
         }
@@ -12958,6 +13050,7 @@ void y264_mb_warm_statics(void)
     (void)est_scrtrace_on();
         (void)part_earlyterm(); (void)lr_seed_on();
     (void)probe_trellis_on();
+    (void)p_part_rd_on(); (void)p_part_rd_t(); (void)p_intra_cabac_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env();
     (void)cdc_rd_on(); (void)cdc_lam_x256();
