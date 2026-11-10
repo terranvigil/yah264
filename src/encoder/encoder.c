@@ -4268,8 +4268,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
  * (CLI primes on the main thread before workers) */
     (void)tprof_on();           /* profiling gate: warm before any bg thread reads it */
-    y264_cabac_warm();          /* build the RDOQ bit table before any worker runs */
-    y264_cavlc_warm();          /* likewise the VLC tables */
+    y264_cavlc_warm();          /* the VLC tables before any worker runs */
     if (!param)
         return NULL;
     /* The public enums follow the reference encoder's public API numbering,
@@ -9812,7 +9811,7 @@ static int lr_me_stage(void)
 
 static void warm_lr_statics(void)
 {
-    y264_cabac_warm();          /* the CABAC tables and the trace's env gate */
+    y264_cabac_warm();          /* the RDOQ bit table and the trace's env gate */
     (void)gpq_consume_on();
     (void)lr_me_stage(); (void)adme_log();
     (void)psy_flat_log();

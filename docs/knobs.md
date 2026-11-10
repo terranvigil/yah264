@@ -10,7 +10,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 
 | knob | default | reader |
 |---|---|---|
-| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5831 |
+| `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5835 |
 | `Y264_ABR_QCOMP` | 0.6 | src/encoder/rate.c:2654 |
 | `Y264_ABR_TOL` | = param | src/encoder/encoder.c:5099 |
 | `Y264_ABR_VBVOV` | 0.25 | src/encoder/rate.c:2675 |
@@ -69,7 +69,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_VBV_PLAN` | 1.0 | src/encoder/rate.c:571 |
 | `Y264_VBV_POSTI` | 1.0 | src/encoder/rate.c:572 |
 | `Y264_W2` | = pool present | src/encoder/encoder.c:5861 |
-| `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:3768 |
+| `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:3769 |
 
 ## instrument (56)
 
@@ -81,15 +81,15 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_BLATE_STAT` | ? | src/encoder/encoder.c:5582 |
 | `Y264_BPROF` | 0 | src/encoder/mbcode.c:8194 |
 | `Y264_BPROF2` | 0 | src/encoder/mbcode.c:7654 |
-| `Y264_CABAC_TRACE` | ? | src/encoder/cabac.c:50 |
+| `Y264_CABAC_TRACE` | ? | src/encoder/cabac.c:51 |
 | `Y264_DIAG_COLWATCH` | 0 | src/encoder/mbcode.c:38 |
 | `Y264_DIAG_DIRECTOK` | 0 | src/encoder/mbcode.c:39 |
 | `Y264_DIAG_NOHPEL` | 0 | src/encoder/motion.c:345 |
 | `Y264_DIAG_TDIRLIM` | 0 | src/encoder/mbcode.c:37 |
 | `Y264_DIRECT_LRVOTE` | 0 | src/encoder/encoder.c:7662 |
 | `Y264_DIRECT_PERMB` | -1 | src/encoder/encoder.c:496 |
-| `Y264_DIRECT_SCORE` | 0 | src/encoder/encoder.c:2435 |
-| `Y264_DIRECT_WHY` | 0 | src/encoder/encoder.c:2417 |
+| `Y264_DIRECT_SCORE` | 0 | src/encoder/encoder.c:2436 |
+| `Y264_DIRECT_WHY` | 0 | src/encoder/encoder.c:2418 |
 | `Y264_EST_FROZEN` | 0 | src/encoder/mbcode.c:5571 |
 | `Y264_EST_SCRTRACE` | 0 | src/encoder/mbcode.c:4687 |
 | `Y264_EST_TWICE` | 0 | src/encoder/mbcode.c:5539 |
@@ -114,7 +114,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_ME_ETSTAT` | 0 | src/encoder/motion.c:301 |
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:61 |
 | `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:6614 |
-| `Y264_QP_TRACE` | 0 | src/encoder/encoder.c:3055 |
+| `Y264_QP_TRACE` | 0 | src/encoder/encoder.c:3056 |
 | `Y264_RC_PLAY` | ? | src/encoder/rcreplay.h:157 |
 | `Y264_RC_PLAY_K` | 1.0 | src/encoder/rcreplay.h:177 |
 | `Y264_RC_REC` | ? | src/encoder/rcreplay.h:157 |
@@ -126,7 +126,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_TYPE_ORACLE` | ? | src/encoder/encoder.c:9610 |
 | `Y264_UNSAFE_NO_EMIT` | 0 | src/encoder/mbcode.c:5526 |
 | `Y264_UNSAFE_NO_MBT` | 0 | src/encoder/encoder.c:9565 |
-| `Y264_UNSAFE_NO_NAL` | 0 | src/encoder/encoder.c:3244 |
+| `Y264_UNSAFE_NO_NAL` | 0 | src/encoder/encoder.c:3245 |
 | `Y264_UNSAFE_NO_PREVPWAIT` | 0 | src/encoder/encoder.c:870 |
 | `Y264_UNSAFE_NO_REFBWAIT` | 0 | src/encoder/encoder.c:854 |
 | `Y264_VBV_ROWBRAKE_TRACE` | 0 | src/encoder/mbcode.c:5510 |
@@ -143,8 +143,8 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_MCSTF` | ? | src/encoder/mcstf.c:56 |
 | `Y264_MCSTF_RANGE` | ? | src/encoder/mcstf.c:40 |
 | `Y264_ME_HQ` | 0 | src/encoder/motion.c:241 |
-| `Y264_NR_INTER` | 0 | src/encoder/encoder.c:2003 |
-| `Y264_NR_INTRA` | 0 | src/encoder/encoder.c:2002 |
+| `Y264_NR_INTER` | 0 | src/encoder/encoder.c:2004 |
+| `Y264_NR_INTRA` | 0 | src/encoder/encoder.c:2003 |
 | `Y264_PROBE_TRELLIS` | 0 | src/encoder/mbcode.c:10567 |
 | `Y264_P_PART_RD` | 0 | src/encoder/mbcode.c:11698 |
 | `Y264_P_PART_RD_T` | 1 | src/encoder/mbcode.c:11705 |
