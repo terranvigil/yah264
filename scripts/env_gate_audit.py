@@ -428,8 +428,6 @@ def eval_unset(expr, region, envl, readers, macros, depth=0):
         return 0
     if cond_unset(e, envl, readers) is not None and re.search(r"&&|\|\||==|!=|^!", e):
         return int(cond_unset(e, envl, readers))     # 's && atoi(s)' is 0
-    if re.fullmatch(rd + r"\s*==\s*NULL", e) or re.fullmatch(r"!\s*" + rd, e):
-        return 1
     for r, (_ni, idx) in readers.items():
         mm = re.match(re.escape(r) + r"\s*\(", e)
         if mm and idx is not None:
