@@ -831,8 +831,8 @@ def audit(sources):
     # library through its API table and warms none of the library's gates.
     # A thread's entry is only ever a call argument, never followed, so what
     # runs only on a worker stays cold
-    warmed |= walk([(r, n) for r, n in allfuncs if n == "main" and r.startswith("cli/")],
-                   lambda fn: fn[0].startswith("cli/"))
+    warmed |= walk([(r, n) for r, n in allfuncs if n == "main"],
+                   lambda fn: fn[0].startswith("cli/"))      # a main elsewhere drops out
     for r in rows:
         r["warm"] = (r["file"], r["name"]) in warmed
 
@@ -1245,6 +1245,19 @@ static int g_macroed(void)
     return v;
 }
 #define WARM_SOME() do { (void)g_macroed(); } while (0)
+static int g_unmac(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_UNMAC"); v = s ? atoi(s) : 0; }
+    return v;
+}
+#define NEVER_USED() do { (void)g_unmac(); } while (0)
+static int g_othmac(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_OTHMAC"); v = s ? atoi(s) : 0; }
+    return v;
+}
 
 /* 35: nested ternaries: in the then branch, in the else branch, and in
    parentheses; unset keeps the sentinel each time */
@@ -1447,6 +1460,29 @@ static int g_atload(void)
     return g_atl;
 }
 
+/* 45: conditional assignments: with every one under an if the first
+   reachable counts; an unconditional one beats a later conditional one */
+static int g_conds(int w)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_CONDS"); if (w > 0) v = s ? 1 : 2; if (w < 0) v = -1; }
+    return v;
+}
+static int g_cond2(int w)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_COND2"); v = s ? atoi(s) : 0; if (w) v = -1; }
+    return v;
+}
+
+/* 46: the knob's else branch is the only assignment: never taken unset */
+static int g_elseonly(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_ELSEONLY"); if (!s) { } else v = 5; }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1468,6 +1504,7 @@ static void warm_lr_statics(void)
     fprintf(stderr, "g_strcall() not yet\n");
     (void)warm_tab[0]();
     WARM_SOME();
+    OTHER_MAC();
     (void)sizeof(n);
     (void)g_ty();
     (void)g_attr();
@@ -1509,6 +1546,9 @@ SELF_TEST_WANT = {
     "SYN_FLT": ("latches", False), "SYN_LNG": ("latches", False),
     "SYN_BOOL2": ("latches", False), "SYN_AND": ("latches", False),
     "SYN_ATLOAD": ("latches", False),
+    "SYN_UNMAC": ("latches", False), "SYN_OTHMAC": ("latches", False),
+    "SYN_CONDS": ("latches", False), "SYN_COND2": ("latches", False),
+    "SYN_ELSEONLY": ("TRAP", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
@@ -1527,6 +1567,17 @@ static int x_gate(void)
     return v;
 }
 void other_warm(void) { (void)x_gate(); }
+#define OTHER_MAC() do { (void)g_othmac(); } while (0)
+"""
+# a main outside cli/ is not a root
+SELF_TEST_SRCMAIN = r"""
+static int m_gate(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_SRCMAIN"); v = s ? atoi(s) : 0; }
+    return v;
+}
+int main(void) { return m_gate(); }
 """
 # a header's static inline gate: refused, since each file has its own copy
 SELF_TEST_HDR = r"""
@@ -1719,6 +1770,9 @@ def self_test(inject_fail=False):
     wrows, _ = audit({"src/waived.c": SELF_TEST_WAIVED})
     if report(wrows, out=io.StringIO()) != 0 or not (wrows and wrows[0]["waived"]):
         bad.append("a waived TRAP still fails the tree, or isn't marked waived")
+    mrows, _ = audit({"src/main.c": SELF_TEST_SRCMAIN})
+    if [r["warm"] for r in mrows] != [False]:
+        bad.append("a main in src/ is taken as a warm root")
     vrows, _ = audit({"src/waivers.c": SELF_TEST_WAIVERS})
     wv = {k: r["waived"] for r in vrows for k in r["knobs"]}
     want_w = {"SYN_WBODY": "the body form", "SYN_WGNU": "the\n   split signature form",
@@ -1726,8 +1780,9 @@ def self_test(inject_fail=False):
     if {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in wv.items()} != \
             {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in want_w.items()}:
         bad.append(f"waivers read as {wv}")
-    if report(vrows, out=io.StringIO()) != 1:
-        bad.append("an empty waiver and an unwaived TRAP pass the run")
+    erows = [r for r in vrows if "SYN_WEMPTY" in r["knobs"]]
+    if report(erows, out=io.StringIO()) != 1:
+        bad.append("a TRAP under an empty waiver passes the run")
     if not inject_fail:
         # the exit status through a process: main() on a tree on disk, and
         # a failing self-test (its own path spawns nothing)
@@ -1752,7 +1807,7 @@ def self_test(inject_fail=False):
         r = subprocess.run([sys.executable, __file__, "--self-test-failing"], capture_output=True)
         if r.returncode == 0:
             bad.append("a failing self-test exits 0")
-    n = len(want_all) + 12 + (0 if inject_fail else 4)
+    n = len(want_all) + 13 + (0 if inject_fail else 4)
     for b in bad:
         print("env_gate_audit --self-test: FAIL " + b)
     print(f"env_gate_audit --self-test: {n - len(bad)}/{n} checks {'PASS' if not bad else 'FAIL'}")
