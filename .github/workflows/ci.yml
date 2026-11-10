@@ -117,6 +117,11 @@ jobs:
       - name: Knob census
         run: python3 scripts/knob_census.py --check
 
+      - name: Env gate audit
+        run: |
+          python3 scripts/env_gate_audit.py --self-test
+          python3 scripts/env_gate_audit.py
+
       - name: Conformance (encode, decode, recon bit-exact; determinism informational)
         run: ./scripts/conformance.sh
 
@@ -215,6 +220,11 @@ jobs:
 
       - name: Knob census
         run: python3 scripts/knob_census.py --check
+
+      - name: Env gate audit
+        run: |
+          python3 scripts/env_gate_audit.py --self-test
+          python3 scripts/env_gate_audit.py
 
       - name: Conformance (encode, decode, recon bit-exact; determinism informational)
         run: ./scripts/conformance.sh
