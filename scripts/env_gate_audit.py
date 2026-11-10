@@ -604,7 +604,9 @@ def find_guard(body, pos, readers, macros, statics):
             s1 = c1 + balanced(rest, st)
         else:
             s1 = c1 + rest.find(";") + 1
-        early = rest.lstrip().startswith("return")
+        early = bool(re.match(r"\s*(?:\{\s*)?return\b[^;]*;\s*(?:\})?", rest)) and (
+            not rest.lstrip().startswith("{")
+            or re.fullmatch(r"\{\s*return\b[^;]*;\s*\}", rest[st:s1 - c1]) is not None)
         if not (c1 <= pos < s1) and not (early and s1 <= pos):
             continue
         cmps = [(v, op, t) for v, op, t in CMP.findall(cond)]
@@ -1331,6 +1333,16 @@ static int g_ifelse2(void)
     return v;
 }
 
+/* 42: a braced early return guards; a braced block with more in it doesn't */
+static int g_brret(void)
+{
+    static int v = -1;
+    if (v >= 0) { return v; }
+    const char *s = y264_env("SYN_BRRET");
+    v = s ? atoi(s) : 0;
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1389,6 +1401,7 @@ SELF_TEST_WANT = {
     "SYN_LAST": ("TRAP", False), "SYN_UNK": ("latches", False),
     "SYN_ORDER2": ("latches", False), "SYN_OUTER2": ("latches", False),
     "SYN_IFELSE": ("TRAP", False), "SYN_IFELSE2": ("latches", False),
+    "SYN_BRRET": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
