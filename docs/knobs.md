@@ -54,7 +54,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_QPEL_SKIPQ` | 96 | src/encoder/motion.c:252 |
 | `Y264_RCP_LAG` | 1 | src/encoder/encoder.c:469 |
 | `Y264_RC_CARRY` | 1 | cli/yah264_cli.c:1429 |
-| `Y264_SKIP_CLIFT` | 2 | src/encoder/mbcode.c:11085 |
+| `Y264_SKIP_CLIFT` | 2 | src/encoder/mbcode.c:11070 |
 | `Y264_STAIR_BDEPTH` | 1 | src/encoder/encoder.c:365 |
 | `Y264_STAIR_TDIR` | 1 | src/encoder/encoder.c:601 |
 | `Y264_STAIR_WIDE` | 1 | src/encoder/encoder.c:402 |
@@ -70,7 +70,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_W2` | = pool present | src/encoder/encoder.c:5861 |
 | `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:3768 |
 
-## instrument (57)
+## instrument (56)
 
 | knob | default | reader |
 |---|---|---|
@@ -112,7 +112,6 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_MEREUSE_TRACE` | 0 | src/encoder/mbcode.c:6141 |
 | `Y264_ME_ETSTAT` | 0 | src/encoder/motion.c:301 |
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:61 |
-| `Y264_PROBE_TRELLIS` | 1 | src/encoder/mbcode.c:10574 |
 | `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:6614 |
 | `Y264_QP_TRACE` | 0 | src/encoder/encoder.c:3055 |
 | `Y264_RC_PLAY` | ? | src/encoder/rcreplay.h:157 |
@@ -132,7 +131,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_VBV_ROWBRAKE_TRACE` | 0 | src/encoder/mbcode.c:5510 |
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:894 |
 
-## arm (16)
+## arm (17)
 
 | knob | default | reader |
 |---|---|---|
@@ -145,9 +144,10 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_ME_HQ` | 0 | src/encoder/motion.c:241 |
 | `Y264_NR_INTER` | 0 | src/encoder/encoder.c:2003 |
 | `Y264_NR_INTRA` | 0 | src/encoder/encoder.c:2002 |
-| `Y264_P_INTRA_CABAC` | 0 | src/encoder/mbcode.c:11730 |
-| `Y264_P_PART_RD` | 0 | src/encoder/mbcode.c:11713 |
-| `Y264_P_PART_RD_T` | 1 | src/encoder/mbcode.c:11720 |
+| `Y264_PROBE_TRELLIS` | 0 | src/encoder/mbcode.c:10567 |
+| `Y264_P_INTRA_CABAC` | 0 | src/encoder/mbcode.c:11715 |
+| `Y264_P_PART_RD` | 0 | src/encoder/mbcode.c:11698 |
+| `Y264_P_PART_RD_T` | 1 | src/encoder/mbcode.c:11705 |
 | `Y264_QPSQ_MINW` | 0 | src/encoder/motion.c:248 |
 | `Y264_STREAM_WINDOW` | ? | cli/yah264_cli.c:3012 |
 | `Y264_SUB_FAR` | 0 | src/encoder/motion.c:243 |

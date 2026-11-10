@@ -10558,20 +10558,13 @@ static int coef_signif(const dctcoef coef[16], int qp, int strict,
  * without ME / partition / intra analysis. Deadzone quant (strict=0) keeps a
  * superset of what RDOQ+decimate would, so it never yields a false P_Skip; B uses
  * strict=1 (round-to-nearest) because direct MVs need a tighter gate. */
-/* Trellis-aligned significance for the P skip probe. The seed quant keeps a
- * SUPERSET of what the coder finally codes (the trellis prunes marginal
- * levels by RD), so admitting on the seed alone sends MBs to full analysis
- * that still code to nothing -- the bulk of the seed-fix speed cost (~8% of
- * a 720p encode). When the seed keeps something, ask
- * the coder's own medium-tier Viterbi trellis whether any level survives;
- * all-zero means the skip truly codes to nothing and wins RD outright.
- * Falls back to seed-admission when the trellis
- * model doesn't apply (CAVLC, psy-trellis, greedy tiers).
- * Y264_PROBE_TRELLIS=0 restores the seed-only probe. */
+/* the skip probe decides on the seed levels, a superset of what the coder
+ * keeps: asking the trellis instead commits skips a searched vector would
+ * beat. Y264_PROBE_TRELLIS=1 restores the trellis-aligned probe. */
 static int probe_trellis_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = y264_env("Y264_PROBE_TRELLIS"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_PROBE_TRELLIS"); v = e ? atoi(e) : 0; }
     return v;
 }
 /* PROBE_KEEP: a level the decimator can never drop (|level| >= 2), or a block the probe
@@ -10579,17 +10572,11 @@ static int probe_trellis_on(void)
  * per-block threshold, so it fails both acceptance tests. */
 #define PROBE_KEEP 99
 
-/* Significance of one 4x4 as the skip probe sees it. Sets *any when a level
- * survives at all (the pre-decimate answer, which is mode 0's verdict and has
- * to stay exact); returns the run-weighted decimate score the coder's own
- * decimator would compute over those levels.
- *
- * The two are not the same question, and that is the defect this answers. A
- * lone +-1 in the last scan position scores 0 -- DECIMATE_T4[15] is 0 -- so it
- * is a level that survived the trellis AND a block inter_res_4x4_plane goes on
- * to zero. Asking only the first question sends macroblocks our own coder
- * codes to cbp 0 through a full ME + intra + RD tournament, to be discarded
- * as skip anyway. */
+/* significance of one 4x4 as the skip probe sees it: *any says whether a
+ * level survives (mode 0's verdict), the return is the run-weighted decimate
+ * score the coder would compute over those levels. the two differ: a lone
+ * +-1 late in the scan survives but the coder's decimator zeroes it. the
+ * levels are the seed's, or under Y264_PROBE_TRELLIS=1 the trellis's. */
 static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
                              int qp, int qpm, int cat, int ac,
                              int nza, int nzb, const uint8_t *w, int *any)
@@ -10605,10 +10592,9 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
     int qn[16], absc[16], w2[16], out[16];
     if (!probe_trellis_on() || !f->cabac || psy_trellis_qp(f, qpm)
         || !viterbi_rdoq(f->subme)) {
-        /* Trellis model doesn't apply (CAVLC, psy-trellis, greedy tiers): score
- * the SEED levels instead. They are a superset of what the coder finally
- * keeps, so the score is an over-estimate and the acceptance stays
- * conservative -- strictly better than an unconditional reject. */
+        /* seed levels: the default, and the fallback when the trellis model
+ * doesn't apply (CAVLC, psy-trellis, greedy tiers). They are a superset of
+ * what the coder finally keeps, so the acceptance stays conservative. */
         for (int i = 0; i < n; i++) out[i] = lev[ZIGZAG[i + base]];
     } else {
         long unmf[16];
@@ -10638,9 +10624,8 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
         y264_cabac_trellis_4x4(f->cabac, cat, nza, nzb, lambda_trellis(qpm, 0),
                                n, qn_p, absc_p, unmf_p, w2_p, 0, NULL, 0, out);
     }
-    /* Re-ask *any against the levels the coder would actually emit: the trellis
- * can prune the seed to nothing, and mode 0 treats that as a
- * pass. Same scan-order mask feeds the decimate walk. */
+    /* re-ask *any against out: under Y264_PROBE_TRELLIS=1 the trellis can
+     * prune the seed to nothing, which mode 0 treats as a pass */
     uint32_t msk = 0;
     for (int i = 0; i < n; i++) {
         int v = out[i];

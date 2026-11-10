@@ -68,7 +68,8 @@ only the winning reference at quarter-pel.
 In order, at `--subme 8` and below:
 
 1. **Fast P-skip probe.** If the skip prediction's residual quantizes to
-   nothing, commit skip before any search. `--no-fast-pskip` turns it off.
+   nothing under the seed quantizer, commit skip before any search.
+   `--no-fast-pskip` turns it off.
 2. **16x16 search** over the active references.
 3. **Ref-0 exit** (pictures of at least 1200
    macroblocks). If the ref-0 16x16 vector lands within one quarter-pel of
