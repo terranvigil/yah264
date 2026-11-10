@@ -558,6 +558,30 @@ def find_guard(body, pos, readers, macros, statics):
             unset_of(var, region, readers, macros, env_locals(body, readers)))
 
 
+RANK = {"latches": 0, "latches?": 1, "TRAP": 2}
+
+
+def judge(g, body):
+    """(verdict, why) for one guard."""
+    gname, gop, gsent, unset = g
+    if unset is None:
+        # the resolve branch's default array, e.g. int p[3] = { 75, .. }
+        stripped = re.sub(r"static\s+[^;]*;", "", body)
+        for _an, vals in ARRDEF.findall(stripped):
+            unset = as_int(vals.split(",")[0])
+            if unset is not None:
+                break
+    if unset == UNASSIGNED:
+        return "TRAP", (f"the unset path never assigns {gname}, so `{gname} {gop} {gsent}` "
+                        f"holds on every call and the knob is read again each time")
+    if unset is None or gsent is None:
+        return "latches?", f"guard `{gname} {gop} {gsent}`, unset value not statically readable"
+    if satisfies(unset, gop, gsent):
+        return "TRAP", (f"unset resolves {gname}={unset}, which still satisfies "
+                        f"`{gname} {gop} {gsent}` -> rewrites its static every call")
+    return "latches", f"unset {gname}={unset} clears `{gname} {gop} {gsent}`"
+
+
 def audit(sources):
     """sources: {relative path: text}. Returns (gate rows, {(file, function): [bodies]})."""
     defs = []
@@ -576,28 +600,14 @@ def audit(sources):
         knobs = [k for _p, k in reads]
         if not knobs:
             continue
-        g = find_guard(body, reads[0][0], readers, macros.get(rel, {}), fstatics[rel])
-        if g is None:
-            continue                          # per-call read, not a latch
-        gname, gop, gsent, unset = g
-        if unset is None:
-            # the resolve branch's default array, e.g. int p[3] = { 75, .. }
-            stripped = re.sub(r"static\s+[^;]*;", "", body)
-            for _an, vals in ARRDEF.findall(stripped):
-                unset = as_int(vals.split(",")[0])
-                if unset is not None:
-                    break
-
-        if unset == UNASSIGNED:
-            v, why = "TRAP", (f"the unset path never assigns {gname}, so `{gname} {gop} {gsent}` "
-                              f"holds on every call and the knob is read again each time")
-        elif unset is None or gsent is None:
-            v, why = "latches?", f"guard `{gname} {gop} {gsent}`, unset value not statically readable"
-        elif satisfies(unset, gop, gsent):
-            v, why = "TRAP", (f"unset resolves {gname}={unset}, which still satisfies "
-                              f"`{gname} {gop} {gsent}` -> rewrites its static every call")
-        else:
-            v, why = "latches", f"unset {gname}={unset} clears `{gname} {gop} {gsent}`"
+        verdicts = []
+        for pos, _k in reads:                  # every read; the worst verdict stands
+            g = find_guard(body, pos, readers, macros.get(rel, {}), fstatics[rel])
+            if g is not None:
+                verdicts.append(judge(g, body))
+        if not verdicts:
+            continue                          # per-call reads, not a latch
+        v, why = max(verdicts, key=lambda x: RANK[x[0]])
         rows.append(dict(file=rel, line=line, name=name, knobs=knobs,
                          verdict=v, why=why))
 
@@ -956,6 +966,15 @@ static int g_xarith(void)
     return v;
 }
 
+/* 33: two latches in one function; the second one is a TRAP */
+static int g_two(int w)
+{
+    static int a = -1, b = -1;
+    if (a < 0) { const char *s = y264_env("SYN_TWOA"); a = s ? atoi(s) : 0; }
+    if (b < 0) { const char *s = y264_env("SYN_TWOB"); b = s ? atoi(s) : -1; }
+    return w ? a : b;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -996,6 +1015,7 @@ SELF_TEST_WANT = {
     "SYN_OUTER": ("latches", False),
     "SYN_PAREN": ("TRAP", False), "SYN_PNOT": ("TRAP", False),
     "SYN_XAR": ("latches", False),
+    "SYN_TWOA": ("TRAP", False), "SYN_TWOB": ("TRAP", False),
 }
 # a header's static inline gate, read from its own file
 SELF_TEST_HDR = r"""
