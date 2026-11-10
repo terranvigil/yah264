@@ -11,7 +11,9 @@ longest-first queue. These inputs open on a short GOP followed by a longer
 one, the shape where a reader that loses its place leaves the longest GOP
 unread. Each case counts the coded frames in the output and wants every input
 frame and a clean exit, at two and three threads, a few runs each, since how
-far the reader gets before the publish is a matter of timing.
+far the reader gets before the publish is a matter of timing. Under capped
+VBR a skipped GOP stalls the GOPs that wait on its rate state, so each encode
+gets a timeout and a hang fails the case.
 
 The input is spliced on the fly from CIF corpus clips (mobile, foreman,
 bus) when they are present, else from synthetic QCIF segments, which have the
@@ -88,9 +90,12 @@ def main():
         sys.exit("usage: gop_drop_check.py CLI [corpus-dir]")
     cli = os.path.abspath(sys.argv[1])
     corpus = sys.argv[2] if len(sys.argv) == 3 else None
-    work = tempfile.mkdtemp(prefix="yah264-gopdrop.")
     env = {k: v for k, v in os.environ.items() if not k.startswith("Y264_")}
+    with tempfile.TemporaryDirectory(prefix="yah264-gopdrop.") as work:
+        sys.exit(run_cases(cli, corpus, work, env))
 
+
+def run_cases(cli, corpus, work, env):
     qp = os.path.join(work, "qp.txt")
     plan = os.path.join(work, "plan.txt")
     with open(qp, "w") as f:
@@ -102,36 +107,43 @@ def main():
     na = splice(a, [("mobile_cif.y4m", 10, 1), ("foreman_cif.y4m", 100, 5)], corpus)
     nb = splice(b, [("foreman_cif.y4m", 8, 2), ("bus_cif.y4m", 150, 7),
                     ("mobile_cif.y4m", 100, 3)], corpus)
+    crf = ["--crf", "26"]
+    cvbr = ["--bitrate", "800", "--vbv-maxrate", "1000", "--vbv-bufsize", "1000"]
+    qpk = ["--keyint", "40", "--qpfile", qp]
     cases = [
-        ("qpfile key frame", a, na, ["--keyint", "40", "--qpfile", qp]),
-        ("plan idr", b, nb, ["--plan", plan]),
+        ("qpfile key frame", a, na, crf + qpk),
+        # capped VBR chains rate state from GOP to GOP, so a skipped GOP
+        # can stall its successor instead of ending short
+        ("qpfile key frame, capped VBR", a, na, cvbr + qpk),
+        ("plan idr", b, nb, crf + ["--plan", plan]),
     ]
 
     out = os.path.join(work, "out.264")
     fail = 0
     for name, clip, want, args in cases:
         bad = 0
-        for t in ("2", "3"):
-            for run in range(RUNS):
-                if os.path.exists(out):
-                    os.remove(out)
-                p = subprocess.run([cli, "--input-y4m", clip, "--crf", "26", "--threads", t,
+        for t, run in ((t, r) for t in ("2", "3") for r in range(RUNS)):
+            if bad:
+                break               # one failure settles the case; a hang costs 60 s
+            if os.path.exists(out):
+                os.remove(out)
+            try:
+                p = subprocess.run([cli, "--input-y4m", clip, "--threads", t,
                                     "-o", out, "--quiet", "--no-progress"] + args,
                                    env=env, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.PIPE, text=True)
-                got = coded_frames(out) if os.path.exists(out) else 0
-                if p.returncode != 0 or got != want:
-                    print(f"FAIL {name}, threads {t}, run {run + 1}: exit {p.returncode}, "
-                          f"{got} of {want} frames coded {p.stderr.strip()[:200]}")
-                    bad = 1
+                                   stderr=subprocess.PIPE, text=True, timeout=60)
+                rc, err = p.returncode, p.stderr.strip()[:200]
+            except subprocess.TimeoutExpired:
+                rc, err = "timeout", "hung for 60 s"
+            got = coded_frames(out) if os.path.exists(out) else 0
+            if rc != 0 or got != want:
+                print(f"FAIL {name}, threads {t}, run {run + 1}: exit {rc}, "
+                      f"{got} of {want} frames coded {err}")
+                bad = 1
         fail |= bad
         if not bad:
             print(f"ok   {name}: {want} frames at threads 2 and 3, {RUNS} runs each")
-    for fn in os.listdir(work):
-        os.remove(os.path.join(work, fn))
-    os.rmdir(work)
-    sys.exit(fail)
-
+    return fail
 
 if __name__ == "__main__":
     main()
