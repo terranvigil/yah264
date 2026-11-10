@@ -308,6 +308,10 @@ def num(tok, macros):
         if tok in macros:
             tok = macros[tok].strip()
             continue
+        m = re.fullmatch(r"-\s*\(\s*(.+?)\s*\)", tok)
+        if m:
+            tok = "-" + m.group(1)
+            continue
         break
     v = as_int(tok)
     if v is None:
@@ -338,6 +342,8 @@ def cond_unset(cond, envl, readers):
     read: `!s`, `!s || ...` and `s == NULL` are true, `s`, `s && ...` and
     `s != NULL` false, s an env local or a reader call."""
     c = cond.strip()
+    while c.startswith("(") and balanced(c, 0) == len(c):
+        c = c[1:-1].strip()
     rd = r"(?:" + "|".join(re.escape(r) for r, (_n, d) in readers.items() if d is None) + r")\s*\([^()]*\)"
     x = r"(?:" + ("|".join(map(re.escape, envl)) + "|" if envl else "") + rd + r")"
     if re.match(r"!\s*" + x + r"\s*(\|\||$)", c) or re.fullmatch(x + r"\s*==\s*NULL", c):
@@ -369,6 +375,10 @@ def eval_unset(expr, region, envl, readers, macros, depth=0):
             q = i
         elif ch == ":" and depth_p == 0 and q >= 0:
             t = cond_unset(e[:q], envl, readers)
+            if t is None:
+                t = cond_value(e[:q], region, envl, readers, macros, depth)
+            if t is None:
+                return None                          # a condition it can't read
             # nested ternaries sit in the else branch, so the first ':' at
             # depth 0 splits this one
             br = e[q + 1:i] if t else e[i + 1:]
@@ -388,6 +398,27 @@ def eval_unset(expr, region, envl, readers, macros, depth=0):
         if mm:                                       # a local carrying it
             return eval_unset(mm.group(1), region, envl, readers, macros, depth + 1)
     return num(e, macros)
+
+
+def cond_value(cond, region, envl, readers, macros, depth):
+    """A condition over locals whose unset values are known ('x > 0',
+    '(x & 1)'), evaluated as integer arithmetic, or None."""
+    names = set(re.findall(r"[A-Za-z_]\w*", cond))
+    vals = {}
+    for n in names:
+        v = eval_unset(n, region, envl, readers, macros, depth + 1)
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            return None
+        vals[n] = v
+    expr = re.sub(r"[A-Za-z_]\w*", lambda m: repr(vals[m.group(0)]), cond)
+    expr = expr.replace("&&", " and ").replace("||", " or ")
+    expr = re.sub(r"!(?!=)", " not ", expr)
+    if not re.fullmatch(r"[\d\s().+\-*/%<>=!&|^~a-z]*", expr):
+        return None
+    try:
+        return bool(eval(expr, {"__builtins__": {}}, {}))
+    except Exception:
+        return None
 
 
 def skipped_unset(region, at, envl, readers):
@@ -903,6 +934,28 @@ static int g_outer(void)
     return v;
 }
 
+/* 31: parenthesised ternary conditions: unset keeps the sentinel */
+static int g_paren(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_PAREN"); v = (s == NULL) ? -1 : atoi(s); }
+    return v;
+}
+static int g_pnot(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_PNOT"); v = (!s) ? -1 : 1; }
+    return v;
+}
+
+/* 32: a condition over a local whose unset value is known */
+static int g_xarith(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = y264_env("SYN_XAR"); int x = e ? atoi(e) : 2; v = x > 0 ? x : -1; }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -941,6 +994,8 @@ SELF_TEST_WANT = {
     "SYN_NOTE": ("TRAP", False), "SYN_AFLAG": ("latches", False),
     "SYN_VIA": ("latches", False), "SYN_TWIN": ("latches", True),
     "SYN_OUTER": ("latches", False),
+    "SYN_PAREN": ("TRAP", False), "SYN_PNOT": ("TRAP", False),
+    "SYN_XAR": ("latches", False),
 }
 # a header's static inline gate, read from its own file
 SELF_TEST_HDR = r"""
