@@ -785,8 +785,10 @@ def audit(sources):
                 tables.setdefault(rel, {})[nm.group(1)] = set(re.findall(r"[A-Za-z_]\w*", init))
     def refs(rel, body):
         """Names a body calls, directly or through a same-file macro, plus
-        function names it holds outside any call's arguments (a pointer
-        taken) and the functions in a file-scope table it names."""
+        function names it holds outside any call's arguments in a plain
+        local pointer, and the functions in a file-scope table it names. A
+        name stored into a member or a slot (a dispatch table being filled)
+        or cast to a data pointer is not followed."""
         b = blank_strings(drop_if0(body))
         out = set(CALL.findall(b))
         for mname, mbody in fmacros.get(rel, {}).items():
@@ -802,6 +804,10 @@ def audit(sources):
             elif t[0] in "-.":
                 pass                                     # a member, not a function
             elif depth <= 0:
+                before = b[max(0, m.start() - 80):m.start()]
+                if re.search(r"(?:->\s*\w+|\.\s*\w+|\])\s*=\s*(?:\([^()]*\)\s*)?$", before) \
+                        or re.search(r"\(\s*[\w\s]*\*\s*\)\s*$", before):
+                    continue        # stored into a member or slot, or cast to data: not a call
                 out.add(t)
                 out |= tables.get(rel, {}).get(t, set())
         return out
@@ -1503,6 +1509,45 @@ static int g_fld(void)
     return v;
 }
 
+/* 49: filling a dispatch struct, or casting a name to a data pointer,
+   doesn't call: the kernels stay cold */
+static int k_fill(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_KFILL"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int k_slot(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_KSLOT"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int k_cast(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_KCAST"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int k_local(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_KLOCAL"); v = s ? atoi(s) : 0; }
+    return v;
+}
+struct dsp { int (*fill)(void); };
+static int (*slots[2])(void);
+static void dsp_init(struct dsp *d)
+{
+    void *keep;
+    int (*fp)(void);
+    d->fill = k_fill;
+    slots[0] = k_slot;
+    keep = (void *)k_cast;
+    fp = k_local;
+    (void)keep; (void)fp;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1529,6 +1574,7 @@ static void warm_lr_statics(void)
     (void)g_ty();
     (void)g_attr();
     (void)pickfp(0);
+    dsp_init(0);
     warm_twin();
     other_warm();
     LOOP(n);
@@ -1570,6 +1616,8 @@ SELF_TEST_WANT = {
     "SYN_CONDS": ("latches", False), "SYN_COND2": ("latches", False),
     "SYN_ELSEONLY": ("TRAP", False), "SYN_FLD": ("latches", False),
     "SYN_NLPAREN": ("latches", False),
+    "SYN_KFILL": ("latches", False), "SYN_KSLOT": ("latches", False),
+    "SYN_KCAST": ("latches", False), "SYN_KLOCAL": ("latches", True),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
