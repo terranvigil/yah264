@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Audit every lazy env-static gate in src/ for the two ways they go wrong.
 
-The encoder resolves its ~200 Y264_* knobs through lazy function-local
-statics:
+The encoder resolves many of its Y264_* knobs (docs/knobs.md counts them)
+through lazy statics:
 
     static int v = -1;
     if (v < 0) { const char *e = y264_env("Y264_FOO"); v = e ? atoi(e) : 1; }
