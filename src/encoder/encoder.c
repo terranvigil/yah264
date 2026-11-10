@@ -5315,6 +5315,23 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->hrd_rate_pic = e->hrd_bitrate * (double)e->hrd_tpp
                             * (double)param->timebase.fps_den
                             / (2.0 * (double)param->timebase.fps_num);
+            /* a cbr channel delivers a picture period's bits between removals,
+ * and a buffer that cannot hold them overflows whatever is coded */
+            if (param->nal_hrd == YAH264_NAL_HRD_CBR && e->hrd_cpb <= e->hrd_rate_pic) {
+                fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture "
+                        "period of arrival (%.0f bits); --vbv-bufsize gives %.0f\n",
+                        e->hrd_rate_pic, e->hrd_cpb);
+                yah264_encoder_close(e);
+                return NULL;
+            }
+            /* --crf-max lets the buffer under-run by design, which a declared
+ * HRD cannot */
+            if (param->crf_max > 0.0) {
+                fprintf(stderr, "yah264: --crf-max cannot be combined with --nal-hrd: it lets "
+                        "the buffer under-run, and the stream would fail its own declaration\n");
+                yah264_encoder_close(e);
+                return NULL;
+            }
             e->hrd_full_delay = (unsigned)(90000.0 * e->hrd_cpb / e->hrd_bitrate);
             if (e->hrd_full_delay < 1) e->hrd_full_delay = 1;
             double d0 = 90000.0 * e->vbv.fill / e->hrd_bitrate;
