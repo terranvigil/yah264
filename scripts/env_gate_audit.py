@@ -466,17 +466,30 @@ def body_statics(body):
     return out
 
 
+def assigns(var, text):
+    """Whether `text` writes `var`: an assignment (plain or compound), ++/--,
+    or an atomic store or exchange."""
+    v = re.escape(var)
+    return bool(re.search(r"\b" + v + r"(?:\[[^\]]*\])?\s*(?:[-+*/|&^]|<<|>>)?=(?!=)"
+                          r"|(?:\+\+|--)\s*\b" + v + r"\b|\b" + v + r"\s*(?:\+\+|--)"
+                          r"|atomic_(?:store|exchange)\w*\s*\(\s*&\s*" + v + r"\b", text))
+
+
 def find_guard(body, pos, readers, macros, statics):
-    """(var, op, sentinel, unset) of the latch guarding the body's first env
-    read, or None when the read is not behind one. A guard is an `if` whose
+    """(var, op, sentinel, unset) of the latch guarding the env read at
+    `pos`, or None when the read is not behind one. A guard is an `if` whose
     condition compares a variable (`v < 0`, `v == UNSET`, `!done`, either
     side of a compound) and whose statement holds the read, or an early
-    `if (...) return` ahead of it, read negated."""
+    `if (...) return` ahead of it, read negated. The variable must be static
+    and written by the function, or it is a mode flag and the read is
+    per-call; of the candidates, the outermost one its region writes is
+    the latch."""
     statics = set(statics) | body_statics(body)
     for m in re.finditer(r"\b(\w+)\s*=\s*atomic_load\w*\s*\(\s*&\s*(\w+)", body):
         if m.group(2) in statics:
             statics.add(m.group(1))           # a local copy of a static atomic
-    best = None
+    inner = body[body.find("{") + 1:]
+    cands = []
     for m in re.finditer(r"\bif\s*\(", body):
         if m.start() >= pos:
             break
@@ -498,16 +511,20 @@ def find_guard(body, pos, readers, macros, statics):
         bare = re.fullmatch(r"\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*", cond)
         if bare:
             cmps.append((bare.group(1), "!=", "0"))      # if (x) return v;
-        cmps = [c for c in cmps if c[0] in statics]     # a latch keeps its value
+        cmps = [c for c in cmps if c[0] in statics and assigns(c[0], inner)]
         if not cmps:
             continue
         var, op, tok = cmps[0]
         if early:
             op = NEG[op]
         region = body[c1:s1] if not early else body[s1:]
-        best = (var, op, num(tok, macros),
-                unset_of(var, region, readers, macros, env_locals(body, readers)))
-    return best
+        cands.append((assigns(var, region), var, op, tok, region))
+    if not cands:
+        return None
+    pick = next((c for c in cands if c[0]), cands[0])   # outermost the region writes
+    _w, var, op, tok, region = pick
+    return (var, op, num(tok, macros),
+            unset_of(var, region, readers, macros, env_locals(body, readers)))
 
 
 def audit(sources):
@@ -579,7 +596,8 @@ def audit(sources):
 
 
 # --self-test: one case per gate shape the audit has to read. Each knob maps
-# to (verdict, warmed); a knob left out (SYN_LOCAL) must not read as a gate.
+# to (verdict, warmed); a knob left out (SYN_LOCAL, SYN_MODE, SYN_OFF) must
+# not read as a gate.
 SELF_TEST_SRC = r"""
 #include <stdlib.h>
 #include "env.h"
@@ -862,6 +880,29 @@ static int h_gate(void)
     return v;
 }
 
+/* 29: static mode flags the function never writes: per-call reads */
+static int g_mode, g_disabled;
+static int g_modeflag(void)
+{
+    if (g_mode > 0) { const char *s = y264_env("SYN_MODE"); return s ? atoi(s) : 0; }
+    return 0;
+}
+static int g_offflag(void)
+{
+    if (g_disabled) return 0;
+    const char *s = y264_env("SYN_OFF");
+    return s ? atoi(s) : 0;
+}
+
+/* 30: a static debug flag inside a real latch: the outer guard is the latch */
+static int g_dbg;
+static int g_outer(void)
+{
+    static int v = -1;
+    if (v < 0) { v = 0; if (g_dbg) { const char *s = y264_env("SYN_OUTER"); v = s ? atoi(s) : 0; } }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -899,6 +940,7 @@ SELF_TEST_WANT = {
     "SYN_PICK": ("TRAP", False), "SYN_DEFNAME": ("latches", False),
     "SYN_NOTE": ("TRAP", False), "SYN_AFLAG": ("latches", False),
     "SYN_VIA": ("latches", False), "SYN_TWIN": ("latches", True),
+    "SYN_OUTER": ("latches", False),
 }
 # a header's static inline gate, read from its own file
 SELF_TEST_HDR = r"""
