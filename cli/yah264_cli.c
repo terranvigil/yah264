@@ -1281,6 +1281,10 @@ typedef struct {
  * gop_cons[g] the next one its worker will take. */
     int seek_rd, readahead;
     int *gop_rd, *gop_cons;
+    /* bumped when the schedule is published: the seek reader starts on
+     * display order, and its cursor indexes whichever order is current */
+    int order_gen;
+    int lost;                       /* a GOP's frames were never read: fail */
     size_t held;                    /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
     int gops_final, gops_cap;
@@ -1697,6 +1701,17 @@ static void *gop_worker(void *arg)
                 j->waiting--;
             }
             int have = !j->abort_ && fs_ready(j, i) && i < end;
+            /* the seek reader ends only once every GOP is read, and a short
+             * read is an error there, so this frame was skipped: coding on
+             * would drop the GOP's tail and still exit 0 */
+            if (!have && !j->abort_ && j->seek_rd) {
+                fprintf(stderr, "yah264: internal error: input frame %ld of GOP %d was "
+                        "never read; the output is incomplete\n", i + g_seek_frames, g);
+                j->lost = 1; j->abort_ = 1;
+                pthread_cond_broadcast(&j->cv_ready);
+                pthread_cond_broadcast(&j->cv_emit);
+                pthread_cond_broadcast(&j->cv_space);
+            }
             pthread_mutex_unlock(&j->lock);
             if (!have) { end = i; break; }              /* aborted, or short input */
 
@@ -1929,9 +1944,10 @@ static void *y4m_reader(void *arg)
  * least read ahead of its worker goes first, so a starving worker is always
  * served next, and ties go to the GOP handed out first, which is the one the
  * writer is waiting on. */
-static int seek_pick(gop_job_t *j, int *lo)
+static int seek_pick(gop_job_t *j, int *lo, int *gen)
 {
     int n = j->n_gops;
+    if (*gen != j->order_gen) { *gen = j->order_gen; *lo = 0; }
     while (*lo < n) {
         int g = j->gop_owner || !j->gop_order ? *lo : j->gop_order[*lo];
         if (j->gop_rd[g] < j->gop_start[g + 1]) break;
@@ -1961,12 +1977,12 @@ static void *y4m_reader_seek(void *arg)
     reader_arg_t *r = arg;
     gop_job_t *j = r->j;
     char line[512];
-    int lo = 0;
+    int lo = 0, gen = 0;
 
     for (;;) {
         pthread_mutex_lock(&j->lock);
         int g;
-        while (!j->abort_ && (g = seek_pick(j, &lo)) == -1)
+        while (!j->abort_ && (g = seek_pick(j, &lo, &gen)) == -1)
             pthread_cond_wait(&j->cv_space, &j->lock);
         if (j->abort_ || g < 0) { pthread_mutex_unlock(&j->lock); break; }
         int i = j->gop_rd[g];
@@ -3597,8 +3613,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     g_api->encoder_close(prime);
 
     job.param = &p;
+    /* the seek reader is already running and reads these under the lock;
+     * a new generation restarts its scan in the new order */
+    pthread_mutex_lock(&job.lock);
     job.wparam = wp; job.gop_owner = owner;
     job.gop_order = qorder; job.gop_k = qk;
+    job.order_gen++;
+    pthread_cond_broadcast(&job.cv_space);
+    pthread_mutex_unlock(&job.lock);
     job.gop_stats = gop_stats; job.gop_target = gop_target;
     job.stream_start = !gstart_known && !cut_split && !qorder && !owner &&
                        !gop_stats && !job.gop_rf && param->rc.bitrate <= 0 &&
@@ -3781,7 +3803,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     pthread_cond_destroy(&job.cv_space);
     pthread_cond_destroy(&job.cv_ready);
     pthread_cond_destroy(&job.cv_emit);
-    return tp_rc ? tp_rc : (wr_err || job.rerr);
+    return tp_rc ? tp_rc : (wr_err || job.rerr || job.lost);
 }
 
 /* Read one newline-terminated header line (Y4M stream or frame header) into buf.
