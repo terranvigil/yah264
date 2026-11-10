@@ -3505,6 +3505,7 @@ static double hrd_slice_bits(const uint8_t *rbsp, const struct slice_map *sm)
             if (z >= 2 && rbsp[i] <= 3) { n++; z = 0; }
             z = rbsp[i] == 0 ? z + 1 : 0;
         }
+        if (z >= 2) n++;                /* the 0x03 after trailing cabac_zero_words */
         n += sm->len[s] + Y264_NAL_START_BYTES;
         at += sm->len[s];
     }
