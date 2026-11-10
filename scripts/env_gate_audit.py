@@ -350,6 +350,14 @@ def num(tok, macros):
         break
     if tok in ("true", "false"):
         return int(tok == "true")
+    neg = tok.startswith("-")
+    body = tok[1:].strip() if neg else tok
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+[uUlL]*", body):
+        v = int(re.sub(r"[uUlL]+$", "", body), 16)         # 0x7fffffff, 0xffu
+        return -v if neg else v
+    if re.fullmatch(r"0[0-7]+[uUlL]*", body):
+        v = int(re.sub(r"[uUlL]+$", "", body), 8)          # 0777
+        return -v if neg else v
     tok = re.sub(r"(?<=[0-9.])[uUlLfF]+$", "", tok)    # 1.0f, 10UL
     v = as_int(tok)
     if v is None:
@@ -1551,6 +1559,32 @@ static void dsp_init(struct dsp *d)
     (void)keep; (void)fp;
 }
 
+/* 50: hex and octal literals */
+static int g_hex(void)
+{
+    static int v = 0x7fffffff;
+    if (v == 0x7fffffff) { const char *s = y264_env("SYN_HEX"); v = s ? atoi(s) : 0x7fffffff; }
+    return v;
+}
+static int g_hexu(void)
+{
+    static unsigned v = 0xffu;
+    if (v > 0x10u) { const char *s = y264_env("SYN_HEXU"); v = s ? (unsigned)atoi(s) : 0x8u; }
+    return (int)v;
+}
+static int g_oct(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_OCT"); v = s ? atoi(s) : 0777; }
+    return v;
+}
+static int g_octtrap(void)
+{
+    static int v = 010;
+    if (v >= 8) { const char *s = y264_env("SYN_OCTT"); v = s ? atoi(s) : 010; }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1623,6 +1657,8 @@ SELF_TEST_WANT = {
     "SYN_KFILL": ("latches", False), "SYN_KSLOT": ("latches", False),
     "SYN_KCAST": ("latches", False), "SYN_KLOCAL": ("latches", True),
     "SYN_SPRIV": ("latches", False),
+    "SYN_HEX": ("TRAP", False), "SYN_HEXU": ("latches", False),
+    "SYN_OCT": ("latches", False), "SYN_OCTT": ("TRAP", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
