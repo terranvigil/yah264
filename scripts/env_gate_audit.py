@@ -38,16 +38,6 @@ import re, sys, json, pathlib, subprocess
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WARM_ROOTS = ["warm_lr_statics", "ntp_pool_create", "ntp_bg_create"]
 
-# functions whose env reads land in a local each call: no shared static, so
-# no race, and warming them would be meaningless.
-NOT_A_GATE = {
-    "auto_threads", "la_depth_for", "wf_width_for", "la_chain_prop",
-    "yah264_encoder_open", "yah264_encoder_close",
-    "cpu_detect_once", "mbt_oracle_init", "dpbp_open", "skor_init",
-    "mb_log_open", "blate_open", "trf_open", "tr_select",
-    "blk8_intra_dispatch", "warm_lr_statics", "compute_mbtree",
-    "encoder_open_sw", "stair_drain", "rcr_open_env",
-}
 
 # the env read: y264_env (src/common/env.h), or a bare getenv
 ENVREAD = r"(?:y264_env|getenv)"
@@ -288,7 +278,34 @@ def unset_of(var, region, readers, macros):
     return num(rhs, macros)
 
 
-def find_guard(body, rx_read, readers, macros):
+def declared(decl):
+    """The names a declaration's text (between 'static' and ';') declares."""
+    out = []
+    for part in split_args(decl + ")"):
+        part = part.split("=")[0].split("[")[0]
+        ids = re.findall(r"[A-Za-z_]\w*", part)
+        if ids:
+            out.append(ids[-1])
+    return out
+
+
+def file_statics(text):
+    """Names declared at file scope as static or atomic."""
+    out = set()
+    for m in re.finditer(r"^(?:static|_Atomic|atomic_\w+)\b([^;(]*?(?:=[^;]*)?);", strip_comments(text), re.M):
+        out.update(declared(m.group(1)))
+    return out
+
+
+def body_statics(body):
+    """Names a body declares static, plus locals loaded from a static atomic."""
+    out = set()
+    for m in re.finditer(r"\bstatic\b([^;{]*);", body[body.find("{") + 1:]):
+        out.update(declared(m.group(1)))
+    return out
+
+
+def find_guard(body, rx_read, readers, macros, statics):
     """(var, op, sentinel, unset) of the latch guarding the body's first env
     read, or None when the read is not behind one. A guard is an `if` whose
     condition compares a variable (`v < 0`, `v == UNSET`, `!done`, either
@@ -297,6 +314,10 @@ def find_guard(body, rx_read, readers, macros):
     rd = rx_read.search(body)
     if not rd:
         return None
+    statics = set(statics) | body_statics(body)
+    for m in re.finditer(r"\b(\w+)\s*=\s*atomic_load\w*\s*\(\s*&\s*(\w+)", body):
+        if m.group(2) in statics:
+            statics.add(m.group(1))           # a local copy of a static atomic
     pos, best = rd.start(), None
     for m in re.finditer(r"\bif\s*\(", body):
         if m.start() >= pos:
@@ -315,6 +336,7 @@ def find_guard(body, rx_read, readers, macros):
             continue
         cmps = [(v, op, t) for v, op, t in CMP.findall(cond)]
         cmps += [(v, "==", "0") for v in NOT.findall(cond)]
+        cmps = [c for c in cmps if c[0] in statics]     # a latch keeps its value
         if not cmps:
             continue
         var, op, tok = cmps[0]
@@ -332,6 +354,7 @@ def audit(sources):
         for name, line, body, sig in functions(text):
             defs.append((name, line, body, sig, rel))
     readers = find_readers(defs)
+    fstatics = {rel: file_statics(text) for rel, text in sources.items()}
     macros = {rel: {m.group(1): m.group(2) for m in
                     re.finditer(r"^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+(.+?)[ \t]*$", text, re.M)}
               for rel, text in sources.items()}
@@ -343,9 +366,9 @@ def audit(sources):
             continue                          # the helper itself, not a gate
         reads = rx_read.findall(body)
         knobs = [k for _r, k in reads]
-        if not knobs or name in NOT_A_GATE:
+        if not knobs:
             continue
-        g = find_guard(body, rx_read, readers, macros.get(rel, {}))
+        g = find_guard(body, rx_read, readers, macros.get(rel, {}), fstatics[rel])
         if g is None:
             continue                          # per-call read, not a latch
         gname, gop, gsent, unset = g
@@ -382,7 +405,7 @@ def audit(sources):
 
 
 # --self-test: one case per gate shape the audit has to read. Each knob maps
-# to (verdict, warmed), or None for a read that is not a gate.
+# to (verdict, warmed); a knob left out (Y264_SYN_LOCAL) must not read as a gate.
 SELF_TEST_SRC = r"""
 #include <stdlib.h>
 #include "env.h"
@@ -472,6 +495,27 @@ static void hot_inline(int *x)
     x[0] += v;
 }
 
+/* 12: a guard on a local is a per-call read, not a gate */
+static int g_local(int t)
+{
+    int x = t;
+    if (x < 0) { const char *s = y264_env("Y264_SYN_LOCAL"); x = s ? atoi(s) : 0; }
+    return x;
+}
+
+/* 13: a static atomic read through a local copy, never warmed */
+static int g_atomic(void)
+{
+    static _Atomic int v = -1;
+    int x = atomic_load_explicit(&v, memory_order_relaxed);
+    if (x < 0) {
+        const char *e = y264_env("Y264_SYN_ATOMIC");
+        x = e ? atoi(e) : 0;
+        atomic_store_explicit(&v, x, memory_order_relaxed);
+    }
+    return x;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -495,7 +539,7 @@ SELF_TEST_WANT = {
     "Y264_SYN_WRAP": ("latches", False), "Y264_SYN_KNR": ("latches", False),
     "Y264_SYN_TRAPH": ("TRAP", False), "Y264_SYN_COMPOUND": ("latches", False),
     "Y264_SYN_INIF": ("latches", False), "Y264_SYN_INLINE": ("latches", False),
-    "Y264_SYN_EARLY": ("latches", True),
+    "Y264_SYN_EARLY": ("latches", True), "Y264_SYN_ATOMIC": ("latches", False),
 }
 
 
