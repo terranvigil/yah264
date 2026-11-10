@@ -739,9 +739,11 @@ def audit(sources):
     macros = {rel: {m.group(1): m.group(2) for m in
                     re.finditer(r"^[ \t]*#[ \t]*define[ \t]+(\w+)[ \t]+(.+?)[ \t]*$", text, re.M)}
               for rel, text in sources.items()}
-    rows, allfuncs = [], {}
+    rows, allfuncs, fstatic = [], {}, set()
     for name, line, body, sig, rel in defs:
         allfuncs.setdefault((rel, name), []).append(body)   # #if/#else twins
+        if re.search(r"\bstatic\b", sig):
+            fstatic.add((rel, name))
         reads = env_reads(body, readers, macros.get(rel, {}))
         knobs = [k for _p, k in reads]
         if not knobs:
@@ -769,7 +771,7 @@ def audit(sources):
     def resolve(rel, name):
         if (rel, name) in allfuncs:
             return [(rel, name)]
-        return [(r, name) for r in byname.get(name, [])]
+        return [(r, name) for r in byname.get(name, []) if (r, name) not in fstatic]
     # what each file adds to a body's references: function-like macros
     # (their bodies' calls) and file-scope tables of function names
     fmacros, tables = {}, {}
@@ -832,8 +834,9 @@ def audit(sources):
                 for c in refs(fn[0], b):
                     frontier += [x for x in resolve(fn[0], c) if x not in seen]
         return seen
-    # the library's roots walk everything they reach
-    warmed = walk([(r, n) for n in WARM_ROOTS for r in byname.get(n, [])], lambda fn: True)
+    # the library's roots walk the library; a static elsewhere is out of reach
+    warmed = walk([(r, n) for n in WARM_ROOTS for r in byname.get(n, [])],
+                  lambda fn: not fn[0].startswith("cli/"))
     # the CLI resolves its own gates on the main thread before it starts the
     # GOP workers; that walk stays inside cli/, since main reaches the whole
     # library through its API table and warms none of the library's gates.
@@ -1575,6 +1578,7 @@ static void warm_lr_statics(void)
     (void)g_attr();
     (void)pickfp(0);
     dsp_init(0);
+    (void)s_priv();
     warm_twin();
     other_warm();
     LOOP(n);
@@ -1618,6 +1622,7 @@ SELF_TEST_WANT = {
     "SYN_NLPAREN": ("latches", False),
     "SYN_KFILL": ("latches", False), "SYN_KSLOT": ("latches", False),
     "SYN_KCAST": ("latches", False), "SYN_KLOCAL": ("latches", True),
+    "SYN_SPRIV": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
@@ -1636,6 +1641,12 @@ static int x_gate(void)
     return v;
 }
 void other_warm(void) { (void)x_gate(); }
+static int s_priv(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_SPRIV"); v = s ? atoi(s) : 0; }
+    return v;
+}
 #define OTHER_MAC() do { (void)g_othmac(); } while (0)
 """
 # a main outside cli/ is not a root
@@ -1711,6 +1722,13 @@ static int c_work(void)
     if (v < 0) { const char *s = y264_env("SYN_CWORK"); v = s ? atoi(s) : 0; }
     return v;
 }
+static int c_lib(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_CLIB"); v = s ? atoi(s) : 0; }
+    return v;
+}
+void cli_hook(void) { (void)c_lib(); }
 static void *worker(void *a) { (void)c_main(); (void)c_work(); return a; }
 static int c_work2(void)
 {
@@ -1740,6 +1758,7 @@ static int l_gate(void)
     return v;
 }
 void lib_encode(void) { (void)l_gate(); }
+static void warm_lr_statics(void) { cli_hook(); }
 """
 # waiver placement: in the body, above a GNU-style split signature, with no
 # reason (an error), and inside a string literal (not a waiver)
@@ -1834,7 +1853,8 @@ def self_test(inject_fail=False):
         bad.append(f"a guard should print as its source text: {mwhy}")
     lrows, _ = audit({"cli/cli.c": SELF_TEST_CLI, "src/lib.c": SELF_TEST_LIB})
     lw = {k: r["warm"] for r in lrows for k in r["knobs"]}
-    if lw != {"SYN_CMAIN": True, "SYN_CWORK": False, "SYN_LIB": False, "SYN_CWORK2": False}:
+    if lw != {"SYN_CMAIN": True, "SYN_CWORK": False, "SYN_LIB": False, "SYN_CWORK2": False,
+              "SYN_CLIB": False}:
         bad.append(f"cli: want main's gate warm, the worker's and the library's cold, got {lw}")
     wrows, _ = audit({"src/waived.c": SELF_TEST_WAIVED})
     if report(wrows, out=io.StringIO()) != 0 or not (wrows and wrows[0]["waived"]):
