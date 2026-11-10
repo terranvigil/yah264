@@ -11,9 +11,9 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | knob | default | reader |
 |---|---|---|
 | `Y264_2PASS_MT` | 1 | cli/yah264_cli.c:5831 |
-| `Y264_ABR_QCOMP` | 0.6 | src/encoder/rate.c:2655 |
+| `Y264_ABR_QCOMP` | 0.6 | src/encoder/rate.c:2654 |
 | `Y264_ABR_TOL` | = param | src/encoder/encoder.c:5099 |
-| `Y264_ABR_VBVOV` | 0.25 | src/encoder/rate.c:2676 |
+| `Y264_ABR_VBVOV` | 0.25 | src/encoder/rate.c:2675 |
 | `Y264_AQ_D8` | 1 | src/encoder/mbcode.c:311 |
 | `Y264_AQ_DARK` | 6.0 | src/encoder/mbcode.c:387 |
 | `Y264_AQ_DARK_B0` | 0.08 | src/encoder/mbcode.c:388 |
@@ -32,8 +32,8 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_B_SKIP_EXIT` | 1 | src/encoder/mbcode.c:3645 |
 | `Y264_CDC_LAM` | 64 | src/encoder/mbcode.c:3954 |
 | `Y264_CDC_RD` | 1 | src/encoder/mbcode.c:3960 |
-| `Y264_CRF_CPLX` | 1 | src/encoder/rate.c:2646 |
-| `Y264_CRF_LEVEL` | 2.3 | src/encoder/rate.c:579 |
+| `Y264_CRF_CPLX` | 1 | src/encoder/rate.c:2645 |
+| `Y264_CRF_LEVEL` | 2.3 | src/encoder/rate.c:580 |
 | `Y264_DARK_IADMIT` | 12 | src/encoder/encoder.c:4653 |
 | `Y264_DARK_SKIPLIFT` | 16 | src/encoder/encoder.c:4669 |
 | `Y264_DARK_SKIPLIFT_P` | = Y264_DARK_SKIPLIFT / 2 | src/encoder/encoder.c:4672 |
@@ -65,9 +65,9 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_TP_PBF` | 1.3 | src/encoder/encoder.c:5349 |
 | `Y264_TREL_SMOOTH_V` | 8 | src/encoder/mbcode.c:1827 |
 | `Y264_UMH_RANGE` | 16 | src/encoder/motion.c:777 |
-| `Y264_VBV_LOW` | 0.25 | src/encoder/rate.c:572 |
-| `Y264_VBV_PLAN` | 1 | src/encoder/rate.c:1243 |
-| `Y264_VBV_POSTI` | 1.0 | src/encoder/rate.c:571 |
+| `Y264_VBV_LOW` | 0.25 | src/encoder/rate.c:573 |
+| `Y264_VBV_PLAN` | 1.0 | src/encoder/rate.c:571 |
+| `Y264_VBV_POSTI` | 1.0 | src/encoder/rate.c:572 |
 | `Y264_W2` | = pool present | src/encoder/encoder.c:5861 |
 | `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:3768 |
 
@@ -138,7 +138,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 |---|---|---|
 | `Y264_BAND_PRECOMP` | 0 | src/encoder/mbcode.c:5753 |
 | `Y264_B_RECT` | 0 | src/encoder/mbcode.c:7428 |
-| `Y264_HW` | off | src/encoder/encoder.c:17109 |
+| `Y264_HW` | off | src/encoder/encoder.c:17110 |
 | `Y264_MAX_INPUT_MB` | ? | cli/yah264_cli.c:2296 |
 | `Y264_MCSTF` | ? | src/encoder/mcstf.c:56 |
 | `Y264_MCSTF_RANGE` | ? | src/encoder/mcstf.c:40 |
