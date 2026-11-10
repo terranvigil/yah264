@@ -1545,7 +1545,10 @@ static void *gop_worker(void *arg)
             j->waiting--;
         }
         if (j->abort_) { pthread_mutex_unlock(&j->lock); break; }
-        if (end > j->n_read && j->eof) end = j->n_read;  /* input ended short */
+        /* input ended short. not under the seek reader, whose n_read is the
+         * highest frame read and not a frontier: an unread GOP there is caught
+         * in the frame loop below */
+        if (end > j->n_read && j->eof && !j->seek_rd) end = j->n_read;
         pthread_mutex_unlock(&j->lock);
         if (end <= start) {                     /* nothing to code; still publish */
             pthread_mutex_lock(&j->lock);
