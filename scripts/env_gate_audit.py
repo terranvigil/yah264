@@ -517,16 +517,20 @@ def unset_of(var, region, readers, macros, envl=frozenset()):
     ternaries, a helper's default, a local, or a constant. UNASSIGNED when
     the unset path never assigns it."""
     v = re.escape(var)
-    rx = re.compile(r"\b" + v + r"(?:\[[^\]]*\])?\s*=(?!=)\s*([^;]+);"
-                    r"|atomic_store\w*\s*\(\s*&\s*" + v + r"\s*,\s*([^,()]+)")
-    hits = [m for m in rx.finditer(region) if not skipped_unset(region, m.start(), envl, readers)]
+    hits = [(m.start(), m.group(1)) for m in
+            re.finditer(r"\b" + v + r"(?:\[[^\]]*\])?\s*=(?!=)\s*([^;]+);", region)]
+    for m in re.finditer(r"atomic_store\w*\s*\(\s*&\s*" + v + r"\s*,", region):
+        args = split_args(region[m.end():])            # the stored value, whole
+        if args:
+            hits.append((m.start(), args[0]))
+    hits = sorted(h for h in hits if not skipped_unset(region, h[0], envl, readers))
     if not hits:
         return UNASSIGNED
     # the last assignment outside any nested if runs last on every path; with
     # none, the first one the unset path may reach
-    top = [m for m in hits if not under_if(region, m.start())]
-    m = top[-1] if top else hits[0]
-    return eval_unset(m.group(1) or m.group(2), region, envl, readers, macros)
+    top = [h for h in hits if not under_if(region, h[0])]
+    h = top[-1] if top else hits[0]
+    return eval_unset(h[1], region, envl, readers, macros)
 
 
 def declared(decl):
@@ -620,6 +624,7 @@ def find_guard(body, pos, readers, macros, statics):
         cmps = [(v, op, t) for v, op, t in CMP.findall(cond)]
         cmps += [(v, "==", "0") for v in NOT.findall(cond)]
         cmps += [(v, "==", "0") for v in re.findall(r"!\s*atomic_load\w*\s*\(\s*&\s*(\w+)", cond)]
+        cmps += re.findall(r"atomic_load\w*\s*\(\s*&\s*(\w+)[^()]*\)\s*(<=|>=|==|!=|<|>)\s*(\(?-?[\w.]+\)?)", cond)
         bare = re.fullmatch(r"\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*", cond)
         if bare:
             cmps.append((bare.group(1), "!=", "0"))      # if (x) return v;
@@ -1418,6 +1423,17 @@ static int g_and(void)
     return v;
 }
 
+/* 44: an atomic latch compared through atomic_load */
+static _Atomic int g_atl = -1;
+static int g_atload(void)
+{
+    if (atomic_load_explicit(&g_atl, memory_order_relaxed) < 0) {
+        const char *s = y264_env("SYN_ATLOAD");
+        atomic_store_explicit(&g_atl, s ? atoi(s) : 0, memory_order_relaxed);
+    }
+    return g_atl;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1479,6 +1495,7 @@ SELF_TEST_WANT = {
     "SYN_BRRET": ("latches", False),
     "SYN_FLT": ("latches", False), "SYN_LNG": ("latches", False),
     "SYN_BOOL2": ("latches", False), "SYN_AND": ("latches", False),
+    "SYN_ATLOAD": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
