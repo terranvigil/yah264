@@ -68,7 +68,8 @@ only the winning reference at quarter-pel.
 In order, at `--subme 8` and below:
 
 1. **Fast P-skip probe.** If the skip prediction's residual quantizes to
-   nothing, commit skip before any search. `--no-fast-pskip` turns it off.
+   nothing under the seed quantizer, commit skip before any search.
+   `--no-fast-pskip` turns it off.
 2. **16x16 search** over the active references.
 3. **Ref-0 exit** (pictures of at least 1200
    macroblocks). If the ref-0 16x16 vector lands within one quarter-pel of
@@ -92,6 +93,9 @@ In order, at `--subme 8` and below:
 7. **Intra screen.** Each I_16x16 mode is predicted and scored by SATD with
    no transform. Intra gets a full encode and an RD trial only when that cost
    is under 1.5x the inter winner's SATD (0.75x on B macroblocks).
+
+At every `--subme`, the intra trial of a CABAC P macroblock is priced with the
+CABAC rate estimate, as its inter candidates are.
 
 The transform size is also pre-decided at medium (SA8D against SATD), so only
 one size is encoded. `--subme 9` and up encode both and let RD pick.

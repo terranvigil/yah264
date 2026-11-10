@@ -124,6 +124,10 @@ OVERRIDES = {
     # a shipped constant read through rc_tunable of a #define
     "Y264_CRF_LEVEL": "default",
     "Y264_DARK_SKIPLIFT_P": "default",
+    # the threshold of an arm (Y264_P_PART_RD=2): inert at the default
+    "Y264_P_PART_RD_T": "arm",
+    # the escape of a shipped default whose name reads as a probe
+    "Y264_PROBE_TRELLIS": "arm",
 }
 
 # knobs whose nearest default-claim is correct but beyond the detector
