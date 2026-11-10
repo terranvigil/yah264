@@ -227,7 +227,7 @@ def functions(text):
 
 def as_int(s):
     try:
-        return int(s.strip().rstrip(";").strip())
+        return int(s.strip().rstrip(";").strip(), 0)
     except ValueError:
         return None
 
@@ -343,6 +343,9 @@ def num(tok, macros):
             tok = "-" + m.group(1)
             continue
         break
+    if tok in ("true", "false"):
+        return int(tok == "true")
+    tok = re.sub(r"(?<=[0-9.])[uUlLfF]+$", "", tok)    # 1.0f, 10UL
     v = as_int(tok)
     if v is None:
         try:
@@ -352,7 +355,7 @@ def num(tok, macros):
     return v
 
 
-CMP = re.compile(r"(?<![\w.>])([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*(<=|>=|==|!=|<|>)\s*(\(?-?\w+\)?)")
+CMP = re.compile(r"(?<![\w.>])([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*(<=|>=|==|!=|<|>)\s*(\(?-?[\w.]+\)?)")
 NOT = re.compile(r"!\s*([A-Za-z_]\w*)\b(?!\s*[(\[.])")
 NEG = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}
 
@@ -418,6 +421,8 @@ def eval_unset(expr, region, envl, readers, macros, depth=0):
     rd = r"(?:" + "|".join(re.escape(r) for r, (_n, d) in readers.items() if d is None) + r")\s*\([^()]*\)"
     if re.fullmatch(rd + r"\s*!=\s*NULL", e) or re.fullmatch(rd, e):
         return 0
+    if cond_unset(e, envl, readers) is not None and re.search(r"&&|\|\||==|!=|^!", e):
+        return int(cond_unset(e, envl, readers))     # 's && atoi(s)' is 0
     if re.fullmatch(rd + r"\s*==\s*NULL", e) or re.fullmatch(r"!\s*" + rd, e):
         return 1
     for r, (_ni, idx) in readers.items():
@@ -1387,6 +1392,32 @@ static int g_brret(void)
     return v;
 }
 
+/* 43: literal forms: a float suffix, a long suffix, a bool, and 's && x' */
+static float g_flt(void)
+{
+    static float v = -1.0f;
+    if (v < 0.0f) { const char *s = y264_env("SYN_FLT"); v = s ? (float)atof(s) : 0.5f; }
+    return v;
+}
+static long g_lng(void)
+{
+    static long v = -1L;
+    if (v < 0L) { const char *s = y264_env("SYN_LNG"); v = s ? atol(s) : 10UL; }
+    return v;
+}
+static int g_bool2(void)
+{
+    static int done = false, v;
+    if (!done) { const char *s = y264_env("SYN_BOOL2"); v = s ? atoi(s) : 0; done = true; }
+    return v;
+}
+static int g_and(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_AND"); v = s && atoi(s) > 0; }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1446,6 +1477,8 @@ SELF_TEST_WANT = {
     "SYN_ORDER2": ("latches", False), "SYN_OUTER2": ("latches", False),
     "SYN_IFELSE": ("TRAP", False), "SYN_IFELSE2": ("latches", False),
     "SYN_BRRET": ("latches", False),
+    "SYN_FLT": ("latches", False), "SYN_LNG": ("latches", False),
+    "SYN_BOOL2": ("latches", False), "SYN_AND": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
