@@ -37,7 +37,8 @@ and has to be hoisted into an accessor first.
 
 A gate a reviewer has judged sound can carry an 'env-audit-ok: <reason>'
 marker, in comment text only: in a comment that ends on the line directly
-above the definition (a block comment may open further up), on the
+above the definition, with no code on its lines (a block comment may open
+further up; its reason may start on the line after the marker), on the
 definition's own lines (a GNU-style 'static int' line above the name is
 one of them), or anywhere in the body. It is then listed as waived and
 doesn't count. A marker with no reason is an error and fails the run.
@@ -694,20 +695,34 @@ def waiver(text, line, body):
     read, never a string literal."""
     com = comments_only(text).split("\n")
     raw = text.split("\n")
+    code = strip_comments(text).split("\n")
     first = line - 1                          # 0-based first line of the definition
     while first > 0 and raw[first - 1].strip() and not com[first - 1].strip() \
             and not re.search(r"[;{}#]", raw[first - 1]) and "(" not in raw[first - 1]:
         first -= 1                            # a split 'static int' line
     last = line - 1 + body.count("\n")
     start = first
-    if first > 0 and com[first - 1].strip():   # the comment ending on the line above
+    # the comment ending on the line above, with no code on any of its lines
+    # (a comment after the previous function's '}' is that function's)
+    if first > 0 and com[first - 1].strip() and not code[first - 1].strip():
         start = first - 1
-        while start > 0 and "/*" not in com[start] and com[start - 1].strip():
+        while start > 0 and "/*" not in com[start] and com[start - 1].strip() \
+                and not code[start - 1].strip():
             start -= 1
-    m = WAIVER.search("\n".join(com[start:last + 1]))
+    span = "\n".join(com[start:last + 1])
+    m = WAIVER.search(span)
     if not m:
         return None
-    return m.group(1).strip() or EMPTY_WAIVER
+    reason = m.group(1).strip()
+    if not reason:
+        # a block comment whose reason starts on the next line
+        rest = span[m.end():].split("*/")[0] if "*/" in span[m.start():] else ""
+        for ln in rest.split("\n"):
+            ln = ln.strip().lstrip("*").strip()
+            if ln:
+                reason = ln
+                break
+    return reason or EMPTY_WAIVER
 
 
 RANK = {"latches": 0, "latches?": 1, "TRAP": 2}
@@ -1815,6 +1830,21 @@ w_gnu(void)
     if (v < 0) { const char *s = y264_env("SYN_WGNU"); v = s ? atoi(s) : -1; }
     return v;
 }
+/* env-audit-ok:
+   the reason on the next line */
+static int w_next(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_WNEXT"); v = s ? atoi(s) : -1; }
+    return v;
+}
+static int w_prev(void) { return 0; } /* env-audit-ok: belongs to w_prev */
+static int w_after(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_WAFTER"); v = s ? atoi(s) : -1; }
+    return v;
+}
 // env-audit-ok:
 static int w_empty(void)
 {
@@ -1901,13 +1931,15 @@ def self_test(inject_fail=False):
     vrows, _ = audit({"src/waivers.c": SELF_TEST_WAIVERS})
     wv = {k: r["waived"] for r in vrows for k in r["knobs"]}
     want_w = {"SYN_WBODY": "the body form", "SYN_WGNU": "the\n   split signature form",
-              "SYN_WEMPTY": EMPTY_WAIVER, "SYN_WSTR": None}
+              "SYN_WEMPTY": EMPTY_WAIVER, "SYN_WSTR": None,
+              "SYN_WNEXT": "the reason on the next line", "SYN_WAFTER": None}
     if {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in wv.items()} != \
             {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in want_w.items()}:
         bad.append(f"waivers read as {wv}")
     erows = [r for r in vrows if "SYN_WEMPTY" in r["knobs"]]
-    if report(erows, out=io.StringIO()) != 1:
-        bad.append("a TRAP under an empty waiver passes the run")
+    ebuf = io.StringIO()
+    if report(erows, out=ebuf) != 1 or "=== TRAP" in ebuf.getvalue():
+        bad.append("a TRAP under an empty waiver passes the run, or lists twice")
     if not inject_fail:
         # the exit status through a process: main() on a tree on disk, and
         # a failing self-test (its own path spawns nothing)
@@ -1942,9 +1974,9 @@ def self_test(inject_fail=False):
 def report(rows, show_all=False, out=sys.stdout):
     """Print the verdicts; the exit status, nonzero on any TRAP, COLD or
     undetermined gate."""
-    live = [r for r in rows if not r.get("waived") or r["waived"] == EMPTY_WAIVER]
+    live = [r for r in rows if not r.get("waived")]
     waived = [r for r in rows if r.get("waived") and r["waived"] != EMPTY_WAIVER]
-    badw = [r for r in rows if r.get("waived") == EMPTY_WAIVER]
+    badw = [r for r in rows if r.get("waived") == EMPTY_WAIVER]   # listed once, there
     traps = [r for r in live if r["verdict"] == "TRAP"]
     cold = [r for r in live if not r["warm"] and r["verdict"] != "TRAP"]
     und = [r for r in live if r["verdict"] == "latches?"]
@@ -1964,7 +1996,7 @@ def report(rows, show_all=False, out=sys.stdout):
             mark = "" if r["warm"] else "  [cold]"
             print(f"  {r['file']}:{r['line']}  {r['name']}  {','.join(r['knobs'])}{mark}", file=out)
             if r.get("waived") == EMPTY_WAIVER:
-                print("      a waiver needs a reason after 'env-audit-ok:'", file=out)
+                print(f"      {r['verdict']}; a waiver needs a reason after 'env-audit-ok:'", file=out)
             elif r.get("waived"):
                 print(f"      {r['verdict']}, waived: {r['waived']}", file=out)
             elif r["verdict"] in ("TRAP", "latches?"):

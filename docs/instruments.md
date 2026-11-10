@@ -179,8 +179,9 @@ at all. In anything a warm touches, use read-compare-write instead of a plain
 store. `make test` and both CI jobs run `env_gate_audit.py --self-test` and
 then the audit. A gate it misjudges can carry an `env-audit-ok: <reason>`
 marker and is then listed as waived. The marker is read in comment text only:
-in a comment that ends on the line directly above the definition (a block
-comment may open further up), on the definition's own lines (a GNU-style
+in a comment that ends on the line directly above the definition, with no code
+on its lines (a block comment may open further up, and its reason may start on
+the line after the marker), on the definition's own lines (a GNU-style
 `static int` line above the name counts), or anywhere in the body. A marker
 with no reason is an error. It also refuses a lazy gate in a header,
 where every including file has its own static. Its known limits, read wrongly
