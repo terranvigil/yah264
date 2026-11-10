@@ -405,7 +405,7 @@ def audit(sources):
 
 
 # --self-test: one case per gate shape the audit has to read. Each knob maps
-# to (verdict, warmed); a knob left out (Y264_SYN_LOCAL) must not read as a gate.
+# to (verdict, warmed); a knob left out (SYN_LOCAL) must not read as a gate.
 SELF_TEST_SRC = r"""
 #include <stdlib.h>
 #include "env.h"
@@ -415,14 +415,14 @@ static int env_int(const char *name, int dflt)
     return e ? atoi(e) : dflt;
 }
 /* 1: gate through a helper, never warmed */
-static int g_helper(void) { static int v = -1; if (v < 0) v = env_int("Y264_SYN_HELPER", 0); return v; }
+static int g_helper(void) { static int v = -1; if (v < 0) v = env_int("SYN_HELPER", 0); return v; }
 
 /* 2: macro sentinel, never warmed */
 #define UNSET (-1000)
 static int g_macro(void)
 {
     static int v = UNSET;
-    if (v == UNSET) { const char *s = y264_env("Y264_SYN_MACRO"); v = s ? atoi(s) : 0; }
+    if (v == UNSET) { const char *s = y264_env("SYN_MACRO"); v = s ? atoi(s) : 0; }
     return v;
 }
 
@@ -430,7 +430,7 @@ static int g_macro(void)
 static int g_comment(void)          /* warmed somewhere */
 {
     static int v = -1;
-    if (v < 0) { const char *s = y264_env("Y264_SYN_COMMENT"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = y264_env("SYN_COMMENT"); v = s ? atoi(s) : 0; }
     return v;
 }
 
@@ -438,7 +438,7 @@ static int g_comment(void)          /* warmed somewhere */
 static int g_bool(void)
 {
     static int done, v;
-    if (!done) { const char *s = y264_env("Y264_SYN_BOOL"); v = s ? atoi(s) : 0; done = 1; }
+    if (!done) { const char *s = y264_env("SYN_BOOL"); v = s ? atoi(s) : 0; done = 1; }
     return v;
 }
 
@@ -447,14 +447,14 @@ static int g_wrapped(int a,
                      int b)
 {
     static int v = -1;
-    if (v < 0) { const char *s = y264_env("Y264_SYN_WRAP"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = y264_env("SYN_WRAP"); v = s ? atoi(s) : 0; }
     return v + a + b;
 }
 
 /* 6: brace on the signature line, never warmed */
 static int g_knr(void) {
     static int v = -1;
-    if (v < 0) { const char *s = y264_env("Y264_SYN_KNR"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = y264_env("SYN_KNR"); v = s ? atoi(s) : 0; }
     return v;
 }
 
@@ -462,7 +462,7 @@ static int g_knr(void) {
 static int g_trap_helper(void)
 {
     static int v = -1;
-    if (v < 0) v = env_int("Y264_SYN_TRAPH", -2);
+    if (v < 0) v = env_int("SYN_TRAPH", -2);
     return v;
 }
 
@@ -470,7 +470,7 @@ static int g_trap_helper(void)
 static int g_compound(int on)
 {
     static int v = -1;
-    if (v < 0 && on) { const char *s = y264_env("Y264_SYN_COMPOUND"); v = s ? atoi(s) : 0; }
+    if (v < 0 && on) { const char *s = y264_env("SYN_COMPOUND"); v = s ? atoi(s) : 0; }
     return v;
 }
 
@@ -478,7 +478,7 @@ static int g_compound(int on)
 static int g_cold_inif(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = y264_env("Y264_SYN_INIF"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = y264_env("SYN_INIF"); v = s ? atoi(s) : 0; }
     return v;
 }
 static void hot_worker(int *x,
@@ -491,7 +491,7 @@ static void hot_worker(int *x,
 static void hot_inline(int *x)
 {
     static int v = -1;
-    if (v < 0) { const char *s = y264_env("Y264_SYN_INLINE"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = y264_env("SYN_INLINE"); v = s ? atoi(s) : 0; }
     x[0] += v;
 }
 
@@ -499,7 +499,7 @@ static void hot_inline(int *x)
 static int g_local(int t)
 {
     int x = t;
-    if (x < 0) { const char *s = y264_env("Y264_SYN_LOCAL"); x = s ? atoi(s) : 0; }
+    if (x < 0) { const char *s = y264_env("SYN_LOCAL"); x = s ? atoi(s) : 0; }
     return x;
 }
 
@@ -509,7 +509,7 @@ static int g_atomic(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = y264_env("Y264_SYN_ATOMIC");
+        const char *e = y264_env("SYN_ATOMIC");
         x = e ? atoi(e) : 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
     }
@@ -522,7 +522,7 @@ static void g_early(void)
 {
     if (g_early_n != -2) return;
     g_early_n = -1;
-    const char *p = y264_env("Y264_SYN_EARLY");
+    const char *p = y264_env("SYN_EARLY");
     if (p) g_early_n = atoi(p);
 }
 
@@ -534,12 +534,12 @@ static void warm_lr_statics(void)
 }
 """
 SELF_TEST_WANT = {
-    "Y264_SYN_HELPER": ("latches", False), "Y264_SYN_MACRO": ("latches", False),
-    "Y264_SYN_COMMENT": ("latches", False), "Y264_SYN_BOOL": ("latches", False),
-    "Y264_SYN_WRAP": ("latches", False), "Y264_SYN_KNR": ("latches", False),
-    "Y264_SYN_TRAPH": ("TRAP", False), "Y264_SYN_COMPOUND": ("latches", False),
-    "Y264_SYN_INIF": ("latches", False), "Y264_SYN_INLINE": ("latches", False),
-    "Y264_SYN_EARLY": ("latches", True), "Y264_SYN_ATOMIC": ("latches", False),
+    "SYN_HELPER": ("latches", False), "SYN_MACRO": ("latches", False),
+    "SYN_COMMENT": ("latches", False), "SYN_BOOL": ("latches", False),
+    "SYN_WRAP": ("latches", False), "SYN_KNR": ("latches", False),
+    "SYN_TRAPH": ("TRAP", False), "SYN_COMPOUND": ("latches", False),
+    "SYN_INIF": ("latches", False), "SYN_INLINE": ("latches", False),
+    "SYN_EARLY": ("latches", True), "SYN_ATOMIC": ("latches", False),
 }
 
 
