@@ -640,6 +640,10 @@ def audit(sources):
         if not verdicts:
             continue                          # per-call reads, not a latch
         v, why = max(verdicts, key=lambda x: RANK[x[0]])
+        if rel.endswith(".h"):
+            v, why = "TRAP", ("a lazy gate in a header is a separate static in every "
+                              "file that includes it, each resolved on its own first "
+                              "touch; move it into one .c file")
         rows.append(dict(file=rel, line=line, name=name, knobs=knobs,
                          verdict=v, why=why, waived=waiver(sources[rel], line, body)))
 
@@ -1112,7 +1116,7 @@ SELF_TEST_WANT = {
     "SYN_SECOND": ("latches", False), "SYN_GT": ("latches", False),
     "SYN_ORDER": ("latches", False), "SYN_ATTR": ("latches", False),
     "SYN_ARRDEF": ("latches", False), "SYN_REREAD": ("TRAP", False),
-    "SYN_STR": ("latches", False), "SYN_HDR": ("latches", False),
+    "SYN_STR": ("latches", False), "SYN_HDR": ("TRAP", False),
     "SYN_PICK": ("TRAP", False), "SYN_DEFNAME": ("latches", False),
     "SYN_NOTE": ("TRAP", False), "SYN_AFLAG": ("latches", False),
     "SYN_VIA": ("latches", False), "SYN_TWIN": ("latches", True),
@@ -1123,7 +1127,7 @@ SELF_TEST_WANT = {
     "SYN_IF0": ("latches", False), "SYN_STRCALL": ("latches", False),
     "SYN_TABBED": ("latches", True), "SYN_MACROED": ("latches", True),
 }
-# a header's static inline gate, read from its own file
+# a header's static inline gate: refused, since each file has its own copy
 SELF_TEST_HDR = r"""
 static inline int h_gate(void)
 {
