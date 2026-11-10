@@ -67,6 +67,9 @@ IDENT  = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 # words that open a statement, never a function definition
 KEYWORDS = {"if", "else", "while", "for", "do", "switch", "case", "return",
             "sizeof", "typedef", "struct", "union", "enum", "goto", "default"}
+# type words a '(' can follow in a declarator ('int (*f(void))(int)')
+TYPE_WORDS = {"void", "char", "short", "int", "long", "float", "double", "signed",
+              "unsigned", "const", "volatile", "static", "inline", "extern"}
 # words that take parentheses in a declaration without naming it
 DECL_WORDS = {"__attribute__", "__declspec", "_Alignas", "alignas", "__typeof__",
               "typeof", "_Atomic"}
@@ -164,8 +167,7 @@ def functions(text):
         m = re.match(r"[ \t]*([A-Za-z_]\w*)", ln)
         indented = bool(ln[:1].isspace())
         if not m or m.group(1) in KEYWORDS or "(" not in ln or \
-                (indented and top[i] != 0) or \
-                ("=" in ln and ln.index("=") < ln.index("(")):
+                (indented and top[i] != 0):
             i += 1
             continue
         # join the signature until its parentheses balance
@@ -185,9 +187,6 @@ def functions(text):
             sig += struct[j] + "\n"
             j += 1
         if after is None:
-            i += 1
-            continue
-        if after.lstrip().startswith("("):    # a function-pointer declarator
             i += 1
             continue
         if ";" in after.split("{")[0]:
@@ -211,7 +210,7 @@ def functions(text):
             if started and depth <= 0 and e >= k:
                 break
             e += 1
-        names = [x for x in IDENT.findall(sig) if x not in DECL_WORDS]
+        names = [x for x in IDENT.findall(sig) if x not in DECL_WORDS and x not in TYPE_WORDS]
         if names:
             yield names[0], i + 1, "\n".join(lines[i:e + 1]), sig
         i = e + 1
