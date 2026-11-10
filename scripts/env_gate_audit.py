@@ -178,7 +178,8 @@ def functions(text):
         ln = struct[i]
         m = re.match(r"[ \t]*([A-Za-z_]\w*)", ln)
         indented = bool(ln[:1].isspace())
-        if not m or m.group(1) in KEYWORDS or "(" not in ln or \
+        opens = "(" in ln or (i + 1 < len(struct) and struct[i + 1].lstrip().startswith("("))
+        if not m or m.group(1) in KEYWORDS or not opens or \
                 (indented and top[i] != 0):
             i += 1
             continue
@@ -1486,6 +1487,15 @@ static int g_elseonly(void)
     return v;
 }
 
+/* 48: a name whose parameter list opens on the next line */
+static int g_nlparen
+(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_NLPAREN"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
 /* 47: a gate whose name is also a struct field a warm root writes */
 static int g_fld(void)
 {
@@ -1560,6 +1570,7 @@ SELF_TEST_WANT = {
     "SYN_UNMAC": ("latches", False), "SYN_OTHMAC": ("latches", False),
     "SYN_CONDS": ("latches", False), "SYN_COND2": ("latches", False),
     "SYN_ELSEONLY": ("TRAP", False), "SYN_FLD": ("latches", False),
+    "SYN_NLPAREN": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
