@@ -9811,6 +9811,7 @@ static int lr_me_stage(void)
 
 static void warm_lr_statics(void)
 {
+    y264_cabac_warm();          /* the CABAC tables and the trace's env gate */
     (void)gpq_consume_on();
     (void)lr_me_stage(); (void)adme_log();
     (void)psy_flat_log();

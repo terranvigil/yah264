@@ -42,7 +42,7 @@ static void tr_close(void) { if (tr_f) { fclose(tr_f); tr_f = NULL; } }
 /* Re-selected on every engine init: each slice's engine is a different stack
  * object, and every init_engine call site is a real slice engine (RD trials
  * reuse the live engine in est mode, which is not recorded). Single thread. */
-static void tr_select(const y264_cabac_t *c)
+static void tr_open(void)
 {
     static int tried;
     if (!tried) {
@@ -50,6 +50,10 @@ static void tr_select(const y264_cabac_t *c)
         const char *path = y264_env("Y264_CABAC_TRACE");
         if (path && *path && (tr_f = fopen(path, "wb"))) atexit(tr_close);
     }
+}
+static void tr_select(const y264_cabac_t *c)
+{
+    tr_open();
     if (tr_f) tr_c = c;
 }
 static inline void tr_put(const y264_cabac_t *c, int n, const int32_t *v)
@@ -868,7 +872,13 @@ static inline void ent_ensure(void)
     if (!atomic_load_explicit(&ent_ready, memory_order_acquire))
         pthread_once(&ent_once, ent_init);
 }
-void y264_cabac_warm(void) { ent_ensure(); }
+void y264_cabac_warm(void)
+{
+    ent_ensure();
+#ifdef Y264_CABAC_TRACE
+    tr_open();                  /* resolve the trace's env gate on the opening thread */
+#endif
+}
 
 /* Estimated bits (x256) to code `bin` with packed context state `st`, and the
  * state after coding it (mirrors y264_cabac_encode_decision's transition). */
