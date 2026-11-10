@@ -843,8 +843,13 @@ def audit(sources):
     for rel, text in sources.items():
         code = blank_strings(strip_comments(text))
         for m in re.finditer(r"\b(?:pthread_create|ntp_\w+)\s*\(", code):
+            pre = code[code.rfind("\n", 0, m.start()) + 1:m.start()]
+            if re.fullmatch(r"\s*(?:[A-Za-z_]\w*[\s*]+)+", pre):
+                continue                     # a definition or prototype, not a call
             for a in split_args(code[m.end():]):
-                entries.update(x for x in re.findall(r"[A-Za-z_]\w*", a) if x in byname)
+                for x in re.finditer(r"(->|\.)?\s*\b([A-Za-z_]\w*)\b(\s*\()?", a):
+                    if not x.group(1) and not x.group(3) and x.group(2) in byname:
+                        entries.add(x.group(2))     # a name passed, not called or a member
     def walk(frontier, keep):
         roots = set(frontier)
         seen = set()
@@ -1600,6 +1605,31 @@ static int g_octtrap(void)
     return v;
 }
 
+/* 51: pool entries: a function passed to an ntp_* call is an entry (both
+   arms of a ternary), one called inside the arguments is not, and a
+   prototype's parameters aren't arguments */
+static int e_called(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_ECALLED"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int e_job(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_EJOB"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static void *job_a(void *a) { (void)e_job(); return a; }
+static void *job_b(void *a) { return a; }
+void ntp_pool_run(struct st *p, void *(*fn)(void *), int e_called);
+static void pool_go(struct st *p, int w)
+{
+    void *(*f)(void *) = job_a;
+    ntp_pool_run(p, w ? job_a : job_b, e_called());
+    (void)f;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1628,6 +1658,7 @@ static void warm_lr_statics(void)
     (void)pickfp(0);
     dsp_init(0);
     (void)s_priv();
+    pool_go(0, 0);
     warm_twin();
     other_warm();
     LOOP(n);
@@ -1674,6 +1705,7 @@ SELF_TEST_WANT = {
     "SYN_SPRIV": ("latches", False),
     "SYN_HEX": ("TRAP", False), "SYN_HEXU": ("latches", False),
     "SYN_OCT": ("latches", False), "SYN_OCTT": ("TRAP", False),
+    "SYN_ECALLED": ("latches", True), "SYN_EJOB": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
