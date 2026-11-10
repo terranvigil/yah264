@@ -171,46 +171,114 @@ def satisfies(val, op, sent):
             "==": val == sent, "!=": val != sent}.get(op)
 
 
-def main():
-    files = sorted(subprocess.run(["grep", "-rlE", r"y264_env|getenv", str(ROOT / "src")],
-                                  capture_output=True, text=True).stdout.split())
-    rows, allfuncs = [], {}
-    for f in files:
-        text = pathlib.Path(f).read_text()
-        rel = str(pathlib.Path(f).relative_to(ROOT))
-        for name, line, body, _sig in functions(text):
-            allfuncs.setdefault(name, []).append(body)
-            knobs = KNOB.findall(body)
-            if not knobs or name in NOT_A_GATE:
+def params_of(sig):
+    """The parameter names of a joined signature, in order."""
+    inner = sig[sig.index("(") + 1:sig.rindex(")")]
+    out = []
+    for part in inner.split(","):
+        ids = re.findall(r"[A-Za-z_]\w*", part.split("[")[0])
+        if ids and ids[-1] != "void":
+            out.append(ids[-1])
+    return out
+
+
+def find_readers(defs):
+    """Every function that reads the environment by name: y264_env and getenv,
+    and any function that hands one of its own parameters to a reader
+    (env_int, rc_tunable, env_f). Maps the name to the index of the argument
+    a caller's unset value sits in (the second), or None for the base two."""
+    readers = {"y264_env": None, "getenv": None}
+    changed = True
+    while changed:
+        changed = False
+        for name, _line, body, sig, _rel in defs:
+            if name in readers:
                 continue
-            guards = GUARD.findall(body)
-            if not guards:
-                continue                      # per-call read, not a latch
-            gname, gop, gsent = guards[0]
-            gsent = int(gsent)
-
-            unset = None
-            for tn, _set, tunset in TERN.findall(body):
-                if tn == gname:
-                    unset = as_int(tunset)
+            ps = params_of(sig)
+            for r in list(readers):
+                m = re.search(r"\b" + r + r"\s*\(\s*(\w+)\s*[,)]", body)
+                if m and m.group(1) in ps:
+                    readers[name] = 1 if len(ps) > 1 else None
+                    changed = True
                     break
-            if unset is None:
-                # the resolve branch's default array, e.g. int p[3] = { 75, .. }
-                stripped = re.sub(r"static\s+[^;]*;", "", body)
-                for _an, vals in ARRDEF.findall(stripped):
-                    unset = as_int(vals.split(",")[0])
-                    if unset is not None:
-                        break
+    return readers
 
-            if unset is None:
-                v, why = "latches?", f"guard `{gname} {gop} {gsent}`, unset value not statically readable"
-            elif satisfies(unset, gop, gsent):
-                v, why = "TRAP", (f"unset resolves {gname}={unset}, which still satisfies "
-                                  f"`{gname} {gop} {gsent}` -> rewrites its static every call")
-            else:
-                v, why = "latches", f"unset {gname}={unset} clears `{gname} {gop} {gsent}`"
-            rows.append(dict(file=rel, line=line, name=name, knobs=knobs,
-                             verdict=v, why=why))
+
+def split_args(text):
+    """Top-level comma split of a call's argument text (up to its ')')."""
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur.strip()); cur = ""
+            continue
+        cur += ch
+    out.append(cur.strip())
+    return out
+
+
+def audit(sources):
+    """sources: {relative path: text}. Returns (gate rows, {function: [bodies]})."""
+    defs = []
+    for rel, text in sorted(sources.items()):
+        for name, line, body, sig in functions(text):
+            defs.append((name, line, body, sig, rel))
+    readers = find_readers(defs)
+    rx_read = re.compile(r"\b(" + "|".join(map(re.escape, readers)) + r')\s*\(\s*"([^"]+)"')
+    rows, allfuncs = [], {}
+    for name, line, body, sig, rel in defs:
+        allfuncs.setdefault(name, []).append(body)
+        if name in readers and readers[name] is not None:
+            continue                          # the helper itself, not a gate
+        reads = rx_read.findall(body)
+        knobs = [k for _r, k in reads]
+        if not knobs or name in NOT_A_GATE:
+            continue
+        guards = GUARD.findall(body)
+        if not guards:
+            continue                          # per-call read, not a latch
+        gname, gop, gsent = guards[0]
+        gsent = int(gsent)
+
+        unset = None
+        for tn, _set, tunset in TERN.findall(body):
+            if tn == gname:
+                unset = as_int(tunset)
+                break
+        if unset is None:
+            # a helper's default: v = env_int("Y264_X", D)
+            for r, idx in readers.items():
+                if idx is None:
+                    continue
+                m = re.search(r"\b" + re.escape(gname) + r"(?:\[[^\]]*\])?\s*=\s*(?:\(\w+\)\s*)?"
+                              + r + r"\s*\(", body)
+                if m:
+                    args = split_args(body[m.end():])
+                    if len(args) > idx:
+                        unset = as_int(args[idx])
+                    break
+        if unset is None:
+            # the resolve branch's default array, e.g. int p[3] = { 75, .. }
+            stripped = re.sub(r"static\s+[^;]*;", "", body)
+            for _an, vals in ARRDEF.findall(stripped):
+                unset = as_int(vals.split(",")[0])
+                if unset is not None:
+                    break
+
+        if unset is None:
+            v, why = "latches?", f"guard `{gname} {gop} {gsent}`, unset value not statically readable"
+        elif satisfies(unset, gop, gsent):
+            v, why = "TRAP", (f"unset resolves {gname}={unset}, which still satisfies "
+                              f"`{gname} {gop} {gsent}` -> rewrites its static every call")
+        else:
+            v, why = "latches", f"unset {gname}={unset} clears `{gname} {gop} {gsent}`"
+        rows.append(dict(file=rel, line=line, name=name, knobs=knobs,
+                         verdict=v, why=why))
 
     warmed, frontier = set(), list(WARM_ROOTS)
     while frontier:
@@ -222,6 +290,14 @@ def main():
             frontier += [c for c in CALL.findall(b) if c in allfuncs and c not in warmed]
     for r in rows:
         r["warm"] = r["name"] in warmed
+
+    return rows, allfuncs
+
+
+def main():
+    files = sorted(str(p) for p in (ROOT / "src").rglob("*.[ch]"))
+    sources = {str(pathlib.Path(f).relative_to(ROOT)): pathlib.Path(f).read_text() for f in files}
+    rows, _allfuncs = audit(sources)
 
     if "--json" in sys.argv:
         json.dump(rows, open(sys.argv[sys.argv.index("--json") + 1], "w"), indent=1)
