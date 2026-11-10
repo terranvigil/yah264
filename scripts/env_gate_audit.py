@@ -292,16 +292,36 @@ def declared(decl):
 def file_statics(text):
     """Names declared at file scope as static or atomic."""
     out = set()
-    for m in re.finditer(r"^(?:static|_Atomic|atomic_\w+)\b([^;(]*?(?:=[^;]*)?);", strip_comments(text), re.M):
-        out.update(declared(m.group(1)))
+    text = strip_comments(text)
+    for m in re.finditer(r"^(?:static|_Atomic|atomic_\w+)\b", text, re.M):
+        d = decl_at(text, m.end())
+        if "(" not in d.split("=")[0]:         # a variable, not a function
+            out.update(declared(d))
     return out
+
+
+def decl_at(text, start):
+    """The declaration text from `start` to its ';', a brace initialiser
+    (`= { -1, -1 }`) skipped whole."""
+    i, depth = start, 0
+    while i < len(text):
+        ch = text[i]
+        if ch in "({[":
+            depth += 1
+        elif ch in ")}]":
+            depth -= 1
+        elif ch == ";" and depth <= 0:
+            return text[start:i]
+        i += 1
+    return text[start:]
 
 
 def body_statics(body):
     """Names a body declares static, plus locals loaded from a static atomic."""
     out = set()
-    for m in re.finditer(r"\bstatic\b([^;{]*);", body[body.find("{") + 1:]):
-        out.update(declared(m.group(1)))
+    inner = body[body.find("{") + 1:]
+    for m in re.finditer(r"\bstatic\b", inner):
+        out.update(declared(decl_at(inner, m.end())))
     return out
 
 
@@ -516,6 +536,17 @@ static int g_atomic(void)
     return x;
 }
 
+/* 14: an array latch with a brace initialiser, never warmed */
+static double g_arr(int which)
+{
+    static double v[3] = { -1.0, -1.0, -1.0 };
+    if (v[0] < 0) {
+        const char *s = y264_env("SYN_ARR");
+        v[0] = s ? atof(s) : 6.0; v[1] = 1.0; v[2] = 2.0;
+    }
+    return v[which];
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -540,6 +571,7 @@ SELF_TEST_WANT = {
     "SYN_TRAPH": ("TRAP", False), "SYN_COMPOUND": ("latches", False),
     "SYN_INIF": ("latches", False), "SYN_INLINE": ("latches", False),
     "SYN_EARLY": ("latches", True), "SYN_ATOMIC": ("latches", False),
+    "SYN_ARR": ("latches", False),
 }
 
 
