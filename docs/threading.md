@@ -146,8 +146,9 @@ clip, so title length doesn't limit what can be encoded.
   needs reference counting.
 - **File input uses the seek reader.** A Y4M frame is a fixed-size record, so
   the reader takes the frame count from the file length and checks every frame
-  header against the first, failing loudly on a mismatch. The GOP table and the
-  whole schedule are known before the first pixel read. The reader keeps each
+  header against the first, failing loudly on a mismatch. The GOP table is
+  known before the first read. The reader reads in display order until the
+  schedule is published, then follows the schedule's order. It keeps each
   GOP in flight at most 16 frames ahead of its worker, so the store is about `(GOPs in flight + 1) x 16`
   frames whatever the length: 272 frames (0.6 GiB) on a ten-minute 1920x818
   title at default threads.
