@@ -48,7 +48,6 @@ NOT_A_GATE = {
     "encoder_open_sw", "stair_drain", "rcr_open_env",
 }
 
-FUNC   = re.compile(r"^(?:static\s+)?[A-Za-z_][\w \t*]*?\b(\w+)\s*\([^;]*?\)\s*$", re.M)
 # the env read: y264_env (src/common/env.h), or a bare getenv
 ENVREAD = r"(?:y264_env|getenv)"
 KNOB   = re.compile(ENVREAD + r'\s*\(\s*"([^"]+)"')
@@ -56,36 +55,108 @@ GUARD  = re.compile(r"if\s*\(\s*(\w+)(?:\[\d+\])?\s*(<|<=|==|!=)\s*(-?\d+)\s*\)"
 TERN   = re.compile(r"(\w+)(?:\[\d+\])?\s*=\s*\w+\s*\?\s*(.+?)\s*:\s*(.+?)\s*;", re.S)
 ARRDEF = re.compile(r"\bint\s+(\w+)\[\d+\]\s*=\s*\{([^}]*)\}")
 CALL   = re.compile(r"\b(\w+)\s*\(")
+IDENT  = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+# words that open a statement, never a function definition
+KEYWORDS = {"if", "else", "while", "for", "do", "switch", "case", "return",
+            "sizeof", "typedef", "struct", "union", "enum", "goto", "default"}
+# words that take parentheses in a declaration without naming it
+DECL_WORDS = {"__attribute__", "__declspec", "_Alignas", "alignas", "__typeof__",
+              "typeof", "_Atomic"}
+
+
+def strip_comments(text):
+    """The text with every comment blanked to spaces, newlines kept, so line
+    numbers and columns survive. String and character literals are kept."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(re.sub(r"[^\n]", " ", text[i:j]))
+            i = j
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+        elif c in "\"'":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def functions(text):
-    """(name, line, body) for every function defined at column 0.
+    """(name, line, body, signature) for every function defined at column 0.
 
-    Brace-counted; a body written on one line is matched by the `{ ... }`
-    check, since several gates are written that way.
+    The signature may wrap: lines are joined until its parentheses balance.
+    The body's opening brace may sit on the signature's last line or on its
+    own line, and a whole definition may sit on one line. Comments are
+    blanked first, so a trailing comment never hides a signature. A line that
+    opens with a statement keyword is never a signature.
     """
-    lines = text.split("\n")
+    lines = strip_comments(text).split("\n")
     i = 0
     while i < len(lines):
-        m = FUNC.match(lines[i])
-        if m and i + 1 < len(lines) and lines[i + 1].strip() == "{":
-            depth, j, started = 0, i + 1, False
-            while j < len(lines):
-                depth += lines[j].count("{") - lines[j].count("}")
-                if lines[j].count("{"):
-                    started = True
-                if started and depth <= 0:
-                    break
-                j += 1
-            yield m.group(1), i + 1, "\n".join(lines[i:j + 1])
-            i = j + 1
+        ln = lines[i]
+        m = re.match(r"[A-Za-z_]\w*", ln)
+        if not m or m.group(0) in KEYWORDS or "(" not in ln or \
+                ("=" in ln and ln.index("=") < ln.index("(")):
+            i += 1
             continue
-        # one-liner: `void f(void) { ... }`
-        if m is None and "{" in lines[i] and "}" in lines[i]:
-            m2 = re.match(r"^(?:static\s+)?[\w ]+?\b(\w+)\s*\([^;]*?\)\s*\{", lines[i])
-            if m2:
-                yield m2.group(1), i + 1, lines[i]
-        i += 1
+        # join the signature until its parentheses balance
+        sig, j, depth, seen, after = "", i, 0, False, None
+        while j < len(lines) and j < i + 12:
+            for c, ch in enumerate(lines[j]):
+                if ch == "(":
+                    depth += 1; seen = True
+                elif ch == ")":
+                    depth -= 1
+                    if seen and depth == 0:
+                        sig += lines[j][:c + 1]
+                        after = lines[j][c + 1:]
+                        break
+            if after is not None:
+                break
+            sig += lines[j] + "\n"
+            j += 1
+        if after is None:
+            i += 1
+            continue
+        if after.lstrip().startswith("("):    # a function-pointer declarator
+            i += 1
+            continue
+        if ";" in after.split("{")[0]:
+            i = j + 1                         # a prototype or a declaration
+            continue
+        k = j
+        if "{" not in after:
+            k = j + 1
+            while k < len(lines) and not lines[k].strip():
+                k += 1
+            if k >= len(lines) or not lines[k].lstrip().startswith("{"):
+                i += 1
+                continue
+        # brace-count the body from the definition's first line
+        depth, e, started = 0, i, False
+        while e < len(lines):
+            seg = lines[e] if e != i else lines[e]
+            depth += seg.count("{") - seg.count("}")
+            if seg.count("{"):
+                started = True
+            if started and depth <= 0 and e >= k:
+                break
+            e += 1
+        names = [x for x in IDENT.findall(sig) if x not in DECL_WORDS and x not in KEYWORDS]
+        if names:
+            yield names[0], i + 1, "\n".join(lines[i:e + 1]), sig
+        i = e + 1
 
 
 def as_int(s):
@@ -107,7 +178,7 @@ def main():
     for f in files:
         text = pathlib.Path(f).read_text()
         rel = str(pathlib.Path(f).relative_to(ROOT))
-        for name, line, body in functions(text):
+        for name, line, body, _sig in functions(text):
             allfuncs.setdefault(name, []).append(body)
             knobs = KNOB.findall(body)
             if not knobs or name in NOT_A_GATE:
