@@ -718,20 +718,26 @@ def audit(sources):
                 out.add(t)
                 out |= tables.get(rel, {}).get(t, set())
         return out
-    warmed = set()
-    frontier = [(r, n) for n in WARM_ROOTS for r in byname.get(n, [])]
-    # the CLI resolves its gates on the main thread before it starts the
-    # GOP workers; a thread's entry is only ever a call argument, never
-    # followed, so what runs only on a worker stays cold
-    frontier += [(r, n) for r, n in allfuncs if n == "main" and r.startswith("cli/")]
-    while frontier:
-        fn = frontier.pop()
-        if fn in warmed:
-            continue
-        warmed.add(fn)
-        for b in allfuncs[fn]:
-            for c in refs(fn[0], b):
-                frontier += [x for x in resolve(fn[0], c) if x not in warmed]
+    def walk(frontier, keep):
+        seen = set()
+        while frontier:
+            fn = frontier.pop()
+            if fn in seen or not keep(fn):
+                continue
+            seen.add(fn)
+            for b in allfuncs[fn]:
+                for c in refs(fn[0], b):
+                    frontier += [x for x in resolve(fn[0], c) if x not in seen]
+        return seen
+    # the library's roots walk everything they reach
+    warmed = walk([(r, n) for n in WARM_ROOTS for r in byname.get(n, [])], lambda fn: True)
+    # the CLI resolves its own gates on the main thread before it starts the
+    # GOP workers; that walk stays inside cli/, since main reaches the whole
+    # library through its API table and warms none of the library's gates.
+    # A thread's entry is only ever a call argument, never followed, so what
+    # runs only on a worker stays cold
+    warmed |= walk([(r, n) for r, n in allfuncs if n == "main" and r.startswith("cli/")],
+                   lambda fn: fn[0].startswith("cli/"))
     for r in rows:
         r["warm"] = (r["file"], r["name"]) in warmed
 
@@ -1429,9 +1435,20 @@ int main(void)
 {
     pthread_t t;
     (void)c_main();
+    lib_encode();
     pthread_create(&t, NULL, worker, NULL);
     return 0;
 }
+"""
+# the library the CLI calls into: main's walk must not warm its gate
+SELF_TEST_LIB = r"""
+static int l_gate(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_LIB"); v = s ? atoi(s) : 0; }
+    return v;
+}
+void lib_encode(void) { (void)l_gate(); }
 """
 # a clean tree: one latch, warmed
 SELF_TEST_CLEAN = r"""
@@ -1490,10 +1507,10 @@ def self_test(inject_fail=False):
     mwhy = [r["why"] for r in rows if "SYN_MACRO" in r["knobs"]]
     if not mwhy or "v == UNSET" not in mwhy[0] or any("None" in r["why"] for r in rows):
         bad.append(f"a guard should print as its source text: {mwhy}")
-    lrows, _ = audit({"cli/cli.c": SELF_TEST_CLI})
+    lrows, _ = audit({"cli/cli.c": SELF_TEST_CLI, "src/lib.c": SELF_TEST_LIB})
     lw = {k: r["warm"] for r in lrows for k in r["knobs"]}
-    if lw != {"SYN_CMAIN": True, "SYN_CWORK": False}:
-        bad.append(f"cli: want main's gate warm and the worker's cold, got {lw}")
+    if lw != {"SYN_CMAIN": True, "SYN_CWORK": False, "SYN_LIB": False}:
+        bad.append(f"cli: want main's gate warm, the worker's and the library's cold, got {lw}")
     wrows, _ = audit({"src/waived.c": SELF_TEST_WAIVED})
     if report(wrows, out=io.StringIO()) != 0 or not (wrows and wrows[0]["waived"]):
         bad.append("a waived TRAP still fails the tree, or isn't marked waived")
