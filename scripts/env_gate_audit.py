@@ -1035,6 +1035,26 @@ static int g_c(void)
     return v;
 }
 """
+# a tree whose only fault is a TRAP (warmed)
+SELF_TEST_TRAP = r"""
+static int g_t(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_T"); v = s ? atoi(s) : -1; }
+    return v;
+}
+static void warm_lr_statics(void) { (void)g_t(); }
+"""
+# a tree whose only fault is an unset value it can't read (warmed)
+SELF_TEST_UND = r"""
+static int g_u(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_U"); v = s ? atoi(s) : some_call(); }
+    return v;
+}
+static void warm_lr_statics(void) { (void)g_u(); }
+"""
 # a clean tree: one latch, warmed
 SELF_TEST_CLEAN = r"""
 static int g_ok(void)
@@ -1047,14 +1067,20 @@ static void warm_lr_statics(void) { (void)g_ok(); }
 """
 
 
-def self_test():
+def self_test(inject_fail=False):
+    """The synthetic cases; with inject_fail, one expectation is wrong, so
+    the caller can check the failure reaches the exit status. Only the
+    plain self-test spawns processes, and never this flag's own path."""
     rows, funcs = audit({"src/synth.c": SELF_TEST_SRC, "src/synth.h": SELF_TEST_HDR})
     got = {}
     for r in rows:
         for k in r["knobs"]:
             got[k] = (r["verdict"], r["warm"])
     bad = []
-    for k, want in SELF_TEST_WANT.items():
+    want_all = dict(SELF_TEST_WANT)
+    if inject_fail:
+        want_all["SYN_HELPER"] = ("TRAP", True)
+    for k, want in want_all.items():
         if got.get(k) != want:
             bad.append(f"{k}: want {want}, got {got.get(k)}")
     for k in set(got) - set(SELF_TEST_WANT):
@@ -1077,10 +1103,29 @@ def self_test():
     crc = report(crows, out=io.StringIO())
     if crc != 0 or len(crows) != 1:
         bad.append(f"clean tree: exit status {crc}, {len(crows)} gate(s)")
-    orows, _ = audit({"src/cold.c": SELF_TEST_COLD})
-    if report(orows, out=io.StringIO()) != 1:
-        bad.append("a tree with only a cold gate exits 0")
-    n = len(SELF_TEST_WANT) + 5
+    for label, src in (("cold", SELF_TEST_COLD), ("trap", SELF_TEST_TRAP),
+                       ("undetermined", SELF_TEST_UND)):
+        orows, _ = audit({f"src/{label}.c": src})
+        if report(orows, out=io.StringIO()) != 1:
+            bad.append(f"a tree whose only fault is {label} exits 0")
+    if not inject_fail:
+        # the exit status through a process: main() on a tree on disk, and
+        # a failing self-test (its own path spawns nothing)
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (pathlib.Path(d) / "src").mkdir()
+            (pathlib.Path(d) / "src" / "trap.c").write_text(SELF_TEST_TRAP)
+            r = subprocess.run([sys.executable, __file__, "--root", d], capture_output=True)
+            if r.returncode != 1:
+                bad.append(f"main() on a TRAP tree exits {r.returncode}")
+            (pathlib.Path(d) / "src" / "trap.c").write_text(SELF_TEST_CLEAN)
+            r = subprocess.run([sys.executable, __file__, "--root", d], capture_output=True)
+            if r.returncode != 0:
+                bad.append(f"main() on a clean tree exits {r.returncode}")
+        r = subprocess.run([sys.executable, __file__, "--self-test-failing"], capture_output=True)
+        if r.returncode == 0:
+            bad.append("a failing self-test exits 0")
+    n = len(want_all) + 7 + (0 if inject_fail else 3)
     for b in bad:
         print("env_gate_audit --self-test: FAIL " + b)
     print(f"env_gate_audit --self-test: {n - len(bad)}/{n} checks {'PASS' if not bad else 'FAIL'}")
@@ -1088,7 +1133,8 @@ def self_test():
 
 
 def report(rows, show_all=False, out=sys.stdout):
-    """Print the verdicts; the exit status, nonzero on any TRAP or COLD."""
+    """Print the verdicts; the exit status, nonzero on any TRAP, COLD or
+    undetermined gate."""
     traps = [r for r in rows if r["verdict"] == "TRAP"]
     cold = [r for r in rows if not r["warm"] and r["verdict"] != "TRAP"]
     und = [r for r in rows if r["verdict"] == "latches?"]
@@ -1096,6 +1142,7 @@ def report(rows, show_all=False, out=sys.stdout):
           f"{sum(r['warm'] for r in rows)} warmed, {len(und)} undetermined", file=out)
     for label, group in (("TRAP -- perpetual writer, no warm can quiet it", traps),
                          ("COLD -- latches, but first touch races", cold),
+                         ("UNDETERMINED -- the unset value can't be read", und),
                          ("all gates", rows if show_all else [])):
         if not group:
             continue
@@ -1103,16 +1150,19 @@ def report(rows, show_all=False, out=sys.stdout):
         for r in sorted(group, key=lambda r: (r["file"], r["line"])):
             mark = "" if r["warm"] else "  [cold]"
             print(f"  {r['file']}:{r['line']}  {r['name']}  {','.join(r['knobs'])}{mark}", file=out)
-            if r["verdict"] == "TRAP":
+            if r["verdict"] in ("TRAP", "latches?"):
                 print(f"      {r['why']}", file=out)
-    return 1 if traps or cold else 0
+    return 1 if traps or cold or und else 0
 
 
 def main():
     if "--self-test" in sys.argv:
         return self_test()
-    files = sorted(str(p) for p in (ROOT / "src").rglob("*.[ch]"))
-    sources = {str(pathlib.Path(f).relative_to(ROOT)): pathlib.Path(f).read_text() for f in files}
+    if "--self-test-failing" in sys.argv:          # a self-test with one wrong case
+        return self_test(inject_fail=True)
+    root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1]) if "--root" in sys.argv else ROOT
+    files = sorted(str(p) for p in (root / "src").rglob("*.[ch]"))
+    sources = {str(pathlib.Path(f).relative_to(root)): pathlib.Path(f).read_text() for f in files}
     rows, _allfuncs = audit(sources)
     if "--json" in sys.argv:
         json.dump(rows, open(sys.argv[sys.argv.index("--json") + 1], "w"), indent=1)
