@@ -56,7 +56,10 @@ Known limits, each read wrongly or not at all:
 - a Yoda guard (-1 == v), a ~0u sentinel and a while-guard are not read
   as guards, nor is a read in an if's else branch;
 - a latch flag set by atomic_exchange or ++ reads as never assigned;
-- whether main's touch of a CLI gate comes before the workers start.
+- whether main's touch of a CLI gate comes before the workers start;
+- a thread entry never named as a pthread_create or ntp_* argument (only
+  ever passed through a variable or field) reads as warm when a warm
+  function names it.
 
 --self-test checks every behaviour above it reads, but it can't catch a
 change that drops its own exit status (or main's sys.exit); review that.
@@ -800,11 +803,21 @@ def audit(sources):
                 out.add(t)
                 out |= tables.get(rel, {}).get(t, set())
         return out
+    # a function handed to pthread_create or an ntp_* pool call anywhere is a
+    # thread entry: never followed, even when stored in a variable or field
+    # that a warm function then names
+    entries = set()
+    for rel, text in sources.items():
+        code = blank_strings(strip_comments(text))
+        for m in re.finditer(r"\b(?:pthread_create|ntp_\w+)\s*\(", code):
+            for a in split_args(code[m.end():]):
+                entries.update(x for x in re.findall(r"[A-Za-z_]\w*", a) if x in byname)
     def walk(frontier, keep):
+        roots = set(frontier)
         seen = set()
         while frontier:
             fn = frontier.pop()
-            if fn in seen or not keep(fn):
+            if fn in seen or not keep(fn) or (fn[1] in entries and fn not in roots):
                 continue
             seen.add(fn)
             for b in allfuncs[fn]:
@@ -1579,12 +1592,22 @@ static int c_work(void)
     return v;
 }
 static void *worker(void *a) { (void)c_main(); (void)c_work(); return a; }
+static int c_work2(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_CWORK2"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static void *worker2(void *a) { (void)c_work2(); return a; }
 int main(void)
 {
     pthread_t t;
+    void *(*entry)(void *) = worker2;
     (void)c_main();
     lib_encode();
     pthread_create(&t, NULL, worker, NULL);
+    pthread_create(&t, NULL, worker2, NULL);
+    pthread_create(&t, NULL, entry, NULL);
     return 0;
 }
 """
@@ -1691,7 +1714,7 @@ def self_test(inject_fail=False):
         bad.append(f"a guard should print as its source text: {mwhy}")
     lrows, _ = audit({"cli/cli.c": SELF_TEST_CLI, "src/lib.c": SELF_TEST_LIB})
     lw = {k: r["warm"] for r in lrows for k in r["knobs"]}
-    if lw != {"SYN_CMAIN": True, "SYN_CWORK": False, "SYN_LIB": False}:
+    if lw != {"SYN_CMAIN": True, "SYN_CWORK": False, "SYN_LIB": False, "SYN_CWORK2": False}:
         bad.append(f"cli: want main's gate warm, the worker's and the library's cold, got {lw}")
     wrows, _ = audit({"src/waived.c": SELF_TEST_WAIVED})
     if report(wrows, out=io.StringIO()) != 0 or not (wrows and wrows[0]["waived"]):

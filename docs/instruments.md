@@ -192,7 +192,10 @@ or not at all:
   through a helper that reads a literal knob;
 - Yoda guards, `~0u` sentinels, while-guards and reads in an else branch;
 - latch flags set by `atomic_exchange` or `++` (read as never assigned);
-- whether the CLI's main touches a gate before the workers start.
+- whether the CLI's main touches a gate before the workers start;
+- a thread entry only ever passed through a variable or field (never named as
+  a `pthread_create` or `ntp_*` argument) reads as warm when a warm function
+  names it.
 
 **Determinism is a diagnostic with threads, a gate at one thread.** Threaded
 encodes don't need repeatable byte-exact output, so `stair_determ.sh`,
