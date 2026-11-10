@@ -148,7 +148,8 @@ clip, so title length doesn't limit what can be encoded.
   the reader takes the frame count from the file length and checks every frame
   header against the first, failing loudly on a mismatch. The GOP table is
   known before the first read. The reader reads in display order until the
-  schedule is published, then follows the schedule's order. It keeps each
+  schedule is published, then reads GOPs as the schedule hands them to
+  workers. It keeps each
   GOP in flight at most 16 frames ahead of its worker, so the store is about `(GOPs in flight + 1) x 16`
   frames whatever the length: 272 frames (0.6 GiB) on a ten-minute 1920x818
   title at default threads.
