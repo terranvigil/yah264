@@ -131,7 +131,7 @@ make test                                   # unit tests (checkasm is one of the
 make conformance                            # recon-match (YAH264_CONF_FAST)
 python3 scripts/stress_threads.py           # hang/determinism under load
 scripts/tsan_catch.sh                       # TSan; the floor is 0 reports
-python3 scripts/env_gate_audit.py           # every lazy env static: TRAP + COLD, exits 1 on TRAP
+python3 scripts/env_gate_audit.py           # every lazy env static in src/ and cli/: exits 1 on TRAP, COLD or undetermined
 ARM='<env>' scripts/recon_sweep.sh          # recon-match ONE ARM across a config matrix
 scripts/determ_repeat.sh                    # SAME config, N times -> how many bitstreams (STRICT=1 fails)
 scripts/identity_ab.sh OLD NEW              # two binaries, ~100 configs, md5 per cell -> PASS/DIFF table
@@ -167,7 +167,7 @@ CLI opens one encoder per GOP from concurrent workers, so any gate not resolved
 on the main thread first gets its first touch on whichever worker gets there.
 These races are benign same-value init, but they fog real hunts. The audit
 walks the call graph from `warm_lr_statics` / `ntp_pool_create` /
-`ntp_bg_create` and names two failures. A **TRAP** gate's resolved value still
+`ntp_bg_create`, and in `cli/` from `main`, and names two failures. A **TRAP** gate's resolved value still
 satisfies its guard, so the gate rewrites its static on every call, a perpetual
 writer no warm can quiet (resolving "unset" to `-2` under a `v < 0` guard does
 exactly this). A **COLD** gate latches and is never warmed. Run the audit after
@@ -176,7 +176,19 @@ function** is unreachable by any warm and must be hoisted into an accessor
 first; and an **unconditional store** in a warm function
 (`y264_tl_on = trprof_on();`) is a perpetual writer that isn't a getenv guard
 at all. In anything a warm touches, use read-compare-write instead of a plain
-store.
+store. `make test` and both CI jobs run `env_gate_audit.py --self-test` and
+then the audit. A gate it misjudges can carry an `env-audit-ok: <reason>`
+comment and is then listed as waived. It also refuses a lazy gate in a header,
+where every including file has its own static. Its known limits, read wrongly
+or not at all:
+
+- K&R definitions, macro-generated functions and signatures over 12 lines;
+- function-like macros that wrap the reader;
+- latches on a struct member, a non-static or extern variable, or filled
+  through a helper that reads a literal knob;
+- Yoda guards, `~0u` sentinels, while-guards and reads in an else branch;
+- latch flags set by `atomic_exchange` or `++` (read as never assigned);
+- whether the CLI's main touches a gate before the workers start.
 
 **Determinism is a diagnostic with threads, a gate at one thread.** Threaded
 encodes don't need repeatable byte-exact output, so `stair_determ.sh`,
