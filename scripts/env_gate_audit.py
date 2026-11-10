@@ -571,7 +571,7 @@ def find_guard(body, pos, readers, macros, statics):
     pick = next((c for c in cands if c[0]), cands[0])   # outermost the region writes
     _w, var, op, tok, region = pick
     return (var, op, num(tok, macros),
-            unset_of(var, region, readers, macros, env_locals(body, readers)))
+            unset_of(var, region, readers, macros, env_locals(body, readers)), tok.strip())
 
 
 WAIVER = re.compile(r"env-audit-ok:\s*(.*?)\s*(?:\*/|$)")
@@ -592,8 +592,9 @@ RANK = {"latches": 0, "latches?": 1, "TRAP": 2}
 
 
 def judge(g, body):
-    """(verdict, why) for one guard."""
-    gname, gop, gsent, unset = g
+    """(verdict, why) for one guard; the guard prints as its source text."""
+    gname, gop, gsent, unset, tok = g
+    guard = f"`{gname} {gop} {tok}`"
     if unset is None:
         # the resolve branch's default array, e.g. int p[3] = { 75, .. }
         stripped = re.sub(r"static\s+[^;]*;", "", body)
@@ -602,14 +603,15 @@ def judge(g, body):
             if unset is not None:
                 break
     if unset == UNASSIGNED:
-        return "TRAP", (f"the unset path never assigns {gname}, so `{gname} {gop} {gsent}` "
+        return "TRAP", (f"the unset path never assigns {gname}, so {guard} "
                         f"holds on every call and the knob is read again each time")
     if unset is None or gsent is None:
-        return "latches?", f"guard `{gname} {gop} {gsent}`, unset value not statically readable"
+        what = "the unset value" if unset is None else f"`{tok}`"
+        return "latches?", f"guard {guard}: {what} not statically readable"
     if satisfies(unset, gop, gsent):
         return "TRAP", (f"unset resolves {gname}={unset}, which still satisfies "
-                        f"`{gname} {gop} {gsent}` -> rewrites its static every call")
-    return "latches", f"unset {gname}={unset} clears `{gname} {gop} {gsent}`"
+                        f"{guard} -> rewrites its static every call")
+    return "latches", f"unset {gname}={unset} clears {guard}"
 
 
 def audit(sources):
@@ -1246,6 +1248,9 @@ def self_test(inject_fail=False):
         orows, _ = audit({f"src/{label}.c": src})
         if report(orows, out=io.StringIO()) != 1:
             bad.append(f"a tree whose only fault is {label} exits 0")
+    mwhy = [r["why"] for r in rows if "SYN_MACRO" in r["knobs"]]
+    if not mwhy or "v == UNSET" not in mwhy[0] or any("None" in r["why"] for r in rows):
+        bad.append(f"a guard should print as its source text: {mwhy}")
     lrows, _ = audit({"cli/cli.c": SELF_TEST_CLI})
     lw = {k: r["warm"] for r in lrows for k in r["knobs"]}
     if lw != {"SYN_CMAIN": True, "SYN_CWORK": False}:
@@ -1270,7 +1275,7 @@ def self_test(inject_fail=False):
         r = subprocess.run([sys.executable, __file__, "--self-test-failing"], capture_output=True)
         if r.returncode == 0:
             bad.append("a failing self-test exits 0")
-    n = len(want_all) + 9 + (0 if inject_fail else 3)
+    n = len(want_all) + 10 + (0 if inject_fail else 3)
     for b in bad:
         print("env_gate_audit --self-test: FAIL " + b)
     print(f"env_gate_audit --self-test: {n - len(bad)}/{n} checks {'PASS' if not bad else 'FAIL'}")
