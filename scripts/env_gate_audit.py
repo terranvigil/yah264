@@ -7,7 +7,7 @@ The encoder resolves its ~200 Y264_* knobs through lazy function-local
 statics:
 
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_FOO"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = y264_env("Y264_FOO"); v = e ? atoi(e) : 1; }
 
 Under GOP-parallel opens these first-touch on whichever worker gets there
 first. The races are benign same-value init, but a nonzero TSan floor hides
@@ -15,7 +15,7 @@ the next real report -- the 4:4:4 MC border overflow (08-29) sat behind four
 of them. Two distinct failures:
 
   TRAP  the resolved value still satisfies the guard, so the gate re-runs
-        getenv and REWRITES its static on EVERY call. A perpetual writer;
+        the env read and REWRITES its static on EVERY call. A perpetual writer;
         no warm can quiet it. (Y264_WF_CAPK resolved "unset" to -2 under a
         `v < 0` guard and did exactly this.)
   COLD  latches correctly, but nothing resolves it on the main thread before
@@ -37,7 +37,7 @@ import re, sys, json, pathlib, subprocess
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WARM_ROOTS = ["warm_lr_statics", "ntp_pool_create", "ntp_bg_create"]
 
-# functions whose getenv reads into a local each call: no shared static, so
+# functions whose env reads land in a local each call: no shared static, so
 # no race, and warming them would be meaningless.
 NOT_A_GATE = {
     "auto_threads", "la_depth_for", "wf_width_for", "la_chain_prop",
@@ -45,10 +45,13 @@ NOT_A_GATE = {
     "cpu_detect_once", "mbt_oracle_init", "dpbp_open", "skor_init",
     "mb_log_open", "blate_open", "trf_open", "tr_select",
     "blk8_intra_dispatch", "warm_lr_statics", "compute_mbtree",
+    "encoder_open_sw", "stair_drain", "rcr_open_env",
 }
 
 FUNC   = re.compile(r"^(?:static\s+)?[A-Za-z_][\w \t*]*?\b(\w+)\s*\([^;]*?\)\s*$", re.M)
-KNOB   = re.compile(r'getenv\s*\(\s*"([^"]+)"')
+# the env read: y264_env (src/common/env.h), or a bare getenv
+ENVREAD = r"(?:y264_env|getenv)"
+KNOB   = re.compile(ENVREAD + r'\s*\(\s*"([^"]+)"')
 GUARD  = re.compile(r"if\s*\(\s*(\w+)(?:\[\d+\])?\s*(<|<=|==|!=)\s*(-?\d+)\s*\)")
 TERN   = re.compile(r"(\w+)(?:\[\d+\])?\s*=\s*\w+\s*\?\s*(.+?)\s*:\s*(.+?)\s*;", re.S)
 ARRDEF = re.compile(r"\bint\s+(\w+)\[\d+\]\s*=\s*\{([^}]*)\}")
@@ -58,8 +61,8 @@ CALL   = re.compile(r"\b(\w+)\s*\(")
 def functions(text):
     """(name, line, body) for every function defined at column 0.
 
-    Brace-counted, so a one-line body is missed -- see the `{` check. That is
-    deliberate: every gate in this tree is written multi-line.
+    Brace-counted; a body written on one line is matched by the `{ ... }`
+    check, since several gates are written that way.
     """
     lines = text.split("\n")
     i = 0
@@ -78,7 +81,7 @@ def functions(text):
             i = j + 1
             continue
         # one-liner: `void f(void) { ... }`
-        if m is None and "{" in lines[i] and "}" in lines[i] and "getenv" not in lines[i]:
+        if m is None and "{" in lines[i] and "}" in lines[i]:
             m2 = re.match(r"^(?:static\s+)?[\w ]+?\b(\w+)\s*\([^;]*?\)\s*\{", lines[i])
             if m2:
                 yield m2.group(1), i + 1, lines[i]
@@ -98,7 +101,7 @@ def satisfies(val, op, sent):
 
 
 def main():
-    files = sorted(subprocess.run(["grep", "-rl", "getenv", str(ROOT / "src")],
+    files = sorted(subprocess.run(["grep", "-rlE", r"y264_env|getenv", str(ROOT / "src")],
                                   capture_output=True, text=True).stdout.split())
     rows, allfuncs = [], {}
     for f in files:
