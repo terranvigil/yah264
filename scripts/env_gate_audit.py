@@ -459,19 +459,35 @@ def skipped_unset(region, at, envl, readers):
     return False
 
 
+def under_if(region, at):
+    """Whether the statement at `at` sits under an if inside `region`."""
+    for m in re.finditer(r"\bif\s*\(", region[:at]):
+        c1 = balanced(region, m.end() - 1)
+        rest = region[c1:]
+        st = len(rest) - len(rest.lstrip())
+        s1 = c1 + (balanced(rest, st) if rest.lstrip().startswith("{") else rest.find(";") + 1)
+        if c1 <= at < s1:
+            return True
+    return False
+
+
 def unset_of(var, region, readers, macros, envl=frozenset()):
-    """The value `var` holds after `region` runs with the knob unset: the
-    first assignment to it the unset path reaches (a plain assignment or an
-    atomic store), read through ternaries, a helper's default, a local, or a
-    constant. UNASSIGNED when the unset path never assigns it."""
+    """The value `var` holds after `region` runs with the knob unset: the last
+    assignment to it outside any nested if, else the first the unset path
+    may reach (a plain assignment or an atomic store), read through
+    ternaries, a helper's default, a local, or a constant. UNASSIGNED when
+    the unset path never assigns it."""
     v = re.escape(var)
     rx = re.compile(r"\b" + v + r"(?:\[[^\]]*\])?\s*=(?!=)\s*([^;]+);"
                     r"|atomic_store\w*\s*\(\s*&\s*" + v + r"\s*,\s*([^,()]+)")
-    for m in rx.finditer(region):
-        if skipped_unset(region, m.start(), envl, readers):
-            continue
-        return eval_unset(m.group(1) or m.group(2), region, envl, readers, macros)
-    return UNASSIGNED
+    hits = [m for m in rx.finditer(region) if not skipped_unset(region, m.start(), envl, readers)]
+    if not hits:
+        return UNASSIGNED
+    # the last assignment outside any nested if runs last on every path; with
+    # none, the first one the unset path may reach
+    top = [m for m in hits if not under_if(region, m.start())]
+    m = top[-1] if top else hits[0]
+    return eval_unset(m.group(1) or m.group(2), region, envl, readers, macros)
 
 
 def declared(decl):
@@ -1106,6 +1122,23 @@ static int g_nest3(void)
     return c;
 }
 
+/* 36: the last assignment outside a nested if wins */
+static int g_last(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_LAST"); v = s ? atoi(s) : 0; if (v > 9) v = 9; v = -1; }
+    return v;
+}
+
+/* 37: the only assignment sits under a condition that isn't about the
+   knob: it may run, so the latch is taken as assigned */
+static int g_unk(int w)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_UNK"); if (w > 0) v = s ? atoi(s) : 5; }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1155,6 +1188,7 @@ SELF_TEST_WANT = {
     "SYN_TWOA": ("TRAP", False), "SYN_TWOB": ("TRAP", False),
     "SYN_IF0": ("latches", False), "SYN_STRCALL": ("latches", False),
     "SYN_TABBED": ("latches", True), "SYN_MACROED": ("latches", True),
+    "SYN_LAST": ("TRAP", False), "SYN_UNK": ("latches", False),
     "SYN_NEST1": ("TRAP", False), "SYN_NEST2": ("TRAP", False), "SYN_NEST3": ("TRAP", False),
 }
 # a header's static inline gate: refused, since each file has its own copy
