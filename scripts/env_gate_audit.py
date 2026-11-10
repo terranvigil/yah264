@@ -326,29 +326,100 @@ NOT = re.compile(r"!\s*([A-Za-z_]\w*)\b(?!\s*[(\[.])")
 NEG = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}
 
 
-def unset_of(var, region, readers, macros):
-    """The value `var` holds after `region` runs with the knob unset: the
-    first assignment to it, read as its ternary's unset branch, a helper's
-    default argument, or a constant."""
-    m = re.search(r"\b" + re.escape(var) + r"(?:\[[^\]]*\])?\s*=(?!=)\s*([^;]+);", region)
-    if not m:
+UNASSIGNED = "unassigned"
+
+
+def env_locals(body, readers):
+    """Locals a body loads from an env read: NULL when the knob is unset."""
+    rx = r"\b(\w+)\s*=\s*(?:" + "|".join(re.escape(r) for r, (_n, d) in readers.items()
+                                          if d is None) + r")\s*\("
+    return set(re.findall(rx, body))
+
+
+def cond_unset(cond, envl, readers):
+    """A condition's truth with the knob unset, or None when it can't be
+    read: `!s`, `!s || ...` and `s == NULL` are true, `s`, `s && ...` and
+    `s != NULL` false, s an env local or a reader call."""
+    c = cond.strip()
+    rd = r"(?:" + "|".join(re.escape(r) for r, (_n, d) in readers.items() if d is None) + r")\s*\([^()]*\)"
+    x = r"(?:" + ("|".join(map(re.escape, envl)) + "|" if envl else "") + rd + r")"
+    if re.match(r"!\s*" + x + r"\s*(\|\||$)", c) or re.fullmatch(x + r"\s*==\s*NULL", c):
+        return True
+    if re.match(x + r"\s*(&&|$)", c) or re.fullmatch(x + r"\s*!=\s*NULL", c):
+        return False
+    return None
+
+
+def eval_unset(expr, region, envl, readers, macros, depth=0):
+    """An expression's value with the knob unset, or None."""
+    e = expr.strip()
+    if depth > 6 or not e:
         return None
-    rhs = m.group(1).strip()
-    rhs = re.sub(r"^\(\s*\w+\s*\)\s*", "", rhs)          # a leading cast
-    depth = 0
-    for i, ch in enumerate(rhs):                         # top-level ternary
+    while True:
+        m = re.fullmatch(r"\(\s*(\w+\s*\**)\s*\)\s*(.+)", e, re.S)   # a cast
+        if m and not re.fullmatch(r"\(.*\)", e, re.S):
+            e = m.group(2).strip(); continue
+        if e.startswith("(") and balanced(e, 0) == len(e):
+            e = e[1:-1].strip(); continue
+        break
+    depth_p, q = 0, -1
+    for i, ch in enumerate(e):                       # top-level ternary
         if ch in "([":
-            depth += 1
+            depth_p += 1
         elif ch in ")]":
-            depth -= 1
-        elif ch == ":" and depth == 0 and "?" in rhs[:i]:
-            return num(rhs[i + 1:], macros)
+            depth_p -= 1
+        elif ch == "?" and depth_p == 0 and q < 0:
+            q = i
+        elif ch == ":" and depth_p == 0 and q >= 0:
+            t = cond_unset(e[:q], envl, readers)
+            # nested ternaries sit in the else branch, so the first ':' at
+            # depth 0 splits this one
+            br = e[q + 1:i] if t else e[i + 1:]
+            return eval_unset(br, region, envl, readers, macros, depth + 1)
+    rd = r"(?:" + "|".join(re.escape(r) for r, (_n, d) in readers.items() if d is None) + r")\s*\([^()]*\)"
+    if re.fullmatch(rd + r"\s*!=\s*NULL", e) or re.fullmatch(rd, e):
+        return 0
+    if re.fullmatch(rd + r"\s*==\s*NULL", e) or re.fullmatch(r"!\s*" + rd, e):
+        return 1
     for r, (_ni, idx) in readers.items():
-        mm = re.match(re.escape(r) + r"\s*\(", rhs)
+        mm = re.match(re.escape(r) + r"\s*\(", e)
         if mm and idx is not None:
-            args = split_args(rhs[mm.end():])
+            args = split_args(e[mm.end():])
             return num(args[idx], macros) if len(args) > idx else None
-    return num(rhs, macros)
+    if re.fullmatch(r"[A-Za-z_]\w*", e) and e not in macros and e not in envl:
+        mm = re.search(r"\b" + re.escape(e) + r"\s*=(?!=)\s*([^;]+);", region)
+        if mm:                                       # a local carrying it
+            return eval_unset(mm.group(1), region, envl, readers, macros, depth + 1)
+    return num(e, macros)
+
+
+def skipped_unset(region, at, envl, readers):
+    """Whether the statement at `at` sits under an `if` that the unset knob
+    makes false (`if (s) v = atoi(s);`)."""
+    for m in re.finditer(r"\bif\s*\(", region[:at]):
+        c0 = m.end() - 1
+        c1 = balanced(region, c0)
+        rest = region[c1:]
+        st = len(rest) - len(rest.lstrip())
+        s1 = c1 + (balanced(rest, st) if rest.lstrip().startswith("{") else rest.find(";") + 1)
+        if c1 <= at < s1 and cond_unset(region[c0 + 1:c1 - 1], envl, readers) is False:
+            return True
+    return False
+
+
+def unset_of(var, region, readers, macros, envl=frozenset()):
+    """The value `var` holds after `region` runs with the knob unset: the
+    first assignment to it the unset path reaches (a plain assignment or an
+    atomic store), read through ternaries, a helper's default, a local, or a
+    constant. UNASSIGNED when the unset path never assigns it."""
+    v = re.escape(var)
+    rx = re.compile(r"\b" + v + r"(?:\[[^\]]*\])?\s*=(?!=)\s*([^;]+);"
+                    r"|atomic_store\w*\s*\(\s*&\s*" + v + r"\s*,\s*([^,()]+)")
+    for m in rx.finditer(region):
+        if skipped_unset(region, m.start(), envl, readers):
+            continue
+        return eval_unset(m.group(1) or m.group(2), region, envl, readers, macros)
+    return UNASSIGNED
 
 
 def declared(decl):
@@ -426,6 +497,10 @@ def find_guard(body, pos, readers, macros, statics):
             continue
         cmps = [(v, op, t) for v, op, t in CMP.findall(cond)]
         cmps += [(v, "==", "0") for v in NOT.findall(cond)]
+        cmps += [(v, "==", "0") for v in re.findall(r"!\s*atomic_load\w*\s*\(\s*&\s*(\w+)", cond)]
+        bare = re.fullmatch(r"\s*([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*", cond)
+        if bare:
+            cmps.append((bare.group(1), "!=", "0"))      # if (x) return v;
         cmps = [c for c in cmps if c[0] in statics]     # a latch keeps its value
         if not cmps:
             continue
@@ -433,7 +508,8 @@ def find_guard(body, pos, readers, macros, statics):
         if early:
             op = NEG[op]
         region = body[c1:s1] if not early else body[s1:]
-        best = (var, op, num(tok, macros), unset_of(var, region, readers, macros))
+        best = (var, op, num(tok, macros),
+                unset_of(var, region, readers, macros, env_locals(body, readers)))
     return best
 
 
@@ -469,7 +545,10 @@ def audit(sources):
                 if unset is not None:
                     break
 
-        if unset is None or gsent is None:
+        if unset == UNASSIGNED:
+            v, why = "TRAP", (f"the unset path never assigns {gname}, so `{gname} {gop} {gsent}` "
+                              f"holds on every call and the knob is read again each time")
+        elif unset is None or gsent is None:
             v, why = "latches?", f"guard `{gname} {gop} {gsent}`, unset value not statically readable"
         elif satisfies(unset, gop, gsent):
             v, why = "TRAP", (f"unset resolves {gname}={unset}, which still satisfies "
