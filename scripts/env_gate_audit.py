@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Audit every lazy env-static gate in src/ for the two ways they go wrong.
+"""Audit every lazy env-static gate in src/ and cli/ for the two ways they go wrong.
 
 The encoder resolves many of its Y264_* knobs (docs/knobs.md counts them)
 through lazy statics:
@@ -22,7 +22,11 @@ of them. Two distinct failures:
         the pool exists, so first touch races.
 
 Warmed means reachable from warm_lr_statics, ntp_pool_create or
-ntp_bg_create. A warm can only reach a gate through a CALLABLE function: a
+ntp_bg_create, or in cli/ from main: the CLI resolves its gates on the main
+thread before it starts its GOP workers, and a thread's entry function is
+only ever passed as an argument, which the walk never follows, so code that
+runs only on a worker stays cold. (Whether main's touch comes before the
+workers start is not checked.) A warm can only reach a gate through a CALLABLE function: a
 static resolved inline inside a hot function is unreachable by construction
 and has to be hoisted into an accessor first.
 
@@ -681,6 +685,10 @@ def audit(sources):
         return out
     warmed = set()
     frontier = [(r, n) for n in WARM_ROOTS for r in byname.get(n, [])]
+    # the CLI resolves its gates on the main thread before it starts the
+    # GOP workers; a thread's entry is only ever a call argument, never
+    # followed, so what runs only on a worker stays cold
+    frontier += [(r, n) for r, n in allfuncs if n == "main" and r.startswith("cli/")]
     while frontier:
         fn = frontier.pop()
         if fn in warmed:
@@ -1161,6 +1169,30 @@ static int g_w(void)
     return v;
 }
 """
+# the CLI: main resolves one gate before it starts a worker; the other is
+# touched only by the worker
+SELF_TEST_CLI = r"""
+static int c_main(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_CMAIN"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int c_work(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_CWORK"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static void *worker(void *a) { (void)c_main(); (void)c_work(); return a; }
+int main(void)
+{
+    pthread_t t;
+    (void)c_main();
+    pthread_create(&t, NULL, worker, NULL);
+    return 0;
+}
+"""
 # a clean tree: one latch, warmed
 SELF_TEST_CLEAN = r"""
 static int g_ok(void)
@@ -1214,6 +1246,10 @@ def self_test(inject_fail=False):
         orows, _ = audit({f"src/{label}.c": src})
         if report(orows, out=io.StringIO()) != 1:
             bad.append(f"a tree whose only fault is {label} exits 0")
+    lrows, _ = audit({"cli/cli.c": SELF_TEST_CLI})
+    lw = {k: r["warm"] for r in lrows for k in r["knobs"]}
+    if lw != {"SYN_CMAIN": True, "SYN_CWORK": False}:
+        bad.append(f"cli: want main's gate warm and the worker's cold, got {lw}")
     wrows, _ = audit({"src/waived.c": SELF_TEST_WAIVED})
     if report(wrows, out=io.StringIO()) != 0 or not (wrows and wrows[0]["waived"]):
         bad.append("a waived TRAP still fails the tree, or isn't marked waived")
@@ -1234,7 +1270,7 @@ def self_test(inject_fail=False):
         r = subprocess.run([sys.executable, __file__, "--self-test-failing"], capture_output=True)
         if r.returncode == 0:
             bad.append("a failing self-test exits 0")
-    n = len(want_all) + 8 + (0 if inject_fail else 3)
+    n = len(want_all) + 9 + (0 if inject_fail else 3)
     for b in bad:
         print("env_gate_audit --self-test: FAIL " + b)
     print(f"env_gate_audit --self-test: {n - len(bad)}/{n} checks {'PASS' if not bad else 'FAIL'}")
@@ -1276,7 +1312,7 @@ def main():
     if "--self-test-failing" in sys.argv:          # a self-test with one wrong case
         return self_test(inject_fail=True)
     root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1]) if "--root" in sys.argv else ROOT
-    files = sorted(str(p) for p in (root / "src").rglob("*.[ch]"))
+    files = sorted(str(p) for d in ("src", "cli") for p in (root / d).rglob("*.[ch]"))
     sources = {str(pathlib.Path(f).relative_to(root)): pathlib.Path(f).read_text() for f in files}
     rows, _allfuncs = audit(sources)
     if "--json" in sys.argv:
