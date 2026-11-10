@@ -917,10 +917,11 @@ static int wp_stat_on(void)
 #define Y264_LA_BUF_UNSET INT_MIN
 static int la_buf_env(void)
 {
-    static int v = Y264_LA_BUF_UNSET;
-    if (v == Y264_LA_BUF_UNSET) {
+    static int done, v = Y264_LA_BUF_UNSET;
+    if (!done) {                /* latch on its own flag: unset keeps v at the marker */
         const char *s = y264_env("Y264_LA_BUF");
         if (s) v = atoi(s);
+        done = 1;
     }
     return v;
 }
