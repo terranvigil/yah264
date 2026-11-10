@@ -628,9 +628,8 @@ def find_guard(body, pos, readers, macros, statics):
             s1 = c1 + balanced(rest, st)
         else:
             s1 = c1 + rest.find(";") + 1
-        early = bool(re.match(r"\s*(?:\{\s*)?return\b[^;]*;\s*(?:\})?", rest)) and (
-            not rest.lstrip().startswith("{")
-            or re.fullmatch(r"\{\s*return\b[^;]*;\s*\}", rest[st:s1 - c1]) is not None)
+        # 'return ...;', or a braced block holding only that
+        early = bool(re.match(r"\s*(?:\{\s*return\b[^;]*;\s*\}|return\b)", rest))
         if not (c1 <= pos < s1) and not (early and s1 <= pos):
             continue
         cmps = [(v, op, t) for v, op, t in CMP.findall(cond)]
@@ -880,7 +879,7 @@ def audit(sources):
 
 # --self-test: one case per gate shape the audit has to read. Each knob maps
 # to (verdict, warmed); a knob left out (SYN_LOCAL, SYN_MODE, SYN_OFF,
-# SYN_ATP, SYN_LOCALA) must not read as a gate.
+# SYN_ATP, SYN_LOCALA, SYN_BRMORE) must not read as a gate.
 SELF_TEST_SRC = r"""
 #include <stdlib.h>
 #include "env.h"
@@ -1424,7 +1423,7 @@ static int g_bg(void)
     if (v < 0) { const char *s = y264_env("SYN_BG"); v = s ? atoi(s) : 0; }
     return v;
 }
-struct st { int g_fld; };
+struct st { int g_fld; int g_dotm; };
 void ntp_pool_create(struct st *p) { (void)g_pool(); p->g_fld = 1; }
 void ntp_bg_create(void) { (void)g_bg(); }
 static int g_twin2(void)
@@ -1453,7 +1452,7 @@ static int g_ifelse2(void)
     return v;
 }
 
-/* 42: a braced early return guards; a braced block with more in it doesn't */
+/* 42: a braced early return guards (case 54 has a block that does more) */
 static int g_brret(void)
 {
     static int v = -1;
@@ -1604,6 +1603,18 @@ static int g_octtrap(void)
     if (v >= 8) { const char *s = y264_env("SYN_OCTT"); v = s ? atoi(s) : 010; }
     return v;
 }
+static int g_oct9(void)
+{
+    static int v = 10;
+    if (v >= 9) { const char *s = y264_env("SYN_OCT9"); v = s ? atoi(s) : 010; }
+    return v;
+}
+static int g_hexbig(void)
+{
+    static int v = 0;
+    if (v < 0x10) { const char *s = y264_env("SYN_HEXBIG"); v = s ? atoi(s) : 0x7fffffff; }
+    return v;
+}
 
 /* 51: pool entries: a function passed to an ntp_* call is an entry (both
    arms of a ternary), one called inside the arguments is not, and a
@@ -1630,6 +1641,57 @@ static void pool_go(struct st *p, int w)
     (void)f;
 }
 
+/* 52: references a warm root makes that aren't calls: a member write
+   ('.name'), a name passed as a call argument */
+static int g_dotm(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_DOTM"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_argcb(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_ARGCB"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
+/* 53: an else-if chain: every assignment is conditional, the first counts */
+static int g_chain(int w)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *s = y264_env("SYN_CHAIN");
+        if (w > 0) v = s ? 1 : 1; else if (w < 0) v = 2; else v = -1;
+    }
+    return v;
+}
+
+/* 54: a braced block that does more than return is not a guard, so the
+   read below it is per-call */
+static int g_brmore(void)
+{
+    static int v = -1;
+    if (v >= 0) { (void)g_dotm; return v; }
+    const char *s = y264_env("SYN_BRMORE");
+    v = s ? atoi(s) : 0;
+    return v;
+}
+
+/* 55: '-(1)' as the unset value, and a parenthesised sentinel */
+static int g_negp(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_NEGP"); v = s ? atoi(s) : -(1); }
+    return v;
+}
+static int g_eqparen(void)
+{
+    static int v = -1;
+    if (v == (-1)) { const char *s = y264_env("SYN_EQPAREN"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1640,6 +1702,7 @@ static void g_early(void)
     if (p) g_early_n = atoi(p);
 }
 
+static struct st gcfg;
 static void warm_lr_statics(void)
 {
     int n = 0;
@@ -1659,6 +1722,8 @@ static void warm_lr_statics(void)
     dsp_init(0);
     (void)s_priv();
     pool_go(0, 0);
+    gcfg.g_dotm = 1;
+    register_cb(g_argcb);
     warm_twin();
     other_warm();
     LOOP(n);
@@ -1705,7 +1770,11 @@ SELF_TEST_WANT = {
     "SYN_SPRIV": ("latches", False),
     "SYN_HEX": ("TRAP", False), "SYN_HEXU": ("latches", False),
     "SYN_OCT": ("latches", False), "SYN_OCTT": ("TRAP", False),
+    "SYN_OCT9": ("latches", False), "SYN_HEXBIG": ("latches", False),
     "SYN_ECALLED": ("latches", True), "SYN_EJOB": ("latches", False),
+    "SYN_DOTM": ("latches", False), "SYN_ARGCB": ("latches", False),
+    "SYN_CHAIN": ("latches", False), "SYN_NEGP": ("TRAP", False),
+    "SYN_EQPAREN": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
@@ -1877,6 +1946,13 @@ static int w_after(void)
     if (v < 0) { const char *s = y264_env("SYN_WAFTER"); v = s ? atoi(s) : -1; }
     return v;
 }
+/* env-audit-ok: short */ /* another comment */
+static int w_short(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_WSHORT"); v = s ? atoi(s) : -1; }
+    return v;
+}
 // env-audit-ok:
 static int w_empty(void)
 {
@@ -1964,10 +2040,16 @@ def self_test(inject_fail=False):
     wv = {k: r["waived"] for r in vrows for k in r["knobs"]}
     want_w = {"SYN_WBODY": "the body form", "SYN_WGNU": "the\n   split signature form",
               "SYN_WEMPTY": EMPTY_WAIVER, "SYN_WSTR": None,
-              "SYN_WNEXT": "the reason on the next line", "SYN_WAFTER": None}
+              "SYN_WNEXT": "the reason on the next line", "SYN_WAFTER": None,
+              "SYN_WSHORT": "short"}
     if {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in wv.items()} != \
             {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in want_w.items()}:
         bad.append(f"waivers read as {wv}")
+    if [r["waived"] for r in vrows if "SYN_WSHORT" in r["knobs"]] != ["short"]:
+        bad.append("a waiver's reason runs past its own comment")
+    lrows2, _ = audit({"src/lone.c": "// env-audit-ok:\n" + SELF_TEST_CLEAN.lstrip("\n")})
+    if report(lrows2, out=io.StringIO()) != 1:
+        bad.append("an empty waiver on a clean, warmed latch passes the run")
     erows = [r for r in vrows if "SYN_WEMPTY" in r["knobs"]]
     ebuf = io.StringIO()
     if report(erows, out=ebuf) != 1 or "=== TRAP" in ebuf.getvalue():
@@ -1996,7 +2078,7 @@ def self_test(inject_fail=False):
         r = subprocess.run([sys.executable, __file__, "--self-test-failing"], capture_output=True)
         if r.returncode == 0:
             bad.append("a failing self-test exits 0")
-    n = len(want_all) + 13 + (0 if inject_fail else 4)
+    n = len(want_all) + 15 + (0 if inject_fail else 4)
     for b in bad:
         print("env_gate_audit --self-test: FAIL " + b)
     print(f"env_gate_audit --self-test: {n - len(bad)}/{n} checks {'PASS' if not bad else 'FAIL'}")
