@@ -450,28 +450,54 @@ def cond_value(cond, region, envl, readers, macros, depth):
         return None
 
 
-def skipped_unset(region, at, envl, readers):
-    """Whether the statement at `at` sits under an `if` that the unset knob
-    makes false (`if (s) v = atoi(s);`)."""
-    for m in re.finditer(r"\bif\s*\(", region[:at]):
+def stmt_end(text, at):
+    """Index just past the statement that starts at `at` (whitespace
+    skipped): a braced block, an if with its else chain, or up to ';'."""
+    k = at + len(text[at:]) - len(text[at:].lstrip())
+    if text.startswith("{", k):
+        return balanced(text, k)
+    m = re.match(r"if\s*\(", text[k:])
+    if m:
+        c1 = balanced(text, k + m.end() - 1)
+        e = stmt_end(text, c1)
+        m2 = re.match(r"\s*else\b", text[e:])
+        return stmt_end(text, e + m2.end()) if m2 else e
+    semi = text.find(";", k)
+    return len(text) if semi < 0 else semi + 1
+
+
+def if_spans(region, upto):
+    """(condition, then span, else span or None) for every if that starts
+    before `upto` in `region`."""
+    for m in re.finditer(r"\bif\s*\(", region[:upto]):
         c0 = m.end() - 1
         c1 = balanced(region, c0)
-        rest = region[c1:]
-        st = len(rest) - len(rest.lstrip())
-        s1 = c1 + (balanced(rest, st) if rest.lstrip().startswith("{") else rest.find(";") + 1)
-        if c1 <= at < s1 and cond_unset(region[c0 + 1:c1 - 1], envl, readers) is False:
+        s1 = stmt_end(region, c1)
+        m2 = re.match(r"\s*else\b", region[s1:])
+        els = (s1 + m2.end(), stmt_end(region, s1 + m2.end())) if m2 else None
+        yield region[c0 + 1:c1 - 1], (c1, s1), els
+
+
+def skipped_unset(region, at, envl, readers):
+    """Whether the statement at `at` sits in a branch the unset knob never
+    takes: under an if it makes false (`if (s) v = atoi(s);`), or in the
+    else of one it makes true (`if (!s) v = 0; else v = atoi(s);`)."""
+    for cond, (a, b), els in if_spans(region, at):
+        t = None
+        if a <= at < b or (els and els[0] <= at < els[1]):
+            t = cond_unset(cond, envl, readers)
+        if a <= at < b and t is False:
+            return True
+        if els and els[0] <= at < els[1] and t is True:
             return True
     return False
 
 
 def under_if(region, at):
-    """Whether the statement at `at` sits under an if inside `region`."""
-    for m in re.finditer(r"\bif\s*\(", region[:at]):
-        c1 = balanced(region, m.end() - 1)
-        rest = region[c1:]
-        st = len(rest) - len(rest.lstrip())
-        s1 = c1 + (balanced(rest, st) if rest.lstrip().startswith("{") else rest.find(";") + 1)
-        if c1 <= at < s1:
+    """Whether the statement at `at` sits under an if, or its else, inside
+    `region`."""
+    for _cond, (a, b), els in if_spans(region, at):
+        if a <= at < b or (els and els[0] <= at < els[1]):
             return True
     return False
 
@@ -1291,6 +1317,20 @@ static void warm_twin(void) { (void)g_twin2(); }
 static void warm_twin(void) { }
 #endif
 
+/* 41: if/else on the knob: the else branch is not unconditional */
+static int g_ifelse(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_IFELSE"); if (s == NULL) v = -1; else v = 1; }
+    return v;
+}
+static int g_ifelse2(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_IFELSE2"); if (!s) v = 0; else v = atoi(s); }
+    return v;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1348,6 +1388,7 @@ SELF_TEST_WANT = {
     "SYN_TABBED": ("latches", True), "SYN_MACROED": ("latches", True),
     "SYN_LAST": ("TRAP", False), "SYN_UNK": ("latches", False),
     "SYN_ORDER2": ("latches", False), "SYN_OUTER2": ("latches", False),
+    "SYN_IFELSE": ("TRAP", False), "SYN_IFELSE2": ("latches", False),
     "SYN_PICKFP": ("latches", True),
     "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
     "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
