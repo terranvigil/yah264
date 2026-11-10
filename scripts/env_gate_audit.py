@@ -54,6 +54,9 @@ Known limits, each read wrongly or not at all:
   as guards, nor is a read in an if's else branch;
 - a latch flag set by atomic_exchange or ++ reads as never assigned;
 - whether main's touch of a CLI gate comes before the workers start.
+
+--self-test checks every behaviour above it reads, but it can't catch a
+change that drops its own exit status (or main's sys.exit); review that.
 """
 import io, re, sys, json, pathlib
 
@@ -736,8 +739,8 @@ def audit(sources):
 
 
 # --self-test: one case per gate shape the audit has to read. Each knob maps
-# to (verdict, warmed); a knob left out (SYN_LOCAL, SYN_MODE, SYN_OFF) must
-# not read as a gate.
+# to (verdict, warmed); a knob left out (SYN_LOCAL, SYN_MODE, SYN_OFF,
+# SYN_ATP, SYN_LOCALA) must not read as a gate.
 SELF_TEST_SRC = r"""
 #include <stdlib.h>
 #include "env.h"
@@ -865,8 +868,15 @@ int knr(a)
 int a;
 {
 if (a) { g_kw(); }
+sizeof (a) { g_szk(); }
     LOOP(a) { g_ind(); }
     return a;
+}
+static int g_szk(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_SZK"); v = s ? atoi(s) : 0; }
+    return v;
 }
 static int g_ind(void)
 {
@@ -914,6 +924,38 @@ static int g_order(void)
     static int v = -1;
     if (v < 0 && lim > 0) { const char *s = y264_env("SYN_ORDER"); v = s ? atoi(s) : 0; }
     return v;
+}
+static int g_order2(void)
+{
+    static int v = -1, cnt = 0;
+    if (v < 0 && cnt >= 0) { const char *s = y264_env("SYN_ORDER2"); v = s ? atoi(s) : 0; cnt++; }
+    return v;
+}
+
+/* a static struct type with ';' inside its braces: its member names are not
+   statics, so a local of the same name guards a per-call read */
+static int g_decl3(int t)
+{
+    static struct { int a; int b; } shape = { 1, 2 };
+    int a = t;
+    if (a < 0) { const char *s = y264_env("SYN_LOCALA"); a = s ? atoi(s) : shape.b; }
+    return a;
+}
+
+/* the outer latch wins over a written inner one */
+static int g_outer2(void)
+{
+    static int v = -1, n = 1;
+    if (v < 0) { v = 0; if (n <= 0) { const char *s = y264_env("SYN_OUTER2"); v = s ? atoi(s) : 0; n = 0; } }
+    return v;
+}
+
+/* a definition returning a function pointer */
+static int (*pickfp(int k))(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_PICKFP"); v = s ? atoi(s) : 0; }
+    return k ? 0 : 0;
 }
 
 /* 20: an attribute group, a prototype first, a function-pointer declarator
@@ -992,7 +1034,7 @@ static int g_note(void)
 }
 
 /* 27: a file-scope atomic flag */
-static _Atomic int g_af;
+_Atomic int g_af;
 static int g_afv;
 static int g_aflag(void)
 {
@@ -1141,6 +1183,108 @@ static int g_unk(int w)
     return v;
 }
 
+/* 38: name, string and preprocessor shapes */
+static __typeof__(int) g_ty(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_TY"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_esc(void)
+{
+    static int v = -1;
+    fprintf(stderr, "\"{\"\n");
+    if (v < 0) { const char *s = y264_env("SYN_ESC"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_sl(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *t = "//"; const char *s = y264_env("SYN_SL"); v = s ? atoi(s) + (t[0] == '/') : 0; }
+    return v;
+}
+#  define SYN_SENTV (-5)
+static int g_sent(void)
+{
+    static int v = SYN_SENTV;
+    if (v == SYN_SENTV) { const char *s = y264_env("SYN_SENT"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_genv(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("SYN_GETENV"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_decl2(void)
+{
+    static struct { int a; int b; } cfgs = { 1, 2 };
+    static int other = 0, v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_DECL2"); v = s ? atoi(s) + cfgs.a + other : 0; }
+    return v;
+}
+
+/* 39: reader calls compared with NULL, a cast over a ternary, and a local
+   copied from a parameter's atomic (not a latch) */
+static int g_nenull(void)
+{
+    static int v = -1;
+    if (v < 0) v = (y264_env("SYN_NENULL") != NULL) ? -1 : 1;
+    return v;
+}
+static int g_nn(void)
+{
+    static int v = -1;
+    if (v <= 0) { v = y264_env("SYN_NN") != NULL; }
+    return v;
+}
+static int g_eqn(void)
+{
+    static int v = -1;
+    if (v != 1) { v = y264_env("SYN_EQN") == NULL; }
+    return v;
+}
+static int g_cast(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_CAST"); v = (int)(s ? atoi(s) : -1); }
+    return v;
+}
+static int g_atp(struct st *p)
+{
+    int x = atomic_load(&p->ready);
+    if (x < 0) { const char *s = y264_env("SYN_ATP"); x = s ? atoi(s) : 0; }
+    return x;
+}
+
+/* 40: warm roots and resolution: the pool roots, an #if twin, and a call
+   into another file */
+static int g_pool(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_POOL"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_bg(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_BG"); v = s ? atoi(s) : 0; }
+    return v;
+}
+void ntp_pool_create(void) { (void)g_pool(); }
+void ntp_bg_create(void) { (void)g_bg(); }
+static int g_twin2(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_TWIN2"); v = s ? atoi(s) : 0; }
+    return v;
+}
+#if HAVE_X
+static void warm_twin(void) { (void)g_twin2(); }
+#else
+static void warm_twin(void) { }
+#endif
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1162,6 +1306,12 @@ static void warm_lr_statics(void)
     fprintf(stderr, "g_strcall() not yet\n");
     (void)warm_tab[0]();
     WARM_SOME();
+    (void)sizeof(n);
+    (void)g_ty();
+    (void)g_attr();
+    (void)pickfp(0);
+    warm_twin();
+    other_warm();
     LOOP(n);
     g_early();
     (void)h_gate();
@@ -1178,7 +1328,7 @@ SELF_TEST_WANT = {
     "SYN_KW": ("latches", False), "SYN_CMT": ("latches", False),
     "SYN_IND": ("latches", False),
     "SYN_SECOND": ("latches", False), "SYN_GT": ("latches", False),
-    "SYN_ORDER": ("latches", False), "SYN_ATTR": ("latches", False),
+    "SYN_ORDER": ("latches", False), "SYN_ATTR": ("latches", True),
     "SYN_ARRDEF": ("latches", False), "SYN_REREAD": ("TRAP", False),
     "SYN_STR": ("latches", False), "SYN_HDR": ("TRAP", False),
     "SYN_PICK": ("TRAP", False), "SYN_DEFNAME": ("latches", False),
@@ -1191,8 +1341,26 @@ SELF_TEST_WANT = {
     "SYN_IF0": ("latches", False), "SYN_STRCALL": ("latches", False),
     "SYN_TABBED": ("latches", True), "SYN_MACROED": ("latches", True),
     "SYN_LAST": ("TRAP", False), "SYN_UNK": ("latches", False),
+    "SYN_ORDER2": ("latches", False), "SYN_OUTER2": ("latches", False),
+    "SYN_PICKFP": ("latches", True),
+    "SYN_TY": ("latches", True), "SYN_ESC": ("latches", False), "SYN_SL": ("latches", False),
+    "SYN_SENT": ("latches", False), "SYN_GETENV": ("latches", False),
+    "SYN_DECL2": ("latches", False), "SYN_NENULL": ("latches", False),
+    "SYN_NN": ("TRAP", False), "SYN_EQN": ("latches", False), "SYN_CAST": ("TRAP", False),
+    "SYN_POOL": ("latches", True), "SYN_BG": ("latches", True),
+    "SYN_TWIN2": ("latches", True), "SYN_OTHER": ("latches", True), "SYN_SZK": ("latches", False),
     "SYN_NEST1": ("TRAP", False), "SYN_NEST2": ("TRAP", False), "SYN_NEST3": ("TRAP", False),
 }
+# another file: a gate the synthetic file warms through a cross-file call
+SELF_TEST_OTHER = r"""
+static int x_gate(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_OTHER"); v = s ? atoi(s) : 0; }
+    return v;
+}
+void other_warm(void) { (void)x_gate(); }
+"""
 # a header's static inline gate: refused, since each file has its own copy
 SELF_TEST_HDR = r"""
 static inline int h_gate(void)
@@ -1281,7 +1449,8 @@ def self_test(inject_fail=False):
     """The synthetic cases; with inject_fail, one expectation is wrong, so
     the caller can check the failure reaches the exit status. Only the
     plain self-test spawns processes, and never this flag's own path."""
-    rows, funcs = audit({"src/synth.c": SELF_TEST_SRC, "src/synth.h": SELF_TEST_HDR})
+    rows, funcs = audit({"src/synth.c": SELF_TEST_SRC, "src/synth.h": SELF_TEST_HDR,
+                         "src/other.c": SELF_TEST_OTHER})
     got = {}
     for r in rows:
         for k in r["knobs"]:
@@ -1297,9 +1466,9 @@ def self_test(inject_fail=False):
         bad.append(f"{k}: not a gate, read as {got[k]}")
     if not any(r["file"] == "src/synth.h" and r["name"] == "h_gate" for r in rows):
         bad.append("the header's static inline gate is not keyed to its own file")
-    fake = sorted({n for _f, n in funcs} & KEYWORDS)
+    fake = sorted({n for _f, n in funcs} & (KEYWORDS | TYPE_WORDS | DECL_WORDS))
     if fake:
-        bad.append(f"statement keywords read as functions: {fake}")
+        bad.append(f"keywords or type words read as function names: {fake}")
     # the report: its COLD list and its exit status
     buf = io.StringIO()
     rc = report(rows, out=buf)
@@ -1342,10 +1511,15 @@ def self_test(inject_fail=False):
             r = subprocess.run([sys.executable, __file__, "--root", d], capture_output=True)
             if r.returncode != 0:
                 bad.append(f"main() on a clean tree exits {r.returncode}")
+            (pathlib.Path(d) / "cli").mkdir()
+            (pathlib.Path(d) / "cli" / "trap.c").write_text(SELF_TEST_TRAP)
+            r = subprocess.run([sys.executable, __file__, "--root", d], capture_output=True)
+            if r.returncode != 1:
+                bad.append(f"main() doesn't scan cli/: a TRAP there exits {r.returncode}")
         r = subprocess.run([sys.executable, __file__, "--self-test-failing"], capture_output=True)
         if r.returncode == 0:
             bad.append("a failing self-test exits 0")
-    n = len(want_all) + 10 + (0 if inject_fail else 3)
+    n = len(want_all) + 10 + (0 if inject_fail else 4)
     for b in bad:
         print("env_gate_audit --self-test: FAIL " + b)
     print(f"env_gate_audit --self-test: {n - len(bad)}/{n} checks {'PASS' if not bad else 'FAIL'}")
