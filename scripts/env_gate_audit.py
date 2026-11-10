@@ -103,6 +103,13 @@ def blank_strings(text):
     return "".join(out)
 
 
+def drop_if0(text):
+    """The text with every '#if 0' ... '#else'/'#endif' region blanked
+    (newlines kept); nested conditionals inside one are not tracked."""
+    return re.sub(r"^[ \t]*#[ \t]*if[ \t]+0\b.*?(?=^[ \t]*#[ \t]*(?:else|elif|endif)\b)",
+                  lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.M | re.S)
+
+
 def blank_attributes(text):
     """The text with every __attribute__((...)) group blanked to spaces."""
     out, i = [], 0
@@ -620,6 +627,39 @@ def audit(sources):
         if (rel, name) in allfuncs:
             return [(rel, name)]
         return [(r, name) for r in byname.get(name, [])]
+    # what each file adds to a body's references: function-like macros
+    # (their bodies' calls) and file-scope tables of function names
+    fmacros, tables = {}, {}
+    for rel, text in sources.items():
+        code = blank_strings(drop_if0(strip_comments(text)).replace("\\\n", " "))
+        for m in re.finditer(r"^[ \t]*#[ \t]*define[ \t]+(\w+)\(([^)]*)\)(.*)$", code, re.M):
+            fmacros.setdefault(rel, {})[m.group(1)] = m.group(3)
+        for m in re.finditer(r"^[^\s#][^;{=]*=\s*\{", code, re.M):
+            decl = m.group(0)[:m.group(0).rindex("=")]
+            nm = re.search(r"\b(\w+)\s*\[", decl) or re.search(r"(\w+)\W*$", decl)
+            init = code[m.end() - 1:balanced(code, m.end() - 1)]
+            if nm:
+                tables.setdefault(rel, {})[nm.group(1)] = set(re.findall(r"[A-Za-z_]\w*", init))
+    def refs(rel, body):
+        """Names a body calls, directly or through a same-file macro, plus
+        function names it holds outside any call's arguments (a pointer
+        taken) and the functions in a file-scope table it names."""
+        b = blank_strings(drop_if0(body))
+        out = set(CALL.findall(b))
+        for mname, mbody in fmacros.get(rel, {}).items():
+            if re.search(r"\b" + mname + r"\s*\(", b):
+                out |= set(CALL.findall(mbody))
+        depth = 0
+        for m in re.finditer(r"[()]|[A-Za-z_]\w*", b):
+            t = m.group(0)
+            if t == "(":
+                depth += 1
+            elif t == ")":
+                depth -= 1
+            elif depth <= 0:
+                out.add(t)
+                out |= tables.get(rel, {}).get(t, set())
+        return out
     warmed = set()
     frontier = [(r, n) for n in WARM_ROOTS for r in byname.get(n, [])]
     while frontier:
@@ -628,7 +668,7 @@ def audit(sources):
             continue
         warmed.add(fn)
         for b in allfuncs[fn]:
-            for c in CALL.findall(b):
+            for c in refs(fn[0], b):
                 frontier += [x for x in resolve(fn[0], c) if x not in warmed]
     for r in rows:
         r["warm"] = (r["file"], r["name"]) in warmed
@@ -975,6 +1015,35 @@ static int g_two(int w)
     return w ? a : b;
 }
 
+/* 34: warm references: an #if 0 call and a call inside a string don't
+   warm; a function-pointer table and a same-file macro do */
+static int g_if0(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_IF0"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_strcall(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_STRCALL"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int g_tabbed(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_TABBED"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int (*const warm_tab[])(void) = { g_tabbed };
+static int g_macroed(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_MACROED"); v = s ? atoi(s) : 0; }
+    return v;
+}
+#define WARM_SOME() do { (void)g_macroed(); } while (0)
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -990,6 +1059,12 @@ static void warm_lr_statics(void)
     int n = 0;
     if (n == 0) { n = 1; }
     /* g_cmt(); */
+#if 0
+    (void)g_if0();
+#endif
+    fprintf(stderr, "g_strcall() not yet\n");
+    (void)warm_tab[0]();
+    WARM_SOME();
     LOOP(n);
     g_early();
     (void)h_gate();
@@ -1016,6 +1091,8 @@ SELF_TEST_WANT = {
     "SYN_PAREN": ("TRAP", False), "SYN_PNOT": ("TRAP", False),
     "SYN_XAR": ("latches", False),
     "SYN_TWOA": ("TRAP", False), "SYN_TWOB": ("TRAP", False),
+    "SYN_IF0": ("latches", False), "SYN_STRCALL": ("latches", False),
+    "SYN_TABBED": ("latches", True), "SYN_MACROED": ("latches", True),
 }
 # a header's static inline gate, read from its own file
 SELF_TEST_HDR = r"""
