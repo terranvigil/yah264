@@ -387,22 +387,24 @@ def eval_unset(expr, region, envl, readers, macros, depth=0):
         if e.startswith("(") and balanced(e, 0) == len(e):
             e = e[1:-1].strip(); continue
         break
-    depth_p, q = 0, -1
+    depth_p, q, open_q = 0, -1, 0
     for i, ch in enumerate(e):                       # top-level ternary
         if ch in "([":
             depth_p += 1
         elif ch in ")]":
             depth_p -= 1
-        elif ch == "?" and depth_p == 0 and q < 0:
-            q = i
-        elif ch == ":" and depth_p == 0 and q >= 0:
+        elif ch == "?" and depth_p == 0:
+            if q < 0:
+                q = i
+            open_q += 1
+        elif ch == ":" and depth_p == 0 and q >= 0 and (open_q := open_q - 1) == 0:
             t = cond_unset(e[:q], envl, readers)
             if t is None:
                 t = cond_value(e[:q], region, envl, readers, macros, depth)
             if t is None:
                 return None                          # a condition it can't read
-            # nested ternaries sit in the else branch, so the first ':' at
-            # depth 0 splits this one
+            # the ':' that closes the first '?' splits this one, so a ternary
+            # nested in either branch stays whole
             br = e[q + 1:i] if t else e[i + 1:]
             return eval_unset(br, region, envl, readers, macros, depth + 1)
     rd = r"(?:" + "|".join(re.escape(r) for r, (_n, d) in readers.items() if d is None) + r")\s*\([^()]*\)"
@@ -1083,6 +1085,27 @@ static int g_macroed(void)
 }
 #define WARM_SOME() do { (void)g_macroed(); } while (0)
 
+/* 35: nested ternaries: in the then branch, in the else branch, and in
+   parentheses; unset keeps the sentinel each time */
+static int g_nest1(void)
+{
+    static int a = -1;
+    if (a < 0) { const char *e = y264_env("SYN_NEST1"); a = e ? e[0] ? 1 : 2 : -1; }
+    return a;
+}
+static int g_nest2(void)
+{
+    static int b = -1;
+    if (b < 0) { const char *e = y264_env("SYN_NEST2"); b = !e ? -1 : e[0] == 'x' ? 1 : 2; }
+    return b;
+}
+static int g_nest3(void)
+{
+    static int c = -1;
+    if (c < 0) { const char *e = y264_env("SYN_NEST3"); c = e ? (e[0] == 'a' ? 1 : 2) : -1; }
+    return c;
+}
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1132,6 +1155,7 @@ SELF_TEST_WANT = {
     "SYN_TWOA": ("TRAP", False), "SYN_TWOB": ("TRAP", False),
     "SYN_IF0": ("latches", False), "SYN_STRCALL": ("latches", False),
     "SYN_TABBED": ("latches", True), "SYN_MACROED": ("latches", True),
+    "SYN_NEST1": ("TRAP", False), "SYN_NEST2": ("TRAP", False), "SYN_NEST3": ("TRAP", False),
 }
 # a header's static inline gate: refused, since each file has its own copy
 SELF_TEST_HDR = r"""
