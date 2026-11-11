@@ -1428,255 +1428,6 @@ static void buf_append(uint8_t **buf, size_t *sz, size_t *cap,
     *sz += n;
 }
 
-/* --nal-hrd across GOP segments: a segment's first cpb_removal_delay and every
- * later buffering period's initial delay depend on the segments before it, so
- * the writer runs the stream's arrival schedule and rewrites them, sizes kept. */
-struct hrd_join {
-    double tc, bitrate;                 /* seconds per tick, declared bit/s */
-    unsigned full;                      /* the full-buffer delay, 90 kHz */
-    int cbr, tpp;
-    long aus;                           /* access units seen */
-    long next_cpb;                      /* ticks from the last period to the next AU */
-    double tr_nb, tai, taf;
-    unsigned init, off;                 /* the period in force */
-    int pad;                            /* re-pad filler on the stream's ledger */
-    double cpb, fill;                   /* CpbSize; bits before the next removal */
-};
-
-/* the next start code at or after `from`: its first byte, with *hdr the NAL
- * header after it; n when there is none */
-static size_t hrd_next_nal(const uint8_t *b, size_t n, size_t from, size_t *hdr)
-{
-    for (size_t i = from; i + 3 <= n; i++) {
-        if (b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1) {
-            *hdr = i + 3;
-            return i > from && b[i - 1] == 0 ? i - 1 : i;
-        }
-    }
-    *hdr = n;
-    return n;
-}
-
-/* NAL bytes [a, e) without their emulation bytes, into r; the length */
-static size_t hrd_unescape(const uint8_t *b, size_t a, size_t e, uint8_t *r)
-{
-    size_t m = 0;
-    int z = 0;
-    for (size_t i = a; i < e; i++) {
-        if (z >= 2 && b[i] == 3) { z = 0; continue; }
-        r[m++] = b[i];
-        z = b[i] == 0 ? z + 1 : 0;
-    }
-    return m;
-}
-
-static unsigned hrd_bits(const uint8_t *r, size_t *bit, int n)
-{
-    unsigned v = 0;
-    for (int i = 0; i < n; i++, (*bit)++)
-        v = (v << 1) | ((r[*bit >> 3] >> (7 - (*bit & 7))) & 1u);
-    return v;
-}
-
-static void hrd_put_bits(uint8_t *r, size_t bit, int n, unsigned v)
-{
-    for (int i = n - 1; i >= 0; i--, bit++) {
-        uint8_t m = (uint8_t)(0x80 >> (bit & 7));
-        r[bit >> 3] = (uint8_t)(((v >> i) & 1) ? r[bit >> 3] | m : r[bit >> 3] & ~m);
-    }
-}
-
-static int hrd_is_vcl(int t) { return t >= 1 && t <= 5; }
-
-/* growable output */
-struct hrd_out { uint8_t *p; size_t n, cap; };
-
-static int hrd_put(struct hrd_out *o, const void *d, size_t n)
-{
-    if (o->n + n > o->cap) {
-        size_t c = o->cap ? o->cap : 4096;
-        while (c < o->n + n) c *= 2;
-        uint8_t *q = realloc(o->p, c);
-        if (!q) return -1;
-        o->p = q; o->cap = c;
-    }
-    memcpy(o->p + o->n, d, n);
-    o->n += n;
-    return 0;
-}
-
-/* a start code of sclen bytes (3 or 4), then n bytes of NAL */
-static int hrd_put_nal(struct hrd_out *o, long sclen, const uint8_t *nal, size_t n)
-{
-    static const uint8_t sc4[4] = { 0, 0, 0, 1 };
-    return hrd_put(o, sc4 + 4 - sclen, (size_t)sclen) < 0 || hrd_put(o, nal, n) < 0 ? -1 : 0;
-}
-
-/* Rewrites one GOP's timing in *buf, and advances j over it. -1 when an
- * access unit cannot keep its size or memory runs out. */
-static int hrd_join_gop(struct hrd_join *j, uint8_t **buf, size_t *sz, int more)
-{
-    const uint8_t *b = *buf;
-    size_t n = *sz, hdr, sc = hrd_next_nal(b, n, 0, &hdr);
-    struct hrd_out o = { NULL, 0, 0 };
-    uint8_t *r = NULL;
-    size_t rcap = 0;
-    int in_vcl = 0, au_open = 0, au_nals = 0, debt = 0, bp = 0, rc = 0, gop_aus = 0;
-    size_t au_start = 0;
-    double tr = 0.0;
-    for (;;) {
-        size_t hdr2 = n, nx = sc < n ? hrd_next_nal(b, n, hdr, &hdr2) : n;
-        int t = sc < n && hdr < n ? (b[hdr] & 0x1F) : -1;
-        /* an access unit ends before the first NAL that is neither VCL nor
-         * filler after its slices, and at the end of the GOP */
-        if (au_open && in_vcl && (t < 0 || (!hrd_is_vcl(t) && t != 12))) {
-            if (debt) { rc = -1; break; }
-            double bits = 8.0 * (double)(o.n - au_start);
-            double rpic = j->bitrate * j->tc * (double)j->tpp;
-            /* the encoder's padding rule on the stream's own ledger: pad until
-             * the buffer before the next removal sits strictly inside CpbSize;
-             * the stream's last access unit is never padded */
-            double want = j->fill + rpic - j->cpb - bits;
-            if (j->pad && (t >= 0 || more) && want > 0.0) {
-                size_t need = (size_t)(want / 8.0) + 1, ff = need > 6 ? need - 6 : 0;
-                static const uint8_t fh[5] = { 0, 0, 0, 1, 12 };
-                uint8_t ffb[256], stop = 0x80;
-                memset(ffb, 0xFF, sizeof ffb);
-                if (hrd_put(&o, fh, 5) < 0) { rc = -1; break; }
-                for (size_t q = 0; q < ff && rc == 0; q += sizeof ffb)
-                    if (hrd_put(&o, ffb, ff - q < sizeof ffb ? ff - q : sizeof ffb) < 0) rc = -1;
-                if (rc || hrd_put(&o, &stop, 1) < 0) { rc = -1; break; }
-                bits = 8.0 * (double)(o.n - au_start);
-            }
-            if (j->pad)
-                j->fill += rpic - bits;
-            j->taf = j->tai + bits / j->bitrate;
-            j->aus++;
-            gop_aus++;
-            au_open = in_vcl = au_nals = bp = 0;
-        }
-        if (t < 0) break;
-        if (!au_open) { au_open = 1; au_start = o.n; }
-        size_t ce = nx;
-        while (ce > hdr + 1 && b[ce - 1] == 0) ce--;   /* trailing_zero_8bits */
-        long sclen = (long)(hdr - sc), trail = (long)(nx - ce);
-        /* a NAL that is not the first of its access unit, nor a parameter
-         * set, may give back its zero_byte to an earlier NAL that grew */
-        if (debt && au_nals > 0 && t != 7 && t != 8 && sclen == 4) { sclen = 3; debt--; }
-        if (t == 6) {
-            if (nx - hdr > rcap) {
-                rcap = nx - hdr;
-                uint8_t *q = realloc(r, rcap);
-                if (!q) { rc = -1; break; }
-                r = q;
-            }
-            size_t m = hrd_unescape(b, hdr + 1, ce, r);
-            int changed = 0;
-            size_t i = 0;
-            while (i + 1 < m) {                     /* the last byte is the stop bit */
-                int pt = 0; size_t ps = 0;
-                while (i < m && r[i] == 0xFF) { pt += 255; i++; }
-                if (i >= m) break;
-                pt += r[i++];
-                while (i < m && r[i] == 0xFF) { ps += 255; i++; }
-                if (i >= m) break;
-                ps += r[i++];
-                if (i + ps > m) break;
-                if (pt == 0 && ps >= 7) {
-                    bp = 1;
-                    if (j->aus > 0) {
-                        size_t bit = 8 * i;
-                        int lz = 0;
-                        while (!hrd_bits(r, &bit, 1)) lz++;
-                        hrd_bits(r, &bit, lz);          /* sps_id */
-                        size_t at = bit;
-                        unsigned init = hrd_bits(r, &bit, 24), off = hrd_bits(r, &bit, 24);
-                        /* tr of this AU is known only at its pic_timing,
-                         * which follows; it is the previous removal plus
-                         * the cadence, and next_cpb holds the ticks */
-                        double trn = j->tr_nb + j->tc * (double)j->next_cpb;
-                        double d = ceil(90000.0 * (trn - j->taf) - 1e-6);
-                        unsigned want = d >= (double)j->full ? j->full : d < 1.0 ? 1u : (unsigned)d;
-                        if (want != init || off != j->full - want) {
-                            hrd_put_bits(r, at, 24, want);
-                            hrd_put_bits(r, at + 24, 24, j->full - want);
-                            changed = 1;
-                        }
-                        j->init = want; j->off = j->full - want;
-                    } else {
-                        size_t bit = 8 * i;
-                        int lz = 0;
-                        while (!hrd_bits(r, &bit, 1)) lz++;
-                        hrd_bits(r, &bit, lz);
-                        j->init = hrd_bits(r, &bit, 24);
-                        j->off = hrd_bits(r, &bit, 24);
-                    }
-                }
-                if (pt == 1 && ps >= 3) {
-                    long c = ((long)r[i] << 16) | ((long)r[i + 1] << 8) | r[i + 2];
-                    if (j->aus > 0 && gop_aus == 0 && j->next_cpb >= 0 && c != j->next_cpb) {
-                        c = j->next_cpb;
-                        r[i] = (uint8_t)(c >> 16); r[i + 1] = (uint8_t)(c >> 8); r[i + 2] = (uint8_t)c;
-                        changed = 1;
-                    }
-                    tr = j->aus == 0 ? (double)j->init / 90000.0 : j->tr_nb + j->tc * (double)c;
-                    if (j->aus == 0)
-                        j->fill = j->bitrate * (double)j->init / 90000.0;
-                    double ear = tr - (double)(bp ? j->init : j->init + j->off) / 90000.0;
-                    j->tai = j->aus == 0 ? 0.0 : j->cbr || ear < j->taf ? j->taf : ear;
-                    if (j->aus == 0 || bp) j->tr_nb = tr;
-                    /* the next AU counts from here, or from this period */
-                    j->next_cpb = (bp ? 0 : c) + j->tpp;
-                }
-                i += ps;
-            }
-            if (changed) {
-                if (hrd_put_nal(&o, sclen, b + hdr, 1) < 0) { rc = -1; break; }
-                size_t before = o.n;
-                int z = 0;
-                for (size_t q = 0; q < m && rc == 0; q++) {
-                    uint8_t e3 = 3;
-                    if (z >= 2 && r[q] <= 3) { if (hrd_put(&o, &e3, 1) < 0) rc = -1; z = 0; }
-                    if (hrd_put(&o, &r[q], 1) < 0) rc = -1;
-                    z = r[q] == 0 ? z + 1 : 0;
-                }
-                if (rc) break;
-                long delta = (long)(o.n - before) - (long)(ce - hdr - 1);
-                /* growth: drop trailing zeros, then this NAL's own zero_byte
-                 * when it does not open its access unit, then later ones */
-                long tz = trail - delta;
-                if (tz < 0) {
-                    long need = -tz;
-                    tz = 0;
-                    if (need && au_nals > 0 && sclen == 4) {
-                        /* rewrite the start code in place: shift the NAL down */
-                        size_t s0 = before - 1 - 4;
-                        memmove(o.p + s0, o.p + s0 + 1, o.n - s0 - 1);
-                        o.n--; need--;
-                    }
-                    debt += (int)need;
-                }
-                uint8_t zz = 0;
-                for (long q = 0; q < tz; q++) if (hrd_put(&o, &zz, 1) < 0) { rc = -1; break; }
-                if (rc) break;
-            } else {
-                if (hrd_put_nal(&o, sclen, b + hdr, nx - hdr) < 0) { rc = -1; break; }
-            }
-        } else if (!(t == 12 && j->pad)) {
-            if (hrd_put_nal(&o, sclen, b + hdr, nx - hdr) < 0) { rc = -1; break; }
-        }
-        if (hrd_is_vcl(t)) in_vcl = 1;
-        au_nals++;
-        sc = nx; hdr = hdr2;
-    }
-    free(r);
-    if (rc) { free(o.p); return -1; }
-    free(*buf);
-    *buf = o.p;
-    *sz = o.n;
-    return 0;
-}
-
 /* Y264_RC_CARRY=0 disables the cross-GOP ABR carry (each GOP re-solves its
  * own rate problem from the seeds, the pre-2026-09-02 behaviour). */
 static int rc_carry_on(void)
@@ -1875,12 +1626,18 @@ static void *gop_worker(void *arg)
         p.idr_pic_id_base = idr_base;
         /* The same handoff, asked of the HRD clock instead of the buffer. This
  * GOP opens a buffering period at its first picture, and that picture's
- * cpb_removal_delay counts ticks back to the PREVIOUS period: the previous
- * GOP's first picture, two ticks per input frame, unless that GOP opened
- * one of its own at a scene cut. The writer rewrites it then
- * (hrd_join_gop), once the previous GOP is coded. */
+ * cpb_removal_delay counts ticks back to the PREVIOUS period, which is
+ * the previous GOP's first picture -- two ticks per input frame between
+ * them. Static in the GOP split, like the flag above, so it does not
+ * depend on which worker coded which GOP. */
         if (g > 0 && p.nal_hrd)
             p.rc.hrd_bp_ticks = 2 * (j->gop_start[g] - j->gop_start[g - 1]);
+        /* ...and tell the encoder that the count above is only meaningful if it
+ * opens no buffering period of its own in between. Assume segmented
+ * unless the split is FINAL and holds exactly one GOP: a streamed input
+ * publishes boundaries as it reads them, so "one so far" is not "one". */
+        if (p.nal_hrd)
+            p.rc.hrd_segmented = (gops_final && n_gops == 1) ? 0 : 1;
         /* ABR carry: the predecessor is the GOP handed out W places earlier
  * (pull mode: pull index k - W; static mode: this worker's previous
  * GOP). Wait for its export, then credit the GOPs between at target. */
@@ -3996,27 +3753,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * behaviour for a streaming encoder and it is what the exit code is for;
  * the alternative is holding the whole stream to be able to withdraw it. */
     int emitted = 0, wr_err = 0;
-    struct hrd_join hj;
-    memset(&hj, 0, sizeof hj);
-    if (param->nal_hrd) {
-        double br = ceil((double)param->rc.vbv_maxrate * 1000.0 / 64.0) * 64.0;
-        double cpb = ceil((double)param->rc.vbv_bufsize * 1000.0 / 16.0) * 16.0;
-        hj.tc = (double)param->timebase.fps_den / (2.0 * (double)param->timebase.fps_num);
-        hj.bitrate = br;
-        hj.full = (unsigned)(90000.0 * cpb / br);
-        if (hj.full < 1) hj.full = 1;
-        hj.cbr = param->nal_hrd == YAH264_NAL_HRD_CBR;
-        hj.tpp = param->interlaced ? 1 : 2;
-        hj.next_cpb = -1;
-        hj.cpb = cpb;
-        hj.pad = param->filler == YAH264_FILLER_OFF ? 0
-               : param->filler > 0 ? 1 : param->nal_hrd == YAH264_NAL_HRD_CBR;
-    }
-    /* padded: a GOP is held until we know another GOP follows, since the
-     * stream's last access unit is never padded */
-    uint8_t *held = NULL;
-    size_t held_sz = 0;
-    int held_idx = 0;
     for (;;) {
         uint8_t *buf = NULL;
         size_t sz = 0;
@@ -4034,47 +3770,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             job.held -= sz;
         }
         pthread_mutex_unlock(&job.lock);
-        if (fin) {
-            /* on an abort too: the held GOP is finished, and it ends the output */
-            if (held) {
-                if (hrd_join_gop(&hj, &held, &held_sz, 0) < 0) {
-                    fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", held_idx);
-                    wr_err = 1;
-                    free(held);
-                    held = NULL;
-                }
-                gop_emit(&job, out, held_idx, held, held ? held_sz : 0, &wr_err);
-            }
-            held = NULL;
-            break;
-        }
-        if (hj.pad && buf && sz) {
-            if (held) {
-                if (hrd_join_gop(&hj, &held, &held_sz, 1) < 0) {
-                    /* nothing after it could be timed right either: stop here */
-                    fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", held_idx);
-                    wr_err = 1;
-                    free(held);
-                    gop_emit(&job, out, held_idx, NULL, 0, &wr_err);   /* its stats lines */
-                } else
-                    gop_emit(&job, out, held_idx, held, held_sz, &wr_err);
-            }
-            held = buf; held_sz = sz; held_idx = emitted;
-            if (wr_err) {
-                free(held);
-                held = NULL;
-                gop_emit(&job, out, held_idx, NULL, 0, &wr_err);
-            }
-        } else {
-            if (param->nal_hrd && buf && sz && hrd_join_gop(&hj, &buf, &sz, 1) < 0) {
-                fprintf(stderr, "yah264: cannot rewrite the HRD timing at GOP %d\n", emitted);
-                wr_err = 1;
-                free(buf);
-                buf = NULL;
-                sz = 0;
-            }
-            gop_emit(&job, out, emitted, buf, sz, &wr_err);
-        }
+        if (fin) break;
+        gop_emit(&job, out, emitted, buf, sz, &wr_err);
         emitted++;
         /* Frames written, not frames read: the progress a viewer cares about is
  * output that exists. gop_start[emitted] is the first frame of the next
@@ -4082,9 +3779,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         progress(job.gop_start && emitted <= job.n_gops ? job.gop_start[emitted] : 0,
                  job.gops_final ? (long)job.gop_start[job.n_gops] : 0);
         if (wr_err) {
-            if (held) gop_emit(&job, out, held_idx, NULL, 0, &wr_err);
-            free(held);
-            held = NULL;
             pthread_mutex_lock(&job.lock);
             job.abort_ = 1;
             pthread_cond_broadcast(&job.cv_space);
@@ -6095,12 +5789,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
-    /* --nal-hrd two-pass runs one continuous encoder (see the path choice
- * below), and these three exist only on the per-GOP path */
-    if (nal_hrd && param.rc.method == YAH264_RC_2PASS && (g_cut_split || g_shot_table || g_shot_crf)) {
-        fprintf(stderr, "yah264: --nal-hrd two-pass cannot be combined with %s: it runs one "
-                "continuous encoder, and that option splits the stream into per-GOP encoders\n",
-                g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table" : "--cut-split");
+    /* --nal-hrd and --keyint 1 with a VBV run one continuous encoder (see the
+ * path choice below), and these options exist only on the per-GOP path */
+    int vbv_k1 = param.keyint == 1 && param.rc.vbv_maxrate > 0 && param.rc.vbv_bufsize > 0;
+    if ((nal_hrd || vbv_k1)
+        && (g_cut_split || g_shot_table || g_shot_crf || g_segment_out)) {
+        fprintf(stderr, "yah264: %s cannot be combined with %s: it runs one "
+                "continuous encoder, and that option needs the per-GOP encoders\n",
+                nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV",
+                g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table"
+                : g_cut_split ? "--cut-split" : "--segment-out");
         return 2;
     }
     /* --intra-refresh. Everything it cannot run with is named here, because
@@ -6205,25 +5903,16 @@ int main(int argc, char **argv)
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
-    /* --nal-hrd at one thread runs one continuous encoder: one worker has
- * no parallel GOPs to win back, and the per-GOP path would restart the
- * rate control at every keyint boundary. The per-GOP options still take
- * that path. Two-pass runs one encoder at any thread count, because its
- * per-GOP joins can miss the handoff level, and a declared HRD turns that
- * into a stream failing its own declaration (syn_shots, a GOP pinned at
- * QP 51 leaving the next one 3.5 kbit short). */
-    /* ...and so do one-frame GOPs under a VBV: each opens on an assumed
-     * level with no frame of its own left to correct it, and the drift
-     * compounds over every GOP in flight */
-    int vbv_k1 = param.keyint == 1 && param.rc.vbv_maxrate > 0 && param.rc.vbv_bufsize > 0;
-    int one_enc = (vbv_k1 || (nal_hrd && (nthreads <= 1 || param.rc.method == YAH264_RC_2PASS)))
-                  && !g_cut_split && !g_shot_table && !g_shot_crf;
+    /* A per-GOP join starts from an assumed buffer level. One-frame GOPs under
+ * a VBV and a declared HRD have no room for it to be wrong, so they run one
+ * encoder, its threads on the row wavefront. */
+    int one_enc = vbv_k1 || nal_hrd;
     if (one_enc) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
             LOGF(LOG_INFO, "yah264: %s runs one continuous encoder, so the %d threads "
                  "run its row wavefront instead of parallel GOPs\n",
-                 vbv_k1 ? "--keyint 1 with a VBV" : "--nal-hrd two-pass", nthreads);
+                 nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV", nthreads);
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
