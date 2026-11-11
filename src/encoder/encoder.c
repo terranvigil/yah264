@@ -5407,6 +5407,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 yah264_encoder_close(e);
                 return NULL;
             }
+            /* so does a QP ceiling under 51: the buffer may need the QPs above it */
+            if (param->rc.qp_max > 0 && param->rc.qp_max < 51) {
+                fprintf(stderr, "yah264: --qpmax under 51 cannot be combined with --nal-hrd: the "
+                        "buffer may need a higher QP, and the stream would fail its own declaration\n");
+                yah264_encoder_close(e);
+                return NULL;
+            }
             e->hrd_full_delay = (unsigned)(90000.0 * e->hrd_cpb / e->hrd_bitrate);
             if (e->hrd_full_delay < 1) e->hrd_full_delay = 1;
             double d0 = 90000.0 * e->vbv.fill / e->hrd_bitrate;
@@ -11654,10 +11661,12 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * decided QP and the content and of nothing else. Same frames re-encode on
  * every run and at every thread count.
  *
- * Four attempts, then ship what we have. The loop is monotone (each pass
- * raises the QP by at least 1 and stops at 51), so this is a cap on wasted
- * work, not a correctness knob: a frame still over the limit at QP 51 is one
- * the buffer simply cannot hold, and there is no quantiser that fixes it. */
+ * Four attempts under a plain VBV, then ship what we have; under --nal-hrd
+ * it goes on until the frame fits or its coded QP stops rising. The loop is
+ * monotone (each pass raises the QP by at least 1 and stops at the ceiling),
+ * so the cap is on wasted work, not a correctness knob: a frame still over
+ * the limit at the ceiling is one the buffer cannot hold, and no quantiser
+ * fixes it. */
     if (vbv_bounded_now(e)) {
         /* The occupancy this frame is removed FROM. It is the instance's first
  * frame, so under the pipelined path the ledger holds only this frame's
@@ -11689,10 +11698,10 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * escapes and nothing else does. */
         int fqp0 = frame_qp(e, type, is_ref), qp0 = e->qp;
         /* A forced QP is not a QP the buffer may move, so there is nothing
- * here to try: the re-encode would code the same frame four times. */
+ * here to try: every re-encode would code the same frame again. */
         /* under --nal-hrd until it fits or the ceiling: noise moves a few
          * percent a step and four tries left it over with no count */
-        double kovh = -1.0;     /* what a key's parameter sets and SEIs add over this AU's */
+        double kovh = -1.0;     /* what a key's SEIs add over this AU's */
         for (int k = 0; k < (e->hrd_on ? 64 : 4) && limit > 0.0 && forced_qp(e) < 0; k++) {
             double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
             double over = bits / limit;
@@ -11728,6 +11737,15 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             int cap = fqp0 < qp0 ? 51 + qp0 - fqp0 : 51;   /* intra codes under its base */
             if (nq > cap) nq = cap;
             nq = (int)crf_max_clip(e, qp0, nq, fqp0 - qp0);
+            if (nq != e->qp) {
+                /* a base QP whose coded QP the bounds hold still would code
+                 * the same frame again */
+                int was = e->qp, fq = frame_qp(e, type, is_ref);
+                e->qp = nq;
+                if (frame_qp(e, type, is_ref) == fq)
+                    nq = was;
+                e->qp = was;
+            }
             if (nq == e->qp) {
                 /* at the ceiling the per-macroblock offsets still code some
                  * blocks under 51: under a declared buffer, drop them once */

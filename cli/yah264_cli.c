@@ -5802,10 +5802,12 @@ int main(int argc, char **argv)
         int forced = 0, zq = 0;
         for (int i = 0; i < g_nforces; i++) forced |= g_forces[i].qp >= 0;
         for (int i = 0; i < g_nzones; i++) zq |= (g_zones[i].flags & YAH264_ZONE_QP) != 0;
-        if (crf_max > 0.0 || forced || zq) {
-            fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: it fixes a QP the "
-                    "buffer may need to raise, and the stream would fail its own declaration\n",
-                    crf_max > 0.0 ? "--crf-max" : forced ? "a forced qpfile QP" : "a --zones q= zone");
+        int qcap = qp_max > 0 && qp_max < 51;
+        if (crf_max > 0.0 || qcap || forced || zq) {
+            fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: it holds the QP under "
+                    "what the buffer may need, and the stream would fail its own declaration\n",
+                    crf_max > 0.0 ? "--crf-max" : qcap ? "--qpmax under 51"
+                    : forced ? "a forced qpfile QP" : "a --zones q= zone");
             if (out != stdout) { fclose(out); remove(out_path); }
             return 2;
         }
