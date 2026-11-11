@@ -52,6 +52,11 @@ if get_option('dev_knobs')
   test('aqdc', test_aqdc)
 endif
 
+test_deblockqp = executable('test_deblockqp',
+  'test_deblockqp.c',
+  dependencies : yah264_dep)
+test('deblockqp', test_deblockqp)
+
 test_denoise = executable('test_denoise',
   'test_denoise.c',
   dependencies : yah264_dep)
