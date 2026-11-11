@@ -825,6 +825,13 @@ def audit(sources):
         for mname, mbody in fmacros.get(rel, {}).items():
             if re.search(r"\b" + mname + r"\s*\(", b):
                 out |= set(CALL.findall(mbody))
+        # the right-hand side of every store into a member or slot
+        # ('lhs->m = ...;', 'lhs.m = ...;', 'lhs[i] = ...;'): nothing named
+        # there and not called is followed, ternary arms, '&k' and casts too
+        stores = []
+        for st in re.finditer(r"(?:->\s*\w+|\.\s*\w+|\])\s*=(?!=)", b):
+            end = b.find(";", st.end())
+            stores.append((st.end(), len(b) if end < 0 else end))
         depth = 0
         for m in re.finditer(r"[()]|(?:->|\.)\s*[A-Za-z_]\w*|[A-Za-z_]\w*", b):
             t = m.group(0)
@@ -836,7 +843,7 @@ def audit(sources):
                 pass                                     # a member, not a function
             elif depth <= 0:
                 before = b[max(0, m.start() - 80):m.start()]
-                if re.search(r"(?:->\s*\w+|\.\s*\w+|\])\s*=\s*(?:\([^()]*\)\s*)?$", before) \
+                if any(a <= m.start() < e for a, e in stores) \
                         or re.search(r"\(\s*[\w\s]*\*\s*\)\s*$", before):
                     continue        # stored into a member or slot, or cast to data: not a call
                 out.add(t)
@@ -1572,9 +1579,27 @@ static int k_local(void)
     if (v < 0) { const char *s = y264_env("SYN_KLOCAL"); v = s ? atoi(s) : 0; }
     return v;
 }
-struct dsp { int (*fill)(void); };
+static int k_tern(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_KTERN"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int k_addr(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_KADDR"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int k_icast(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_KICAST"); v = s ? atoi(s) : 0; }
+    return v;
+}
+struct dsp { int (*fill)(void); int (*alt)(void); void *p; long n; };
 static int (*slots[2])(void);
-static void dsp_init(struct dsp *d)
+static void dsp_init(struct dsp *d, int w)
 {
     void *keep;
     int (*fp)(void);
@@ -1582,6 +1607,9 @@ static void dsp_init(struct dsp *d)
     slots[0] = k_slot;
     keep = (void *)k_cast;
     fp = k_local;
+    d->alt = w ? k_tern : k_fill;
+    d->p = &k_addr;
+    d->n = (long)k_icast;
     (void)keep; (void)fp;
 }
 
@@ -1726,7 +1754,7 @@ static void warm_lr_statics(void)
     (void)g_ty();
     (void)g_attr();
     (void)pickfp(0);
-    dsp_init(0);
+    dsp_init(0, 0);
     (void)s_priv();
     pool_go(0, 0);
     gcfg.g_dotm = 1;
@@ -1775,6 +1803,8 @@ SELF_TEST_WANT = {
     "SYN_KFILL": ("latches", False), "SYN_KSLOT": ("latches", False),
     "SYN_KCAST": ("latches", False), "SYN_KLOCAL": ("latches", True),
     "SYN_SPRIV": ("latches", False),
+    "SYN_KTERN": ("latches", False), "SYN_KADDR": ("latches", False),
+    "SYN_KICAST": ("latches", False),
     "SYN_HEX": ("TRAP", False), "SYN_HEXU": ("latches", False),
     "SYN_OCT": ("latches", False), "SYN_OCTT": ("TRAP", False),
     "SYN_OCT9": ("latches", False), "SYN_HEXBIG": ("latches", False),
