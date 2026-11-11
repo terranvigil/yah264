@@ -11646,10 +11646,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             int cap = fqp0 < qp0 ? 51 + qp0 - fqp0 : 51;   /* intra codes under its base */
             if (nq > cap) nq = cap;
             nq = (int)crf_max_clip(e, qp0, nq, fqp0 - qp0);
-            if (nq == e->qp) {
-                e->hrd_capped++;        /* already at the ceiling, still over */
-                break;
-            }
+            if (nq == e->qp)
+                break;                  /* already at the ceiling */
             e->qp = nq;
             e->chroma_qp = y264_chroma_qp(nq, e->param.chroma_qp_index_offset);
             if (e->rcp_on)
@@ -16333,15 +16331,14 @@ void yah264_encoder_close(yah264_encoder_t *e)
     e->rcr = NULL;
     /* the last access unit is never closed by a next one: count it here.
      * Exit status stays 0; the stream is still a stream, but it says so. */
-    if (e->hrd_on && e->hrd_pic > 0 && e->hrd_au_bytes > 0 &&
-        e->hrd_tai + 8.0 * (double)e->hrd_au_bytes / e->hrd_bitrate > e->hrd_tr_cur + 1e-9)
-        e->hrd_late++;
-    if (e->hrd_capped)
-        fprintf(stderr, "yah264: warning: %ld picture(s) did not fit the buffer even at the "
-                "highest QP; the stream underflows there\n", e->hrd_capped);
-    if (e->hrd_late)
-        fprintf(stderr, "yah264: warning: %ld access unit(s) arrive after their removal time "
-                "on the declared HRD schedule\n", e->hrd_late);
+    if (e->hrd_on && e->tp_pass != 1) {
+        if (e->hrd_pic > 0 && e->hrd_au_bytes > 0 &&
+            e->hrd_tai + 8.0 * (double)e->hrd_au_bytes / e->hrd_bitrate > e->hrd_tr_cur + 1e-9)
+            e->hrd_late++;
+        if (e->hrd_late)
+            fprintf(stderr, "yah264: warning: %ld access unit(s) arrive after their removal "
+                    "time on the declared HRD schedule\n", e->hrd_late);
+    }
     if (e->rc_shared) {
         pthread_mutex_lock(&e->rc_shared->mx);
         e->rc_shared->nlive--;
