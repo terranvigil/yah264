@@ -1741,6 +1741,24 @@ static int g_eqparen(void)
     return v;
 }
 
+/* 56: a negative hex unset value */
+static int g_neghex(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_NEGHEX"); v = s ? atoi(s) : -0x10; }
+    return v;
+}
+
+/* 57: a function named only as a member in a pool call is not an entry */
+static int jobm(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_JOBM"); v = s ? atoi(s) : 0; }
+    return v;
+}
+struct holder { void *(*jobm)(void *); };
+static void pool_member(struct st *p, struct holder *a) { ntp_run(p, a->jobm); }
+
 /* 11: early return ahead of the read, warmed */
 static int g_early_n = -2;
 static void g_early(void)
@@ -1773,6 +1791,7 @@ static void warm_lr_statics(void)
     pool_go(0, 0);
     (void)start_r(0);
     h_helper();
+    (void)jobm();
     gcfg.g_dotm = 1;
     register_cb(g_argcb);
     warm_twin();
@@ -1826,6 +1845,7 @@ SELF_TEST_WANT = {
     "SYN_OCT9": ("latches", False), "SYN_HEXBIG": ("latches", False),
     "SYN_ECALLED": ("latches", True), "SYN_EJOB": ("latches", False),
     "SYN_ERET": ("latches", False), "SYN_HXGATE": ("latches", True),
+    "SYN_NEGHEX": ("TRAP", False), "SYN_JOBM": ("latches", True),
     "SYN_DOTM": ("latches", False), "SYN_ARGCB": ("latches", False),
     "SYN_CHAIN": ("latches", False), "SYN_NEGP": ("TRAP", False),
     "SYN_EQPAREN": ("latches", False),
@@ -2031,6 +2051,14 @@ static int w_inbody(void)
     if (v < 0) { const char *s = y264_env("SYN_WINBODY"); v = s ? atoi(s) : 0; }
     return v;
 }
+static int w_pre(void) { return 0; } // env-audit-ok: belongs to w_pre
+// just a note
+static int w_climb(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_WCLIMB"); v = s ? atoi(s) : -1; }
+    return v;
+}
 // env-audit-ok:
 static int w_empty(void)
 {
@@ -2120,7 +2148,7 @@ def self_test(inject_fail=False):
               "SYN_WEMPTY": EMPTY_WAIVER, "SYN_WSTR": None,
               "SYN_WNEXT": "the reason on the next line", "SYN_WAFTER": None,
               "SYN_WSHORT": "short", "SYN_WLINEBLK": EMPTY_WAIVER,
-              "SYN_WINBODY": EMPTY_WAIVER}
+              "SYN_WINBODY": EMPTY_WAIVER, "SYN_WCLIMB": None}
     if {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in wv.items()} != \
             {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in want_w.items()}:
         bad.append(f"waivers read as {wv}")
