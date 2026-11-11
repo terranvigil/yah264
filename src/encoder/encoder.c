@@ -11619,9 +11619,19 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     }
     /* under --nal-hrd the rate control never sees the QP the buffer raised a
      * frame to, and drifts under it; start from the last raised QP of the
-     * type so the frame is not coded at a QP the buffer refuses first */
+     * type so the frame is not coded at a QP the buffer refuses first. A key
+     * or a cut starts over, and a floor no frame has started from for a
+     * lookahead window is dropped. */
     int bound = vbv_bounded_now(e) && forced_qp(e) < 0;
-    if (bound && e->hrd_on && e->hrd_qfloor[type] > e->qp) {
+    int floored = bound && e->hrd_on;
+    if (floored) {
+        long age = e->la_depth > 0 ? e->la_depth : 40;
+        for (int t = 0; t < 3; t++)
+            if (type == 0 || is_idr || e->cur_open_key || e->cur_disp - e->hrd_qfloor_at[t] > age)
+                e->hrd_qfloor[t] = -1;
+    }
+    if (floored && e->hrd_qfloor[type] > e->qp) {
+        e->hrd_qfloor_at[type] = e->cur_disp;   /* still in use */
         e->qp = e->hrd_qfloor[type];
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
         if (e->rcp_on)
@@ -11775,12 +11785,23 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         }
     }
     e->hrd_flat = 0;
-    if (bound && e->hrd_on) {
-        /* a raise sets the floor; a frame with room to spare lowers it a step */
-        if (e->qp > qstart)
+    if (floored) {
+        /* a raise of --qpstep or more sets the floor of its type, the drift
+         * the floor is for, so a frame that needed a step or two does not
+         * hold the next one up; a frame of any type with room to spare
+         * lowers every floor by what that room is worth */
+        if (e->qp - qstart >= e->qp_step) {
             e->hrd_qfloor[type] = e->qp;
-        else if (last_over < 0.8 && e->hrd_qfloor[type] >= 0)
-            e->hrd_qfloor[type]--;
+            e->hrd_qfloor_at[type] = e->cur_disp;
+        } else if (last_over < 0.8) {
+            /* at most --qpstep a frame: near the top of the range bits move
+             * far more than 6 QP a halving, and a long drop overshoots */
+            int d = (int)ceil(6.0 * log2(0.8 / (last_over > 0.01 ? last_over : 0.01)));
+            if (d > e->qp_step) d = e->qp_step;
+            for (int t = 0; t < 3; t++)
+                if (e->hrd_qfloor[t] >= 0)
+                    e->hrd_qfloor[t] = e->hrd_qfloor[t] > d ? e->hrd_qfloor[t] - d : -1;
+        }
     }
     if (e->hrd_on) {
         /* what this picture's type costs at the highest QP, for the reserve */
