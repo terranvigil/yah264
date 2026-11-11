@@ -3555,11 +3555,18 @@ static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, dou
     }
     if (i51 > e->hrd_cpb) i51 = e->hrd_cpb;
     long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
-    if (e->la_n > 0) {
-        const struct la_entry *h = &e->la[e->la_head % e->la_cap];
-        long dc = (long)e->frame_count - e->cur_disp;
-        if ((h->is_cut || h->is_idr) && dc >= 1 && (dc < d || d < 1))
-            d = dc;
+    /* the lookahead head is display frame_count + 1, and the first typed
+     * entry flagged a cut or an IDR is the next key */
+    for (int i = 0; i < e->la_n; i++) {
+        const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
+        if (!h->typed)
+            break;
+        if (h->is_cut || h->is_idr) {
+            long dc = (long)e->frame_count + 1 + i - e->cur_disp;
+            if (dc >= 1 && (dc < d || d < 1))
+                d = dc;
+            break;
+        }
     }
     if (d < 1 || d > e->param.keyint)
         return nx;
