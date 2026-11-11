@@ -206,6 +206,7 @@ struct rc_knobs {
     double rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
     double vbv_plan_tj;        /* in a segment that assumed the handoff occupancy, the floor of the plan's target (vbv_burst_plan_qp) */
+    int    vbv_plan;           /* Y264_VBV_PLAN: the capped-VBR burst plan on (vbv_plan_on) */
     int    vbv_posti;          /* Y264_VBV_POSTI (default 1): under capped VBR the anchor after an intra frame, or after one the buffer raised, takes the serial schedule */
     double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
     double crf_base, crf_slope, crf_cap;

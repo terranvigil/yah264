@@ -4733,12 +4733,11 @@ long y264_dscore_n;
  * temporal means every co-located reference resolves in list 0 -- the frame
  * carries that as direct_alt_ok. */
 long y264_dscore_skip[2];
-/* Y264_DIRECT_WHY: [0] direct unavailable, [1] total. NON-ATOMIC, incremented
- * from the macroblock loop, so above one thread it LOSES COUNTS and its totals
- * are approximate. It reads as encoder nondeterminism if you let it: three runs
- * at t18 gave 34440 / 28045 / 26874 on the same clip, which is this counter
- * racing with itself and not the encoder disagreeing. Read it at t1, or read
- * colhash and the output md5, which are the sound signals. */
+/* Y264_DIRECT_WHY: [0] direct unavailable, [1] total, added atomically from
+ * the macroblock loop and taken (read and zeroed) per B slice. Above one
+ * thread another frame's macroblocks can land in a slice's count, so read
+ * it at t1, or read colhash and the output md5, which are the sound
+ * signals. */
 long y264_tdir_mb[2];
 /* Y264_DIRECT_AUTO: run the skippability score every B frame and let the next
  * B slice take the higher one (--direct auto). Separate from
@@ -8331,7 +8330,10 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int tdir_ok = 1;
     if (f->direct_temporal) {
         tdir_ok = temporal_direct(f, mbx, mby, &dmv);
-        if (direct_why_on()) { y264_tdir_mb[1]++; y264_tdir_mb[0] += !tdir_ok; }
+        if (direct_why_on()) {
+            __atomic_fetch_add(&y264_tdir_mb[1], 1L, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&y264_tdir_mb[0], (long)!tdir_ok, __ATOMIC_RELAXED);
+        }
     } else
         spatial_direct(f, mbx, mby, &dmv);
     /* v5 staircase (Y264_STAIR_BDEPTH): the derived direct list-0 MV is a
@@ -13043,6 +13045,7 @@ void y264_mb_warm_statics(void)
     (void)aq_dark_env(0);
     (void)skip_clift_env();
     (void)psy_dark_env();
+    (void)direct_why_on();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
  * is a lazy env static read from analyse on wavefront workers, so first

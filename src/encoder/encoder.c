@@ -917,10 +917,11 @@ static int wp_stat_on(void)
 #define Y264_LA_BUF_UNSET INT_MIN
 static int la_buf_env(void)
 {
-    static int v = Y264_LA_BUF_UNSET;
-    if (v == Y264_LA_BUF_UNSET) {
+    static int done, v = Y264_LA_BUF_UNSET;
+    if (!done) {                /* latch on its own flag: unset keeps v at the marker */
         const char *s = y264_env("Y264_LA_BUF");
         if (s) v = atoi(s);
+        done = 1;
     }
     return v;
 }
@@ -2484,9 +2485,9 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                        ^ ((unsigned)(uint16_t)fw->colmvy[i] << 16);
             h = (h ^ v) * 1099511628211UL;
         }
-        fprintf(stderr, "] colhash=%016lx tdir_mb=%ld/%ld\n", h,
-                y264_tdir_mb[0], y264_tdir_mb[1]);
-        y264_tdir_mb[0] = y264_tdir_mb[1] = 0;
+        long un = __atomic_exchange_n(&y264_tdir_mb[0], 0L, __ATOMIC_RELAXED);
+        long tot = __atomic_exchange_n(&y264_tdir_mb[1], 0L, __ATOMIC_RELAXED);
+        fprintf(stderr, "] colhash=%016lx tdir_mb=%ld/%ld\n", h, un, tot);
     }
     h.direct_spatial = !direct_temporal;
     h.active_ref = active_ref;
@@ -4267,8 +4268,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
  * (CLI primes on the main thread before workers) */
     (void)tprof_on();           /* profiling gate: warm before any bg thread reads it */
-    y264_cabac_warm();          /* build the RDOQ bit table before any worker runs */
-    y264_cavlc_warm();          /* likewise the VLC tables */
+    y264_cavlc_warm();          /* the VLC tables before any worker runs */
     if (!param)
         return NULL;
     /* The public enums follow the reference encoder's public API numbering,
@@ -9811,6 +9811,7 @@ static int lr_me_stage(void)
 
 static void warm_lr_statics(void)
 {
+    y264_cabac_warm();          /* the RDOQ bit table and the trace's env gate */
     (void)gpq_consume_on();
     (void)lr_me_stage(); (void)adme_log();
     (void)psy_flat_log();

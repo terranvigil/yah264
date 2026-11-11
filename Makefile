@@ -145,7 +145,7 @@ build: configure
 # Fast unit tests (all of them run in well under a second each), the symbol
 # check (one binary links both depth libraries, and a name defined in both
 # resolves by archive order with wrong pixels as the only symptom), the knob
-# census, and the regression smoke tier (8 seeded option-product cells plus one at the defaults, on a
+# census, the env gate audit and its self-test, and the regression smoke tier (8 seeded option-product cells plus one at the defaults, on a
 # synthetic clip, ~30s; skipped cleanly when ffmpeg is absent since it is the
 # decode oracle). Fixed seed so the per-commit cells are stable; the full
 # 50-cell tier and fresh seeds are a sign-off step, not a commit gate.
@@ -153,6 +153,8 @@ test: build
 	@meson test -C $(BUILD)
 	@scripts/symbol_check.sh $(BUILD)
 	@python3 scripts/knob_census.py --check
+	@python3 scripts/env_gate_audit.py --self-test
+	@python3 scripts/env_gate_audit.py
 	@scripts/pipe_window_check.sh $(BUILD)
 	@if command -v ffmpeg >/dev/null; then \
 	    YAH264=$(BUILD)/cli/yah264 python3 scripts/regress.py --seed 264; \

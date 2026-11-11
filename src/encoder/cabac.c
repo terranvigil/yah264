@@ -39,16 +39,28 @@ enum { TR_DEC = 0, TR_BYP, TR_UEG, TR_TERM, TR_RES, TR_RES8, TR_ENG, TR_CTX };
 static FILE *tr_f;
 static const y264_cabac_t *tr_c;
 static void tr_close(void) { if (tr_f) { fclose(tr_f); tr_f = NULL; } }
-/* Re-selected on every engine init: each slice's engine is a different stack
- * object, and every init_engine call site is a real slice engine (RD trials
- * reuse the live engine in est mode, which is not recorded). Single thread. */
-static void tr_select(const y264_cabac_t *c)
+/* the env gate alone, resolved by y264_cabac_warm before any worker runs;
+ * the file itself opens on the first CABAC engine, so a CAVLC encode makes
+ * none */
+static const char *tr_path;
+static void tr_open(void)
 {
     static int tried;
     if (!tried) {
         tried = 1;
         const char *path = y264_env("Y264_CABAC_TRACE");
-        if (path && *path && (tr_f = fopen(path, "wb"))) atexit(tr_close);
+        if (path && *path) tr_path = path;
+    }
+}
+/* Re-selected on every engine init: each slice's engine is a different stack
+ * object, and every init_engine call site is a real slice engine (RD trials
+ * reuse the live engine in est mode, which is not recorded). Single thread. */
+static void tr_select(const y264_cabac_t *c)
+{
+    tr_open();
+    if (tr_path && !tr_f) {
+        if ((tr_f = fopen(tr_path, "wb"))) atexit(tr_close);
+        else tr_path = NULL;        /* one try */
     }
     if (tr_f) tr_c = c;
 }
@@ -868,7 +880,13 @@ static inline void ent_ensure(void)
     if (!atomic_load_explicit(&ent_ready, memory_order_acquire))
         pthread_once(&ent_once, ent_init);
 }
-void y264_cabac_warm(void) { ent_ensure(); }
+void y264_cabac_warm(void)
+{
+    ent_ensure();
+#ifdef Y264_CABAC_TRACE
+    tr_open();                  /* resolve the trace's env gate on the opening thread */
+#endif
+}
 
 /* Estimated bits (x256) to code `bin` with packed context state `st`, and the
  * state after coding it (mirrors y264_cabac_encode_decision's transition). */

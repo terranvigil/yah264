@@ -430,6 +430,13 @@ static double rc_tunable(const char *n, double def)
     const char *s = y264_env(n);
     return s ? atof(s) : def;
 }
+/* the integer form, for an on/off knob: atoi, so "0x1" reads 0 and a
+ * value atof would make inf or nan can't reach an int conversion */
+static int rc_int_tunable(const char *n, int def)
+{
+    const char *s = y264_env(n);
+    return s ? atoi(s) : def;
+}
 
 /* Every rate-control calibration constant the decides read. Resolved once
  * at open: decides run on the stair driver thread and nothing on a decide
@@ -568,6 +575,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  * below it, and this is its floor. 0.25 vs 0 on 7-10 minute titles: 0
  * underflowed, 0.25 did not. */
     k->vbv_plan_tj    = 0.25;
+    k->vbv_plan       = rc_int_tunable("Y264_VBV_PLAN", 1);
     k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0);
     k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25);
     k->vbv_cbr_dive   = 2.0;
@@ -1239,9 +1247,7 @@ double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
  * pending B complexities and the decided QP, so it moves with nothing else. */
 static int vbv_plan_on(const yah264_encoder_t *e)
 {
-    static int v = -1;
-    if (v < 0) { const char *s = y264_env("Y264_VBV_PLAN"); v = s ? atoi(s) : 1; }
-    return v && e->abr_on && e->vbv_on && !e->vbv_cbr && !e->tp_pass;
+    return e->rck.vbv_plan && e->abr_on && e->vbv_on && !e->vbv_cbr && !e->tp_pass;
 }
 
 static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, int is_ref,
