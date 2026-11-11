@@ -292,15 +292,17 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
  * 52-entry, so the clamp is what makes a nonzero offset safe; at the
  * default pair of zeroes the whole thing is byte-identical to indexing
  * by the edge QP directly. The chroma mapping carries
- * chroma_qp_index_offset, which the spec folds in before the average. */
+ * chroma_qp_index_offset, which the spec folds in before the average.
+ * A coded QPY never goes below 0 here, so the luma clips are inert; a QPc
+ * does above 8 bits, so chroma takes no clip before indexA/indexB. */
             int offA = f->deblock_a * 2, offB = f->deblock_b * 2;
             int cqo = f->chroma_qp_off;
             int qpc = clip3(0, 51, MBQP(mbx, mby));
             int qpv = mbx > 0 ? clip3(0, 51, (MBQP(mbx - 1, mby) + qpc + 1) >> 1) : qpc;
             int qph = mby > 0 ? clip3(0, 51, (MBQP(mbx, mby - 1) + qpc + 1) >> 1) : qpc;
-            int cqc = clip3(0, 51, y264_chroma_qp(qpc, cqo));
-            int cqv = mbx > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx - 1, mby), cqo) + cqc + 1) >> 1) : cqc;
-            int cqh = mby > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx, mby - 1), cqo) + cqc + 1) >> 1) : cqc;
+            int cqc = y264_chroma_qp(qpc, cqo);
+            int cqv = mbx > 0 ? y264_deblock_chroma_qpav(MBQP(mbx - 1, mby), qpc, cqo) : cqc;
+            int cqh = mby > 0 ? y264_deblock_chroma_qpav(MBQP(mbx, mby - 1), qpc, cqo) : cqc;
 #define IDXA(q) clip3(0, 51, (q) + offA)
 #define IDXB(q) clip3(0, 51, (q) + offB)
 
