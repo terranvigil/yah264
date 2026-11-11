@@ -75,3 +75,13 @@ if rc_python.found() and get_option('dev_knobs')
     args : [files('rc_selftest.py'), yah264_cli_exe],
     timeout : 120)
 endif
+
+# A GOP-parallel encode from a file must code every input frame when the
+# schedule reorders GOPs behind a reader that has already started. Spliced
+# from CIF corpus clips when tests/corpus has them, else synthetic.
+if rc_python.found()
+  test('gop_drop', rc_python,
+    args : [files('gop_drop_check.py'), yah264_cli_exe,
+            meson.project_source_root() / 'tests' / 'corpus'],
+    timeout : 300)
+endif
