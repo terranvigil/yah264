@@ -11772,14 +11772,26 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                     break;
                 e->hrd_flat = 1;
             }
+            int good = e->qp;
             e->qp = nq;
             e->chroma_qp = y264_chroma_qp(nq, e->param.chroma_qp_index_offset);
             if (e->rcp_on)
                 rcp_reqp(e, type, is_ref);
             struct slice_map sm2;
             size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
-            if (sz == 0)
-                break;                  /* keep the last good slice */
+            if (sz == 0) {
+                /* the failed build overwrote the slice: code the last good QP again */
+                e->qp = good;
+                e->chroma_qp = y264_chroma_qp(good, e->param.chroma_qp_index_offset);
+                if (e->rcp_on)
+                    rcp_reqp(e, type, is_ref);
+                sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
+                if (sz) {
+                    rbsp_size = sz;
+                    sm = sm2;
+                }
+                break;
+            }
             rbsp_size = sz;
             sm = sm2;
         }
