@@ -15489,7 +15489,8 @@ int yah264_encoder_set_zones(yah264_encoder_t *e, const yah264_zone_t *zones, in
         for (int k = i; k > 0 && z[k].first < z[k - 1].first; k--) { yah264_zone_t t = z[k]; z[k] = z[k - 1]; z[k - 1] = t; }
     for (int i = 0; i < n; i++)
         if (z[i].first < 0 || z[i].last < z[i].first || (i && z[i].first <= z[i - 1].last) ||
-            ((z[i].flags & YAH264_ZONE_QP) && !(z[i].qp_offset >= 0.0 && z[i].qp_offset <= 51.0))) { free(z); return -1; }
+            ((z[i].flags & YAH264_ZONE_QP) && !(z[i].qp_offset >= 0.0 && z[i].qp_offset <= 51.0)) ||
+            ((z[i].flags & YAH264_ZONE_QP) && e->hrd_on)) { free(z); return -1; }   /* a fixed QP the HRD cannot hold */
     free(e->zones);
     e->zones = z; e->nzones = n;
     return 0;
@@ -15512,6 +15513,11 @@ int yah264_encoder_set_frame_forces(yah264_encoder_t *e, const yah264_frame_forc
     for (int i = 0; i < n; i++) {
         if (f[i].disp < 0 || (i && f[i].disp == f[i - 1].disp)) { free(f); return -1; }
         if (f[i].qp < -1 || f[i].qp > 51) { free(f); return -1; }
+        if (f[i].qp >= 0 && e->hrd_on) {        /* a fixed QP the HRD cannot hold */
+            fprintf(stderr, "yah264: a forced QP cannot be combined with --nal-hrd\n");
+            free(f);
+            return -1;
+        }
         if (f[i].type < YAH264_FORCE_NONE || f[i].type > YAH264_FORCE_B) { free(f); return -1; }
         /* The two B refusals that are readable from the array alone. Frame 0
  * opens the stream, so it is a key frame whatever anyone asks; and with
