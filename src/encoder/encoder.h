@@ -900,6 +900,8 @@ struct yah264_encoder {
  * declares the delay these leave it (C.3). */
     double   hrd_tr_nb, hrd_tai, hrd_taf;
     unsigned hrd_bp_init, hrd_bp_off;   /* the delay and offset in force */
+    size_t   hrd_ovh, hrd_ovh_bp;       /* most bytes an AU opened with ahead of its
+                                         * slices, without and with a buffering period */
     long     hrd_pad_bytes;     /* filler written, for the diagnostic line */
     /* The filler payload's own buffer. It cannot share e->rbsp: the padding is
  * written from inside the access-unit opener, which runs while e->rbsp still

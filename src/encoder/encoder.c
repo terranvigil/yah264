@@ -3338,6 +3338,8 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
  * after it, so there is no later instant for its buffer to overflow at. */
     if (e->hrd_on && hrd_close_au(e, off) < 0)
         return -1;
+    size_t ovh0 = e->hrd_au_bytes;
+    int ovh_bp = 0;
     /* The delimiter opens the access unit, so for the FIRST one it was already
  * written ahead of the parameter sets; the timing SEIs are not, because
  * 7.4.1.2.3 puts SEI after the parameter sets and an SEI written before the
@@ -3400,6 +3402,7 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
                                buf, (size_t)(bs.p - bs.start)) < 0)
                 return -1;
             e->hrd_anchor_tick = tick;
+            ovh_bp = 1;
             e->hrd_bp_init = init;
             e->hrd_bp_off = e->hrd_full_delay - init;
         }
@@ -3456,8 +3459,73 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
+    if (e->hrd_on) {
+        size_t ovh = e->hrd_au_bytes - ovh0;
+        size_t *m = ovh_bp ? &e->hrd_ovh_bp : &e->hrd_ovh;
+        if (ovh > *m) *m = ovh;
+    }
     e->hrd_pic++;
     return 0;
+}
+
+/* Bits the next access unit may still take, slices included, before its own
+ * last bit would arrive after its removal on the declared schedule; < 0 with
+ * no HRD. The access unit before it is still open, so its close (and under
+ * cbr its filler) is worked out here the way hrd_close_au will do it, and
+ * this one's delimiter and SEIs are the most any access unit opened with. */
+static double hrd_room(const yah264_encoder_t *e, int is_idr)
+{
+    if (!e->hrd_on)
+        return -1.0;
+    double tc = (double)e->param.timebase.fps_den / (2.0 * (double)e->param.timebase.fps_num);
+    int bp = is_idr && e->hrd_pic > 0 && !e->param.rc.hrd_segmented;
+    size_t ovh = bp ? (e->hrd_ovh_bp > e->hrd_ovh + 16 ? e->hrd_ovh_bp : e->hrd_ovh + 16)
+                    : e->hrd_ovh;
+    if (!ovh) ovh = 64;                 /* none opened yet */
+    double head = 8.0 * (double)(ovh + 2);
+    if (e->hrd_pic == 0)                /* the parameter sets and this AU's first SEIs */
+        return (double)e->hrd_bp_init / 90000.0 * e->hrd_bitrate
+               - 8.0 * (double)e->hrd_au_bytes - head - 8.0;
+    double bits = 8.0 * (double)e->hrd_au_bytes;
+    if (e->hrd_filler) {
+        double want = e->hrd_fill + e->hrd_rate_pic - e->hrd_cpb - bits;
+        if (want > 0.0) {
+            size_t need = (size_t)(want / 8.0) + 1;
+            size_t over = Y264_NAL_START_BYTES + 1;
+            bits += 8.0 * (double)((need > over ? need - over : 0) + over);
+        }
+    }
+    double taf = e->hrd_tai + bits / e->hrd_bitrate;
+    long tick = e->hrd_pic * e->hrd_tpp;
+    double tr = e->hrd_tr_nb + tc * (double)(tick - e->hrd_anchor_tick);
+    double tai;
+    if (e->hrd_on == YAH264_NAL_HRD_CBR) {
+        tai = taf;
+    } else {
+        double d = bp ? ceil(90000.0 * (tr - taf) - 1e-6) : 0.0;
+        double delay = bp ? (d >= (double)e->hrd_full_delay ? (double)e->hrd_full_delay : d)
+                          : (double)(e->hrd_bp_init + e->hrd_bp_off);
+        double ear = tr - delay / 90000.0;
+        tai = ear > taf ? ear : taf;
+    }
+    return (tr - tai) * e->hrd_bitrate - head - 8.0;
+}
+
+/* The bits an access unit's slices take on the wire: start codes, NAL
+ * headers and the emulation-prevention bytes the escape will add. */
+static double hrd_slice_bits(const uint8_t *rbsp, const struct slice_map *sm)
+{
+    size_t n = 0, at = 0;
+    for (int s = 0; s < sm->n; s++) {
+        int z = 0;
+        for (size_t i = at; i < at + sm->len[s]; i++) {
+            if (z >= 2 && rbsp[i] <= 3) { n++; z = 0; }
+            z = rbsp[i] == 0 ? z + 1 : 0;
+        }
+        n += sm->len[s] + Y264_NAL_START_BYTES;
+        at += sm->len[s];
+    }
+    return 8.0 * (double)n;
 }
 
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
@@ -11526,9 +11594,17 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * here to try: the re-encode would code the same frame four times. */
         for (int k = 0; k < 4 && limit > 0.0 && forced_qp(e) < 0; k++) {
             double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
-            if (bits <= limit)
+            double over = bits / limit;
+            /* --nal-hrd: the declared buffer, which also holds the SEIs and
+             * the emulation bytes the VBV model leaves out, must hold too */
+            double room = hrd_room(e, is_idr);
+            if (e->hrd_on && room > 0.0) {
+                double ho = hrd_slice_bits(e->rbsp, &sm) / room;
+                if (ho > over) over = ho;
+            }
+            if (over <= 1.0)
                 break;
-            int bump = (int)ceil(6.0 * log2(bits / limit));
+            int bump = (int)ceil(6.0 * log2(over));
             if (bump < 1) bump = 1;
             int nq = e->qp + bump;
             int cap = fqp0 < qp0 ? 51 + qp0 - fqp0 : 51;   /* intra codes under its base */
