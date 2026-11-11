@@ -715,10 +715,16 @@ def waiver(text, line, body):
         return None
     reason = m.group(1).strip()
     if not reason:
-        # a block comment whose reason starts on the next line
-        rest = span[m.end():].split("*/")[0] if "*/" in span[m.start():] else ""
+        # a block comment whose reason starts on the next line: only when the
+        # marker sits inside a /* */ that is still open, up to its own */
+        opened = span.rfind("/*", 0, m.start())
+        inside = opened >= 0 and span.find("*/", opened, m.start()) < 0
+        rest = ""
+        if inside and not m.group(0).rstrip().endswith("*/"):
+            close = span.find("*/", m.end())
+            rest = span[m.end():close if close >= 0 else len(span)]
         for ln in rest.split("\n"):
-            ln = ln.strip().lstrip("*").strip()
+            ln = ln.strip().lstrip("/*").strip()
             if ln:
                 reason = ln
                 break
@@ -1955,6 +1961,22 @@ static int w_short(void)
     return v;
 }
 // env-audit-ok:
+static int w_lineblk(void)
+{
+    static int v = -1;
+    /* a later block comment is not a reason */
+    if (v < 0) { const char *s = y264_env("SYN_WLINEBLK"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int w_inbody(void)
+{
+    static int v = -1;
+    // env-audit-ok:
+    /* nor is this one */
+    if (v < 0) { const char *s = y264_env("SYN_WINBODY"); v = s ? atoi(s) : 0; }
+    return v;
+}
+// env-audit-ok:
 static int w_empty(void)
 {
     static int v = -1;
@@ -2042,7 +2064,8 @@ def self_test(inject_fail=False):
     want_w = {"SYN_WBODY": "the body form", "SYN_WGNU": "the\n   split signature form",
               "SYN_WEMPTY": EMPTY_WAIVER, "SYN_WSTR": None,
               "SYN_WNEXT": "the reason on the next line", "SYN_WAFTER": None,
-              "SYN_WSHORT": "short"}
+              "SYN_WSHORT": "short", "SYN_WLINEBLK": EMPTY_WAIVER,
+              "SYN_WINBODY": EMPTY_WAIVER}
     if {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in wv.items()} != \
             {k: (v.split()[0] if v and v != EMPTY_WAIVER else v) for k, v in want_w.items()}:
         bad.append(f"waivers read as {wv}")
