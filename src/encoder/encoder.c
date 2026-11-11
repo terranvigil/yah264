@@ -11618,7 +11618,9 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         int fqp0 = frame_qp(e, type, is_ref), qp0 = e->qp;
         /* A forced QP is not a QP the buffer may move, so there is nothing
  * here to try: the re-encode would code the same frame four times. */
-        for (int k = 0; k < 4 && limit > 0.0 && forced_qp(e) < 0; k++) {
+        /* under --nal-hrd until it fits or the ceiling: noise moves a few
+         * percent a step and four tries left it over with no count */
+        for (int k = 0; k < (e->hrd_on ? 64 : 4) && limit > 0.0 && forced_qp(e) < 0; k++) {
             double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
             double over = bits / limit;
             /* --nal-hrd: the declared buffer, which also holds the SEIs and
