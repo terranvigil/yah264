@@ -3473,6 +3473,7 @@ static double hrd_room(yah264_encoder_t *e, int nal_type, int disp, int recovery
     if (!e->hrd_on)
         return -1.0;
     double fill = e->hrd_fill, tr_nb = e->hrd_tr_nb, tai = e->hrd_tai, taf = e->hrd_taf;
+    double tr_cur = e->hrd_tr_cur;
     size_t au = e->hrd_au_bytes;
     long pic = e->hrd_pic, anchor = e->hrd_anchor_tick, base = e->hrd_disp_base;
     long pad = e->hrd_pad_bytes, late = e->hrd_late;
@@ -3487,6 +3488,7 @@ static double hrd_room(yah264_encoder_t *e, int nal_type, int disp, int recovery
                 - 8.0 * (double)((pic == 0 ? au : 0) + e->nal_measure_bytes) - 8.0;
     e->nal_measure = 0;
     e->hrd_fill = fill; e->hrd_tr_nb = tr_nb; e->hrd_tai = tai; e->hrd_taf = taf;
+    e->hrd_tr_cur = tr_cur;
     e->hrd_au_bytes = au; e->hrd_pic = pic; e->hrd_anchor_tick = anchor;
     e->hrd_disp_base = base; e->hrd_pad_bytes = pad; e->hrd_late = late;
     e->hrd_bp_init = bpi; e->hrd_bp_off = bpo; e->au_opened = opened;
@@ -16329,7 +16331,11 @@ void yah264_encoder_close(yah264_encoder_t *e)
         return;
     rcr_close(e->rcr);
     e->rcr = NULL;
-    /* exit status stays 0: the stream is still a stream, but it says so */
+    /* the last access unit is never closed by a next one: count it here.
+     * Exit status stays 0; the stream is still a stream, but it says so. */
+    if (e->hrd_on && e->hrd_pic > 0 && e->hrd_au_bytes > 0 &&
+        e->hrd_tai + 8.0 * (double)e->hrd_au_bytes / e->hrd_bitrate > e->hrd_tr_cur + 1e-9)
+        e->hrd_late++;
     if (e->hrd_capped)
         fprintf(stderr, "yah264: warning: %ld picture(s) did not fit the buffer even at the "
                 "highest QP; the stream underflows there\n", e->hrd_capped);
