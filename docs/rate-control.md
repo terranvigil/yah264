@@ -210,6 +210,8 @@ keeps one rate problem:
 - **Two-pass** splits the stats file at the GOP markers a threaded pass 1
   writes, and each GOP takes the share of the budget its complexity earns. A
   serial pass 1 writes no markers, so its pass 2 runs serially too.
+- **`--keyint 1` with a VBV** runs one encoder: a one-frame GOP has no frame
+  of its own to correct the buffer level its segment assumed.
 
 ### What VBV actually guarantees
 
