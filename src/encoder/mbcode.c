@@ -243,20 +243,30 @@ static void mv_predict_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
     }
 }
 
-/* mb_qp_delta: se(v) for CAVLC, unary at contexts 60/62/63 for CABAC. Codes
- * cur_qp - prev_qp and advances the prediction chain. Call only where the
- * syntax carries mb_qp_delta (cbp > 0, or I_16x16). */
-static void qpd_cavlc(y264_bs_t *bs, y264_frame_t *f, int cur_qp)
+/* mb_qp_delta must lie in [-(26 + QpBdOffsetY/2), 25 + QpBdOffsetY/2] (7.4.5),
+ * and the decoder rebuilds QPY modulo 52 + QpBdOffsetY, so a larger jump is
+ * coded the other way round the circle. */
+static inline int qpd_wrap(int d)
 {
-    int d = cur_qp - f->prev_qp;
+    if (d > 25 + Y264_QP_BD_OFFSET / 2) d -= 52 + Y264_QP_BD_OFFSET;
+    else if (d < -(26 + Y264_QP_BD_OFFSET / 2)) d += 52 + Y264_QP_BD_OFFSET;
+    return d;
+}
+
+/* mb_qp_delta: se(v) for CAVLC, unary at contexts 60/62/63 for CABAC. Codes
+ * cur_qp - prev_qp, wrapped, and advances the prediction chain. Call only
+ * where the syntax carries mb_qp_delta (cbp > 0, or I_16x16). */
+void y264_mb_qpd_cavlc(y264_bs_t *bs, y264_frame_t *f, int cur_qp)
+{
+    int d = qpd_wrap(cur_qp - f->prev_qp);
     y264_bs_write_se(bs, d);
     f->prev_qp = cur_qp;
     f->last_qp_delta = d;
     f->qpd_coded = 1;
 }
-static void cabac_mb_qp_delta(y264_cabac_t *c, y264_frame_t *f, int cur_qp)
+void y264_mb_qpd_cabac(y264_cabac_t *c, y264_frame_t *f, int cur_qp)
 {
-    int d = cur_qp - f->prev_qp;
+    int d = qpd_wrap(cur_qp - f->prev_qp);
     int code = d > 0 ? 2 * d - 1 : -2 * d;      /* signed -> codeNum (se mapping) */
     for (int i = 0; ; i++) {
         int bit = i < code;
@@ -1923,9 +1933,9 @@ static void load_mb_nnz(y264_frame_t *f, int mbx, int mby, const int8_t *buf)
 }
 
 /* Save/restore the mb_qp_delta prediction chain around a trial coding pass. The
- * write functions call qpd_cavlc/cabac_mb_qp_delta, which advance prev_qp; a
- * scratch pass done only to measure bits must not perturb the real chain (this is
- * invisible without AQ, since then every cur_qp == prev_qp and the delta is 0). */
+ * mb_qp_delta writers advance prev_qp; a scratch pass done only to measure
+ * bits must not perturb the real chain (this is invisible without AQ, since
+ * then every cur_qp == prev_qp and the delta is 0). */
 struct qp_chain { int prev_qp, last_qp_delta, qpd_coded; };
 static void qp_save(const y264_frame_t *f, struct qp_chain *s)
 {
@@ -3742,7 +3752,7 @@ static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
             else { y264_bs_write1(bs, 0); y264_bs_write(bs, 3, ch < pm ? ch : ch - 1); }
         }
         y264_bs_write_ue(bs, cbp444_to_codenum(cbp, 0));
-        if (cbp) qpd_cavlc(bs, f, f->cur_qp);
+        if (cbp) y264_mb_qpd_cavlc(bs, f, f->cur_qp);
         for (int i8 = 0; i8 < 4; i8++)
             for (int i4 = 0; i4 < 4; i4++) {
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
@@ -3757,7 +3767,7 @@ static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
         int cbp = (lr->cbp_luma || o->lr_c[0].cbp_luma || o->lr_c[1].cbp_luma) ? 15 : 0;
         int mb_type = 1 + lr->mode + (cbp ? 12 : 0);  /* cbp_chroma field = 0 for 4:4:4 */
         y264_bs_write_ue(bs, mb_type + mbt_off);
-        qpd_cavlc(bs, f, f->cur_qp);
+        y264_mb_qpd_cavlc(bs, f, f->cur_qp);
         int ncdc = derive_nc(lnnz, lstride, bx0, by0, f->mb_ytop * 4);
         y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, cavlc_fl(f));
         for (int i = 0; i < 16; i++) {
@@ -3875,7 +3885,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
         int cbp = cbp_luma | (cr->cbp << 4);
         y264_bs_write_ue(bs, cbp_to_codenum(cbp));
         if (cbp > 0)
-            qpd_cavlc(bs, f, f->cur_qp);
+            y264_mb_qpd_cavlc(bs, f, f->cur_qp);
 
         if (o->use_i8) {
             for (int blk = 0; blk < 4; blk++)
@@ -3894,7 +3904,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
         int mb_type = 1 + lr->mode + 4 * cr->cbp + (lr->cbp_luma ? 12 : 0);
         y264_bs_write_ue(bs, mb_type + mbt_off);
         y264_bs_write_ue(bs, cr->mode);
-        qpd_cavlc(bs, f, f->cur_qp);
+        y264_mb_qpd_cavlc(bs, f, f->cur_qp);
 
         int ncdc = derive_nc(lnnz, lstride, bx0, by0, f->mb_ytop * 4);
         y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, cavlc_fl(f));
@@ -5178,7 +5188,7 @@ static void emit_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
     if (f->cf_idc == 3) {                          /* 4:4:4: Cb/Cr like luma, shared cbp */
         int cbp = ir->cbp444;
         y264_bs_write_ue(bs, cbp444_to_codenum(cbp, 1));
-        if (cbp > 0) qpd_cavlc(bs, f, f->cur_qp);
+        if (cbp > 0) y264_mb_qpd_cavlc(bs, f, f->cur_qp);
         for (int i8 = 0; i8 < 4; i8++)
             for (int i4 = 0; i4 < 4; i4++) {
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
@@ -5200,7 +5210,7 @@ static void emit_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
     if (tr8_flag_present(f, ir))
         y264_bs_write1(bs, ir->tr8);
     if (cbp > 0)
-        qpd_cavlc(bs, f, f->cur_qp);            /* mb_qp_delta */
+        y264_mb_qpd_cavlc(bs, f, f->cur_qp);    /* mb_qp_delta */
 
     if (ir->tr8) {
         for (int blk = 0; blk < 4; blk++)
@@ -8038,7 +8048,7 @@ static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol);
 
 /* B slice: per MB choose L0 / L1 / Bi / intra by RD. No B_Skip/direct yet, so
  * every macroblock is coded explicitly with mb_skip_run 0. */
-/* Does the winning intra MB carry mb_qp_delta? (Mirrors the qpd_cavlc conditions
+/* Does the winning intra MB carry mb_qp_delta? (Mirrors the writer's conditions
  * in the emit paths.) The two-pass analysis uses this to advance the raster-order
  * prev_qp chain the RD cost trials read: the mb_qp_delta se(v) length depends on
  * cur_qp - prev_qp, so a stale prev_qp misprices trials under mb-tree / AQ and
@@ -8056,8 +8066,12 @@ static int intra_codes_qpd(const y264_frame_t *f, const struct intra_mb *o)
  * analysis pass's cost trials price se(cur_qp - prev_qp) correctly. */
 static void advance_qpd_chain(y264_frame_t *f, int codes_qpd)
 {
-    if (codes_qpd) { f->last_qp_delta = f->cur_qp - f->prev_qp; f->prev_qp = f->cur_qp; }
-    else f->last_qp_delta = 0;
+    if (codes_qpd) {
+        f->last_qp_delta = qpd_wrap(f->cur_qp - f->prev_qp);
+        f->prev_qp = f->cur_qp;
+    } else {
+        f->last_qp_delta = 0;
+    }
 }
 
 /* W0 step 5: advance the prev_qp chain AND record the decoder-visible QPY for the
@@ -9739,7 +9753,7 @@ static void emit_cabac_inter_tail_ex(y264_cabac_t *c, y264_frame_t *f, int mbx, 
         int cbp = ir->cbp444;
         if (parts & 1) cabac_cbp_luma(c, cbp, la, lt); /* no cabac_cbp_chroma */
         if (cbp) {
-            if (parts & 1) cabac_mb_qp_delta(c, f, f->cur_qp);
+            if (parts & 1) y264_mb_qpd_cabac(c, f, f->cur_qp);
             if (parts & 2) {
                 emit444_i4_comp_cabac(c, f, mbx, mby, 0, cbp, 0, ir->lev);
                 emit444_i4_comp_cabac(c, f, mbx, mby, 1, cbp, 0, ir->cr_c[0].lev);
@@ -9759,7 +9773,7 @@ static void emit_cabac_inter_tail_ex(y264_cabac_t *c, y264_frame_t *f, int mbx, 
     }
 
     if (cbp_luma || cr->cbp) {
-        if (parts & 1) cabac_mb_qp_delta(c, f, f->cur_qp);
+        if (parts & 1) y264_mb_qpd_cabac(c, f, f->cur_qp);
         if (!(parts & 2)) { }
         else if (ir->tr8) {
             for (int blk = 0; blk < 4; blk++)
@@ -10332,7 +10346,7 @@ static void emit_intra444_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int m
     if (use_i4) cabac_cbp_luma(c, cbp, la, lt);   /* no cabac_cbp_chroma */
 
     if (cbp || !use_i4) {
-        cabac_mb_qp_delta(c, f, f->cur_qp);
+        y264_mb_qpd_cabac(c, f, f->cur_qp);
         if (!use_i4) {
             emit444_i16_comp_cabac(c, f, mbx, mby, 0, cbp, lr);
             emit444_i16_comp_cabac(c, f, mbx, mby, 1, cbp, &o->lr_c[0]);
@@ -10460,7 +10474,7 @@ static void emit_intra_cabac_420(y264_cabac_t *c, y264_frame_t *f, int mbx, int 
     }
 
     if (cbp_luma || cbp_chroma || !use_i4) {
-        cabac_mb_qp_delta(c, f, f->cur_qp);     /* mb_qp_delta */
+        y264_mb_qpd_cabac(c, f, f->cur_qp);     /* mb_qp_delta */
 
         if (!use_i4) {                        /* I_16x16 */
             int nza = dc_nb(f, mbx - 1, mby, 8, 1), nzb = dc_nb(f, mbx, mby - 1, 8, 1);

@@ -260,6 +260,8 @@
 #define y264_aq_grain                   y264_aq_grain_10
 #define y264_aq_bars                    y264_aq_bars_10
 #define y264_mb_qp                      y264_mb_qp_10
+#define y264_mb_qpd_cabac               y264_mb_qpd_cabac_10
+#define y264_mb_qpd_cavlc               y264_mb_qpd_cavlc_10
 #define y264_aq_grain_share             y264_aq_grain_share_10
 #define y264_aq_dark_gate               y264_aq_dark_gate_10
 #define y264_mc_build_hpel              y264_mc_build_hpel_10
