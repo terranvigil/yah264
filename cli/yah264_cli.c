@@ -1005,7 +1005,8 @@ static void usage(const char *argv0)
         "                     1920 up; 0 with psy off).\n"
         "                     Reaches the quantiser and the deblock chroma edge QP.\n"
         "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
-        "                     (defaults 0 and 51)\n"
+        "                     (defaults 0 and 51); --qpmax under 51 is refused\n"
+        "                     with --nal-hrd\n"
         "  --qpstep N         largest QP move between consecutive frames of one\n"
         "                     type (default 4)\n"
         "  --vbv-init F       initial VBV occupancy: <=1 a fraction of\n"
@@ -1035,7 +1036,8 @@ static void usage(const char *argv0)
         "                     narrowed to fit, a tool you NAMED is refused, and a\n"
         "                     profile the content cannot fit is refused. Default is\n"
         "                     derived from the tools and the content.\n"
-        "  (the flags below add signalling only: no sample moves.)\n");
+        "  (the flags below add signalling only, except --nal-hrd, which also\n"
+        "  holds the buffer it declares.)\n");
     /* Sixth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  --aud              an access unit delimiter opens every access unit\n"
@@ -1058,13 +1060,19 @@ static void usage(const char *argv0)
         "                     pic_timing SEI per picture, so a receiver can verify\n"
         "                     the buffer instead of trusting it. Needs --vbv-maxrate\n"
         "                     and --vbv-bufsize. vbr declares a schedule the channel\n"
-        "                     may pause on, and moves no sample and no slice bit;\n"
-        "                     cbr declares a channel that never pauses, so each\n"
+        "                     may pause on; cbr one that never pauses, so each\n"
         "                     access unit is padded up to the rate with filler, and\n"
         "                     needs a buffer larger than one picture period of\n"
-        "                     arrival. Runs one encoder; refused with --crf-max,\n"
-        "                     forced qpfile QPs, --zones q=, --cut-split,\n"
-        "                     --shot-table, --shot-crf and --segment-out.\n"
+        "                     arrival. Either way each picture is re-coded up to\n"
+        "                     the QP ceiling until it arrives in time, leaving room\n"
+        "                     for the pictures the lookahead holds; one that still\n"
+        "                     cannot, even where QP 51 would have fitted, is counted\n"
+        "                     in a warning at the end. Runs one encoder; refused\n"
+        "                     with --crf-max, --qpmax under 51, forced qpfile QPs,\n"
+        "                     --zones q=, --cut-split, --shot-table, --shot-crf and\n"
+        "                     --segment-out.\n");
+    /* the --nal-hrd lines push this chunk past 4095 bytes too */
+    fprintf(stderr,
         "  --filler / --no-filler   pad (or refuse to pad) access units to the\n"
         "                     constant rate. Only under --nal-hrd cbr, where it is\n"
         "                     already on; --no-filler there gives the cbr headers\n"

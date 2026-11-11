@@ -149,8 +149,23 @@ picture. `BitRate` and `CpbSize` are `--vbv-maxrate` and `--vbv-bufsize`
 rounded up to the syntax grid. The first buffering period's initial removal
 delay is the occupancy the encoder started from; every later one is the gap
 between the previous picture's final arrival and this one's removal, at most
-a full buffer, as C.3 requires. `vbr` moves no bit. `cbr` adds filler and nothing else.
-`scripts/hrd_check.py` reads the declaration back and simulates Annex C.
+a full buffer, as C.3 requires. `cbr` also pads every access unit up to the
+rate with filler.
+
+The declared buffer is held, not only described. Each picture's slices are
+measured against the room left before its removal time on the declared
+schedule, the SEIs and emulation bytes included, and re-coded at a higher QP
+until they fit or the coded QP reaches 51, where it is coded once more without
+its per-macroblock offsets. The room left after it is a reserve for the
+pictures the lookahead holds: the worst stretch of their estimated QP-51 costs
+less what arrives in time for them, keys priced from their intra cost. A
+picture still late at the ceiling is counted, and the encode ends with one
+warning naming the count. The estimates can fall short, so a stream whose
+pictures would all have fitted at QP 51 can still carry a late access unit;
+the warning says so when it happens. `--crf-max`, `--qpmax` under 51, forced
+QPs and `--zones q=` are refused, since each holds a QP under what the buffer
+may need. `scripts/hrd_check.py` reads the declaration back and simulates
+Annex C.
 
 ### Two-pass
 
