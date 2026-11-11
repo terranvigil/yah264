@@ -1545,6 +1545,10 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
     if (!tight && e->rck.vbv_low > 0.0 && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && e->vbv.fill < e->rck.vbv_low * e->vbv.size)
         tight = 1;
+    /* CBR has no headroom for a prediction to miss into: on a pool every CBR
+ * burst takes the serial schedule and its measured-size re-encode */
+    if (e->vbv_cbr && e->pool)
+        tight = 1;
     e->rcp_vbv_tight = tight;
 }
 
