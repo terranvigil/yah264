@@ -6212,13 +6212,18 @@ int main(int argc, char **argv)
  * per-GOP joins can miss the handoff level, and a declared HRD turns that
  * into a stream failing its own declaration (syn_shots, a GOP pinned at
  * QP 51 leaving the next one 3.5 kbit short). */
-    int hrd_serial = nal_hrd && (nthreads <= 1 || param.rc.method == YAH264_RC_2PASS)
+    /* ...and so do one-frame GOPs under a VBV: each opens on an assumed
+     * level with no frame of its own left to correct it, and the drift
+     * compounds over every GOP in flight */
+    int vbv_k1 = param.keyint == 1 && param.rc.vbv_maxrate > 0 && param.rc.vbv_bufsize > 0;
+    int one_enc = (vbv_k1 || (nal_hrd && (nthreads <= 1 || param.rc.method == YAH264_RC_2PASS)))
                   && !g_cut_split && !g_shot_table && !g_shot_crf;
-    if (hrd_serial) {
+    if (one_enc) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
-            LOGF(LOG_INFO, "yah264: --nal-hrd two-pass runs one continuous encoder, so the "
-                 "%d threads run its row wavefront instead of parallel GOPs\n", nthreads);
+            LOGF(LOG_INFO, "yah264: %s runs one continuous encoder, so the %d threads "
+                 "run its row wavefront instead of parallel GOPs\n",
+                 vbv_k1 ? "--keyint 1 with a VBV" : "--nal-hrd two-pass", nthreads);
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
@@ -6227,7 +6232,7 @@ int main(int argc, char **argv)
  * Only when the user asked explicitly for more than one thread. Unset means
  * "auto, every core", which is not a user asking for anything, and warning on
  * it would fire on all 252 --dump-recon runs of the conformance gate. */
-    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !hrd_serial))) {
+    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !one_enc))) {
         /* Ordered by what actually decided it, not by what is also true: with
  * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */
