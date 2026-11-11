@@ -156,13 +156,17 @@ The declared buffer is held, not only described. Each picture's slices are
 measured against the room left before its removal time on the declared
 schedule, the SEIs and emulation bytes included, and re-coded at a higher QP
 until they fit or the coded QP reaches 51, where it is coded once more without
-its per-macroblock offsets. The room left after it is a reserve for the
-pictures the lookahead holds: the worst stretch of their estimated QP-51 costs
-less what arrives in time for them, keys priced from their intra cost. A
-picture still late at the ceiling is counted, and the encode ends with one
-warning naming the count. The estimates can fall short, so a stream whose
-pictures would all have fitted at QP 51 can still carry a late access unit;
-the warning says so when it happens. `--crf-max`, `--qpmax` under 51, forced
+its per-macroblock offsets. The room left after it is a reserve for the next
+key the encoder can see coming (the keyint key or a scene cut the lookahead
+flagged) at what the last intra picture cost at QP 51, less what arrives
+before it, and under field coding for the second field of an intra first
+field. The rate control never sees these raises, so after a frame is raised
+by `--qpstep` or more, the next frame of its type starts from that QP; a frame
+with room to spare lowers that start, and a key, a cut or a lookahead window
+without use drops it. A picture still late at the ceiling is counted, and the
+encode ends with one warning naming the count. The reserve is an estimate and
+covers keys only, so a stream whose pictures would all have fitted at QP 51
+can still carry a late access unit; the warning says so when it happens. `--crf-max`, `--qpmax` under 51, forced
 QPs and `--zones q=` are refused, since each holds a QP under what the buffer
 may need. `scripts/hrd_check.py` reads the declaration back and simulates
 Annex C.

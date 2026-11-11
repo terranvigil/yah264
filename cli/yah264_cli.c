@@ -1065,7 +1065,7 @@ static void usage(const char *argv0)
         "                     needs a buffer larger than one picture period of\n"
         "                     arrival. Either way each picture is re-coded up to\n"
         "                     the QP ceiling until it arrives in time, leaving room\n"
-        "                     for the pictures the lookahead holds; one that still\n"
+        "                     for the next key the lookahead shows; one that still\n"
         "                     cannot, even where QP 51 would have fitted, is counted\n"
         "                     in a warning at the end. Runs one encoder; refused\n"
         "                     with --crf-max, --qpmax under 51, forced qpfile QPs,\n"
