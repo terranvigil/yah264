@@ -903,7 +903,10 @@ struct yah264_encoder {
     double   hrd_tr_cur;                /* removal time of the access unit just opened */
     long     hrd_late;                  /* pictures whose last bit arrived after their removal */
     long     hrd_last_idr;              /* display index of the last key (IDR or open key), -1 none */
-    double   hrd_c51[4];                /* last slice bits at QP 51 per type: I, P, B, an intra frame's second field */
+    double   hrd_f51;                   /* an intra frame's second field at QP 51 */
+    double   hrd_i51;                   /* the last intra frame at QP 51 */
+    long     hrd_max_disp;              /* the latest display index coded */
+    double   hrd_rn[3], hrd_rd[3];      /* QP-51 bits per unit lowres cost, per type: weighted sums */
     int      hrd_f0_intra;              /* the current frame's first field was intra */
     int      hrd_flat;                  /* re-coding at QP 51 without macroblock offsets */
     int      nal_measure;               /* 0 write NALs; 1 count them; 2 only charge the AU */

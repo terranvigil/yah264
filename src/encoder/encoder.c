@@ -3516,63 +3516,102 @@ static double hrd_cost51(double bits, int qp)
     return 1.1 * bits * pow(2.0, (qp - 51) / 8.0);
 }
 
-/* bits to leave in the buffer for the next intra picture the encoder can
- * see coming (the keyint key, a scene cut the lookahead flagged, or the P
- * field after an intra first field) at what that type last cost at QP 51,
- * capped at CpbSize, less what arrives before it */
+/* a picture's lowres cost the reserve scales: its intra cost for a key, its
+ * cost against the frame before it otherwise */
+static double hrd_la_cost(const struct la_entry *h, int intra)
+{
+    return intra ? (double)h->sum_icost : (double)h->sum_cost[LR_LEG_PREV];
+}
+
+/* bits at QP 51 per unit of lowres cost for a type, the measured ratio of
+ * that type, else of another, else the picture being coded's own */
+static double hrd_ratio(const yah264_encoder_t *e, int t, double own)
+{
+    static const int alt[3][3] = { { 0, 1, 2 }, { 1, 0, 2 }, { 2, 1, 0 } };
+    for (int i = 0; i < 3; i++) {
+        int u = alt[t][i];
+        if (e->hrd_rd[u] > 0.0)
+            return e->hrd_rn[u] / e->hrd_rd[u];
+    }
+    return own;
+}
+
+/* a lookahead picture at QP 51. An inter picture whose cost nears its intra
+ * cost codes as intra blocks, which the skip-heavy pictures behind the
+ * inter ratio say nothing about, so it moves toward the intra ratio. */
+static double hrd_price(const struct la_entry *h, int intra, double r_i, double r_p)
+{
+    if (intra)
+        return (double)h->sum_icost * r_i;
+    double c = (double)h->sum_cost[LR_LEG_PREV], ic = (double)h->sum_icost;
+    double f = ic > 0.0 ? c / ic : 1.0;
+    if (f > 1.0) f = 1.0;
+    double r = r_p + (r_i > r_p ? (r_i - r_p) * f : 0.0);
+    return c * r;
+}
+
+/* bits to leave in the buffer after this picture so that every picture the
+ * lookahead holds still arrives at QP 51: the worst prefix of their QP-51
+ * costs less what arrives before each, keys (keyint, flagged cuts) priced
+ * from their intra cost, capped at CpbSize. Under field coding an intra
+ * first field also leaves its second field room. */
 static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, double kovh)
 {
-    if (e->fld_pic && !e->fld_second && type == 0) {
-        /* no second field seen yet: price it at twice this first field, since
-         * it predicts from the other parity and pays for its vectors too */
-        double f51 = e->hrd_c51[3] > 0.0 ? e->hrd_c51[3] : 2.0 * cur51;
-        return (f51 < e->hrd_cpb ? f51 : e->hrd_cpb) - e->hrd_rate_pic;
+    double per = e->hrd_rate_pic, cpb = e->hrd_cpb;
+    double acc = 0.0, arr = 0.0, res = 0.0;
+    if (e->fld_pic && !e->fld_second) {
+        /* the second field comes next: an intra frame's at what the last one
+         * cost, or twice this field before one has been seen, since it
+         * predicts from the other parity and pays for its vectors too */
+        acc = type == 0 ? (e->hrd_f51 > 0.0 ? e->hrd_f51 : 2.0 * cur51) : cur51;
+        arr = per;
+        res = acc - arr;
     }
-    /* a P prices the pictures the lookahead holds from itself, scaled by
-     * each one's cost against its predecessor, so a hard change the scene
-     * detector let through still finds the buffer saved up for it */
-    double nx = 0.0;
-    if (type == 1 && !e->fields && e->la_n > 0 && e->cur_la_en) {
-        double cc = (double)e->cur_la_en->sum_cost[LR_LEG_PREV];
-        double acc = 0.0;
-        for (int i = 0; i < e->la_n && cc > 0.0; i++) {
-            const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
-            if (!h->typed || h->is_cut || h->is_idr)
-                break;
-            acc += cur51 * (double)h->sum_cost[LR_LEG_PREV] / cc;
-            double r = (acc < e->hrd_cpb ? acc : e->hrd_cpb) - (double)(i + 1) * e->hrd_rate_pic;
-            if (r > nx) nx = r;
-        }
+    /* the coded picture's own ratio, the estimate before any is measured */
+    double own = 0.0;
+    if (type != 2 && e->cur_la_en) {
+        double c = hrd_la_cost(e->cur_la_en, type == 0);
+        if (c > 0.0)
+            own = cur51 / c * (e->fld_pic ? 2.0 : 1.0);
     }
-    double i51 = e->hrd_c51[0];
-    if (i51 <= 0.0 || e->hrd_last_idr < 0)
-        return nx;
-    double tail = 0.0;
-    if (e->fields) {
-        /* the key's second field lands before the buffer refills */
-        i51 += e->hrd_c51[3];
-        tail = e->hrd_rate_pic;
+    double r_i = hrd_ratio(e, 0, own), r_p = hrd_ratio(e, 1, own);
+    long key = e->hrd_last_idr >= 0 ? e->hrd_last_idr + e->param.keyint : -1;
+    double fper = e->fields ? 2.0 * per : per;
+    int seen = 0;
+    /* popped but not yet coded: the frames buffered after this one, at its
+     * own cost, then the anchor at frame_count if it has not been coded */
+    long fc = (long)e->frame_count;
+    for (long pd = (long)e->cur_disp + 1; pd < fc; pd++) {
+        acc += e->fld_pic ? 2.0 * cur51 : cur51;
+        arr += fper;
+        if (acc - arr > res) res = acc - arr;
     }
-    if (i51 > e->hrd_cpb) i51 = e->hrd_cpb;
-    long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
-    /* the lookahead head is display frame_count + 1, and the first typed
-     * entry flagged a cut or an IDR is the next key */
+    if (e->cur_la_en && fc > e->cur_disp && e->hrd_max_disp < fc) {
+        const struct la_entry *h = e->cur_la_en;
+        int intra = h->is_cut || h->is_idr || fc == key;
+        acc += hrd_price(h, intra, r_i, r_p) + (intra ? kovh : 0.0);
+        arr += fper;
+        if (acc - arr > res) res = acc - arr;
+        seen = 1;
+    }
+    /* the lookahead head is display frame_count + 1 */
     for (int i = 0; i < e->la_n; i++) {
         const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
         if (!h->typed)
             break;
-        if (h->is_cut || h->is_idr) {
-            long dc = (long)e->frame_count + 1 + i - e->cur_disp;
-            if (dc >= 1 && (dc < d || d < 1))
-                d = dc;
-            break;
-        }
+        long pd = (long)e->frame_count + 1 + i;
+        int intra = h->is_cut || h->is_idr || pd == key;
+        acc += hrd_price(h, intra, r_i, r_p) + (intra ? kovh : 0.0);
+        arr += fper;
+        if (acc - arr > res) res = acc - arr;
+        seen = 1;
     }
-    if (d < 1 || d > e->param.keyint)
-        return nx;
-    double per = e->fields ? 2.0 * e->hrd_rate_pic : e->hrd_rate_pic;
-    double r = i51 + kovh - (double)d * per - tail;
-    return r > nx ? r : nx;
+    /* no lookahead to read: the keyint key at what the last intra cost */
+    if (!seen && key > e->cur_disp && e->hrd_i51 > 0.0) {
+        double r = e->hrd_i51 + kovh - (double)(key - e->cur_disp) * fper;
+        if (r > res) res = r;
+    }
+    return res < cpb ? res : cpb;
 }
 
 /* the bits an access unit's slices take on the wire: start codes, NAL
@@ -5435,7 +5474,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->hrd_anchor_tick = 0;
             e->hrd_disp_base = -1;
             e->hrd_last_idr = -1;
-            e->hrd_c51[0] = e->hrd_c51[1] = e->hrd_c51[2] = e->hrd_c51[3] = 0.0;
+            e->hrd_f51 = e->hrd_i51 = 0.0;
+            e->hrd_max_disp = -1;
+            for (int t = 0; t < 3; t++) e->hrd_rn[t] = e->hrd_rd[t] = 0.0;
             e->hrd_f0_intra = 0;
             e->sps.hrd = param->nal_hrd;
             e->sps.hrd_bit_rate = (unsigned)e->hrd_bitrate;
@@ -11775,13 +11816,26 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     }
     e->hrd_flat = 0;
     if (e->hrd_on) {
-        /* what this picture's type costs at the highest QP, for the reserve */
-        double c51 = hrd_cost51(hrd_slice_bits(e->rbsp, &sm), frame_qp(e, type, is_ref));
-        /* only an intra frame's second field prices the next key's */
-        if (!(e->fld_pic && e->fld_second))
-            e->hrd_c51[type] = c51;
-        else if (e->hrd_f0_intra)
-            e->hrd_c51[3] = c51;
+        /* what this picture costs at the highest QP, for the reserve: per unit
+         * of its lowres cost, weighted toward pictures coded near 51 where the
+         * extrapolation is short; only an intra frame's second field prices
+         * the next key's */
+        int fq = frame_qp(e, type, is_ref);
+        double c51 = hrd_cost51(hrd_slice_bits(e->rbsp, &sm), fq);
+        if (e->cur_disp > e->hrd_max_disp)
+            e->hrd_max_disp = e->cur_disp;
+        if (!(e->fld_pic && e->fld_second) && type != 2 && e->cur_la_en) {
+            double c = hrd_la_cost(e->cur_la_en, type == 0);
+            if (c > 0.0) {
+                double w = pow(2.0, (fq - 51) / 4.0);
+                e->hrd_rn[type] = 0.7 * e->hrd_rn[type] + w * c51 / c * (e->fld_pic ? 2.0 : 1.0);
+                e->hrd_rd[type] = 0.7 * e->hrd_rd[type] + w;
+            }
+        }
+        if (type == 0 && !(e->fld_pic && e->fld_second))
+            e->hrd_i51 = c51 * (e->fld_pic ? 2.0 : 1.0);
+        else if (e->fld_pic && e->fld_second && e->hrd_f0_intra)
+            e->hrd_f51 = c51;
         if (e->fld_pic && !e->fld_second)
             e->hrd_f0_intra = type == 0;
         if ((is_idr || e->cur_open_key) && !(e->fld_pic && e->fld_second))
