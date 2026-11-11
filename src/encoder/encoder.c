@@ -15583,8 +15583,13 @@ int yah264_encoder_set_zones(yah264_encoder_t *e, const yah264_zone_t *zones, in
         for (int k = i; k > 0 && z[k].first < z[k - 1].first; k--) { yah264_zone_t t = z[k]; z[k] = z[k - 1]; z[k - 1] = t; }
     for (int i = 0; i < n; i++)
         if (z[i].first < 0 || z[i].last < z[i].first || (i && z[i].first <= z[i - 1].last) ||
-            ((z[i].flags & YAH264_ZONE_QP) && !(z[i].qp_offset >= 0.0 && z[i].qp_offset <= 51.0)) ||
-            ((z[i].flags & YAH264_ZONE_QP) && e->hrd_on)) { free(z); return -1; }   /* a fixed QP the HRD cannot hold */
+            ((z[i].flags & YAH264_ZONE_QP) && !(z[i].qp_offset >= 0.0 && z[i].qp_offset <= 51.0))) { free(z); return -1; }
+    for (int i = 0; i < n; i++)
+        if ((z[i].flags & YAH264_ZONE_QP) && e->hrd_on) {   /* a fixed QP the HRD cannot hold */
+            fprintf(stderr, "yah264: a q= zone cannot be combined with --nal-hrd\n");
+            free(z);
+            return -1;
+        }
     free(e->zones);
     e->zones = z; e->nzones = n;
     return 0;
