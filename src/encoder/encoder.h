@@ -906,6 +906,7 @@ struct yah264_encoder {
     double   hrd_f51;                   /* an intra frame's second field at QP 51 */
     double   hrd_i51;                   /* the last intra frame at QP 51 */
     long     hrd_max_disp;              /* the latest display index coded */
+    int      hrd_qfloor[3];             /* per type, the base QP the next frame starts from, -1 none */
     double   hrd_rn[3], hrd_rd[3];      /* QP-51 bits per unit lowres cost, per type: weighted sums */
     int      hrd_f0_intra;              /* the current frame's first field was intra */
     int      hrd_flat;                  /* re-coding at QP 51 without macroblock offsets */

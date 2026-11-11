@@ -5324,6 +5324,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 
     e->abr_on = (param->rc.method == YAH264_RC_ABR && param->rc.bitrate > 0);
+    e->hrd_qfloor[0] = e->hrd_qfloor[1] = e->hrd_qfloor[2] = -1;
     if (e->abr_on) {
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
                    ? (double)param->timebase.fps_num / param->timebase.fps_den : 25.0;
@@ -11670,6 +11671,18 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     } else {
         rc_head_serial(e, type, is_ref, src);
     }
+    /* under --nal-hrd the rate control never sees the QP the buffer raised a
+     * frame to, and drifts under it; start from the last raised QP of the
+     * type so the frame is not coded at a QP the buffer refuses first */
+    int bound = vbv_bounded_now(e) && forced_qp(e) < 0;
+    if (bound && e->hrd_on && e->hrd_qfloor[type] > e->qp) {
+        e->qp = e->hrd_qfloor[type];
+        e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+        if (e->rcp_on)
+            rcp_reqp(e, type, is_ref);
+    }
+    int qstart = e->qp;
+    double last_over = 1.0;
     struct slice_map sm;
     size_t rbsp_size = rcr_build_slice(e, type, is_idr, is_ref, src, &sm, 0);
     if (rbsp_size == 0) { slice_overflow_warn(); }
@@ -11778,6 +11791,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                     if (hr > over) over = hr;
                 }
             }
+            last_over = over;
             if (over <= 1.0)
                 break;
             int bump = (int)ceil(6.0 * log2(over));
@@ -11815,6 +11829,13 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         }
     }
     e->hrd_flat = 0;
+    if (bound && e->hrd_on) {
+        /* a raise sets the floor; a frame with room to spare lowers it a step */
+        if (e->qp > qstart)
+            e->hrd_qfloor[type] = e->qp;
+        else if (last_over < 0.8 && e->hrd_qfloor[type] >= 0)
+            e->hrd_qfloor[type]--;
+    }
     if (e->hrd_on) {
         /* what this picture costs at the highest QP, for the reserve: per unit
          * of its lowres cost, weighted toward pictures coded near 51 where the
