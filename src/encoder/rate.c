@@ -2770,7 +2770,10 @@ static int vbv_abr_bounded(const yah264_encoder_t *e)
  * prediction cannot see: samsung 720p, CRF with a 480 kbit cap, one
  * thread, a 307 kbit anchor into a 277 kbit buffer once weighted P stopped
  * weighting the brightness drift before the cut. */
-    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight || !e->pool);
+    /* and a two-pass pass 2 under --nal-hrd, whose declared buffer has to hold
+ * whatever pass 1 planned */
+    return e->vbv_on && (!e->tp_pass || (e->hrd_on && e->tp_pass >= 2))
+           && (!e->rcp_on || e->rcp_vbv_tight || !e->pool);
 }
 
 /* Either bound wants the serial emit: W2 does not know a frame's size until
