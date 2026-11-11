@@ -902,7 +902,7 @@ struct yah264_encoder {
     unsigned hrd_bp_init, hrd_bp_off;   /* the delay and offset in force */
     double   hrd_tr_cur;                /* removal time of the access unit just opened */
     long     hrd_late;                  /* pictures whose last bit arrived after their removal */
-    long     hrd_last_idr;              /* display index of the last IDR coded, -1 none */
+    long     hrd_last_idr;              /* display index of the last key (IDR or open key), -1 none */
     double   hrd_i51;                   /* that IDR's slice bits scaled to QP 51 */
     int      nal_measure;               /* 0 write NALs; 1 count them; 2 only charge the AU */
     size_t   nal_measure_bytes;

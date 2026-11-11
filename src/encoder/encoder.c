@@ -11664,7 +11664,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             sm = sm2;
         }
     }
-    if (e->hrd_on && is_idr) {
+    /* an --open-gop key restarts the keyint count as an IDR does */
+    if (e->hrd_on && (is_idr || e->cur_open_key) && !(e->fld_pic && e->fld_second)) {
         e->hrd_last_idr = e->cur_disp;
         e->hrd_i51 = hrd_slice_bits(e->rbsp, &sm)
                    * pow(2.0, (frame_qp(e, type, is_ref) - 51) / 6.0);
