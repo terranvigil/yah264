@@ -5815,9 +5815,12 @@ int main(int argc, char **argv)
                    ? (double)param.timebase.fps_num / param.timebase.fps_den : 0.0;
         double br = ceil((double)param.rc.vbv_maxrate * 1000.0 / 64.0) * 64.0;
         double cpb = ceil((double)param.rc.vbv_bufsize * 1000.0 / 16.0) * 16.0;
-        if (nal_hrd == YAH264_NAL_HRD_CBR && fps > 0.0 && cpb <= br / fps) {
+        /* a field is a picture: under --tff/--bff the period is a field's */
+        double pic = fps > 0.0 ? br / (param.interlaced ? 2.0 * fps : fps) : 0.0;
+        if (nal_hrd == YAH264_NAL_HRD_CBR && fps > 0.0 && cpb <= pic) {
             fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture period "
-                    "of arrival (%.0f bits); --vbv-bufsize gives %.0f\n", br / fps, cpb);
+                    "of arrival (%.0f bits, a field's under --tff/--bff); --vbv-bufsize gives %.0f\n",
+                    pic, cpb);
             if (out != stdout) { fclose(out); remove(out_path); }
             return 2;
         }

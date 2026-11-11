@@ -5394,7 +5394,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * and a buffer that cannot hold them overflows whatever is coded */
             if (param->nal_hrd == YAH264_NAL_HRD_CBR && e->hrd_cpb <= e->hrd_rate_pic) {
                 fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture "
-                        "period of arrival (%.0f bits); --vbv-bufsize gives %.0f\n",
+                        "period of arrival (%.0f bits, a field's under --tff/--bff); "
+                        "--vbv-bufsize gives %.0f\n",
                         e->hrd_rate_pic, e->hrd_cpb);
                 yah264_encoder_close(e);
                 return NULL;
