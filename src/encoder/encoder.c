@@ -3392,8 +3392,10 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
             /* C.3: no further back than the previous final arrival, at most a
  * full buffer; the arrival schedule is the full-buffer one either way */
             double d = ceil(90000.0 * (tr - e->hrd_taf) - 1e-6);
-            unsigned init = d >= (double)e->hrd_full_delay ? e->hrd_full_delay
-                          : d < 1.0 ? 1u : (unsigned)d;
+            /* after a late access unit there is no legal delay: the full one
+             * delays nothing further, and the late count already says so */
+            unsigned init = d >= (double)e->hrd_full_delay || d < 1.0 ? e->hrd_full_delay
+                          : (unsigned)d;
             size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
                                                  init, e->hrd_full_delay - init);
             y264_bs_init(&bs, buf, sizeof buf);
