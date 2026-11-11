@@ -8703,13 +8703,9 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         osum += off;
         if (off < omin) omin = off; if (off > omax) omax = off;
     }
-    /* mb_qp_delta is [-26, 25] (7.4.5) between consecutive coded macroblocks,
- * and the first one's is against the slice QP (offset 0), so the frame's
- * offsets must fit a 25-wide window that contains 0 -- the spread, not the
- * magnitude, is the constraint. Only a frame whose span already exceeds
- * that is touched (an extreme --qcomp/--aq-strength pair reached [-31, 18]
- * and emitted -30; review 2026-09-04); the defaults' spans are narrower,
- * so their output is unchanged. */
+    /* the entropy coders wrap mb_qp_delta into its legal range, so this
+ * window isn't needed for conformance; it stays because narrowing a
+ * frame whose offset spread exceeds 25 is what the tuned output assumes. */
     if (omax - omin > 25) {
         int lo = (int)lround((double)osum / nmb) - 12;
         if (lo < -26) lo = -26;
