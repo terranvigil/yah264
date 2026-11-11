@@ -5789,6 +5789,30 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
+    /* what the HRD cannot hold, refused before any output exists (the library
+     * refuses the same for API callers) */
+    if (nal_hrd) {
+        int forced = 0, zq = 0;
+        for (int i = 0; i < g_nforces; i++) forced |= g_forces[i].qp >= 0;
+        for (int i = 0; i < g_nzones; i++) zq |= (g_zones[i].flags & YAH264_ZONE_QP) != 0;
+        if (crf_max > 0.0 || forced || zq) {
+            fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: it fixes a QP the "
+                    "buffer may need to raise, and the stream would fail its own declaration\n",
+                    crf_max > 0.0 ? "--crf-max" : forced ? "a forced qpfile QP" : "a --zones q= zone");
+            if (out != stdout) { fclose(out); remove(out_path); }
+            return 2;
+        }
+        double fps = param.timebase.fps_num > 0 && param.timebase.fps_den > 0
+                   ? (double)param.timebase.fps_num / param.timebase.fps_den : 0.0;
+        double br = ceil((double)param.rc.vbv_maxrate * 1000.0 / 64.0) * 64.0;
+        double cpb = ceil((double)param.rc.vbv_bufsize * 1000.0 / 16.0) * 16.0;
+        if (nal_hrd == YAH264_NAL_HRD_CBR && fps > 0.0 && cpb <= br / fps) {
+            fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture period "
+                    "of arrival (%.0f bits); --vbv-bufsize gives %.0f\n", br / fps, cpb);
+            if (out != stdout) { fclose(out); remove(out_path); }
+            return 2;
+        }
+    }
     /* --nal-hrd and --keyint 1 with a VBV run one continuous encoder (see the
  * path choice below), and these options exist only on the per-GOP path */
     int vbv_k1 = param.keyint == 1 && param.rc.vbv_maxrate > 0 && param.rc.vbv_bufsize > 0;
@@ -5799,6 +5823,7 @@ int main(int argc, char **argv)
                 nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV",
                 g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table"
                 : g_cut_split ? "--cut-split" : "--segment-out");
+        if (out != stdout) { fclose(out); remove(out_path); }
         return 2;
     }
     /* --intra-refresh. Everything it cannot run with is named here, because
