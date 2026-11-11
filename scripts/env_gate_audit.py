@@ -857,7 +857,8 @@ def audit(sources):
         code = blank_strings(strip_comments(text))
         for m in re.finditer(r"\b(?:pthread_create|ntp_\w+)\s*\(", code):
             pre = code[code.rfind("\n", 0, m.start()) + 1:m.start()]
-            if re.fullmatch(r"\s*(?:[A-Za-z_]\w*[\s*]+)+", pre):
+            if re.fullmatch(r"\s*(?:[A-Za-z_]\w*[\s*]+)+", pre) and \
+                    pre.split()[0] not in KEYWORDS:
                 continue                     # a definition or prototype, not a call
             for a in split_args(code[m.end():]):
                 for x in re.finditer(r"(->|\.)?\s*\b([A-Za-z_]\w*)\b(\s*\()?", a):
@@ -1667,6 +1668,19 @@ static int e_job(void)
     return v;
 }
 static void *job_a(void *a) { (void)e_job(); return a; }
+static int e_ret(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_ERET"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static void *job_r(void *a) { (void)e_ret(); return a; }
+static int start_r(pthread_t *t)
+{
+    void *(*f)(void *) = job_r;
+    (void)f;
+    return pthread_create(t, NULL, job_r, NULL);
+}
 static void *job_b(void *a) { return a; }
 void ntp_pool_run(struct st *p, void *(*fn)(void *), int e_called);
 static void pool_go(struct st *p, int w)
@@ -1757,6 +1771,7 @@ static void warm_lr_statics(void)
     dsp_init(0, 0);
     (void)s_priv();
     pool_go(0, 0);
+    (void)start_r(0);
     gcfg.g_dotm = 1;
     register_cb(g_argcb);
     warm_twin();
@@ -1809,6 +1824,7 @@ SELF_TEST_WANT = {
     "SYN_OCT": ("latches", False), "SYN_OCTT": ("TRAP", False),
     "SYN_OCT9": ("latches", False), "SYN_HEXBIG": ("latches", False),
     "SYN_ECALLED": ("latches", True), "SYN_EJOB": ("latches", False),
+    "SYN_ERET": ("latches", False),
     "SYN_DOTM": ("latches", False), "SYN_ARGCB": ("latches", False),
     "SYN_CHAIN": ("latches", False), "SYN_NEGP": ("TRAP", False),
     "SYN_EQPAREN": ("latches", False),
