@@ -771,8 +771,8 @@ def audit(sources):
     rows, allfuncs, fstatic = [], {}, set()
     for name, line, body, sig, rel in defs:
         allfuncs.setdefault((rel, name), []).append(body)   # #if/#else twins
-        if re.search(r"\bstatic\b", sig):
-            fstatic.add((rel, name))
+        if re.search(r"\bstatic\b", sig) and not rel.endswith(".h"):
+            fstatic.add((rel, name))         # a header's static inline is every includer's
         reads = env_reads(body, readers, macros.get(rel, {}))
         knobs = [k for _p, k in reads]
         if not knobs:
@@ -1772,6 +1772,7 @@ static void warm_lr_statics(void)
     (void)s_priv();
     pool_go(0, 0);
     (void)start_r(0);
+    h_helper();
     gcfg.g_dotm = 1;
     register_cb(g_argcb);
     warm_twin();
@@ -1824,7 +1825,7 @@ SELF_TEST_WANT = {
     "SYN_OCT": ("latches", False), "SYN_OCTT": ("TRAP", False),
     "SYN_OCT9": ("latches", False), "SYN_HEXBIG": ("latches", False),
     "SYN_ECALLED": ("latches", True), "SYN_EJOB": ("latches", False),
-    "SYN_ERET": ("latches", False),
+    "SYN_ERET": ("latches", False), "SYN_HXGATE": ("latches", True),
     "SYN_DOTM": ("latches", False), "SYN_ARGCB": ("latches", False),
     "SYN_CHAIN": ("latches", False), "SYN_NEGP": ("TRAP", False),
     "SYN_EQPAREN": ("latches", False),
@@ -1846,6 +1847,13 @@ static int x_gate(void)
     return v;
 }
 void other_warm(void) { (void)x_gate(); }
+static int hx_gate(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("SYN_HXGATE"); v = s ? atoi(s) : 0; }
+    return v;
+}
+void hx_call(void) { (void)hx_gate(); }
 static int s_priv(void)
 {
     static int v = -1;
@@ -1866,6 +1874,7 @@ int main(void) { return m_gate(); }
 """
 # a header's static inline gate: refused, since each file has its own copy
 SELF_TEST_HDR = r"""
+static inline void h_helper(void) { hx_call(); }
 static inline int h_gate(void)
 {
     static int v = -1;
