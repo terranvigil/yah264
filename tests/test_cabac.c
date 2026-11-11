@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "../src/encoder/cabac.h"
+#include "../src/encoder/mbcode.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -289,6 +290,48 @@ int main(void) {
                 }
         }
         printf("cabac 8x8 residual round-trip: %d blocks OK\n", M8);
+    }
+    /* mb_qp_delta: a chain of coded QPs with jumps of every size, decoded with
+ * the unary binarization at contexts 60 + (previous delta != 0), 62, 63.
+ * Each delta must lie in [-(26 + QpBdOffsetY/2), 25 + QpBdOffsetY/2] (7.4.5)
+ * and rebuild the coded QP modulo 52 + QpBdOffsetY. */
+    {
+        enum { NQ = 52 * 52 * 2 };
+        static int qps[NQ];
+        static y264_frame_t f;
+        const int o = Y264_QP_BD_OFFSET;
+        for (int i = 0; i < NQ; i++)
+            qps[i] = i < 52 * 52 ? (i & 1 ? i / 52 % 52 : i % 52) : (int)(nextr() % 52);
+        y264_cabac_t qc;
+        GUARDED(qbuf, 1 << 16);
+        y264_cabac_init_engine(&qc, qbuf);
+        y264_cabac_init_contexts(&qc, 0, 0, 26);
+        f.prev_qp = 26; f.last_qp_delta = 0;
+        for (int i = 0; i < NQ; i++) y264_mb_qpd_cabac(&qc, &f, qps[i]);
+        y264_cabac_encode_terminate(&qc, 1);
+        dec_t dq;
+        { y264_cabac_t tmp; y264_cabac_init_contexts(&tmp, 0, 0, 26); memcpy(dq.ctx, tmp.ctx, sizeof(dq.ctx)); }
+        d_init(&dq, qbuf);
+        int qp = 26, last = 0;
+        for (int i = 0; i < NQ; i++) {
+            int k = 0;
+            while (d_decision(&dq, k == 0 ? 60 + (last != 0) : (k == 1 ? 62 : 63))) {
+                k++;
+                if (k > 2 * (52 + o)) break;
+            }
+            int d = k & 1 ? (k + 1) / 2 : -(k / 2);
+            if (d < -(26 + o / 2) || d > 25 + o / 2) {
+                printf("FAIL mb_qp_delta %d out of range at %d (%d -> %d)\n", d, i, qp, qps[i]);
+                return 1;
+            }
+            qp = (qp + d + 52 + 2 * o) % (52 + o) - o;
+            if (qp != qps[i]) {
+                printf("FAIL mb_qp_delta %d rebuilds QP %d, coded %d at %d\n", d, qp, qps[i], i);
+                return 1;
+            }
+            last = d;
+        }
+        printf("cabac mb_qp_delta round-trip: %d deltas OK\n", NQ);
     }
     return 0;
 }

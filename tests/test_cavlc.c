@@ -12,6 +12,7 @@
  * logic and that the whole thing is self-consistent.
  */
 #include "encoder/cavlc.h"
+#include "encoder/mbcode.h"
 #include "encoder/nzmask.h"
 #include "common/bitstream.h"
 #include "dsp/transform.h"
@@ -377,6 +378,37 @@ static void test_nzmask(void)
     }
 }
 
+/* mb_qp_delta between every pair of coded QPs: the written se(v) stays in
+ * [-(26 + QpBdOffsetY/2), 25 + QpBdOffsetY/2] (7.4.5) and the decoder's modulo
+ * rebuild lands on the coded QP, however far the QP jumped */
+static void test_qp_delta(void)
+{
+    static y264_frame_t f;
+    const int o = Y264_QP_BD_OFFSET;
+    for (int prev = 0; prev <= 51; prev++)
+        for (int cur = 0; cur <= 51; cur++) {
+            uint8_t buf[16];
+            y264_bs_t bs;
+            y264_bs_init(&bs, buf, sizeof(buf));
+            f.prev_qp = prev;
+            y264_mb_qpd_cavlc(&bs, &f, cur);
+            y264_bs_flush(&bs);
+            rdr_t r = { buf, 0, 0, 0 };
+            int lz = 0;
+            while (!rbit(&r)) lz++;
+            int k = (1 << lz) - 1;
+            for (int i = lz - 1; i >= 0; i--) k += rbit(&r) << i;
+            int d = k & 1 ? (k + 1) / 2 : -(k / 2);
+            int qp = (prev + d + 52 + 2 * o) % (52 + o) - o;
+            CHECK(d >= -(26 + o / 2) && d <= 25 + o / 2,
+                  "mb_qp_delta %d out of range (%d -> %d)", d, prev, cur);
+            CHECK(qp == cur, "mb_qp_delta %d rebuilds QP %d, coded %d", d, qp, cur);
+            CHECK(f.prev_qp == cur && f.last_qp_delta == d,
+                  "qp chain %d/%d after %d -> %d", f.prev_qp, f.last_qp_delta, prev, cur);
+            if (fails > 20) return;
+        }
+}
+
 int main(void)
 {
     test_nzmask();
@@ -384,6 +416,7 @@ int main(void)
     test_roundtrip();
     test_field_reorder();
     test_len_8x8();
+    test_qp_delta();
     if (fails) {
         printf("test_cavlc: %d failure(s)\n", fails);
         return 1;

@@ -471,6 +471,11 @@ typedef struct {
 /* a macroblock's coded QP from the frame's maps, without mb_qp_pre's side effects */
 int y264_mb_qp(const y264_frame_t *f, int mbx, int mby);
 
+/* write mb_qp_delta for a macroblock coded at cur_qp and advance the prediction
+ * chain (f->prev_qp, f->last_qp_delta); the delta is wrapped into the legal range */
+void y264_mb_qpd_cavlc(y264_bs_t *bs, y264_frame_t *f, int cur_qp);
+void y264_mb_qpd_cabac(y264_cabac_t *c, y264_frame_t *f, int cur_qp);
+
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),
  * writing the slice_data to `bs` and filling rec[]. Thin wrapper over the
  * analyze/emit split below (kept for callers that don't overlap the two). */
