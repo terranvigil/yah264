@@ -2939,8 +2939,8 @@ static void gop_order_horizon(int *order, const int *gstart, int n_gops, long ho
  * value outside both is free; -2 keeps -1 meaning failure. */
 #define Y264_GO_SERIAL (-2)
 
-/* One finished GOP to the output, its --segment-out file and its
- * --frame-stats lines. Frees buf. */
+/* one finished GOP to the output, its --segment-out file and its
+ * --frame-stats lines; frees buf */
 static void gop_emit(gop_job_t *job, FILE *out, int idx, uint8_t *buf, size_t sz, int *wr_err)
 {
     if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
@@ -5903,9 +5903,9 @@ int main(int argc, char **argv)
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
-    /* A per-GOP join starts from an assumed buffer level. One-frame GOPs under
- * a VBV and a declared HRD have no room for it to be wrong, so they run one
- * encoder, its threads on the row wavefront. */
+    /* a per-GOP join starts from an assumed buffer level, and one-frame GOPs
+ * under a VBV and a declared HRD have no room for it to be wrong: they run
+ * one encoder, its threads on the row wavefront */
     int one_enc = vbv_k1 || nal_hrd;
     if (one_enc) {
         tp_mt = 0;

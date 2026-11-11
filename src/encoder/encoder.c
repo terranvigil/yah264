@@ -1571,8 +1571,8 @@ static int fld_navail(const yah264_encoder_t *e)
  * --ref counts FIELDS here, because num_ref_idx_l0_active does. --ref 1
  * therefore still names exactly the nearest same-parity field, which is the
  * list PAFF-1 built, and only a deeper list reaches the other parity. */
-/* A field's POC over its frame's: the field coded first takes the frame
- * POC and the other the one after it (emit_pair). */
+/* a field's POC over its frame's: the field coded first takes the frame
+ * POC and the other the one after it (emit_pair) */
 static inline int fld_poc_off(const yah264_encoder_t *e, int parity)
 {
     return parity ^ (e->fields == 2);
