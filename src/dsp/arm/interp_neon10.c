@@ -8,8 +8,8 @@
  * the weighted average, chroma MC at widths 8 and 4, and the two row kernels
  * of the half-pel plane build. It also holds the row of the lowres half-pel
  * planes on the 8-bit scale, which the 8-bit library leaves to the compiler.
- * The six-tap luma kernels and the fused band build are here too. The fused
- * bi-prediction forms stay C at 10 bits.
+ * The six-tap luma kernels, the fused band build and the two fused
+ * bi-prediction forms are here too.
  *
  * A sample is a u16 lane. The six-tap filter of 10-bit samples reaches
  * 42*1023 = 42966, past int16, so the filters widen to int32 where the 8-bit
@@ -171,6 +171,72 @@ void y264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,
         v = vrshrq_n_u16(v, 6);
         vst1_u16(dst + y * dstride, vget_low_u16(v));
         vst1_u16(dst + (y + 1) * dstride, vget_high_u16(v));
+    }
+}
+
+/* ---- the fused bi-prediction forms -----------------------------------------
+ *
+ * A 4:2:0 macroblock's flat bi-average from whole-sample positions in one
+ * call: luma 16x16 into pred (stride 16), each chroma 8x8 into its plane
+ * (stride 8), every sample (a + b + 1) >> 1. */
+void y264_avg_mb420_flat_neon(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1)
+{
+    for (int y = 0; y < 16; y++, l0 += s0, l1 += s1) {
+        uint16x8x2_t a = vld1q_u16_x2(l0), b = vld1q_u16_x2(l1);
+        a.val[0] = vrhaddq_u16(a.val[0], b.val[0]);
+        a.val[1] = vrhaddq_u16(a.val[1], b.val[1]);
+        vst1q_u16_x2(pred + 16 * y, a);
+    }
+    for (int y = 0; y < 8; y++, u0 += t0, v0 += t0, u1 += t1, v1 += t1) {
+        vst1q_u16(cu + 8 * y, vrhaddq_u16(vld1q_u16(u0), vld1q_u16(u1)));
+        vst1q_u16(cv + 8 * y, vrhaddq_u16(vld1q_u16(v0), vld1q_u16(v1)));
+    }
+}
+
+/* Two in-bounds 8x8 chroma predictions, one per list, averaged into dst in
+ * the same pass: each list's rows are the width-8 bilinear above, with each
+ * source row loaded once for two output rows, then wt_row's average. Each
+ * list reads nine columns of nine rows. A weight outside int16 averages
+ * through the scalar form, as wt_row does. */
+void y264_mc_chroma_bi8_neon(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1)
+{
+    const uint16_t a0 = (uint16_t)((8 - fx0) * (8 - fy0)), a1 = (uint16_t)(fx0 * (8 - fy0));
+    const uint16_t a2 = (uint16_t)((8 - fx0) * fy0),       a3 = (uint16_t)(fx0 * fy0);
+    const uint16_t b0 = (uint16_t)((8 - fx1) * (8 - fy1)), b1 = (uint16_t)(fx1 * (8 - fy1));
+    const uint16_t b2 = (uint16_t)((8 - fx1) * fy1),       b3 = (uint16_t)(fx1 * fy1);
+    const int flat = w0 == 32 && w1 == 32, vec = wt_ok(w0, w1);
+    const int16x4_t k0 = vdup_n_s16((int16_t)(vec ? w0 : 0));
+    const int16x4_t k1 = vdup_n_s16((int16_t)(vec ? w1 : 0));
+    uint16x8_t t0 = vld1q_u16(r0), t1 = vld1q_u16(r0 + 1);
+    uint16x8_t u0 = vld1q_u16(r1), u1 = vld1q_u16(r1 + 1);
+    for (int y = 0; y < 8; y++, dst += dstride) {
+        r0 += s0; r1 += s1;
+        uint16x8_t n0 = vld1q_u16(r0), n1 = vld1q_u16(r0 + 1);
+        uint16x8_t m0 = vld1q_u16(r1), m1 = vld1q_u16(r1 + 1);
+        /* the weights sum to 64, so the sum stays within u16 as in mcc8 */
+        uint16x8_t p = vmulq_n_u16(t0, a0);
+        p = vmlaq_n_u16(p, t1, a1); p = vmlaq_n_u16(p, n0, a2); p = vmlaq_n_u16(p, n1, a3);
+        uint16x8_t q = vmulq_n_u16(u0, b0);
+        q = vmlaq_n_u16(q, u1, b1); q = vmlaq_n_u16(q, m0, b2); q = vmlaq_n_u16(q, m1, b3);
+        p = vrshrq_n_u16(p, 6);
+        q = vrshrq_n_u16(q, 6);
+        if (flat) {
+            vst1q_u16(dst, vrhaddq_u16(p, q));
+        } else if (vec) {
+            vst1q_u16(dst, wt8(p, q, k0, k1));
+        } else {
+            pixel pa[8], pb[8];
+            vst1q_u16(pa, p);
+            vst1q_u16(pb, q);
+            for (int i = 0; i < 8; i++) dst[i] = wt1(pa[i], pb[i], w0, w1);
+        }
+        t0 = n0; t1 = n1; u0 = m0; u1 = m1;
     }
 }
 

@@ -343,8 +343,7 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
     return bad;
 }
 
-/* The bodies from here to the luma window group have kernels at 8 bits
- * only. */
+/* The lowres bilinear row has kernels at 8 bits only. */
 #if Y264_HAVE_NEON || Y264_HAVE_SSE4
 typedef void (*bilin4_row_fn)(pixel *, const pixel *, const pixel *, int, int,
                               int, int, int, int);
@@ -398,7 +397,9 @@ static int run_bilin4_row(const char *name, bilin4_row_fn kern)
     ca_guard_free(o);
     return bad;
 }
+#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
 
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 typedef void (*mc_chroma_bi8_fn)(pixel *, int, const pixel *, int, int, int,
                                  const pixel *, int, int, int, int, int);
 /* Two 8x8 chroma compensations averaged in one pass, against the plain C
@@ -408,27 +409,55 @@ typedef void (*mc_chroma_bi8_fn)(pixel *, int, const pixel *, int, int, int,
 static int run_mc_chroma_bi8(const char *name, mc_chroma_bi8_fn kern)
 {
     int bad = 0;
-    for (int t = 0; t < TRIALS; t++) {
+    /* one trial past TRIALS fills with extremes, so the weighted sums reach
+     * both clips */
+    for (int t = 0; t <= TRIALS; t++) {
         plane();
-        for (int wi = -64; wi <= 128 && bad < 4; wi += (t < 2 ? 4 : 36)) {
+        if (t == TRIALS)
+            for (int i = 0; i < STRIDE * PLANE_H; i++) {
+                pa[i] = ca_rnd_edge();
+                pb[i] = ca_rnd_edge();
+            }
+        for (int wi = -64; wi <= 128 && bad < 4; wi += (t < 2 || t == TRIALS ? 4 : 36)) {
             int w1 = t == 0 ? 32 : wi, w0 = 64 - w1;   /* trial 0: the flat pair */
             int fx0 = (int)ca_below(8), fy0 = (int)ca_below(8);
             int fx1 = (int)ca_below(8), fy1 = (int)ca_below(8);
             int ix0 = 4 + (int)ca_below(16), iy0 = 4 + (int)ca_below(8);
             int ix1 = 4 + (int)ca_below(16), iy1 = 4 + (int)ca_below(8);
-            pixel c0[64], c1[64], ref[64], out[8 * 11];
+            pixel c0[64], c1[64], ref[64], out[8 * 11], sentinel;
             y264_mc_chroma_c(c0, 8, pa, STRIDE, 48, 32, ix0, iy0, fx0, fy0, 8, 8, 2, 2);
             y264_mc_chroma_c(c1, 8, pb, STRIDE, 48, 32, ix1, iy1, fx1, fy1, 8, 8, 2, 2);
             y264_pixel_avg_wt_c(ref, c0, c1, 64, w0, w1);
             memset(out, 0xA5, sizeof out);
+            memset(&sentinel, 0xA5, sizeof sentinel);
             kern(out + 8, 8, pa + iy0 * STRIDE + ix0, STRIDE, fx0, fy0,
                  pb + iy1 * STRIDE + ix1, STRIDE, fx1, fy1, w0, w1);
-            if (memcmp(out + 8, ref, 64) || out[0] != 0xA5 || out[8 * 9] != 0xA5) {
+            if (memcmp(out + 8, ref, sizeof ref) || out[7] != sentinel ||
+                out[8 * 9] != sentinel) {
                 if (!bad) ca_fail("%s: w %d/%d phases %d,%d %d,%d", name, w0, w1,
                                   fx0, fy0, fx1, fy1);
                 bad++;
             }
         }
+#if Y264_BIT_DEPTH > 8
+        /* explicit weight pairs the 10-bit kernel also averages exactly, and
+         * one past int16 that it must hand to its scalar form */
+        static const int xw[][2] = { { -128, 127 }, { 200, -300 }, { 40000, 5 } };
+        for (unsigned j = 0; j < sizeof(xw) / sizeof(xw[0]); j++) {
+            int fx0 = (int)ca_below(8), fy0 = (int)ca_below(8);
+            int fx1 = (int)ca_below(8), fy1 = (int)ca_below(8);
+            pixel c0[64], c1[64], ref[64], out[64];
+            y264_mc_chroma_c(c0, 8, pa, STRIDE, 48, 32, 8, 8, fx0, fy0, 8, 8, 2, 2);
+            y264_mc_chroma_c(c1, 8, pb, STRIDE, 48, 32, 12, 4, fx1, fy1, 8, 8, 2, 2);
+            y264_pixel_avg_wt_c(ref, c0, c1, 64, xw[j][0], xw[j][1]);
+            kern(out, 8, pa + 8 * STRIDE + 8, STRIDE, fx0, fy0,
+                 pb + 4 * STRIDE + 12, STRIDE, fx1, fy1, xw[j][0], xw[j][1]);
+            if (memcmp(out, ref, sizeof ref)) {
+                if (!bad) ca_fail("%s: w %d/%d", name, xw[j][0], xw[j][1]);
+                bad++;
+            }
+        }
+#endif
     }
     for (int ph = 0; ph < 64 && !bad; ph += 9) {
         size_t win = ca_pg_window_pix(STRIDE, 9, 9);
@@ -478,7 +507,7 @@ static int run_avg_mb420_flat(const char *name, avg_mb420_flat_fn kern)
         y264_pixel_avg_wt_2d_c(rp, 16, l0, STRIDE, l1, STRIDE, 16, 16, 32, 32);
         y264_pixel_avg_wt_2d_c(ru, 8, u0, STRIDE, u1, STRIDE, 8, 8, 32, 32);
         y264_pixel_avg_wt_2d_c(rv, 8, v0, STRIDE, v1, STRIDE, 8, 8, 32, 32);
-        if (memcmp(p, rp, 256) || memcmp(cu, ru, 64) || memcmp(cv, rv, 64)) {
+        if (memcmp(p, rp, sizeof rp) || memcmp(cu, ru, sizeof ru) || memcmp(cv, rv, sizeof rv)) {
             ca_fail("%s: trial %d", name, t);
             bad++;
         }
@@ -504,7 +533,7 @@ static int run_avg_mb420_flat(const char *name, avg_mb420_flat_fn kern)
         y264_pixel_avg_wt_2d_c(rp, 16, l0, LS, l1, LS + 2, 16, 16, 32, 32);
         y264_pixel_avg_wt_2d_c(ru, 8, u0, CS, u1, CS + 2, 8, 8, 32, 32);
         y264_pixel_avg_wt_2d_c(rv, 8, v0, CS, v1, CS + 2, 8, 8, 32, 32);
-        if (memcmp(p, rp, 256) || memcmp(cu, ru, 64) || memcmp(cv, rv, 64)) {
+        if (memcmp(p, rp, sizeof rp) || memcmp(cu, ru, sizeof ru) || memcmp(cv, rv, sizeof rv)) {
             ca_fail("%s: guarded, tail %d", name, tail);
             bad++;
         }
@@ -1016,12 +1045,11 @@ static int t_pred_avg2_neon(void)
 { return run_pred_avg2("pred_avg2", y264_pred_avg2_neon); }
 static int t_pixel_avg_wt_neon(void)
 { return run_pixel_avg_wt("pixel_avg_wt", y264_pixel_avg_wt_neon); }
-#if Y264_HAVE_NEON
 static int t_mc_chroma_bi8_neon(void)
 { return run_mc_chroma_bi8("mc_chroma_bi8", y264_mc_chroma_bi8_neon); }
 static int t_avg_mb420_flat_neon(void)
 { return run_avg_mb420_flat("avg_mb420_flat", y264_avg_mb420_flat_neon); }
-
+#if Y264_HAVE_NEON
 static int t_bilin4_row_neon(void)
 { return run_bilin4_row("bilin4_row", y264_bilin4_row_neon); }
 #endif
@@ -1494,6 +1522,8 @@ const ca_test ca_mc_tests[] = {
     { "pred_avg2",         "mc", Y264_CPU_NEON, t_pred_avg2_neon },
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
+    { "mc_chroma_bi8",     "mc", Y264_CPU_NEON, t_mc_chroma_bi8_neon },
+    { "avg_mb420_flat",    "mc", Y264_CPU_NEON, t_avg_mb420_flat_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
