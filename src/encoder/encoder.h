@@ -1050,6 +1050,7 @@ struct yah264_encoder {
     int      rcp_on;            /* abr_on || tp_pass || vbv_on */
     struct rcp_pend {
         int8_t  type, is_ref, dropped, filled;
+        int8_t  held;           /* raised by the --nal-hrd hold: off the plan's model */
         int8_t  tight;          /* decided in a serial-tight VBV burst: pops at
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */

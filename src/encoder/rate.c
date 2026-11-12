@@ -1062,11 +1062,14 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * BD and the lowest worst rate error over the band (sintel -8.8%,
  * akiyo -0.55%; 8 put touchdown +0.9% and akiyo's error to 2.4%). */
             int mbs = e->width_in_mbs * e->height_in_mbs;
-            if (e->tp_stats[p->tp_rec].bits >= TP_LOBITS * mbs) {
+            /* a frame the --nal-hrd hold raised codes where the plan's
+             * 1/qscale model does not reach (blocks turning to skip), and
+             * its ratio would hold the plan's QPs high long after */
+            if (!p->held && e->tp_stats[p->tp_rec].bits >= TP_LOBITS * mbs) {
                 e->tp_kact += p->bits;
                 e->tp_kmod += p->pred;
             }
-            else if (tp_floor_content(e, p->tp_rec)) {
+            else if (!p->held && tp_floor_content(e, p->tp_rec)) {
                 e->tp_lact += p->bits;
                 e->tp_lmod += p->pred;
                 e->tp_lcnt++;
@@ -1179,6 +1182,8 @@ void rcp_reqp(yah264_encoder_t *e, int type, int is_ref)
     int nf = frame_qp(e, type, is_ref);
     double r = pow(2.0, (double)(p->fqp - nf) / 6.0);   /* bits track 1/qscale */
     p->acc_qp += e->qp - p->base_qp;    /* the rate factor credits the QP coded */
+    if (e->hrd_on && e->tp_pass >= 2)
+        p->held = 1;
     p->base_qp = e->qp;
     p->fqp = nf;
     p->pred *= r;
