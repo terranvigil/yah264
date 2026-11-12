@@ -1030,6 +1030,8 @@ struct yah264_encoder {
     double  *tp_elo;            /* [n+1] modelled bits of floor-bound records before i */
     double   tp_lact, tp_lmod;  /* actual / modelled bits of floor-bound frames with content */
     int      tp_lcnt;           /* such frames landed */
+    double   tp_lact3[3], tp_lmod3[3]; /* the same per frame type */
+    double  *tp_elo3;           /* [3][n+1] tp_elo per frame type */
     double   tp_lastq[3];       /* per type: last floor-bound qscale decided, 0 = none */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
     double   tp_fps;            /* frames per second, for the drift band */

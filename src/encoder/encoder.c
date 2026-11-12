@@ -16633,6 +16633,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->tp_ebits);
     free(e->tp_qlo);
     free(e->tp_elo);
+    free(e->tp_elo3);
     int pw[3] = { e->padded_w, e->padded_w / e->sub_w, e->padded_w / e->sub_w };
     int pb[3] = { Y264_LUMA_BORDER, Y264_CHROMA_BORDER, Y264_CHROMA_BORDER };
     for (int c = 0; c < 3; c++) {
