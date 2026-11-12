@@ -2381,11 +2381,17 @@ static double tp_bisect(yah264_encoder_t *e, const double *cplx, double seed, do
  * +167%. The floor engages when textured frames of this kind that the plan
  * puts more than TP_LOFAR QP under their pass-1 QP carry over TP_LOSHARE of
  * the non-I planned bits (an I frame's planned bits would hide them: dark
- * grain over 120 frames read under the share with the I in it). The P frames
+ * grain over 120 frames read under the share with the I in it), or make up
+ * over TP_LOSHARE of the non-I frames. The count is needed beside the bits:
+ * the model prices these frames at almost nothing, so next to detailed
+ * frames their planned share is tiny however many there are (72 grain
+ * frames beside 72 of a detailed clip read 1% of the bits), and grain that
+ * followed the detail overshot by 90%. The P frames
  * are then held at most TP_LODEPTH under their pass-1 QP and the plan is
  * re-solved; I and B frames follow through the type shaping. Every corpus
- * ladder cell reads under the share and is bit-exact, as is an all-black
- * clip, which has no textured frames. Both depths move with the bit depth:
+ * ladder cell but sintel's two highest rungs reads under both shares and is
+ * bit-exact, as is an all-black clip, which has no textured frames; on
+ * those two rungs sintel's opening fade is half the frames. Both depths move with the bit depth:
  * a 10-bit QP has the step of the 8-bit QP 12 under it, so 10-bit grain
  * sits 12 QP further down before the model stops holding. */
 static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, double step_mult)
@@ -2394,16 +2400,20 @@ static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, 
     double lim = TP_LOBITS * e->width_in_mbs * e->height_in_mbs;
     double tex = (double)e->width_in_mbs * e->height_in_mbs;
     double lo = 0, all = 0;
+    int nlo = 0, nall = 0;
     for (int i = 0; i < n; i++) {
         if (e->tp_stats[i].type == 0)
             continue;
         double b = tp_bits_at(e, i, e->tp_q[i]);
         all += b;
+        nall++;
         if (e->tp_stats[i].bits < lim && e->tp_stats[i].cplx >= tex
-            && e->tp_q[i] < e->tp_qrec[i] * pow(2.0, -TP_LOFAR / 6.0))
+            && e->tp_q[i] < e->tp_qrec[i] * pow(2.0, -TP_LOFAR / 6.0)) {
             lo += b;
+            nlo++;
+        }
     }
-    if (!(lo > TP_LOSHARE * all))
+    if (!(lo > TP_LOSHARE * all) && !(nlo > TP_LOSHARE * nall))
         return;
     e->tp_qlo = malloc((size_t)n * sizeof(*e->tp_qlo));
     e->tp_elo = malloc((size_t)(n + 1) * sizeof(*e->tp_elo));
