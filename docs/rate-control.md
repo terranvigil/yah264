@@ -307,7 +307,8 @@ also go serial:
 - Under capped VBR, the anchor after an intra frame or after one the buffer
   raised 3+ QP (`Y264_VBV_POSTI`), and any burst starting under a quarter full
   (`Y264_VBV_LOW`).
-- Under CBR and under `--nal-hrd`, every burst coded on a frame pool.
+- Under CBR and under `--nal-hrd` (pass 1 of a two-pass aside), every burst
+  coded on a frame pool.
 
 Within a pipelined burst, a B may not decide more than 6 QP below
 the QP regime its model was calibrated at. The VBV model runs on
