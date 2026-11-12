@@ -297,6 +297,7 @@ struct yah264_encoder {
  * aliases ref[]. nref is the configured count; nref_valid grows as refs
  * accumulate after an IDR (min(nref, frames since IDR)). */
     int      nref;
+    int      nref_b0;      /* a flat B's list-0 cap: its future anchor takes a DPB slot */
     int      nref_valid;
     pixel   *refring[16][3];
     int      refring_fn[16];
@@ -893,6 +894,24 @@ struct yah264_encoder {
     long     hrd_anchor_tick;   /* tick of the buffering period in force */
     long     hrd_disp_base;     /* display index of this segment's first picture */
     size_t   hrd_au_bytes;      /* bytes appended into the access unit being built */
+    /* the declared arrival schedule (C.1.2), seconds on this segment's clock:
+ * removal of the buffering period in force, and initial arrival and final
+ * arrival of the last access unit opened. A mid-stream buffering period
+ * declares the delay these leave it (C.3). */
+    double   hrd_tr_nb, hrd_tai, hrd_taf;
+    unsigned hrd_bp_init, hrd_bp_off;   /* the delay and offset in force */
+    double   hrd_tr_cur;                /* removal time of the access unit just opened */
+    long     hrd_late;                  /* pictures whose last bit arrived after their removal */
+    long     hrd_last_idr;              /* display index of the last key (IDR or open key), -1 none */
+    double   hrd_c51[4];                /* last slice bits at QP 51 per type: I, P, B, an intra frame's second field */
+    int      hrd_qfloor[3];             /* per type, the base QP the next frame starts from, -1 none */
+    long     hrd_qfloor_at[3];          /* display index of the frame that set it */
+    int      hrd_f0_intra;              /* the current frame's first field was intra */
+    int      hrd_flat;                  /* re-coding at QP 51 without macroblock offsets */
+    int      nal_measure;               /* 0 write NALs; 1 count them; 2 only charge the AU */
+    size_t   nal_measure_bytes;
+    uint8_t *nal_measure_buf;
+    size_t   nal_measure_cap;
     long     hrd_pad_bytes;     /* filler written, for the diagnostic line */
     /* The filler payload's own buffer. It cannot share e->rbsp: the padding is
  * written from inside the access-unit opener, which runs while e->rbsp still
@@ -1031,6 +1050,7 @@ struct yah264_encoder {
     int      rcp_on;            /* abr_on || tp_pass || vbv_on */
     struct rcp_pend {
         int8_t  type, is_ref, dropped, filled;
+        int8_t  held;           /* raised by the --nal-hrd hold: off the plan's model */
         int8_t  tight;          /* decided in a serial-tight VBV burst: pops at
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */

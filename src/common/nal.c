@@ -35,6 +35,10 @@ size_t y264_nal_write(uint8_t *out, size_t out_size,
         *o++ = b;
         zeros = (b == 0x00) ? zeros + 1 : 0;
     }
+    /* 7.4.1: a NAL unit ends in no 0x00, so cabac_zero_words take a 0x03
+     * after their last pair, which the HRD then counts like any byte */
+    if (zeros >= 2)
+        *o++ = 0x03;
 
     return (size_t)(o - out);
 }

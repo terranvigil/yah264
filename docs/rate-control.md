@@ -146,8 +146,31 @@ of phantom occupancy over a few hundred CBR pictures.
 `--nal-hrd vbr|cbr` writes the buffer model into the stream: `hrd_parameters`
 in the SPS, a `buffering_period` SEI at every IDR, `pic_timing` on every
 picture. `BitRate` and `CpbSize` are `--vbv-maxrate` and `--vbv-bufsize`
-rounded up to the syntax grid, and the initial removal delay is the occupancy
-the encoder started from. `vbr` moves no bit. `cbr` adds filler and nothing else.
+rounded up to the syntax grid. The first buffering period's initial removal
+delay is the occupancy the encoder started from; every later one is the gap
+between the previous picture's final arrival and this one's removal, at most
+a full buffer, as C.3 requires. `cbr` also pads every access unit up to the
+rate with filler.
+
+The declared buffer is held, not only described. Each picture's slices are
+measured against the room left before its removal time on the declared
+schedule, the SEIs and emulation bytes included, and re-coded at a higher QP
+until they fit or the coded QP reaches 51, where it is coded once more without
+its per-macroblock offsets. The room left after it is a reserve for the next
+key the encoder can see coming (the keyint key or a scene cut the lookahead
+flagged) at what the last intra picture cost at QP 51, less what arrives
+before it, and under field coding for the second field of an intra first
+field. The rate control never sees these raises, so after a frame is raised
+by `--qpstep` or more, the next frame of its type starts from that QP; a
+frame with room to spare lowers that start, and a key, a cut or a lookahead
+window without use drops it. A picture still late at the ceiling is counted,
+and the encode ends with one warning naming the count. The reserve is an
+estimate and covers keys only, so a stream whose pictures would all have
+fitted at QP 51 can still carry a late access unit; the warning says so when
+it happens. Pass 1 of a two-pass encode is not held: its stream still
+carries the HRD SEIs but answers to nothing, so send it to `/dev/null`.
+`--crf-max`, `--qpmax` under 51, forced QPs and `--zones q=` are refused,
+since each holds a QP under what the buffer may need.
 `scripts/hrd_check.py` reads the declaration back and simulates Annex C.
 
 ### Two-pass
@@ -208,6 +231,8 @@ keeps one rate problem:
 - **Two-pass** splits the stats file at the GOP markers a threaded pass 1
   writes, and each GOP takes the share of the budget its complexity earns. A
   serial pass 1 writes no markers, so its pass 2 runs serially too.
+- **`--keyint 1` with a VBV** runs one encoder: a one-frame GOP has no frame
+  of its own to correct the buffer level its segment assumed.
 
 ### What VBV actually guarantees
 
@@ -284,10 +309,8 @@ also go serial:
 - Under capped VBR, the anchor after an intra frame or after one the buffer
   raised 3+ QP (`Y264_VBV_POSTI`), and any burst starting under a quarter full
   (`Y264_VBV_LOW`).
-- Under CBR, a burst whose rate factor sits more than 2 QP under the regime the
-  model was calibrated at. Below there the model
-  under-predicts an anchor by 2-5x. About 20% of CBR frames take this path at
-  six threads.
+- Under CBR and under `--nal-hrd` (pass 1 of a two-pass aside), every burst
+  coded on a frame pool.
 
 Within a pipelined burst, a B may not decide more than 6 QP below
 the QP regime its model was calibrated at. The VBV model runs on

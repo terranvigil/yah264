@@ -211,6 +211,8 @@ cells() {
     echo "cqp_hi|1|$st|$F|--qp 45"
     echo "abr_low|1|$st|$F|--bitrate 150"
     echo "abr_qpstep|1|$fm|$F|--bitrate 600 --qpstep 2 --qpmin 20 --qpmax 40"
+    # a starved buffer: a raised intra frame there is the case the ceiling moves
+    echo "vbv_starved|1|$(c mobile_cif)|$F|--bitrate 300 --vbv-maxrate 300 --vbv-bufsize 30"
     echo "twopass_vbv|1|$st|$F|--bitrate 700 --vbv-maxrate 1000 --vbv-bufsize 1000 PASS2"
     echo "crf_max|1|$st|$F|--crf 20 --vbv-maxrate 500 --vbv-bufsize 500 --crf-max 40"
     echo "vbr_hrd|1|$fm|$F|--bitrate 600 --vbv-maxrate 900 --vbv-bufsize 1800 --nal-hrd vbr --vbv-init 0.5"

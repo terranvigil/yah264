@@ -1062,11 +1062,14 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * BD and the lowest worst rate error over the band (sintel -8.8%,
  * akiyo -0.55%; 8 put touchdown +0.9% and akiyo's error to 2.4%). */
             int mbs = e->width_in_mbs * e->height_in_mbs;
-            if (e->tp_stats[p->tp_rec].bits >= TP_LOBITS * mbs) {
+            /* a frame the --nal-hrd hold raised codes where the plan's
+             * 1/qscale model does not reach (blocks turning to skip), and
+             * its ratio would hold the plan's QPs high long after */
+            if (!p->held && e->tp_stats[p->tp_rec].bits >= TP_LOBITS * mbs) {
                 e->tp_kact += p->bits;
                 e->tp_kmod += p->pred;
             }
-            else if (tp_floor_content(e, p->tp_rec)) {
+            else if (!p->held && tp_floor_content(e, p->tp_rec)) {
                 e->tp_lact += p->bits;
                 e->tp_lmod += p->pred;
                 e->tp_lcnt++;
@@ -1179,6 +1182,8 @@ void rcp_reqp(yah264_encoder_t *e, int type, int is_ref)
     int nf = frame_qp(e, type, is_ref);
     double r = pow(2.0, (double)(p->fqp - nf) / 6.0);   /* bits track 1/qscale */
     p->acc_qp += e->qp - p->base_qp;    /* the rate factor credits the QP coded */
+    if (e->hrd_on && e->tp_pass >= 2)
+        p->held = 1;
     p->base_qp = e->qp;
     p->fqp = nf;
     p->pred *= r;
@@ -1383,7 +1388,12 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     newqp = crf_max_clip(e, e->qp, newqp, coded - e->qp);
     int q = (int)lround(newqp);
     if (q < 1) q = 1;              /* the VBV loop's own floor, below --qpmin */
-    q = qp_bound(e, q);
+    /* the bound is on the coded QP: an intra frame codes under its base, so
+ * its base may rise that far past the ceiling, or a starved all-intra
+ * stream stops 3 QP short of what the buffer needs */
+    int lift = coded < e->qp ? e->qp - coded : 0;
+    if (q < e->qp_min) q = e->qp_min;
+    if (q > e->qp_max + lift) q = e->qp_max + lift;
     /* An intra frame the buffer raised: the anchors that refine it are
  * the ones the bits model cannot price (see the burst gate). */
     if (type == 0 && e->crf_on && !e->abr_on)
@@ -1447,18 +1457,9 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         if (e->bm_rvbv.cplx[1] > 0 && e->rcp_arr_cvi * cj < e->bm_rvbv.cplx[1])
             tight = 1;
         /* The anchor at the current base QP (type-1 frame_qp offset is 0)... */
-        /* Under CRF+VBV and CBR, when the buffer raised the last anchor above
- * the rate factor's QP, the next decide starts from the rate factor and
- * may drop as far as the extrapolation guard allows (QPD under the
- * calibrated regime). Price the anchor there, and with the model's
- * downward-extrapolation error (about 2x per 6 QP) in place of r_hi when
- * that is larger. samsung at a 480 kbit cap on four threads: an anchor
- * raised from 26 to 44, the next decided at 30, priced by the gate at
- * 44, coded 300 kbit into 281. With this the share of frames on the
- * serial schedule over the 18 compliance cells at six threads goes from
- * 9.8% to 10.9%. CBR the same way: sintel at 1224 kbit on four threads,
- * a burst priced at the last anchor's raised QP while its rate factor sat
- * 5 QP lower took 443 kbit out of 438. */
+        /* under CRF+VBV and CBR, after a raised anchor the next decide may
+ * drop to the extrapolation guard (QPD under the regime): price the anchor
+ * there, with the model's error off its regime (about 2x per 6 QP). */
         double gq = e->qp, ext = 1.0;
         double rfq = e->crf_on && !e->abr_on ? e->crf_pre_qp
                    : e->vbv_cbr && e->abr_rf2 && e->abr_qp > 0 ? e->abr_qp + e->crf_dc : 0.0;
@@ -1468,7 +1469,11 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
             if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
         }
         double q = pow(2.0, (gq - 12) / 6.0);
+        /* r_hi and ext are independent errors, so they compound where a pool
+ * codes on predictions; one thread re-codes against the measured size */
         double mg = ext > rhi ? ext : rhi;
+        if (e->pool && ext > 1.0)
+            mg = ext * rhi;
         fill -= mg * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
         if (fill < 0) tight = 1;
         fill = rcbuf_refill(&e->vbv, fill);
@@ -1544,6 +1549,11 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         tight = 1;
     if (!tight && e->rck.vbv_low > 0.0 && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && e->vbv.fill < e->rck.vbv_low * e->vbv.size)
+        tight = 1;
+    /* CBR and a declared HRD leave no headroom for a prediction to miss
+ * into: on a pool their bursts take the serial schedule and the re-encode
+ * (not pass 1 of a two-pass, which nothing holds to the buffer) */
+    if ((e->vbv_cbr || (e->hrd_on && e->tp_pass != 1)) && e->pool)
         tight = 1;
     e->rcp_vbv_tight = tight;
 }
@@ -2766,7 +2776,10 @@ static int vbv_abr_bounded(const yah264_encoder_t *e)
  * prediction cannot see: samsung 720p, CRF with a 480 kbit cap, one
  * thread, a 307 kbit anchor into a 277 kbit buffer once weighted P stopped
  * weighting the brightness drift before the cut. */
-    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight || !e->pool);
+    /* and a two-pass pass 2 under --nal-hrd, whose declared buffer has to hold
+ * whatever pass 1 planned */
+    return e->vbv_on && (!e->tp_pass || (e->hrd_on && e->tp_pass >= 2))
+           && (!e->rcp_on || e->rcp_vbv_tight || !e->pool);
 }
 
 /* Either bound wants the serial emit: W2 does not know a frame's size until

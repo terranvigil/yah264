@@ -1005,7 +1005,8 @@ static void usage(const char *argv0)
         "                     1920 up; 0 with psy off).\n"
         "                     Reaches the quantiser and the deblock chroma edge QP.\n"
         "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
-        "                     (defaults 0 and 51)\n"
+        "                     (defaults 0 and 51); --qpmax under 51 is refused\n"
+        "                     with --nal-hrd\n"
         "  --qpstep N         largest QP move between consecutive frames of one\n"
         "                     type (default 4)\n"
         "  --vbv-init F       initial VBV occupancy: <=1 a fraction of\n"
@@ -1013,7 +1014,8 @@ static void usage(const char *argv0)
         "  --crf-max Q        ceiling on the QP the VBV may raise a --crf frame\n"
         "                     to. Needs --crf and a VBV. The buffer is allowed to\n"
         "                     under-run rather than starve the frame: a quality\n"
-        "                     floor, bought with the buffer model.\n"
+        "                     floor, bought with the buffer model. Refused with\n"
+        "                     --nal-hrd.\n"
         "  --ratetol F        how far ABR may drift from its target before the\n"
         "                     correction answers, as a fraction of the bitrate\n"
         "                     (default 1.0). Smaller tracks the rate closer and\n"
@@ -1034,7 +1036,8 @@ static void usage(const char *argv0)
         "                     narrowed to fit, a tool you NAMED is refused, and a\n"
         "                     profile the content cannot fit is refused. Default is\n"
         "                     derived from the tools and the content.\n"
-        "  (the flags below add signalling only: no sample moves.)\n");
+        "  (the flags below add signalling only, except --nal-hrd, which also\n"
+        "  holds the buffer it declares.)\n");
     /* Sixth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  --aud              an access unit delimiter opens every access unit\n"
@@ -1057,9 +1060,20 @@ static void usage(const char *argv0)
         "                     pic_timing SEI per picture, so a receiver can verify\n"
         "                     the buffer instead of trusting it. Needs --vbv-maxrate\n"
         "                     and --vbv-bufsize. vbr declares a schedule the channel\n"
-        "                     may pause on, and moves no sample and no slice bit;\n"
-        "                     cbr declares a channel that never pauses, so each\n"
-        "                     access unit is padded up to the rate with filler.\n"
+        "                     may pause on; cbr one that never pauses, so each\n"
+        "                     access unit is padded up to the rate with filler, and\n"
+        "                     needs a buffer larger than one picture period of\n"
+        "                     arrival. Either way each picture is re-coded up to\n"
+        "                     the QP ceiling until it arrives in time, leaving room\n"
+        "                     for the next key the lookahead shows; one that still\n"
+        "                     cannot, even where QP 51 would have fitted, is counted\n"
+        "                     in a warning at the end. Pass 1 of a two-pass is not\n"
+        "                     held (send its stream to /dev/null). Runs one\n"
+        "                     encoder; refused with --crf-max, --qpmax under 51,\n"
+        "                     forced qpfile QPs, --zones q=, --cut-split,\n"
+        "                     --shot-table, --shot-crf and --segment-out.\n");
+    /* the --nal-hrd lines push this chunk past 4095 bytes too */
+    fprintf(stderr,
         "  --filler / --no-filler   pad (or refuse to pad) access units to the\n"
         "                     constant rate. Only under --nal-hrd cbr, where it is\n"
         "                     already on; --no-filler there gives the cbr headers\n"
@@ -1101,7 +1115,9 @@ static void usage(const char *argv0)
         "                          QP is ABSOLUTE 0..51, or -1 to leave it to the rate control. i (a forced\n"
         "                          non-IDR I) is refused. Unlisted frames are free.\n"
         "  --gop-threads K         pin every GOP instance's frame threads to K (a shot then re-encodes byte-identically alone)\n"
-        "  --segment-out PATTERN   also write each GOP to its own file, PATTERN with a %%d for the GOP index\n"
+        "  --segment-out PATTERN   also write each GOP to its own file, PATTERN with a %%d for the GOP index;\n"
+        "                          refused where the encode runs one encoder (--nal-hrd,\n"
+        "                          --keyint 1 with a VBV)\n"
         "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k\n"
         "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
         "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description: an H.273\n"
@@ -1285,6 +1301,9 @@ typedef struct {
      * display order, and its cursor indexes whichever order is current */
     int order_gen;
     int lost;                       /* a GOP's frames were never read: fail */
+    /* run[g]: one-frame GOPs straight before GOP g, filled in order as
+     * workers ask, so the idr_pic_id base costs O(1) per GOP */
+    int *idr_run, idr_run_n, idr_run_cap;
     size_t held;                    /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
     int gops_final, gops_cap;
@@ -1474,7 +1493,7 @@ static void *gop_worker(void *arg)
     int W = j->width;                   /* the INPUT frame width; the coded one is p.width */
     int scan = 0;
     for (;;) {
-        int g, start, end;
+        int g, start, end, idr_base = 0;
         double tpull = g_gop_trace ? gop_trace_now() : 0;
         pthread_mutex_lock(&j->lock);
         int k = -1;                             /* pull index (pull-queue mode) */
@@ -1518,10 +1537,27 @@ static void *gop_worker(void *arg)
  * boundary restarted the ABR ledger, the VBV occupancy and the opening
  * fit (at one thread, nine GOPs of twelve on a 3000-frame pipe). */
             if (j->pull_gop) j->pull_gop[k] = g;
+            idr_base = j->keyint == 1 ? g & 1 : 0;
         } else {
             if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
             start = j->gop_start[g];
             end   = j->gop_start[g + 1];
+            /* a one-frame GOP ends on its IDR, so the next GOP's IDR must
+             * take the other id: alternate along a run of them */
+            if (g >= j->idr_run_cap) {
+                int nc = j->idr_run_cap ? j->idr_run_cap : 64;
+                while (nc <= g) nc *= 2;
+                int *q = realloc(j->idr_run, (size_t)nc * sizeof(int));
+                if (q) { j->idr_run = q; j->idr_run_cap = nc; }
+            }
+            if (g < j->idr_run_cap) {
+                for (; j->idr_run_n <= g; j->idr_run_n++) {
+                    int i = j->idr_run_n;
+                    j->idr_run[i] = i > 0 && j->gop_start[i] - j->gop_start[i - 1] == 1
+                                  ? j->idr_run[i - 1] + 1 : 0;
+                }
+                idr_base = j->idr_run[g] & 1;
+            }
             if (k >= 0 && j->pull_gop) j->pull_gop[k] = g;   /* a GOP waited for is a pull like any other */
         }
         /* Wait for the GOP's FIRST frame, not for all of it. Blocking until
@@ -1603,6 +1639,7 @@ static void *gop_worker(void *arg)
  * depend on which worker coded the GOP or on how many threads ran. */
         if (g > 0 && p.rc.vbv_maxrate > 0 && p.rc.vbv_bufsize > 0)
             p.rc.vbv_seg_join = 1;
+        p.idr_pic_id_base = idr_base;
         /* The same handoff, asked of the HRD clock instead of the buffer. This
  * GOP opens a buffering period at its first picture, and that picture's
  * cpb_removal_delay counts ticks back to the PREVIOUS period, which is
@@ -2918,6 +2955,30 @@ static void gop_order_horizon(int *order, const int *gstart, int n_gops, long ho
  * value outside both is free; -2 keeps -1 meaning failure. */
 #define Y264_GO_SERIAL (-2)
 
+/* one finished GOP to the output, its --segment-out file and its
+ * --frame-stats lines; frees buf */
+static void gop_emit(gop_job_t *job, FILE *out, int idx, uint8_t *buf, size_t sz, int *wr_err)
+{
+    if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
+        fprintf(stderr, "yah264: error writing the output stream\n");
+        *wr_err = 1;
+    }
+    if (g_segment_out && buf && sz) {               /* one file per GOP, the segment-aligned output */
+        char path[1024]; const char *pc = strstr(g_segment_out, "%d");
+        if (pc) snprintf(path, sizeof path, "%.*s%d%s", (int)(pc - g_segment_out), g_segment_out, idx, pc + 2);
+        else    snprintf(path, sizeof path, "%s.%d", g_segment_out, idx);
+        FILE *sf = fopen(path, "wb");
+        if (!sf || fwrite(buf, 1, sz, sf) != sz) { fprintf(stderr, "yah264: cannot write segment %s\n", path); *wr_err = 1; }
+        if (sf) fclose(sf);
+    }
+    if (job->gop_fst && job->gop_fst[idx]) {
+        FILE *ff = fopen(g_frame_stats, idx ? "a" : "w");
+        if (ff) { fputs(job->gop_fst[idx], ff); fclose(ff); }
+        free(job->gop_fst[idx]); job->gop_fst[idx] = NULL;
+    }
+    free(buf);
+}
+
 static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                            long max_frames, int nthreads)
 {
@@ -3726,24 +3787,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
         pthread_mutex_unlock(&job.lock);
         if (fin) break;
-        if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
-            fprintf(stderr, "yah264: error writing the output stream\n");
-            wr_err = 1;
-        }
-        if (g_segment_out && buf && sz) {               /* one file per GOP, the segment-aligned output */
-            char path[1024]; const char *pc = strstr(g_segment_out, "%d");
-            if (pc) snprintf(path, sizeof path, "%.*s%d%s", (int)(pc - g_segment_out), g_segment_out, emitted, pc + 2);
-            else    snprintf(path, sizeof path, "%s.%d", g_segment_out, emitted);
-            FILE *sf = fopen(path, "wb");
-            if (!sf || fwrite(buf, 1, sz, sf) != sz) { fprintf(stderr, "yah264: cannot write segment %s\n", path); wr_err = 1; }
-            if (sf) fclose(sf);
-        }
-        if (job.gop_fst && job.gop_fst[emitted]) {
-            FILE *ff = fopen(g_frame_stats, emitted ? "a" : "w");
-            if (ff) { fputs(job.gop_fst[emitted], ff); fclose(ff); }
-            free(job.gop_fst[emitted]); job.gop_fst[emitted] = NULL;
-        }
-        free(buf);
+        gop_emit(&job, out, emitted, buf, sz, &wr_err);
         emitted++;
         /* Frames written, not frames read: the progress a viewer cares about is
  * output that exists. gop_start[emitted] is the first frame of the next
@@ -3800,7 +3844,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
     for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
     free(job.seg); free(tid);
-    free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start); free(job.gop_rd); free(job.gop_cons);
+    free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start); free(job.gop_rd); free(job.gop_cons); free(job.idr_run);
     job_rc_free(&job);
     pthread_mutex_destroy(&job.lock);
     pthread_cond_destroy(&job.cv_space);
@@ -5761,13 +5805,46 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
-    /* --nal-hrd runs one continuous encoder (see the path choice below), and
- * these three exist only on the per-GOP path, so they would be dropped. */
-    if (nal_hrd && (g_cut_split || g_shot_table || g_shot_crf)) {
-        fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: a buffering period "
-                "at every IDR needs one continuous encoder, and that option splits the "
-                "stream into per-GOP encoders\n",
-                g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table" : "--cut-split");
+    /* what the HRD cannot hold, refused before any output exists (the library
+     * refuses the same for API callers) */
+    if (nal_hrd) {
+        int forced = 0, zq = 0;
+        for (int i = 0; i < g_nforces; i++) forced |= g_forces[i].qp >= 0;
+        for (int i = 0; i < g_nzones; i++) zq |= (g_zones[i].flags & YAH264_ZONE_QP) != 0;
+        int qcap = qp_max > 0 && qp_max < 51;
+        if (crf_max > 0.0 || qcap || forced || zq) {
+            fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: it holds the QP under "
+                    "what the buffer may need, and the stream would fail its own declaration\n",
+                    crf_max > 0.0 ? "--crf-max" : qcap ? "--qpmax under 51"
+                    : forced ? "a forced qpfile QP" : "a --zones q= zone");
+            if (out != stdout) { fclose(out); remove(out_path); }
+            return 2;
+        }
+        double fps = param.timebase.fps_num > 0 && param.timebase.fps_den > 0
+                   ? (double)param.timebase.fps_num / param.timebase.fps_den : 0.0;
+        double br = ceil((double)param.rc.vbv_maxrate * 1000.0 / 64.0) * 64.0;
+        double cpb = ceil((double)param.rc.vbv_bufsize * 1000.0 / 16.0) * 16.0;
+        /* a field is a picture: under --tff/--bff the period is a field's */
+        double pic = fps > 0.0 ? br / (param.interlaced ? 2.0 * fps : fps) : 0.0;
+        if (nal_hrd == YAH264_NAL_HRD_CBR && fps > 0.0 && cpb <= pic) {
+            fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture period "
+                    "of arrival (%.0f bits, a field's under --tff/--bff); --vbv-bufsize gives %.0f\n",
+                    pic, cpb);
+            if (out != stdout) { fclose(out); remove(out_path); }
+            return 2;
+        }
+    }
+    /* --nal-hrd and --keyint 1 with a VBV run one continuous encoder (see the
+ * path choice below), and these options exist only on the per-GOP path */
+    int vbv_k1 = param.keyint == 1 && param.rc.vbv_maxrate > 0 && param.rc.vbv_bufsize > 0;
+    if ((nal_hrd || vbv_k1)
+        && (g_cut_split || g_shot_table || g_shot_crf || g_segment_out)) {
+        fprintf(stderr, "yah264: %s cannot be combined with %s: it runs one "
+                "continuous encoder, and that option needs the per-GOP encoders\n",
+                nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV",
+                g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table"
+                : g_cut_split ? "--cut-split" : "--segment-out");
+        if (out != stdout) { fclose(out); remove(out_path); }
         return 2;
     }
     /* --intra-refresh. Everything it cannot run with is named here, because
@@ -5872,17 +5949,16 @@ int main(int argc, char **argv)
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
-    /* --nal-hrd needs a buffering period at every IDR. A GOP segment can't
- * open one at a scene-cut IDR of its own: the next segment counts its
- * removal delay back to this segment's start, which it fixes before this
- * one has found its cuts (see hrd_segmented in yah264.h). One instance
- * knows every cut, so --nal-hrd runs one, its threads on the wavefront. */
-    if (nal_hrd) {
+    /* a per-GOP join starts from an assumed buffer level, and one-frame GOPs
+ * under a VBV and a declared HRD have no room for it to be wrong: they run
+ * one encoder, its threads on the row wavefront */
+    int one_enc = vbv_k1 || nal_hrd;
+    if (one_enc) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
-            LOGF(LOG_INFO, "yah264: --nal-hrd puts a buffering period at every IDR, which "
-                 "needs one continuous encoder, so the %d threads run its row wavefront "
-                 "instead of parallel GOPs\n", nthreads);
+            LOGF(LOG_INFO, "yah264: %s runs one continuous encoder, so the %d threads "
+                 "run its row wavefront instead of parallel GOPs\n",
+                 nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV", nthreads);
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
@@ -5891,7 +5967,7 @@ int main(int argc, char **argv)
  * Only when the user asked explicitly for more than one thread. Unset means
  * "auto, every core", which is not a user asking for anything, and warning on
  * it would fire on all 252 --dump-recon runs of the conformance gate. */
-    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !nal_hrd))) {
+    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh && !one_enc))) {
         /* Ordered by what actually decided it, not by what is also true: with
  * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */

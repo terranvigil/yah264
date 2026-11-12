@@ -1460,6 +1460,7 @@ static int build_list0(yah264_encoder_t *e, int type,
             return 1;
         }
         int n = e->nref_valid < 1 ? 1 : (e->nref_valid > e->nref ? e->nref : e->nref_valid);
+        if (type == 2 && n > e->nref_b0) n = e->nref_b0;
         /* --open-gop: the ring is most-recent-first, so cutting it at the first
  * entry below the bound is the whole of the restriction. Inert at bound
  * -1, which is every encode that is not an open GOP. */
@@ -1570,6 +1571,13 @@ static int fld_navail(const yah264_encoder_t *e)
  * --ref counts FIELDS here, because num_ref_idx_l0_active does. --ref 1
  * therefore still names exactly the nearest same-parity field, which is the
  * list PAFF-1 built, and only a deeper list reaches the other parity. */
+/* a field's POC over its frame's: the field coded first takes the frame
+ * POC and the other the one after it (emit_pair) */
+static inline int fld_poc_off(const yah264_encoder_t *e, int parity)
+{
+    return parity ^ (e->fields == 2);
+}
+
 static int build_field_list0(yah264_encoder_t *e, int is_ref,
                              const pixel *pl[16][3], int poc[16], int fn[16],
                              int par[16], int nframes)
@@ -1589,7 +1597,7 @@ static int build_field_list0(yah264_encoder_t *e, int is_ref,
  * other reasons (fpipe_ready, stair_clamp_on). Whoever re-arms one has
  * to hand the pair's recon base in rather than read it here. */
         for (int c = 0; c < 3; c++) cpl[nc][c] = e->rec[c];
-        cpoc[nc] = e->poc - cur;            /* the pair's frame POC (its top field's) */
+        cpoc[nc] = e->poc - fld_poc_off(e, cur);   /* the pair's frame POC */
         cfn[nc] = e->frame_num;             /* a pair shares one frame_num */
         chas[nc][cur] = 0;                  /* this field is the one being coded */
         chas[nc][opp] = 1;
@@ -1620,7 +1628,7 @@ static int build_field_list0(yah264_encoder_t *e, int is_ref,
         int k = idx[t]++;
         for (int c = 0; c < 3; c++)
             pl[n][c] = cpl[k][c] + (size_t)turn * e->pstride[c];
-        poc[n] = cpoc[k] + turn;
+        poc[n] = cpoc[k] + fld_poc_off(e, turn);
         fn[n] = cfn[k];
         par[n] = turn;
         n++;
@@ -2142,7 +2150,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * build_list0 already gave */
                 for (int c = 0; c < 3; c++)
                     l0p[i][c] += (size_t)e->fld_parity * e->pstride[c];
-                l0poc[i] += e->fld_parity;
+                l0poc[i] += fld_poc_off(e, e->fld_parity);
             }
     }
     /* v3 depth clamp eligibility for this slice: a P's list-0 searches against
@@ -2323,7 +2331,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * co-located picture, colpoc resolves each block's refIdx to a POC. */
     e->cur_l0n = (type != 0) ? active_ref : 0;
     for (int i = 0; i < e->cur_l0n; i++) e->cur_l0poc[i] = l0poc[i];
-    e->cur_l1poc0 = (type == 2) ? (e->ref1_poc + e->fld_parity) : -1;
+    e->cur_l1poc0 = (type == 2) ? (e->ref1_poc + fld_poc_off(e, e->fld_parity)) : -1;
     if (e->fld_pic) {                   /* ...and keep this field's, by parity */
         int p = e->fld_parity;
         e->fld_l0n[p] = e->cur_l0n;
@@ -2695,7 +2703,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             f.ref1_stride[c] *= 2;
         }
         f.poc_l0 = (type != 0) ? l0poc[0] : e->poc;
-        f.poc_l1 = (type == 2) ? e->ref1_poc + e->fld_parity : e->poc;
+        f.poc_l1 = (type == 2) ? e->ref1_poc + fld_poc_off(e, e->fld_parity) : e->poc;
         if (type == 0)
             for (int c = 0; c < 3; c++)
                 f.refs[0][c] = f.ref[c];
@@ -2781,6 +2789,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             f.mbtree_off = e->fld_mbt;
         }
     }
+    if (e->hrd_flat)
+        f.aq_off = NULL, f.mbtree_off = NULL;
     /* P-frame lowres ME seed (ref0). Gated to the medium tier so the subme-10
  * default stays byte-identical; only for P (the anchor leg is P-vs-anchor). */
     /* type FIRST: only the anchor's serial prep may touch e->lr_seed_valid --
@@ -3330,6 +3340,8 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
  * after it, so there is no later instant for its buffer to overflow at. */
     if (e->hrd_on && hrd_close_au(e, off) < 0)
         return -1;
+    if (e->nal_measure)
+        e->nal_measure = 1;             /* this access unit's own NALs from here */
     /* The delimiter opens the access unit, so for the FIRST one it was already
  * written ahead of the parameter sets; the timing SEIs are not, because
  * 7.4.1.2.3 puts SEI after the parameter sets and an SEI written before the
@@ -3372,23 +3384,39 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
  * it beside the parameter sets, because a buffering period message has
  * to be the first SEI of its access unit and the settings message is
  * written there too. */
-        if (nal_type == YAH264_NAL_SLICE_IDR && e->hrd_pic > 0 &&
-            !e->param.rc.hrd_segmented) {
+        double tc = (double)e->param.timebase.fps_den / (2.0 * (double)e->param.timebase.fps_num);
+        double tr = e->hrd_pic == 0 ? (double)e->hrd_bp_init / 90000.0
+                                    : e->hrd_tr_nb + tc * (double)cpb_delay;
+        int bp_here = nal_type == YAH264_NAL_SLICE_IDR && e->hrd_pic > 0 &&
+                      !e->param.rc.hrd_segmented;
+        if (bp_here) {
             uint8_t msg[16];
-            /* A decoder joining HERE is told the buffer may be full, which is
- * the widest start the model allows and the one the encoder's own
- * loop assumes it can reach: the buffer law clamps the occupancy at the
- * buffer size and nowhere below it. The stream's own schedule is
- * unaffected either way -- a removal time is counted in ticks from
- * the period's start, never derived from this delay. */
+            /* C.3: no further back than the previous final arrival, at most a
+ * full buffer; the arrival schedule is the full-buffer one either way */
+            double d = ceil(90000.0 * (tr - e->hrd_taf) - 1e-6);
+            /* after a late access unit there is no legal delay: the full one
+             * delays nothing further, and the late count already says so */
+            unsigned init = d >= (double)e->hrd_full_delay || d < 1.0 ? e->hrd_full_delay
+                          : (unsigned)d;
             size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
-                                                 e->hrd_full_delay, 0);
+                                                 init, e->hrd_full_delay - init);
             y264_bs_init(&bs, buf, sizeof buf);
             y264_sei_write(&bs, 0, msg, n);
             if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
                                buf, (size_t)(bs.p - bs.start)) < 0)
                 return -1;
             e->hrd_anchor_tick = tick;
+            e->hrd_bp_init = init;
+            e->hrd_bp_off = e->hrd_full_delay - init;
+        }
+        e->hrd_tr_cur = tr;
+        if (e->hrd_pic == 0 || bp_here)
+            e->hrd_tr_nb = tr;
+        if (e->hrd_pic == 0) {
+            e->hrd_tai = 0.0;
+        } else {
+            double ear = tr - (double)(bp_here ? e->hrd_bp_init : e->hrd_bp_init + e->hrd_bp_off) / 90000.0;
+            e->hrd_tai = e->hrd_on == YAH264_NAL_HRD_CBR || ear < e->hrd_taf ? e->hrd_taf : ear;
         }
     }
     if (e->param.pic_struct || e->hrd_on) {
@@ -3439,6 +3467,119 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
     return 0;
 }
 
+/* bits the next access unit's slices may take before its last bit would
+ * arrive after its removal on the declared schedule, < 0 with no HRD: the
+ * access-unit opener runs dry (the access unit before closes as it will, its
+ * cbr filler included, and this one's delimiter and SEIs are counted), and
+ * the encoder's state is put back */
+static double hrd_room_ex(yah264_encoder_t *e, int nal_type, int disp, int recovery,
+                          double *hdr_bits)
+{
+    if (!e->hrd_on)
+        return -1.0;
+    double fill = e->hrd_fill, tr_nb = e->hrd_tr_nb, tai = e->hrd_tai, taf = e->hrd_taf;
+    double tr_cur = e->hrd_tr_cur;
+    size_t au = e->hrd_au_bytes;
+    long pic = e->hrd_pic, anchor = e->hrd_anchor_tick, base = e->hrd_disp_base;
+    long pad = e->hrd_pad_bytes, late = e->hrd_late;
+    unsigned bpi = e->hrd_bp_init, bpo = e->hrd_bp_off;
+    int opened = e->au_opened;
+    double framing = e->nal_framing;
+    e->nal_measure = 2;
+    e->nal_measure_bytes = 0;
+    size_t off = 0;
+    int r = au_open(e, &off, nal_type, disp, recovery);
+    double room = (e->hrd_tr_cur - e->hrd_tai) * e->hrd_bitrate
+                - 8.0 * (double)((pic == 0 ? au : 0) + e->nal_measure_bytes) - 8.0;
+    if (hdr_bits)
+        *hdr_bits = 8.0 * (double)e->nal_measure_bytes;
+    e->nal_measure = 0;
+    e->hrd_fill = fill; e->hrd_tr_nb = tr_nb; e->hrd_tai = tai; e->hrd_taf = taf;
+    e->hrd_tr_cur = tr_cur;
+    e->hrd_au_bytes = au; e->hrd_pic = pic; e->hrd_anchor_tick = anchor;
+    e->hrd_disp_base = base; e->hrd_pad_bytes = pad; e->hrd_late = late;
+    e->hrd_bp_init = bpi; e->hrd_bp_off = bpo; e->au_opened = opened;
+    e->nal_framing = framing;
+    return r < 0 ? -1.0 : room;
+}
+
+static double hrd_room(yah264_encoder_t *e, int nal_type, int disp, int recovery)
+{
+    return hrd_room_ex(e, nal_type, disp, recovery, NULL);
+}
+
+/* a picture's bits at QP 51 from its bits at qp: they halve slower than every
+ * 6 QPs near the top of the range (headers, vectors), so take 8, and a tenth
+ * more since the next picture of the type is not this one */
+static double hrd_cost51(double bits, int qp)
+{
+    return 1.1 * bits * pow(2.0, (qp - 51) / 8.0);
+}
+
+/* bits to leave in the buffer for the next intra picture the encoder can
+ * see coming (the keyint key, a scene cut the lookahead flagged, or the P
+ * field after an intra first field) at what that type last cost at QP 51,
+ * capped at CpbSize, less what arrives before it. Inter pictures are not
+ * priced: their QP-51 cost extrapolated from this picture's QP held clean
+ * cells far under their rate. */
+static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, double kovh)
+{
+    if (e->fld_pic && !e->fld_second && type == 0) {
+        /* no second field seen yet: price it at twice this first field, since
+         * it predicts from the other parity and pays for its vectors too */
+        double f51 = e->hrd_c51[3] > 0.0 ? e->hrd_c51[3] : 2.0 * cur51;
+        return (f51 < e->hrd_cpb ? f51 : e->hrd_cpb) - e->hrd_rate_pic;
+    }
+    double nx = 0.0;
+    double i51 = e->hrd_c51[0];
+    if (i51 <= 0.0 || e->hrd_last_idr < 0)
+        return nx;
+    double tail = 0.0;
+    if (e->fields) {
+        /* the key's second field lands before the buffer refills */
+        i51 += e->hrd_c51[3];
+        tail = e->hrd_rate_pic;
+    }
+    if (i51 > e->hrd_cpb) i51 = e->hrd_cpb;
+    long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
+    /* the lookahead head is display frame_count + 1, and the first typed
+     * entry flagged a cut or an IDR is the next key */
+    for (int i = 0; i < e->la_n; i++) {
+        const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
+        if (!h->typed)
+            break;
+        if (h->is_cut || h->is_idr) {
+            long dc = (long)e->frame_count + 1 + i - e->cur_disp;
+            if (dc >= 1 && (dc < d || d < 1))
+                d = dc;
+            break;
+        }
+    }
+    if (d < 1 || d > e->param.keyint)
+        return nx;
+    double per = e->fields ? 2.0 * e->hrd_rate_pic : e->hrd_rate_pic;
+    double r = i51 + kovh - (double)d * per - tail;
+    return r > nx ? r : nx;
+}
+
+/* the bits an access unit's slices take on the wire: start codes, NAL
+ * headers and the emulation-prevention bytes the escape will add */
+static double hrd_slice_bits(const uint8_t *rbsp, const struct slice_map *sm)
+{
+    size_t n = 0, at = 0;
+    for (int s = 0; s < sm->n; s++) {
+        int z = 0;
+        for (size_t i = at; i < at + sm->len[s]; i++) {
+            if (z >= 2 && rbsp[i] <= 3) { n++; z = 0; }
+            z = rbsp[i] == 0 ? z + 1 : 0;
+        }
+        if (z >= 2) n++;                /* the 0x03 after trailing cabac_zero_words */
+        n += sm->len[s] + Y264_NAL_START_BYTES;
+        at += sm->len[s];
+    }
+    return 8.0 * (double)n;
+}
+
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                       const uint8_t *rbsp, size_t rbsp_size)
 {
@@ -3473,6 +3614,20 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
 {
     if (rbsp_size == 0)
         return -1;
+    if (e->nal_measure) {               /* hrd_room's dry run: size it, write nothing */
+        size_t need = 6 + rbsp_size + rbsp_size / 2;
+        if (need > e->nal_measure_cap) {
+            uint8_t *q = realloc(e->nal_measure_buf, need);
+            if (!q) return -1;
+            e->nal_measure_buf = q;
+            e->nal_measure_cap = need;
+        }
+        size_t m = y264_nal_write(e->nal_measure_buf, e->nal_measure_cap, ref_idc, type,
+                                  rbsp, rbsp_size);
+        if (e->nal_measure == 1) e->nal_measure_bytes += m;
+        else e->hrd_au_bytes += m;
+        return 0;
+    }
     size_t n = unsafe_no_nal()
              ? (e->out_cap - *off < 5 + rbsp_size + rbsp_size / 2 + 1 ? 0 : rbsp_size + 5)
              : y264_nal_write(e->out + *off, e->out_cap - *off,
@@ -3565,6 +3720,9 @@ static int hrd_close_au(yah264_encoder_t *e, size_t *off)
         }
     }
     e->hrd_fill += e->hrd_rate_pic - bits;
+    e->hrd_taf = e->hrd_tai + bits / e->hrd_bitrate;
+    if (e->hrd_taf > e->hrd_tr_cur + 1e-9)
+        e->hrd_late++;
     e->hrd_au_bytes = 0;
     return 0;
 }
@@ -4924,10 +5082,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * the anchor ring, which holds nref pictures whatever the window says,
  * so the ring has to shrink with the window: at --ref 16 it named a
  * picture the decoder's sliding window had already dropped. (The
- * pyramid draws its lists from the DPB itself and is bounded by it.) */
+ * pyramid draws its lists from the DPB itself and is bounded by it.)
+ * Only a flat B pays for its future anchor's slot: a P is decoded with
+ * every slot holding a past anchor, so it keeps the whole window and
+ * the B's list 0 stops one short. */
+        e->nref_b0 = e->nref;
         if (mrf > 15 && !e->b_pyramid) {
-            e->nref -= mrf - 15;
-            if (e->nref < 1) e->nref = 1;
+            e->nref_b0 = e->nref - (mrf - 15);
+            if (e->nref_b0 < 1) e->nref_b0 = 1;
+            int pmax = 15 - (e->fields != 0);
+            if (e->nref > pmax) e->nref = pmax;
+            if (e->nref_b0 > e->nref) e->nref_b0 = e->nref;
             mrf = 15;
         }
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;
@@ -5107,6 +5272,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 
     e->abr_on = (param->rc.method == YAH264_RC_ABR && param->rc.bitrate > 0);
+    e->hrd_qfloor[0] = e->hrd_qfloor[1] = e->hrd_qfloor[2] = -1;
     if (e->abr_on) {
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
                    ? (double)param->timebase.fps_num / param->timebase.fps_den : 25.0;
@@ -5219,6 +5385,31 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->hrd_rate_pic = e->hrd_bitrate * (double)e->hrd_tpp
                             * (double)param->timebase.fps_den
                             / (2.0 * (double)param->timebase.fps_num);
+            /* a cbr channel delivers a picture period's bits between removals,
+ * and a buffer that cannot hold them overflows whatever is coded */
+            if (param->nal_hrd == YAH264_NAL_HRD_CBR && e->hrd_cpb <= e->hrd_rate_pic) {
+                fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture "
+                        "period of arrival (%.0f bits, a field's under --tff/--bff); "
+                        "--vbv-bufsize gives %.0f\n",
+                        e->hrd_rate_pic, e->hrd_cpb);
+                yah264_encoder_close(e);
+                return NULL;
+            }
+            /* --crf-max lets the buffer under-run by design, which a declared
+ * HRD cannot */
+            if (param->crf_max > 0.0) {
+                fprintf(stderr, "yah264: --crf-max cannot be combined with --nal-hrd: it lets "
+                        "the buffer under-run, and the stream would fail its own declaration\n");
+                yah264_encoder_close(e);
+                return NULL;
+            }
+            /* so does a QP ceiling under 51: the buffer may need the QPs above it */
+            if (param->rc.qp_max > 0 && param->rc.qp_max < 51) {
+                fprintf(stderr, "yah264: --qpmax under 51 cannot be combined with --nal-hrd: the "
+                        "buffer may need a higher QP, and the stream would fail its own declaration\n");
+                yah264_encoder_close(e);
+                return NULL;
+            }
             e->hrd_full_delay = (unsigned)(90000.0 * e->hrd_cpb / e->hrd_bitrate);
             if (e->hrd_full_delay < 1) e->hrd_full_delay = 1;
             double d0 = 90000.0 * e->vbv.fill / e->hrd_bitrate;
@@ -5231,6 +5422,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->hrd_fill = e->hrd_bitrate * (double)i0 / 90000.0;
             e->hrd_anchor_tick = 0;
             e->hrd_disp_base = -1;
+            e->hrd_last_idr = -1;
+            e->hrd_c51[0] = e->hrd_c51[1] = e->hrd_c51[2] = e->hrd_c51[3] = 0.0;
+            e->hrd_f0_intra = 0;
             e->sps.hrd = param->nal_hrd;
             e->sps.hrd_bit_rate = (unsigned)e->hrd_bitrate;
             e->sps.hrd_cpb_size = (unsigned)e->hrd_cpb;
@@ -5768,6 +5962,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->rbsp = malloc(e->rbsp_cap);
     /* Annex-B worst case: start code + header + rbsp + one emu byte per 2 bytes. */
     e->out_cap = e->rbsp_cap + e->rbsp_cap / 2 + 64;
+    /* cbr filler rides the same buffer, up to a picture period's arrival
+     * for each access unit one call can close */
+    if (e->hrd_filler)
+        e->out_cap += (size_t)(e->param.bframes + 3) * (e->hrd_pad_cap + 16);
     e->out = malloc(e->out_cap);
 
     if (!e->plane[0] || !e->plane[1] || !e->plane[2] ||
@@ -6071,11 +6269,18 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
  * -- full for a stream that starts the output, the handoff level for a
  * segment that follows one -- so a receiver is told the buffer this encode
  * actually assumed rather than the widest one the syntax allows. */
+    /* ...except a vbr segment that follows another: the level it assumed
+ * is not the one the previous segment left, so it declares a full buffer,
+ * which bounds nothing, and the caller rewrites it to the real gap. */
     if (e->sps.hrd) {
         uint8_t msg[16];
+        unsigned d0 = e->hrd_init_delay;
+        if (e->param.rc.vbv_seg_join && e->hrd_on == YAH264_NAL_HRD_VBR)
+            d0 = e->hrd_full_delay;
+        e->hrd_bp_init = d0;
+        e->hrd_bp_off = e->hrd_full_delay - d0;
         size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
-                                             e->hrd_init_delay,
-                                             e->hrd_full_delay - e->hrd_init_delay);
+                                             d0, e->hrd_full_delay - d0);
         y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
         y264_sei_write(&bs, 0, msg, n);
         if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
@@ -11412,6 +11617,28 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     } else {
         rc_head_serial(e, type, is_ref, src);
     }
+    /* under --nal-hrd the rate control never sees the QP the buffer raised a
+     * frame to, and drifts under it; start from the last raised QP of the
+     * type so the frame is not coded at a QP the buffer refuses first. A key
+     * or a cut starts over, and a floor no frame has started from for a
+     * lookahead window is dropped. */
+    int bound = vbv_bounded_now(e) && forced_qp(e) < 0;
+    int floored = bound && e->hrd_on;
+    if (floored) {
+        long age = e->la_depth > 0 ? e->la_depth : 40;
+        for (int t = 0; t < 3; t++)
+            if (type == 0 || is_idr || e->cur_open_key || e->cur_disp - e->hrd_qfloor_at[t] > age)
+                e->hrd_qfloor[t] = -1;
+    }
+    if (floored && e->hrd_qfloor[type] > e->qp) {
+        e->hrd_qfloor_at[type] = e->cur_disp;   /* still in use */
+        e->qp = e->hrd_qfloor[type];
+        e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+        if (e->rcp_on)
+            rcp_reqp(e, type, is_ref);
+    }
+    int qstart = e->qp;
+    double last_over = 1.0;
     struct slice_map sm;
     size_t rbsp_size = rcr_build_slice(e, type, is_idr, is_ref, src, &sm, 0);
     if (rbsp_size == 0) { slice_overflow_warn(); }
@@ -11452,10 +11679,12 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * decided QP and the content and of nothing else. Same frames re-encode on
  * every run and at every thread count.
  *
- * Four attempts, then ship what we have. The loop is monotone (each pass
- * raises the QP by at least 1 and stops at 51), so this is a cap on wasted
- * work, not a correctness knob: a frame still over the limit at QP 51 is one
- * the buffer simply cannot hold, and there is no quantiser that fixes it. */
+ * Four attempts under a plain VBV, then ship what we have; under --nal-hrd
+ * it goes on until the frame fits or its coded QP stops rising. The loop is
+ * monotone (each pass raises the QP by at least 1 and stops at the ceiling),
+ * so the cap is on wasted work, not a correctness knob: a frame still over
+ * the limit at the ceiling is one the buffer cannot hold, and no quantiser
+ * fixes it. */
     if (vbv_bounded_now(e)) {
         /* The occupancy this frame is removed FROM. It is the instance's first
  * frame, so under the pipelined path the ledger holds only this frame's
@@ -11487,29 +11716,117 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * escapes and nothing else does. */
         int fqp0 = frame_qp(e, type, is_ref), qp0 = e->qp;
         /* A forced QP is not a QP the buffer may move, so there is nothing
- * here to try: the re-encode would code the same frame four times. */
-        for (int k = 0; k < 4 && limit > 0.0 && forced_qp(e) < 0; k++) {
+ * here to try: every re-encode would code the same frame again. */
+        /* under --nal-hrd until it fits or the ceiling: noise moves a few
+         * percent a step and four tries left it over with no count */
+        double kovh = -1.0;     /* what a key's SEIs add over this AU's */
+        for (int k = 0; k < (e->hrd_on ? 64 : 4) && limit > 0.0 && forced_qp(e) < 0; k++) {
             double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
-            if (bits <= limit)
+            double over = bits / limit;
+            /* --nal-hrd: the declared buffer, which also holds the SEIs and
+             * the emulation bytes the VBV model leaves out, must hold too */
+            if (e->hrd_on) {
+                double room = hrd_room(e, is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE,
+                                       e->cur_disp, e->cur_open_key);
+                double sb = hrd_slice_bits(e->rbsp, &sm);
+                double ho = room > 0.0 ? sb / room : 64.0;
+                if (ho > over) over = ho;
+                if (kovh < 0.0) {
+                    double hc = 0.0, hk = 0.0;
+                    kovh = 0.0;
+                    if (!is_idr
+                        && hrd_room_ex(e, YAH264_NAL_SLICE, e->cur_disp, e->cur_open_key, &hc) >= 0.0
+                        && hrd_room_ex(e, YAH264_NAL_SLICE_IDR, e->cur_disp, 0, &hk) >= 0.0
+                        && hk > hc)
+                        kovh = hk - hc;
+                }
+                double res = hrd_reserve(e, type, hrd_cost51(sb, frame_qp(e, type, is_ref)), kovh);
+                if (res > 0.0) {
+                    double lim = room - res;
+                    double hr = lim > 0.0 ? sb / lim : 64.0;
+                    if (hr > over) over = hr;
+                }
+            }
+            last_over = over;
+            if (over <= 1.0)
                 break;
-            int bump = (int)ceil(6.0 * log2(bits / limit));
+            int bump = (int)ceil(6.0 * log2(over));
             if (bump < 1) bump = 1;
             int nq = e->qp + bump;
-            if (nq > 51) nq = 51;
+            int cap = fqp0 < qp0 ? 51 + qp0 - fqp0 : 51;   /* intra codes under its base */
+            if (nq > cap) nq = cap;
             nq = (int)crf_max_clip(e, qp0, nq, fqp0 - qp0);
-            if (nq == e->qp)
-                break;                  /* already at the ceiling */
+            if (nq != e->qp) {
+                /* a base QP whose coded QP the bounds hold still would code
+                 * the same frame again */
+                int was = e->qp, fq = frame_qp(e, type, is_ref);
+                e->qp = nq;
+                if (frame_qp(e, type, is_ref) == fq)
+                    nq = was;
+                e->qp = was;
+            }
+            if (nq == e->qp) {
+                /* at the ceiling the per-macroblock offsets still code some
+                 * blocks under 51: under a declared buffer, drop them once */
+                if (!e->hrd_on || e->hrd_flat || (!e->aq_off && !e->mbtree_on))
+                    break;
+                e->hrd_flat = 1;
+            }
+            int good = e->qp;
             e->qp = nq;
             e->chroma_qp = y264_chroma_qp(nq, e->param.chroma_qp_index_offset);
             if (e->rcp_on)
                 rcp_reqp(e, type, is_ref);
             struct slice_map sm2;
             size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
-            if (sz == 0)
-                break;                  /* keep the last good slice */
+            if (sz == 0) {
+                /* the failed build overwrote the slice: code the last good QP again */
+                e->qp = good;
+                e->chroma_qp = y264_chroma_qp(good, e->param.chroma_qp_index_offset);
+                if (e->rcp_on)
+                    rcp_reqp(e, type, is_ref);
+                sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
+                if (sz) {
+                    rbsp_size = sz;
+                    sm = sm2;
+                }
+                break;
+            }
             rbsp_size = sz;
             sm = sm2;
         }
+    }
+    e->hrd_flat = 0;
+    if (floored) {
+        /* a raise of --qpstep or more sets the floor of its type, the drift
+         * the floor is for, so a frame that needed a step or two does not
+         * hold the next one up; a frame of any type with room to spare
+         * lowers every floor by what that room is worth */
+        if (e->qp - qstart >= e->qp_step) {
+            e->hrd_qfloor[type] = e->qp;
+            e->hrd_qfloor_at[type] = e->cur_disp;
+        } else if (last_over < 0.8) {
+            /* at most --qpstep a frame: near the top of the range bits move
+             * far more than 6 QP a halving, and a long drop overshoots */
+            int d = (int)ceil(6.0 * log2(0.8 / (last_over > 0.01 ? last_over : 0.01)));
+            if (d > e->qp_step) d = e->qp_step;
+            for (int t = 0; t < 3; t++)
+                if (e->hrd_qfloor[t] >= 0)
+                    e->hrd_qfloor[t] = e->hrd_qfloor[t] > d ? e->hrd_qfloor[t] - d : -1;
+        }
+    }
+    if (e->hrd_on) {
+        /* what this picture's type costs at the highest QP, for the reserve */
+        double c51 = hrd_cost51(hrd_slice_bits(e->rbsp, &sm), frame_qp(e, type, is_ref));
+        /* only an intra frame's second field prices the next key's */
+        if (!(e->fld_pic && e->fld_second))
+            e->hrd_c51[type] = c51;
+        else if (e->hrd_f0_intra)
+            e->hrd_c51[3] = c51;
+        if (e->fld_pic && !e->fld_second)
+            e->hrd_f0_intra = type == 0;
+        if ((is_idr || e->cur_open_key) && !(e->fld_pic && e->fld_second))
+            e->hrd_last_idr = e->cur_disp;
     }
     /* The recon may serve as a reference (copied into the ring / DPB / ref1):
  * replicate its edges outward so out-of-frame MC reads the borders. */
@@ -11556,8 +11873,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * mb-tree field, its place in coding order, and the DPB store that follows the
  * pair. What each field gets of its own is a parity, a POC and a reference
  * list. The two share one frame_num -- they are a complementary field pair --
- * and split the frame's POC 2n into 2n and 2n+1, so the top field precedes the
- * bottom in output order whichever is coded first.
+ * and split the frame's POC 2n into 2n for the field coded first and 2n+1 for
+ * the other, so output order follows the field order --tff/--bff declares.
  *
  * The second field of an I frame is coded as a P field predicting from the
  * first, which is the one place a field reads the OTHER parity and the whole
@@ -11583,7 +11900,9 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     for (int k = 0; k < 2 && r >= 0; k++) {
         e->fld_second = k;
         e->fld_parity = k ? !first_par : first_par;
-        e->poc = poc + e->fld_parity;
+        /* the coded-first field is the earlier one in time, so it takes the
+         * even POC: under --bff that is the bottom field */
+        e->poc = poc + k;
         /* A second field with a reference in front of it is a P field; one
  * whose pair is not a reference pair has nothing of its own to predict
  * from and stays whatever the frame is.
@@ -15332,6 +15651,12 @@ int yah264_encoder_set_zones(yah264_encoder_t *e, const yah264_zone_t *zones, in
     for (int i = 0; i < n; i++)
         if (z[i].first < 0 || z[i].last < z[i].first || (i && z[i].first <= z[i - 1].last) ||
             ((z[i].flags & YAH264_ZONE_QP) && !(z[i].qp_offset >= 0.0 && z[i].qp_offset <= 51.0))) { free(z); return -1; }
+    for (int i = 0; i < n; i++)
+        if ((z[i].flags & YAH264_ZONE_QP) && e->hrd_on) {   /* a fixed QP the HRD cannot hold */
+            fprintf(stderr, "yah264: a q= zone cannot be combined with --nal-hrd\n");
+            free(z);
+            return -1;
+        }
     free(e->zones);
     e->zones = z; e->nzones = n;
     return 0;
@@ -15354,6 +15679,11 @@ int yah264_encoder_set_frame_forces(yah264_encoder_t *e, const yah264_frame_forc
     for (int i = 0; i < n; i++) {
         if (f[i].disp < 0 || (i && f[i].disp == f[i - 1].disp)) { free(f); return -1; }
         if (f[i].qp < -1 || f[i].qp > 51) { free(f); return -1; }
+        if (f[i].qp >= 0 && e->hrd_on) {        /* a fixed QP the HRD cannot hold */
+            fprintf(stderr, "yah264: a forced QP cannot be combined with --nal-hrd\n");
+            free(f);
+            return -1;
+        }
         if (f[i].type < YAH264_FORCE_NONE || f[i].type > YAH264_FORCE_B) { free(f); return -1; }
         /* The two B refusals that are readable from the array alone. Frame 0
  * opens the stream, so it is a key frame whatever anyone asks; and with
@@ -15893,7 +16223,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         e->poc = poc;
         e->cur_b_depth = 0;                          /* anchor: base temporal layer */
         if (is_idr)
-            e->idr_pic_id = (int)(e->frame_count & 0xffff);
+            e->idr_pic_id = (int)((e->frame_count + (unsigned)e->param.idr_pic_id_base) & 0xffff);
         e->cur_disp = (int)e->frame_count;
         if (e->mbtree_on && !e->mbtree_skip && (e->nbuf > 0 || e->la_depth > 0)) {
             /* mb-tree walks the window up to the NEWEST push (its typed flags
@@ -16001,7 +16331,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     e->frame_num = e->anchor_fn;
     e->poc = poc;
     if (is_idr)
-        e->idr_pic_id = (int)(e->frame_count & 0xffff);
+        e->idr_pic_id = (int)((e->frame_count + (unsigned)e->param.idr_pic_id_base) & 0xffff);
     e->cur_disp = (int)e->frame_count;
     if (e->mbtree_on && !e->mbtree_skip && (e->nbuf > 0 || e->la_depth > 0)) {
         if (!RCR_PLAY(e)) {
@@ -16173,6 +16503,16 @@ void yah264_encoder_close(yah264_encoder_t *e)
         return;
     rcr_close(e->rcr);
     e->rcr = NULL;
+    /* the last access unit is never closed by a next one: count it here.
+     * Exit status stays 0; the stream is still a stream, but it says so. */
+    if (e->hrd_on && e->tp_pass != 1) {
+        if (e->hrd_pic > 0 && e->hrd_au_bytes > 0 &&
+            e->hrd_tai + 8.0 * (double)e->hrd_au_bytes / e->hrd_bitrate > e->hrd_tr_cur + 1e-9)
+            e->hrd_late++;
+        if (e->hrd_late)
+            fprintf(stderr, "yah264: warning: %ld access unit(s) arrive after their removal "
+                    "time on the declared HRD schedule\n", e->hrd_late);
+    }
     if (e->rc_shared) {
         pthread_mutex_lock(&e->rc_shared->mx);
         e->rc_shared->nlive--;
@@ -16430,6 +16770,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
         dpbp_bag_free(e, &e->dpbp_pend[i].b, pw, pb);
     free(e->rbsp);
     free(e->hrd_pad);
+    free(e->nal_measure_buf);
     free(e->out);
     free(e);
 }
