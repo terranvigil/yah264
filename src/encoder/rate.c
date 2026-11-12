@@ -2205,8 +2205,8 @@ double tp_bits_at(const yah264_encoder_t *e, int i, double q)
 #define TP_IWIN       8
 #define TP_BLUR_SIGMA 0.5
 #define TP_CWARM      4
-#define TP_LOFAR      (12.0 + 6.0 * (Y264_BIT_DEPTH - 8))
-#define TP_LODEPTH    (15.0 + 6.0 * (Y264_BIT_DEPTH - 8))
+#define TP_LOFAR      12.0
+#define TP_LODEPTH    15.0
 #define TP_LOSHARE    0.3
 #define TP_LOWARM     2
 #define TP_LOHI       8.0
@@ -2391,9 +2391,12 @@ static double tp_bisect(yah264_encoder_t *e, const double *cplx, double seed, do
  * re-solved; I and B frames follow through the type shaping. Every corpus
  * ladder cell but sintel's two highest rungs reads under both shares and is
  * bit-exact, as is an all-black clip, which has no textured frames; on
- * those two rungs sintel's opening fade is half the frames. Both depths move with the bit depth:
- * a 10-bit QP has the step of the 8-bit QP 12 under it, so 10-bit grain
- * sits 12 QP further down before the model stops holding. */
+ * those two rungs sintel's opening fade is half the frames. Both
+ * distances are the same at every bit depth: they bound how far the plan
+ * extrapolates from pass 1's own evidence, a ratio of quantiser steps
+ * the depth doesn't change. With 12 QP added at 10 bits, a dark HDR
+ * title pass 1 coded near skip was planned 15-19 QP under it, out of
+ * the floor's reach, and overshot its target up to fourfold. */
 static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, double step_mult)
 {
     int n = e->tp_n;
