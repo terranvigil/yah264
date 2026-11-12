@@ -86,7 +86,7 @@ the two depths apart. The tier answers `Y264_TIER_NEON` and takes the same
 | family | 10-bit NEON | stays C |
 |---|---|---|
 | pixel metrics | SAD and its batches, SATD at every shape and its average form, SA8D, Hadamard AC, both texture terms, variance, intra 4x4 search, intra 16x16 SATD, SSD and its per-4x4 maps | none |
-| motion compensation | six-tap luma, plane fetch, weighted average, chroma at widths 8 and 4, the half-pel plane build (whole band and rows), the lowres half-pel rows | the fused forms (bi-prediction and the lowres bilinear row) |
+| motion compensation | six-tap luma, plane fetch, weighted average, chroma at widths 8 and 4, the half-pel plane build (whole band and rows), the lowres half-pel rows, the fused bi-prediction forms | the lowres bilinear row, which no current path builds |
 | transform, quant, scan | every NEON dispatch site | as on 8 bits |
 | deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | four-line luma: no 10-bit twin, since the whole-edge kernels serve every call site |
 | intra prediction | 16x16, 8-wide chroma, the routed 8x8 modes, the six-mode 8x8 form, the lowres four-mode builder | as on 8 bits |
@@ -95,12 +95,14 @@ A coefficient is an int32 at 10 bits, so the transforms run on int32 lanes. The
 pixel, intra and deblock kernels keep int16 lanes and widen where 1023 pushes a
 sum past them, as in the intra plane modes; each kernel states its bounds. The
 six-tap luma and whole-band kernels keep u16 lanes instead: an offset makes
-every filter sum non-negative and comes off after the shift. The lowres half-pel
-row keeps the lowres planes' 8-bit scale: it rounds each pair mean to the 8-bit
-scale and saturates at 255. A table lookup reaches 64 bytes, so the
-directional intra modes split their 16-bit table into low and high bytes. The
-boundary-strength kernel reads no samples and is one source both libraries
-build (`src/dsp/arm/loopfilter_bs_neon.c`).
+every filter sum non-negative and comes off after the shift. The chroma
+bilinear and its fused bi-prediction form keep u16 lanes too: the weights sum
+to 64, so no sum of 10-bit samples reaches 65536. The lowres half-pel row keeps
+the lowres planes' 8-bit scale: it rounds each pair mean to the 8-bit scale and
+saturates at 255. A table lookup reaches 64 bytes, so the directional intra
+modes split their 16-bit table into low and high bytes. The boundary-strength
+kernel reads no samples and is one source both libraries build
+(`src/dsp/arm/loopfilter_bs_neon.c`).
 
 ### Dispatch
 
@@ -260,8 +262,7 @@ The ranges span sunflower 1080p and crowd_run 4K.
   beats AVX2 on both AMD and Intel.
 - **Wider AVX2.** Several AVX2 kernels re-encode the SSE4.2 body and could use
   the whole register on 16-wide blocks.
-- **10-bit SIMD.** NEON covers every family. The fused forms (bi-prediction
-  and the lowres bilinear row) are still C, and x86-64 has no 10-bit tier.
+- **10-bit SIMD.** x86-64 has no 10-bit tier.
 
 ## Measuring it
 

@@ -7069,7 +7069,7 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
                 int Y1 = Y + ay < lh ? Y + ay : lh - 1;
                 const pixel *r0 = ref + Y * lw, *r1 = ref + Y1 * lw;
                 pixel *o = out + Y * lw;
-#if Y264_HAVE_MC_FUSED
+#if Y264_HAVE_BILIN4_K
                 if (y264_mc_fused_on())
                     y264_bilin4_row_k(o, r0, r1, lw - ax, ax, w00, w10, w01, w11);
                 else

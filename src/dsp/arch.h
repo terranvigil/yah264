@@ -362,6 +362,14 @@ void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
                             int w0, int w1);
 void y264_pixel_avg_wt_2d_neon(pixel *dst, int ds, const pixel *a, int as,
                                const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_avg_mb420_flat_neon(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1);
+void y264_mc_chroma_bi8_neon(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1);
 void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
 void y264_hpel_build_band_neon(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
                                const pixel *ref, int rstride, int pw, int ph,
@@ -929,14 +937,15 @@ int  y264_sa8d_16x16_avx512(const pixel *, int, const pixel *, int);
  * The flat 4:2:0 macroblock average and the two-list 8x8 chroma compensation
  * are called from the macroblock code and have no portable twin: the caller's
  * own unfused path is the C form. These two inlines give the call sites one
- * name. On aarch64 they are the NEON symbols and nothing else; on x86-64 they
+ * name. On aarch64 they are the NEON symbols at either depth; on x86-64 they
  * pick the tier. `y264_mc_fused_on()` is the question the call site asks
- * before taking either. */
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+ * before taking either. The lowres bilinear row is 8-bit only:
+ * Y264_HAVE_BILIN4_K says whether it is here. */
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
 #define Y264_HAVE_MC_FUSED 1
 static inline int y264_mc_fused_on(void)
 {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     return y264_asm_on(Y264_ASM_MC);
 #else
     return y264_asm_on(Y264_ASM_MC) && y264_cpu_tier() >= Y264_TIER_SSE4;
@@ -949,7 +958,7 @@ static inline void y264_avg_mb420_flat_k(pixel *pred, pixel *cu, pixel *cv,
                                          const pixel *u0, const pixel *v0, int t0,
                                          const pixel *u1, const pixel *v1, int t1)
 {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     y264_avg_mb420_flat_neon(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
 #else
 #if Y264_HAVE_AVX2
@@ -967,7 +976,7 @@ static inline void y264_mc_chroma_bi8_k(pixel *dst, int dstride,
                                         const pixel *r1, int s1, int fx1, int fy1,
                                         int w0, int w1)
 {
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10
     y264_mc_chroma_bi8_neon(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
 #else
 #if Y264_HAVE_AVX2
@@ -980,6 +989,9 @@ static inline void y264_mc_chroma_bi8_k(pixel *dst, int dstride,
 #endif
 }
 
+/* no 10-bit twin: no current path builds a bilinear lowres plane */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#define Y264_HAVE_BILIN4_K 1
 static inline void y264_bilin4_row_k(pixel *o, const pixel *r0, const pixel *r1,
                                      int n, int ax, int w00, int w10, int w01, int w11)
 {
@@ -996,7 +1008,11 @@ static inline void y264_bilin4_row_k(pixel *o, const pixel *r0, const pixel *r1,
 #endif
 }
 #else
+#define Y264_HAVE_BILIN4_K 0
+#endif
+#else
 #define Y264_HAVE_MC_FUSED 0
+#define Y264_HAVE_BILIN4_K 0
 #endif
 
 #endif /* YAH264_DSP_ARCH_H */

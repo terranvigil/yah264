@@ -156,8 +156,7 @@ layout is the likelier cause than the dispatch itself.
   the CABAC 8x8 chroma context init values.
 - **4:2:2 and 4:4:4 against x264.** Both recon-match, but no BD board exists
   for them yet.
-- **The rest of 10-bit SIMD.** An x86-64 tier, and NEON for the fused
-  forms: bi-prediction and the lowres bilinear row (see [simd.md](simd.md)).
+- **The rest of 10-bit SIMD.** An x86-64 tier (see [simd.md](simd.md)).
 
 ## Measuring it
 
