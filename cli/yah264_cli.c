@@ -1067,10 +1067,11 @@ static void usage(const char *argv0)
         "                     the QP ceiling until it arrives in time, leaving room\n"
         "                     for the next key the lookahead shows; one that still\n"
         "                     cannot, even where QP 51 would have fitted, is counted\n"
-        "                     in a warning at the end. Runs one encoder; refused\n"
-        "                     with --crf-max, --qpmax under 51, forced qpfile QPs,\n"
-        "                     --zones q=, --cut-split, --shot-table, --shot-crf and\n"
-        "                     --segment-out.\n");
+        "                     in a warning at the end. Pass 1 of a two-pass is not\n"
+        "                     held (send its stream to /dev/null). Runs one\n"
+        "                     encoder; refused with --crf-max, --qpmax under 51,\n"
+        "                     forced qpfile QPs, --zones q=, --cut-split,\n"
+        "                     --shot-table, --shot-crf and --segment-out.\n");
     /* the --nal-hrd lines push this chunk past 4095 bytes too */
     fprintf(stderr,
         "  --filler / --no-filler   pad (or refuse to pad) access units to the\n"

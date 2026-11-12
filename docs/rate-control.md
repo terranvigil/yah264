@@ -161,15 +161,17 @@ key the encoder can see coming (the keyint key or a scene cut the lookahead
 flagged) at what the last intra picture cost at QP 51, less what arrives
 before it, and under field coding for the second field of an intra first
 field. The rate control never sees these raises, so after a frame is raised
-by `--qpstep` or more, the next frame of its type starts from that QP; a frame
-with room to spare lowers that start, and a key, a cut or a lookahead window
-without use drops it. A picture still late at the ceiling is counted, and the
-encode ends with one warning naming the count. The reserve is an estimate and
-covers keys only, so a stream whose pictures would all have fitted at QP 51
-can still carry a late access unit; the warning says so when it happens. `--crf-max`, `--qpmax` under 51, forced
-QPs and `--zones q=` are refused, since each holds a QP under what the buffer
-may need. `scripts/hrd_check.py` reads the declaration back and simulates
-Annex C.
+by `--qpstep` or more, the next frame of its type starts from that QP; a
+frame with room to spare lowers that start, and a key, a cut or a lookahead
+window without use drops it. A picture still late at the ceiling is counted,
+and the encode ends with one warning naming the count. The reserve is an
+estimate and covers keys only, so a stream whose pictures would all have
+fitted at QP 51 can still carry a late access unit; the warning says so when
+it happens. Pass 1 of a two-pass encode is not held: its stream still
+carries the HRD SEIs but answers to nothing, so send it to `/dev/null`.
+`--crf-max`, `--qpmax` under 51, forced QPs and `--zones q=` are refused,
+since each holds a QP under what the buffer may need.
+`scripts/hrd_check.py` reads the declaration back and simulates Annex C.
 
 ### Two-pass
 
