@@ -5484,12 +5484,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * markers reads exactly as it always did. */
                 long mframes = 0;
                 int split = 0;      /* a file the GOP splitter wrote */
+                int first = 1;
                 while (fgets(ln, sizeof ln, fp)) {
                     int mg, ms, me, mr;
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
                         mframes += me - ms;
-                    if (!strncmp(ln, "#split", 6))
+                    /* the splitter writes it first; anywhere else it isn't its */
+                    if (first && !strncmp(ln, "#split", 6))
                         split = 1;
+                    first = 0;
                     /* a picture's raw samples at its depth, and half again for
                      * what the syntax adds: a real key at QP <= 14 runs 2000
                      * bits a macroblock, a 4:4:4 one more */
@@ -5502,7 +5505,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         && nx.qp >= 0 && nx.qp <= 51)
                         e->tp_next[e->tp_n_next++] = nx;
                     double jv;
-                    if (split && sscanf(ln, "#join %lf", &jv) == 1 && tp_level_ok(e, jv))
+                    /* only a GOP that joins one before it starts at a level */
+                    if (split && e->vbv_joined && sscanf(ln, "#join %lf", &jv) == 1
+                        && tp_level_ok(e, jv))
                         e->tp_join = jv;
                     if (split && sscanf(ln, "#exit %lf", &jv) == 1 && tp_level_ok(e, jv))
                         e->tp_exit = jv;
