@@ -1239,6 +1239,7 @@ typedef struct {
     const yah264_param_t *param;
     int keyint, width, height;
     int tp_grid;                        /* two-pass segments: keyframes inside at multiples of this */
+    int tp_vbv;                         /* the split counts a VBV (tp_split_vbv) */
     unsigned char *tp_keys;             /* ...or at these frames, a scan's key map */
     /* Chroma geometry of the frames above, from the Y4M C tag. The store
  * carries it rather than assuming 4:2:0 -- that assumption was the one
@@ -2249,7 +2250,8 @@ static int tp_stats_have_markers(const char *path)
 /* Concatenate the per-GOP pass-1 files into the user's stats path, in GOP
  * order, each section preceded by its marker. Returns 0 on success. */
 static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
-                          const int *gstart, int n_gops, const yah264_param_t *param)
+                          const int *gstart, int n_gops, const yah264_param_t *param,
+                          int split_vbv)
 {
     FILE *out = fopen(out_path, "w");
     if (!out) {
@@ -2260,7 +2262,7 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
      * that it runs at the same kind (the encoder's stats reader) */
     fprintf(out, "#threads %d\n", param->threads);
     /* and what the split was cut by, which pass 2 splits by in turn */
-    fprintf(out, "#keyint %d\n#vbv %d\n", param->keyint, tp_seg_on(param));
+    fprintf(out, "#keyint %d\n#vbv %d\n", param->keyint, split_vbv);
     for (int g = 0; g < n_gops; g++) {
         FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
         char ln[256];
@@ -3168,7 +3170,7 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
         int m = 0;
         /* a two-pass takes its keys a segment of TP_SEG_MIN frames or more at
          * a time, the ones inside forced where the map has them */
-        int seg = !g_open_gop && tp_split_vbv(param);
+        int seg = !g_open_gop && job->tp_vbv;
         for (int i = 0; i < n; i++)
             if (idr[i] && (!seg || m == 0 || i - job->gop_start[m - 1] >= TP_SEG_MIN))
                 job->gop_start[m++] = i;
@@ -3351,7 +3353,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
      * encoder each, keyframes inside on the --keyint grid: every segment start
      * is a join and a pass 1 started cold. an open GOP is one instance */
     int tp_grid = 0;
-    if (keyint > 1 && keyint < TP_SEG_MIN && !g_open_gop && tp_split_vbv(param)) {
+    /* read once, before a pass 3's priming open rewrites the file */
+    int tp_vbv = tp_split_vbv(param);
+    if (keyint > 1 && keyint < TP_SEG_MIN && !g_open_gop && tp_vbv) {
         tp_grid = keyint;
         keyint *= (TP_SEG_MIN + keyint - 1) / keyint;
     }
@@ -3540,6 +3544,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.param = param;                              /* replaced below with `p` */
     job.keyint = keyint; job.width = W; job.height = H;
     job.tp_grid = tp_grid;
+    job.tp_vbv = tp_vbv;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = whole ? INT_MAX : (int)need;
     job.store_cap = store_cap;
@@ -4207,7 +4212,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * worker calls before it publishes the GOP. */
     int tp_rc = 0;
     if (gop_stats && param->rc.pass != 2)
-        tp_rc = tp_merge_pass1(param->rc.stats, gop_stats, job.gop_start, n_gops, param);
+        tp_rc = tp_merge_pass1(param->rc.stats, gop_stats, job.gop_start, n_gops, param, job.tp_vbv);
     tp_free_paths(gop_stats, n_gops, 1);
     free(gop_target);
 
