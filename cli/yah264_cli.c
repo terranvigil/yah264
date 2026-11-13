@@ -2481,6 +2481,12 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
                         "frames %d..%d\n", g, in_path, nr, s, e);
                 bad = 1; break;
             }
+            /* in order, each once: a repeated one would reopen its file */
+            if (g != cur + 1) {
+                fprintf(stderr, "yah264: stats file '%s' has GOP marker %d out of order\n",
+                        in_path, g);
+                bad = 1; break;
+            }
             if (g < 0 || g >= n_gops || s != gstart[g] || e != gstart[g + 1]) {
                 fprintf(stderr, "yah264: stats file '%s' describes a different GOP "
                         "split than this pass (marker %d = frames %d..%d)%s\n",
