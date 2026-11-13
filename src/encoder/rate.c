@@ -836,6 +836,10 @@ static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
         double b = vbv_fill_budget(e, fill);
         if (b < limit) limit = b;
     }
+    /* pass 2: never more than the buffer holds, whatever the fill estimate
+     * reads (fade CIF at 350/350/35 coded a 35.2 kbit frame) */
+    if (e->tp_pass >= 2 && limit > 0.9 * e->vbv.size)
+        limit = 0.9 * e->vbv.size;
     if (e->tp_resv_cur > 0.0) {
         /* pass 2: leave the next frame what it needs at QP 51 */
         double x = fill + e->vbv.rate - e->tp_resv_cur;
