@@ -5556,6 +5556,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     e->tp_sum_cq += pow(cost, e->crf_qcomp);
                 }
                 fclose(fp);
+                /* a file that is there but holds nothing (a pass 1 or 3
+                 * killed before its first record) is not a pass to plan from */
+                if (e->tp_n == 0) {
+                    fprintf(stderr, "yah264: stats file '%s' holds no records: run pass 1 "
+                            "into it again\n", param->rc.stats);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
                 /* the splitter's join levels: start at the first unless the
                  * GOP before hands over its exact occupancy, leave at least
                  * the second */
