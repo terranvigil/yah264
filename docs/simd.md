@@ -315,10 +315,10 @@ The ranges span sunflower 1080p and crowd_run 4K.
 - **Use Rosetta for routine Docker runs and QEMU for an item's final gate.**
   QEMU is several times slower, and emulated runs are real CPU load, so don't
   run them beside a timed run.
-- **One Docker kit session at a time.** Switching to QEMU changes the Docker
-  VM's binary-format registry for every container, so a second session's run
-  can swap the interpreter under the first one's encoders. Check `docker ps`
-  first.
+- **The Docker kit leaves the VM's interpreter alone.** Its QEMU legs run each
+  binary under the image's own `qemu-x86_64`, named on the command line, so
+  one session's run can't change what another's containers run under. Within
+  one worktree, a lock keeps two runs apart.
 - **Compare the two encoders on the same quiet machine.** Build x264 twice:
   with its assembly, and with assembly off but its C free to vectorize. The
   second is the fair match for `-Dsimd=none`.
