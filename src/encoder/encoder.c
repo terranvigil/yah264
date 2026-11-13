@@ -5481,12 +5481,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
                         mframes += me - ms;
                     struct tp_stat nx = {0};
-                    if (sscanf(ln, "#next %d %lf %lf %d", &nx.type, &nx.cplx, &nx.bits, &nx.qp) == 4
+                    if (e->tp_n_next < 2
+                        && sscanf(ln, "#next %d %lf %lf %d", &nx.type, &nx.cplx, &nx.bits, &nx.qp) == 4
                         && isfinite(nx.bits) && nx.bits >= 0.0 && nx.bits < 1e12
-                        && nx.qp >= 0 && nx.qp <= 51) {
-                        e->tp_next = nx;
-                        e->tp_have_next = 1;
-                    }
+                        && nx.qp >= 0 && nx.qp <= 51)
+                        e->tp_next[e->tp_n_next++] = nx;
                     double jv;
                     if (sscanf(ln, "#join %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
                         e->tp_join = jv;

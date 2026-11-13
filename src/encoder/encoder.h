@@ -1035,8 +1035,8 @@ struct yah264_encoder {
     double  *tp_elo3;           /* [3][n+1] tp_elo per frame type */
     double   tp_lastq[3];       /* per type: last floor-bound qscale decided, 0 = none */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
-    struct tp_stat tp_next;     /* pass 2: the next GOP's first record (#next) */
-    int      tp_have_next;
+    struct tp_stat tp_next[2];  /* pass 2: the next GOP's first records (#next) */
+    int      tp_n_next;
     double   tp_join, tp_exit;  /* pass 2: the splitter's join levels, bits; 0 = none */
     double   tp_spare;          /* pass 2: budget past the plan for this frame, -1 = no cap */
     double  *tp_resv;           /* [n+1] under a VBV: occupancy record i needs at QP 51 */

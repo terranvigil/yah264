@@ -2554,7 +2554,11 @@ static void tp_build_reserve(yah264_encoder_t *e)
     e->tp_resv = malloc((size_t)(n + 1) * sizeof(*e->tp_resv));
     if (!e->tp_resv)
         return;
-    double r = e->tp_have_next ? tp_bits51(e->tp_next.bits, e->tp_next.qp) : 0.0;
+    double r = 0.0;
+    for (int k = e->tp_n_next - 1; k >= 0; k--) {
+        double need = r - e->vbv.rate;
+        r = tp_bits51(e->tp_next[k].bits, e->tp_next[k].qp) + (need > 0.0 ? need : 0.0);
+    }
     e->tp_resv[n] = r < e->vbv.size ? r : e->vbv.size;
     for (int i = n - 1; i >= 0; i--) {
         double need = e->tp_resv[i + 1] - e->vbv.rate;

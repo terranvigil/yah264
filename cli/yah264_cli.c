@@ -2249,7 +2249,7 @@ static void tp_split_cap(const yah264_param_t *param, double *target, const doub
  * a CBR buffer's top unspent and held every later key of akiyo CIF at
  * 100/150/30 to QP 45. static in the split, so it doesn't move with the
  * worker count */
-static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first)[256],
+static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first)[2][256],
                            const long *rec, const double *cw, const double *target,
                            int n_gops, double rps)
 {
@@ -2259,18 +2259,23 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
     if (param->rc.vbv_init > 0)
         f = param->rc.vbv_init <= 1.0 ? param->rc.vbv_init * size : param->rc.vbv_init * 1000.0;
     if (f > size) f = size;
+    /* a field-coded key is its field pair */
+    int fields = param->interlaced ? 2 : 1;
     for (int g = 0; g + 1 < n_gops; g++) {
         f += rec[g] * rate - target[g];
         if (f > size) f = size;
-        if (!out[g] || !first[g + 1][0])
+        if (!out[g] || !first[g + 1][0][0])
             continue;
-        int type, qp;
-        double cplx, bits, key = 0.0;
-        if (sscanf(first[g + 1], "%d %lf %lf %d", &type, &cplx, &bits, &qp) == 4) {
-            fprintf(out[g], "#next %s", first[g + 1]);
+        double key = 0.0;
+        for (int k = 0; k < fields && k < rec[g + 1]; k++) {
+            int type, qp;
+            double cplx, bits;
+            if (sscanf(first[g + 1][k], "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
+                break;
+            fprintf(out[g], "#next %s", first[g + 1][k]);
             double qavg = target[g + 1] > 0.0 ? cw[g + 1] / target[g + 1] : 0.0;
             if (qavg > 0.0)
-                key = (bits + 1.0) * pow(2.0, (qp - 12) / 6.0) / (qavg / 1.4);
+                key += (bits + 1.0) * pow(2.0, (qp - 12) / 6.0) / (qavg / 1.4);
         }
         double j = f > key / 0.9 ? f : key / 0.9;
         if (j > 0.97 * size) j = 0.97 * size;
@@ -2300,7 +2305,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
     double *cw = calloc((size_t)n_gops, sizeof(double));
     long *rec = calloc((size_t)n_gops, sizeof(long));
     FILE **out = calloc((size_t)n_gops, sizeof(FILE *));
-    char (*first)[256] = calloc((size_t)n_gops, sizeof *first);
+    char (*first)[2][256] = calloc((size_t)n_gops, sizeof *first);
     long total_rec = 0;
     double total_w = 0.0;
     int cur = -1, bad = 0;
@@ -2339,8 +2344,8 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
             break;                              /* malformed: stop, as the encoder does */
         fputs(ln, out[cur]);
-        if (!rec[cur])
-            memcpy(first[cur], ln, sizeof ln);
+        if (rec[cur] < 2)
+            memcpy(first[cur][rec[cur]], ln, sizeof ln);
         /* Not on the dispatch table on purpose: this is a pure function of a
          * stats record's (bits, qp) with the same constants in both libraries,
          * so the 8-bit copy is the 10-bit answer. It stays off the table so
