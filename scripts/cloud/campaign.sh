@@ -549,11 +549,11 @@ st_board10_t1() {
     # a VM without PMU passthrough still has task-clock: the instruction
     # column then reads NA and the CPU-seconds column stands alone
     c_can_time || { c_skip "an emulated count is the emulator's own"; return; }
-    local reps="${REPS10:-3}" rows="$RES/.board10.rows" out="$RES/board10-t1.txt" clip n r
+    local reps="${REPS10:-3}" rows="$RES/.board10.rows" out="$RES/board10-t1.txt" clip n
     : > "$rows"
     for clip in $(clips10); do
         n=$(basename "$clip" .y4m)
-        for r in $(seq 1 "$reps"); do
+        for _ in $(seq 1 "$reps"); do
             perf10 "$rows" "$n y264-avx2" "${PIN[@]+"${PIN[@]}"}" "$Y264_10" --input-y4m "$clip" \
                 --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
             perf10 "$rows" "$n y264-sse4" env Y264_SIMD_FORCE=sse4 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
@@ -575,12 +575,15 @@ st_board10_t1() {
         echo "# $SKU $DATE  $CPU_MODEL"
         python3 - "$rows" <<'PY'
 import sys, statistics as st
-rows = {}
+rows, bad = {}, []
 for l in open(sys.argv[1]):
     f = l.split()
     if len(f) == 4:
         rows.setdefault((f[0], f[1]), []).append((int(f[2]) if f[2] != "NA" else 0, float(f[3])))
-clips = sorted({c for c, _ in rows})
+    else:
+        bad.append(" ".join(f))
+clips = sorted({c for c, _ in rows} | {b.split()[0] for b in bad if b})
+arms = ("y264-avx2", "y264-sse4", "y264-c", "x264-asm", "x264-avx2", "x264-c")
 print(f"{'clip':<26}{'arm':<11}{'instr':>10}{'cpu s':>9}")
 for c in clips:
     m = {}
@@ -596,10 +599,18 @@ for c in clips:
         if y in m and x in m:
             ir = f"{m[y][0] / m[x][0]:.3f}" if m[x][0] else "NA"
             print(f"{c:<26}{y + '/' + x:<22} instr {ir}  cpu {m[y][1] / m[x][1]:.3f}")
+missing = [f"{c} {a}" for c in clips for a in arms if (c, a) not in rows]
+for b in bad:
+    print(f"ENCFAIL {b}")
+for x in missing:
+    print(f"MISSING {x}")
+sys.exit(1 if bad or missing or not rows else 0)
 PY
     } > "$out"
+    local rc=$?
     cp -f "$rows" "$RES/board10-t1.rows"
     cat "$out"
+    return "$rc"
 }
 
 # Full threads, wall time: yah264 as shipped against x264's 10-bit asm build,
