@@ -31,15 +31,17 @@ usage: scripts/gen_symbols10.py <arm64>/libyah264.a <arm64>/libyah264_10.a \
            <x86-64>/libyah264.a <x86-64>/libyah264_10.a
        (writes src/common/symbols10.h; --stdout prints instead)
 
-It refuses to write a short list: every archive's nm must succeed, an 8-bit
-and a 10-bit archive are required for each of aarch64 and x86-64 (read from
-the first object's header), and a list with fewer names than the header it
-replaces needs --force.
+It refuses to write a short list: every archive's nm must succeed without
+complaint and yield y264_ names, an 8-bit and a 10-bit archive are required
+for each of aarch64 and x86-64 (read from the first object's header), and a
+list that drops any name the current header has needs --force (--stdout only
+warns, since it writes nothing).
 
 scripts/symbol_check.sh is the gate that fails when this file goes stale.
 """
 
 import os
+import shlex
 import subprocess
 import sys
 
@@ -97,17 +99,28 @@ def defined(archive):
     so the underscore comes off only when the archive is Mach-O.
     """
     nm = os.environ.get("NM", "nm")
-    out = subprocess.run([nm, "-g", archive], capture_output=True, text=True)
-    if out.returncode != 0:
-        sys.exit("gen_symbols10: %s -g %s failed: %s"
-                 % (nm, archive, out.stderr.strip().splitlines()[-1:] or "rc %d" % out.returncode))
+    cmd = [nm, "-g", archive]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:
+        sys.exit("gen_symbols10: cannot run %s (%s); set NM to an nm that "
+                 "reads this archive" % (shlex.join(cmd), e.strerror))
+    # GNU nm exits 0 on a Mach-O archive it can't read and only complains on
+    # stderr, so any complaint is fatal
+    if out.returncode != 0 or out.stderr.strip():
+        why = out.stderr.strip().splitlines()[-1] if out.stderr.strip() else "rc %d" % out.returncode
+        sys.exit("gen_symbols10: %s failed: %s" % (shlex.join(cmd), why))
     raw = set()
     for line in out.stdout.splitlines():
         f = line.split()
         if len(f) == 3 and f[1] != "U":
             raw.add(f[2])
     macho = any(n.startswith(("_y264_", "_yah264_")) for n in raw)
-    return {n[1:] if macho and n.startswith("_") else n for n in raw}
+    names = {n[1:] if macho and n.startswith("_") else n for n in raw}
+    if not any(n.startswith("y264_") for n in names):
+        sys.exit("gen_symbols10: %s defines no y264_ names; it is not an encoder "
+                 "archive this nm can read" % shlex.join(cmd))
+    return names
 
 
 def arch(archive):
@@ -174,11 +187,19 @@ def main(argv):
                  "drop out" % ", ".join("%s %d-bit" % m for m in sorted(need - have)))
     internal_names = sorted(names)
 
+    # every name the current header has must survive: a count would let names
+    # an extra archive adds (SVE, from a Linux aarch64 build) hide dropped ones.
+    # --stdout is a dry run and only warns, since it overwrites nothing
     if os.path.exists(OUT) and not force:
-        old = sum(1 for l in open(OUT) if l.startswith("#define ") and len(l.split()) == 3)
-        if len(internal_names) < old:
-            sys.exit("gen_symbols10: %d names against %d in the current header; "
-                     "rerun with --force if the drop is meant" % (len(internal_names), old))
+        old = {l.split()[1] for l in open(OUT)
+               if l.startswith("#define ") and len(l.split()) == 3}
+        lost = sorted(old - set(internal_names))
+        if lost:
+            msg = ("gen_symbols10: %d name(s) in the current header are missing "
+                   "from these archives:\n  %s" % (len(lost), "\n  ".join(lost)))
+            if not to_stdout:
+                sys.exit(msg + "\nrerun with --force if the drop is meant")
+            sys.stderr.write(msg + "\n(--stdout: printed anyway)\n")
 
     width = max(len(n) for n in internal_names) + 1
     body = "".join("#define %-*s %s_10\n" % (width, n, n) for n in internal_names)
