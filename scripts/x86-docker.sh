@@ -21,11 +21,10 @@
 # The tier axis is Y264_SIMD_FORCE, a RUNTIME cap, so one build serves all
 # three; -Dsimd= is the build-time twin and is what CI exercises instead.
 #
-# THE NEGATIVE CONTROL. On a tree with no x86 kernels the sse4 and avx2 tiers
-# must be byte-identical to none, because there is nothing in the binary for
-# the cap to cap. A difference there is a harness bug and not an encoder
-# finding, and that is the whole reason to run this matrix BEFORE the kernels
-# land rather than with them.
+# THE IDENTITY AXIS. Every kernel is bit-exact with C, so at threads 1 the
+# sse4 and avx2 tiers must be byte-identical to none, at 8 bits on the board
+# clips and at 10 bits on 4:2:0, 4:2:2 and 4:4:4 clips made from the corpus;
+# a difference is a kernel defect.
 #
 # BOX RULE (docs/simd.md). An emulated run
 # is CPU load like an encode. Coordinate it the way a timed leg is coordinated,
