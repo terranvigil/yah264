@@ -2175,6 +2175,13 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     }
     if (e->vbv_on)
         rcp_vbv_clip(e, Cv, type, is_ref);
+    /* the floor holds after the clip too: a pass 1 with its cap at the
+     * target is CBR, whose clip spends a full buffer by lowering the QP
+     * (akiyo recorded B frames at QP 12-22) */
+    if (e->tp_pass == 1 && e->abr_on && e->qp < Y264_TP_P1_QP) {
+        e->qp = Y264_TP_P1_QP;
+        e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+    }
     /* The coded QP and the model predictions at it, AFTER any VBV clip (for
  * non-VBV modes nothing ran between: identical values to the pre-VBV
  * ordering). */
