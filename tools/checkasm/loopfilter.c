@@ -141,7 +141,10 @@ static pixel *ea, *eb;
  * wide-swing term, so both sides of the alpha/beta gate are reached; modes 2
  * and 3: a base within eight of 0 or of PIXEL_MAX, noise on the scale of beta
  * and a random jump across both test edges (column 8 and row 8, toward the
- * middle of the range), so the filtered samples reach the clip at both ends. */
+ * middle of the range), so the filtered samples reach the clip at both ends.
+ * the jump lands on either side, at the edge or one sample past it: past it,
+ * p0 and q0 both sit at the extreme while the far neighbour pulls the delta
+ * outward, which is what pushes p0 or q0 past the range. */
 static void edge_plane(int mode)
 {
     const int sh = Y264_BIT_DEPTH - 8;
@@ -151,12 +154,18 @@ static void edge_plane(int mode)
     }
     if (mode >= 2) {
         int hi = mode == 3;
-        int base = (int)ca_below(8);
-        int jx = (int)ca_below(256u << sh), jy = (int)ca_below(256u << sh);
+        int pside = (int)ca_below(2), k = (int)ca_below(2);
+        int base = (int)ca_below(k ? 2 : 8);
+        /* past the edge the jump stays under beta and the edge pair sits at
+         * the extreme, or the gate shuts or the delta falls short of it */
+        unsigned span = (k ? 20u : 256u) << sh, noise = k ? 1u : 24u << sh;
+        int jx = (int)ca_below(span), jy = (int)ca_below(span);
         for (int y = 0; y < PLANE_H; y++)
             for (int x = 0; x < STRIDE; x++) {
-                int v = base + (int)ca_below(24u << sh)
-                      + (x >= 8 ? jx : 0) + (y >= 8 ? jy : 0);
+                int qx = pside ? x < 8 - k : x >= 8 + k;
+                int qy = pside ? y < 8 - k : y >= 8 + k;
+                int v = base + (int)ca_below(noise)
+                      + (qx ? jx : 0) + (qy ? jy : 0);
                 ea[y * STRIDE + x] = (pixel)clipv(hi ? PIXEL_MAX - v : v);
             }
     } else {
@@ -392,9 +401,10 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
         int base = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
         int amp = ((t & 2) ? 6 : 60) << (Y264_BIT_DEPTH - 8);
-        /* every fourth pair of trials sits within eight of 0 or of PIXEL_MAX,
-         * with a jump across both edges (column 8 and row 4) toward the
-         * middle, so the clip is reached at both ends */
+        /* half the trials (t % 16 >= 8) sit within eight of 0 or of
+         * PIXEL_MAX, with a jump across both edges (column 8 and row 4)
+         * toward the middle, on the q side or the p side by trial parity, so
+         * the clip is reached at both ends from both sides */
         int ext = t >> 2 & 3, jx = 0, jy = 0;
         if (ext >= 2) {
             base = (int)ca_below(8);
@@ -406,8 +416,9 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
         for (int i = 0; i < (S) * H; i++) {                                     \
             int v = base + (int)ca_below(2 * amp + 1) - amp;                    \
             if (ext >= 2)                                                       \
-                v = base + (int)ca_below(2 * amp + 1) + (i % (S) >= 8 ? jx : 0) \
-                  + (i / (S) >= 4 ? jy : 0);                                    \
+                v = base + (int)ca_below(2 * amp + 1)                           \
+                  + (((i % (S) >= 8) != (t & 1)) ? jx : 0)                      \
+                  + (((i / (S) >= 4) != (t & 1)) ? jy : 0);                     \
             a[i] = (pixel)db_clamp_pix(ext == 3 ? PIXEL_MAX - v : v);           \
         }
         CH2_FILL(a1, S1)
