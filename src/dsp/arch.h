@@ -459,13 +459,12 @@ void y264_quant_8x8_f_n_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
  * C11 intrinsics only: there is no assembly in this tree, and hygiene_check
  * refuses any under src/dsp/x86/.
  *
- * The names below are declared and not yet defined. Wave 1 of
- * docs/simd.md defines the pixel family; nothing calls one until then, and
- * the empty family files under src/dsp/x86/ exist so that the build shape --
- * three static libraries, their -m flags, the per-family opt-in lists -- is
- * exercised by every x86 build from now on rather than written blind on the
- * day the first kernel lands. */
-#if Y264_HAVE_SSE4
+ * The 10-bit library's tiers (`<family>_sse4_10.c`, `_avx2_10.c`, on 16-bit
+ * lanes) take the same names, which src/common/symbols10.h suffixes, so the
+ * declarations below serve both depths. That set is a subset: what has no
+ * 10-bit twin is declared and never defined there, and its dispatch sites
+ * stay behind the 8-bit macro alone. */
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 int  y264_sad_16x16_sse4(const pixel *, int, const pixel *, int);
 int  y264_sad_16x8_sse4(const pixel *, int, const pixel *, int);
@@ -522,16 +521,16 @@ void y264_intra4_mode_search_sse4(const pixel *, int, const pixel *, int,
                            int, int, int, int, int[9]);
 void y264_intra16_satd_trio_sse4(const pixel *, int, const pixel *,
                                    const pixel *, int, int[3]);
-int  y264_ssd_16xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
-int  y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_16xh_sse4(const pixel *a, int as, const pixel *b, int bs, int h);
+int  y264_ssd_8xh_sse4(const pixel *a, int as, const pixel *b, int bs, int h);
 /* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
  * four for an 8x8, out[row4 * n + col4]. */
-void y264_ssdsum4x4_16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_16_sse4(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t e[16], int32_t sum[16]);
-void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_8_sse4(const pixel *a, int as, const pixel *b, int bs,
                            uint32_t e[4], int32_t sum[4]);
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
-void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssd4x4_map16_sse4(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t out[16]);
 
 /* ---- motion compensation, half-pel planes (src/dsp/x86/interp_sse4.c) --------
@@ -689,9 +688,9 @@ void y264_deblock_chroma2_h_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
                                  int alpha, int beta, const uint8_t bs[4],
                                  const uint8_t tc0tab[3]);
 
-#endif /* Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 
 int  y264_sad_16x16_avx2(const pixel *, int, const pixel *, int);
 int  y264_sad_16x8_avx2(const pixel *, int, const pixel *, int);
@@ -797,16 +796,16 @@ void y264_mc_chroma_bi8_avx2(pixel *dst, int dstride,
                              const pixel *r0, int s0, int fx0, int fy0,
                              const pixel *r1, int s1, int fx1, int fy1,
                              int w0, int w1);
-int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
-int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_16xh_avx2(const pixel *a, int as, const pixel *b, int bs, int h);
+int  y264_ssd_8xh_avx2(const pixel *a, int as, const pixel *b, int bs, int h);
 /* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
  * four for an 8x8, out[row4 * n + col4]. */
-void y264_ssdsum4x4_16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_16_avx2(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t e[16], int32_t sum[16]);
-void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_8_avx2(const pixel *a, int as, const pixel *b, int bs,
                            uint32_t e[4], int32_t sum[4]);
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
-void y264_ssd4x4_map16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssd4x4_map16_avx2(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t out[16]);
 
 /* Transform, quant and scan (docs/simd.md). The quant and
@@ -897,7 +896,7 @@ void y264_deblock_chroma2_h_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
                                  int alpha, int beta, const uint8_t bs[4],
                                  const uint8_t tc0tab[3]);
 
-#endif /* Y264_HAVE_AVX2 */
+#endif /* Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10 */
 
 #if Y264_HAVE_AVX512
 /* AVX-512 (avx512f + avx512bw + avx512vl) is a gated tier (`-Davx512=true`,

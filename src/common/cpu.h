@@ -58,8 +58,8 @@ enum {
  * dispatch, which is the whole of `-Dsimd=none`.
  *
  * NEON carries the depth in its condition because its kernels are uint8/int16
- * lanes; the x86 tiers carry it in meson, which links them into the 8-bit
- * library only. */
+ * lanes; the x86 tiers carry it in meson, which builds each depth's tier
+ * files into that depth's library. */
 #ifndef Y264_HAVE_NEON
 #  if (defined(__aarch64__) || defined(_M_ARM64)) && Y264_BIT_DEPTH == 8
 #    define Y264_HAVE_NEON 1
@@ -96,6 +96,17 @@ enum {
 #ifndef Y264_HAVE_AVX512
 #  define Y264_HAVE_AVX512 0
 #endif
+/* The 10-bit library's x86 tiers: their own kernel files (src/dsp/x86/
+ * *_<tier>_10.c) on 16-bit lanes, the same feature masks and Y264_TIER_*
+ * answers as the 8-bit tiers, and at most one of Y264_HAVE_SSE4 and
+ * Y264_HAVE_SSE4_10 is 1 in a translation unit. No AVX-512 form yet, so the
+ * 10-bit tier caps at AVX2. meson defines them; a bare compile has none. */
+#ifndef Y264_HAVE_SSE4_10
+#  define Y264_HAVE_SSE4_10 0
+#endif
+#ifndef Y264_HAVE_AVX2_10
+#  define Y264_HAVE_AVX2_10 0
+#endif
 
 /* One bit per compiled-in tier, saying "this build holds kernels a CPU with
  * that bit may run". ANDed with detection it answers the only question the
@@ -105,8 +116,8 @@ enum {
  * once per dispatch site rather than once per call. */
 #define Y264_CPU_SIMD_ANY \
     ((Y264_HAVE_NEON || Y264_HAVE_NEON10 ? (uint32_t)Y264_CPU_NEON : 0u) | \
-     (Y264_HAVE_SSE4   ? (uint32_t)Y264_CPU_SSE4    : 0u) | \
-     (Y264_HAVE_AVX2   ? (uint32_t)Y264_CPU_AVX2    : 0u) | \
+     (Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 ? (uint32_t)Y264_CPU_SSE4 : 0u) | \
+     (Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10 ? (uint32_t)Y264_CPU_AVX2 : 0u) | \
      (Y264_HAVE_AVX512 ? (uint32_t)Y264_CPU_AVX512F : 0u))
 
 /* The tier a dispatch site selects, best usable first. */
@@ -186,11 +197,11 @@ static inline int y264_cpu_tier(void)
     if ((f & Y264_CPU_AVX512_ALL) == Y264_CPU_AVX512_ALL)
         return Y264_TIER_AVX512;
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     if ((f & Y264_CPU_AVX2_ALL) == Y264_CPU_AVX2_ALL)
         return Y264_TIER_AVX2;
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if ((f & Y264_CPU_SSE4_ALL) == Y264_CPU_SSE4_ALL)
         return Y264_TIER_SSE4;
 #endif
