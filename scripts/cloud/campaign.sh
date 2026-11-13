@@ -228,17 +228,17 @@ mhz_drift() {   # the plan's 3% rule, reported not enforced: a repeat costs mone
 # kernel: a -Dsimd=sse4 build, a dispatch guard that drops a tier, or a cap
 # mapped to the wrong mask each leave every tier running the same code, and
 # every identity compare passes. scripts/dispatch_probe.py watches the kernel
-# calls of a short encode at that depth under each cap instead: none calls no
-# kernel, and each tier calls a kernel of every family it has, none above it.
+# calls of short encodes at that depth under each cap instead: none calls no
+# kernel, and each kernel runs at the highest tier the cap allows.
 tier_probe() {
-    local dir="$1" depth="$2" clip; shift 2
-    if [ "$depth" = 10 ]; then clip="$(clips10 | head -1)"
-    else clip="$C_SRC/tests/corpus/foreman_cif.y4m"; fi
-    [ -n "$clip" ] && [ -f "$clip" ] || {
-        echo "# tier_probe: no ${depth}-bit clip to probe with (${clip:-none})" >&2; return 1; }
-    python3 "$C_SRC/scripts/dispatch_probe.py" --build "$dir" "--clip$depth" "$clip" \
-        --tiers "none $*" --work "$RES/dispatch-$depth" 2>&1 | sed 's/^/# /' >&2
-    return "${PIPESTATUS[0]}"
+    local dir="$1" depth="$2" src="$C_SRC/tests/corpus/foreman_cif.y4m" work rc; shift 2
+    [ -f "$src" ] || { echo "# tier_probe: no $src to make the probe clips from" >&2; return 1; }
+    work="$(mktemp -d)"
+    python3 "$C_SRC/scripts/dispatch_probe.py" --build "$dir" --source "$src" \
+        --depths "$depth" --tiers "none $*" --work "$work" 2>&1 | sed 's/^/# /' >&2
+    rc=${PIPESTATUS[0]}
+    rm -rf "$work"
+    return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -282,7 +282,7 @@ st_identity() {
         [ -n "$tier_note" ] && echo "$tier_note"
     } > "$out"
     # shellcheck disable=SC2086
-    tier_probe "$C_B8" 8 $tiers 2>> "$out" || { cat "$out"; return 1; }
+    tier_probe "$C_B8" 8 ${tiers#none} 2>> "$out" || { cat "$out"; return 1; }
     local tier spec clip rate t mode rc=0
     for tier in $tiers; do
         : > "$RES/.md5.$tier"
