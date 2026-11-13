@@ -2243,11 +2243,17 @@ static void tp_split_cap(const yah264_param_t *param, double *target, const doub
         if (wf <= 0.0 || left <= 0.0)
             break;
         int more = 0;
+        /* with the cap at or under the target the channel delivers the cap
+         * whatever a GOP spends, and what its buffer can't hold is lost: so a
+         * GOP gets at least what arrives over it, less half the buffer */
+        int cbr = param->rc.vbv_maxrate <= param->rc.bitrate;
         for (int g = 0; g < n_gops; g++) {
             if (fixed[g]) continue;
             target[g] = left * w[g] / wf;
             double cap = rec[g] * rate + 0.5 * size;
+            double lo = rec[g] * rate - 0.5 * size;
             if (target[g] > cap) { target[g] = cap; fixed[g] = 1; more = 1; }
+            else if (cbr && target[g] < lo) { target[g] = lo; fixed[g] = 1; more = 1; }
         }
         if (!more)
             break;
