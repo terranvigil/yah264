@@ -1717,7 +1717,7 @@ static double rfm_open_qp(yah264_encoder_t *e, double C)
  * level that spends the target, exactly a slowly adapted CRF. */
 static int abr_dc_on(const yah264_encoder_t *e)
 {
-    return e->abr_rf2 && e->aq_abs && !e->vbv_cbr;
+    return e->abr_rf2 && e->aq_abs && !e->vbv_cbr && !e->tp_pass;
 }
 
 void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
@@ -2074,6 +2074,13 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         rc_set_qp_crf(e, C, type);
     }
     /* else pass 1 / CQP: e->qp is the fixed base */
+    /* a pass 1 under a VBV runs as capped ABR, but never finer than the fixed
+     * pass-1 QP: under it the records priced cheap frames dear and pass 2
+     * coded them coarser (sintel 720p's dark stretches, -0.9 dB) */
+    if (e->tp_pass == 1 && e->abr_on && e->qp < Y264_TP_P1_QP) {
+        e->qp = Y264_TP_P1_QP;
+        e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+    }
     if (e->vbv_on && type == 2 && !e->rcp_vbv_tight && e->bm_rvbv.have[2]) {
         /* Extrapolation guard: a pipelined B decides before any of its
  * burst's actuals land, and the bits model under-predicts savagely

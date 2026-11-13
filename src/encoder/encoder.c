@@ -5271,7 +5271,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (e->qp > 51) e->qp = 51;
     e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 
-    e->abr_on = (param->rc.method == YAH264_RC_ABR && param->rc.bitrate > 0);
+    /* pass 1 of a two-pass under a VBV codes as capped ABR at the target: at
+     * the fixed pass-1 QP the buffer pinned it at QP 51 wherever the cap sits
+     * far under that QP's rate, and frames coded there say little about what
+     * a finer quantiser costs, which is what pass 2 plans from */
+    int p1_abr = param->rc.method == YAH264_RC_2PASS && param->rc.pass == 1
+                 && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
+    e->abr_on = ((param->rc.method == YAH264_RC_ABR || p1_abr) && param->rc.bitrate > 0);
     e->hrd_qfloor[0] = e->hrd_qfloor[1] = e->hrd_qfloor[2] = -1;
     if (e->abr_on) {
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
@@ -5454,7 +5460,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 yah264_encoder_close(e);
                 return NULL;
             }
-            e->qp = 26;                             /* fixed reference QP for pass 1 */
+            e->qp = Y264_TP_P1_QP;                    /* fixed reference QP for pass 1 */
             e->chroma_qp = y264_chroma_qp(26, e->param.chroma_qp_index_offset);
         } else {
             FILE *fp = fopen(param->rc.stats, "r");
@@ -5913,7 +5919,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * absolute anchor reaches the per-MB AQ field in every rate mode it is armed
  * in, unlike the two base-QP terms beside it, which carry their own
  * `e->crf_on` gate. The -5.17% median is a CRF number; CBR was not measured. */
-    e->aq_abs    = crf_cplx_env() && (e->crf_on || (e->abr_rf2 && !e->vbv_cbr));
+    e->aq_abs    = crf_cplx_env() && (e->crf_on || (e->abr_rf2 && !e->vbv_cbr && !e->tp_pass));
     /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
  * path, with its own strength scale and B-frame floor; y264_aq_gain). */
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);

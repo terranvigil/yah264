@@ -102,6 +102,7 @@ _Static_assert(Y264_STAIR_HOPS == (Y264_STAIR_K - 1) + 1,
  * budget solve and yah264_2pass_stat_weight -- which a GOP-parallel caller
  * uses to size each GOP's share of that budget -- have to agree on it. */
 #define Y264_TP_QCOMP 0.6
+#define Y264_TP_P1_QP 26     /* pass 1's fixed QP, and a VBV pass 1's floor */
 
 #define LR_MV_INVALID  INT16_MIN
 /* Reference legs of a lookahead entry. Fixed roles for now; Q7 generalises to
