@@ -5551,9 +5551,19 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 if (e->vbv_on) {
                     if (e->vbv_joined && e->tp_join > 0.0)
                         e->vbv.fill = e->tp_join < e->vbv.size ? e->tp_join : e->vbv.size;
-                    if (e->tp_exit > 0.0)
+                    if (e->tp_exit > 0.0) {
                         e->vbv_seg_h = e->tp_exit < e->vbv.size ? e->tp_exit : e->vbv.size;
-                    else if (param->nal_hrd == YAH264_NAL_HRD_CBR) {
+                        /* the last GOP of a split with its cap at or under
+                         * the target is held to the level the splitter walked
+                         * to, by its measured sizes too: what it drains
+                         * below that is spent on top of its budget, and a
+                         * still image's P frame priced at nothing coded 66
+                         * kbit (150/150/150 k30, 11% over) */
+                        if (e->tp_key <= 0.0 && param->rc.vbv_maxrate <= param->rc.bitrate) {
+                            e->vbv_exit_n = e->tp_n;
+                            e->vbv_exit_k = 1.0;
+                        }
+                    } else if (param->nal_hrd == YAH264_NAL_HRD_CBR) {
                         /* a declared CBR stream delivers its rate: one that
                          * ends with less in the buffer than it began spent
                          * the opening buffer on top (grain 150 frames at

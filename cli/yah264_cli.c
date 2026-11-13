@@ -2298,6 +2298,18 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
         if (out[g + 1])
             fprintf(out[g + 1], "#join %.0f\n", j);
     }
+    /* with the cap at or under the target the last GOP leaves the walked
+     * level too: a buffer it drains is spent on top of its budget (a still
+     * image at 150/150/150 k30 came out 11% over) */
+    int g = n_gops - 1;
+    if (g > 0 && out[g] && param->rc.vbv_maxrate <= param->rc.bitrate) {
+        f += rec[g] * rate - target[g];
+        if (f > size) f = size;
+        double j = f;
+        if (j > 0.97 * size) j = 0.97 * size;
+        if (j < 0.1 * size) j = 0.1 * size;
+        fprintf(out[g], "#exit %.0f\n", j);
+    }
 }
 
 /* Split a marked stats file into one file per GOP and size each GOP's pass-2

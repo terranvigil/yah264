@@ -788,9 +788,9 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
 {
     double goal = e->rck.vbv_fill_frac * e->vbv.size;
     /* a pass-2 GOP the splitter planned steers to the level it leaves at,
-     * where that is under half, and the last one to nothing: held at half, a
-     * GOP that joined low (a cap under the target) climbed back instead of
-     * spending. one encoder for the whole clip keeps half, its reserve,
+     * where that is under half, and the last one to nothing where it plans
+     * none for it: held at half, a GOP that joined low (a cap under the
+     * target) climbed back instead of spending. one encoder for the whole clip keeps half, its reserve,
      * except under a cap at or under the target (below) */
     if (e->tp_pass >= 2 && e->tp_exit > 0.0 && e->vbv_seg_h < goal)
         goal = e->vbv_seg_h;
@@ -802,12 +802,17 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
      * at 500/500/500, -0.76 dB at one thread), but a buffer the keys nearly
      * fill needs one held for them (bbb 720p at 800/800/200 lost 1 dB aimed
      * at nothing). The key is the plan's own where this encoder codes it
-     * (one encoder for the clip, --nal-hrd), else the splitter's #key */
+     * (one encoder for the clip, --nal-hrd), else the splitter's #key. Past
+     * the last key, the level the splitter plans the last GOP to leave, high
+     * as it may be: what it drains below that is spent on top of its budget
+     * (a still image at 150/150/150 k30 came out 11% over); else half */
     if (e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate) {
         int i = e->tp_idx > 0 ? e->tp_idx - 1 : 0;
         double nk = e->tp_nkey && i < e->tp_n ? e->tp_nkey[i] : e->tp_key;
-        if (0.5 * nk < goal)
+        if (nk > 0.0 && 0.5 * nk < goal)
             goal = 0.5 * nk;
+        else if (nk <= 0.0 && e->tp_exit > 0.0)
+            goal = e->vbv_seg_h;
     }
     double h = fill > goal ? e->rck.vbv_fill_hup : e->rck.vbv_fill_h;
     if (h <= 0) h = 1.0;
