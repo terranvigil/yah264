@@ -110,73 +110,24 @@ fi
 
 # ONE RUN PER WORKTREE. Two runs share the scratch directory: each other's
 # x.264, err, .part and md5 lists, so one run's row would blame a kernel for
-# the other's files. macOS has no flock, so the lock is a directory, built
-# aside with its pid already in it and renamed into place: rename(2) will not
-# replace a directory that has a file in it, so of two contenders exactly one
-# lands, and no reader ever sees a lock without its pid. A lock whose holder
-# is gone is moved aside, not deleted, and only under a second short-lived
-# lock that re-checks the holder, so two runs that both saw it stale cannot
-# both take over, and neither can move aside a lock the other just took.
-lock="$out/.lock"
-guard="$out/.lock-takeover"
-rename_dir() { perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$1" "$2"; }
-age_of() { perl -e '@s = stat($ARGV[0]) or exit 1; print time - $s[9]' "$1"; }
-# lock_busy <dir>: the dir is held by a live process, or too new to judge
-lock_busy() {
-    local holder age
-    holder="$(cat "$1/pid" 2>/dev/null)"
-    if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null; return; fi
-    age="$(age_of "$1")" || return 1        # gone: not busy
-    [ "$age" -lt 10 ]
-}
-# new_lockdir <prefix>: a fresh dir holding this run's pid
-new_lockdir() {
-    local d
-    d="$(mktemp -d "$1.new.XXXXXX")" || return 1
-    echo $$ > "$d/pid" && echo "$d"
-}
-take_lock() {
-    local mine g n
-    mine="$(new_lockdir "$lock")" || return 1
-    for n in 1 2 3 4 5; do
-        # an empty dir would be replaced by the rename, so a lock left with
-        # no pid by an older version of this script is judged, not renamed over
-        [ -e "$lock" ] || { rename_dir "$mine" "$lock" && return 0; }
-        if lock_busy "$lock"; then
-            rm -rf "$mine"
-            echo "x86-docker: another run (pid $(cat "$lock/pid" 2>/dev/null || echo '?')) holds $lock" >&2
-            return 2
-        fi
-        # stale. take the guard, and judge the lock again under it
-        g="$(new_lockdir "$guard")" || { rm -rf "$mine"; return 1; }
-        if ! rename_dir "$g" "$guard"; then
-            rm -rf "$g"
-            lock_busy "$guard" || { rename_dir "$guard" "$guard.stale.$$.$n" && rm -rf "$guard.stale.$$.$n"; }
-            sleep 1; continue
-        fi
-        if [ -e "$lock" ] && ! lock_busy "$lock" && rename_dir "$lock" "$lock.stale.$$.$n"; then
-            rm -rf "$lock.stale.$$.$n"
-        fi
-        [ "$(cat "$guard/pid" 2>/dev/null)" = $$ ] && rename_dir "$guard" "$guard.done.$$" && rm -rf "$guard.done.$$"
-    done
-    rm -rf "$mine"
-    echo "x86-docker: cannot take $lock" >&2
-    return 1
-}
-take_lock || exit 2
+# the other's files. The lock is a kernel lock (flock) on a file this shell
+# holds open, so it is freed by any death, kill -9 included, and there is no
+# pid, clock or leftover to judge. bash has no flock of its own and macOS no
+# flock(1), so perl takes it on the shell's descriptor. Containers are started
+# with that descriptor closed, so a container that outlives a killed run does
+# not hold the lock on its behalf.
+command -v perl >/dev/null 2>&1 || { echo "x86-docker: perl missing; it takes the run lock" >&2; exit 2; }
+exec 9>>"$out/.lock.f"
+if ! perl -e 'use Fcntl qw(:flock); open(my $fh, ">&=", 9) or exit 3;
+              flock($fh, LOCK_EX | LOCK_NB) or exit 1'; then
+    echo "x86-docker: another run (pid $(cat "$out/.lock.pid" 2>/dev/null || echo '?')) holds $out/.lock.f" >&2
+    exit 2
+fi
+echo $$ > "$out/.lock.pid"
 # the report is this run's from here on; a refused run never touches it
 : > "$report"
-ROSETTA_OFF=0
-cleanup() {
-    if [ "$ROSETTA_OFF" = 1 ]; then restore_rosetta; ROSETTA_OFF=0; fi
-    # only our own lock: a run that lost it must not free another's
-    if [ "$(cat "$lock/pid" 2>/dev/null)" = $$ ] && rename_dir "$lock" "$lock.done.$$"; then
-        rm -rf "$lock.done.$$"
-    fi
-}
-trap cleanup EXIT
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # compare_lists <backend> <tier> <label> <idir> <diff-name> <what moved>:
 # one tier's md5 list against none's. A count that differs is the harness's
@@ -262,29 +213,28 @@ mkdir -p "$root/scratch/x86-docker/fixtures"
 mounts+=(-v "$root/scratch/x86-docker/fixtures:/work/tests/.fixtures")
 
 # ---------------------------------------------------------------------------
-# The two backends. Docker Desktop registers BOTH interpreters for the x86-64
-# ELF magic -- Rosetta and qemu-x86_64 -- and the kernel hands a binary to the
-# first enabled match, so selecting QEMU means disabling the Rosetta entry for
-# the duration and putting it back afterwards. That is a change to the shared
-# Docker VM, so it is announced, trapped, and restored even on a failure.
-binfmt() {   # binfmt <0|1>: 0 disables the Rosetta entries, 1 re-enables them
-    docker run --rm --privileged --platform linux/arm64 alpine sh -c "
-        mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null
-        for e in rosetta rosetta-wrapper; do
-            [ -f /proc/sys/fs/binfmt_misc/\$e ] && echo $1 > /proc/sys/fs/binfmt_misc/\$e
-        done
-        head -1 /proc/sys/fs/binfmt_misc/rosetta 2>/dev/null" >/dev/null 2>&1
-}
-rosetta_enabled() {
+# The two backends. Docker Desktop hands an x86-64 binary to whichever
+# interpreter its VM has registered first, normally Rosetta, and that
+# registration is global to the VM, which other sessions share. So this script
+# never changes it. The rosetta backend runs everything the default way. The
+# qemu backend runs the same containers, but every binary under test goes
+# through the image's own qemu-x86_64, named on the command line: QR below is
+# that wrapper, empty on the rosetta backend. Only the binaries under test run
+# in QEMU; the shells, meson and ffmpeg around them do not.
+rosetta_enabled() {   # read-only: is Rosetta the VM's x86-64 interpreter
     docker run --rm --privileged --platform linux/arm64 alpine sh -c "
         mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null
         head -1 /proc/sys/fs/binfmt_misc/rosetta 2>/dev/null" 2>/dev/null \
       | grep -q enabled
 }
-restore_rosetta() { binfmt 1; }
-# the flag is set BEFORE the flip, so a signal mid-flip still restores
-rosetta_off() { ROSETTA_OFF=1; binfmt 0; }
-rosetta_on() { binfmt 1; ROSETTA_OFF=0; }
+QRUN=""
+qrun_path="/work/scratch/x86-docker/qrun"
+cat > "$out/qrun" <<'QEOF'
+#!/bin/sh
+# an explicit QEMU, so a "qemu" row cannot have run under anything else
+exec /opt/qemu/qemu-x86_64 -cpu "${QEMU_CPU:-max}" "$@"
+QEOF
+chmod +x "$out/qrun"
 
 # dk <env-assignments...> -- <shell command>
 # One container per call: the run is short-lived and stateless, which is what
@@ -295,9 +245,9 @@ dk() {
     shift
     a=(docker run --rm --platform linux/amd64 --cpus "$CPUS"
        -u "$(id -u):$(id -g)" -w /work -v "$root:/work" ${mounts[@]+"${mounts[@]}"}
-       -e "HOME=/tmp" -e "XDG_CACHE_HOME=/tmp/.cache" "${envs[@]}")
-    [ "$BACKEND" = qemu ] && a+=(-e "QEMU_CPU=$QEMU_CPU")
-    "${a[@]}" "$IMAGE" bash -c "$*"
+       -e "HOME=/tmp" -e "XDG_CACHE_HOME=/tmp/.cache"
+       -e "QEMU_CPU=$QEMU_CPU" -e "QR=$QRUN" "${envs[@]}")
+    "${a[@]}" "$IMAGE" bash -c "$*" 9>&-
 }
 
 # A Rosetta case that dies of SIGILL (128+4) is Rosetta's defect and not the
@@ -311,11 +261,9 @@ run_case() {   # run_case <backend> <tier> <leg> <log> <env...> -- <cmd>
     if [ "$rc" = 0 ]; then row "$be" "$tier" "$leg" PASS "$(basename "$log")"; return 0; fi
     if [ "$be" = rosetta ] && [ "$rc" = $SIGILL ]; then
         row "$be" "$tier" "$leg" NOTE "SIGILL under Rosetta -- rerunning under QEMU"
-        local keep="$BACKEND"; BACKEND=qemu
-        rosetta_off
+        local keep="$QRUN"; QRUN="$qrun_path"
         dk "$@" > "$log.qemu" 2>&1; rc=$?
-        rosetta_on
-        BACKEND="$keep"
+        QRUN="$keep"
         [ "$rc" = 0 ] && { row "$be" "$tier" "$leg" PASS "emulator (QEMU; Rosetta SIGILL)"; return 0; }
         row "$be" "$tier" "$leg" FAIL "rc=$rc under QEMU too, $(basename "$log").qemu"
         return 1
@@ -325,77 +273,74 @@ run_case() {   # run_case <backend> <tier> <leg> <log> <env...> -- <cmd>
 }
 
 # ---------------------------------------------------------------------------
-# THE TIERS MUST BE THERE. Y264_SIMD_FORCE is read only in a dev_knobs build,
-# and the checkasm banner prints the CPU's features, not the build's: a stale
-# build8 configured at -Dsimd=none or sse4 still prints avx2, every tier then
-# runs the same code, and every identity leg passes. So the build's options
-# are read back, set right once if they are not, and every tier the legs
-# name must have a checkasm group of its own that --list marks runnable,
-# which only a compiled tier has.
-tier_state() {   # the build's options, the capped banner, the uncapped table
+# THE TIERS MUST BE THERE AND MUST RUN. Y264_SIMD_FORCE is read only in a
+# dev_knobs build, the checkasm banner prints the CPU's features rather than
+# the build's, and checkasm calls each kernel by name, so neither says the
+# encoder reaches a kernel. A stale -Dsimd=none build, a dispatch guard that
+# drops a tier, or a cap name mapped to the wrong mask each leave every tier
+# running the same code, and every identity leg then passes. So each build
+# directory's options are read back and set right once if they are not, and
+# scripts/dispatch_probe.py watches the kernel calls of a real encode at each
+# depth under each cap: none calls no kernel, and each tier calls a kernel
+# of every family that has one at that tier, and none above it.
+B8="scratch/x86-docker/build8"; B10="scratch/x86-docker/build10"
+opts_of() {   # opts_of <dir>: "dev_knobs simd bit_depth" as the dir records them
     dk X=1 -- "python3 -c 'import json, sys
 o = {x[\"name\"]: x[\"value\"] for x in json.load(sys.stdin)}
-print(\"opts\", str(o.get(\"dev_knobs\")).lower(), o.get(\"simd\"))' < <(meson introspect --buildoptions $b8)
-        printf 'capped '; Y264_SIMD_FORCE=none $b8/tools/checkasm/checkasm --list 2>/dev/null | head -1
-        env -u Y264_SIMD_FORCE $b8/tools/checkasm/checkasm --list 2>/dev/null | sed 1d" 2>&1 | tr -d '\r'
+print(str(o.get(\"dev_knobs\")).lower(), o.get(\"simd\"), o.get(\"bit_depth\"))' < <(meson introspect --buildoptions $1)" \
+        2>/dev/null | tr -d '\r' | tail -1
 }
-read_opts() {    # read_opts <state file>: OPT_KNOBS, OPT_SIMD
-    OPT_KNOBS="$(awk '$1 == "opts" { print $2; exit }' "$1")"
-    OPT_SIMD="$(awk '$1 == "opts" { print $3; exit }' "$1")"
-}
-tier_check() {   # tier_check <state file>: 0 when every tier in TIERS is real; else TC_WHY
-    local t miss=""
-    case "$(awk '$1 == "capped" { sub(/^capped /, ""); print; exit }' "$1")" in
-        "checkasm: cpu scalar, "*) ;;
-        *) TC_WHY="Y264_SIMD_FORCE=none does not take in $b8"; return 1 ;;
-    esac
-    for t in $TIERS; do
-        [ "$t" = none ] && continue
-        awk -v s="_$t" '{ n = length($1) - length(s) }
-            n > 0 && substr($1, n + 1) == s && $NF == "yes" { f = 1 }
-            END { exit !f }' "$1" || miss="$miss $t"
-    done
-    [ -z "$miss" ] && return 0
-    TC_WHY="no runnable checkasm group for:$miss (not compiled in, or the CPU lacks it)"
-    return 1
-}
-# build_and_probe: build8, then its options and its tiers. 1 only when the
-# build itself fails; a failed probe leaves tierok=0 and the tier legs skip
-build_and_probe() {
-    local was
-    tierok=0
+# build_dir <dir> <depth>: configure, build, read the options back and set
+# them right once. 1 when the build or the reconfigure fails
+build_dir() {
+    local d="$1" depth="$2" want="true auto $2" got k s b log="build$2.log"
+    local set_="-Ddev_knobs=true -Dsimd=auto -Dbit_depth=$2"
     if ! dk X=1 -- "set -e
-        [ -f $b8/build.ninja ] || meson setup $b8 -Ddev_knobs=true -Dsimd=auto
-        ninja -C $b8 -j$JOBS" > "$out/$BACKEND-build8.log" 2>&1; then
-        row "$BACKEND" - "build" FAIL "$BACKEND-build8.log"
+        [ -f $d/build.ninja ] || meson setup $d $set_
+        ninja -C $d -j$JOBS" > "$out/$log" 2>&1; then
+        row build "${depth}bit" "build" FAIL "$log"
         return 1
     fi
-    tier_state > "$out/$BACKEND-probe.log"
-    read_opts "$out/$BACKEND-probe.log"
-    row "$BACKEND" - "build -Dsimd=${OPT_SIMD:-?}" PASS "dev_knobs=${OPT_KNOBS:-?}, $BACKEND-build8.log"
-    if [ "$OPT_KNOBS $OPT_SIMD" != "true auto" ]; then
-        was="dev_knobs=${OPT_KNOBS:-?} simd=${OPT_SIMD:-?}"
-        # a dir from another meson version refuses `configure`; setup
-        # --reconfigure is the second try. the log holds the real error
-        if dk X=1 -- "meson configure $b8 -Ddev_knobs=true -Dsimd=auto && ninja -C $b8 -j$JOBS" \
-               > "$out/$BACKEND-devknobs.log" 2>&1 \
-           || dk X=1 -- "meson setup --reconfigure $b8 -Ddev_knobs=true -Dsimd=auto && ninja -C $b8 -j$JOBS" \
-               >> "$out/$BACKEND-devknobs.log" 2>&1; then
-            tier_state > "$out/$BACKEND-probe.log"
-            read_opts "$out/$BACKEND-probe.log"
-            row "$BACKEND" - "reconfigure" NOTE "was $was; now dev_knobs=$OPT_KNOBS simd=$OPT_SIMD"
-        else
-            row "$BACKEND" - "reconfigure" FAIL "was $was; $BACKEND-devknobs.log"
+    got="$(opts_of "$d")"
+    read -r k s b <<< "$got"
+    row build "${depth}bit" "build -Dsimd=${s:-?}" PASS "dev_knobs=${k:-?} bit_depth=${b:-?}, $log"
+    [ "$got" = "$want" ] && return 0
+    # a dir from another meson version refuses `configure`; setup
+    # --reconfigure is the second try. the log holds the real error
+    if dk X=1 -- "meson configure $d $set_ && ninja -C $d -j$JOBS" > "$out/devknobs$2.log" 2>&1 \
+       || dk X=1 -- "meson setup --reconfigure $d $set_ && ninja -C $d -j$JOBS" \
+              >> "$out/devknobs$2.log" 2>&1; then
+        local now; now="$(opts_of "$d")"
+        if [ "$now" = "$want" ]; then
+            row build "${depth}bit" "reconfigure" NOTE "was dev_knobs=$k simd=$s bit_depth=$b; now $set_"
             return 0
         fi
+        row build "${depth}bit" "reconfigure" FAIL "still '$now'; devknobs$2.log"
+        return 1
     fi
-    if tier_check "$out/$BACKEND-probe.log"; then
-        tierok=1
-        row "$BACKEND" - "tier probe" PASS "the cap takes; a runnable group for each of: $TIERS"
-    else
-        row "$BACKEND" - "tier probe" FAIL "$TC_WHY"
+    row build "${depth}bit" "reconfigure" FAIL "was dev_knobs=$k simd=$s bit_depth=$b; devknobs$2.log"
+    return 1
+}
+# dispatch <dir> <label>: the dispatch probe on one build dir under this
+# backend; a row either way, 0 when every depth and cap passes
+probe_clip10="scratch/x86-docker/probe/foreman_cif-p10-f3.y4m"
+dispatch() {
+    local log="$BACKEND-dispatch-$2.log"
+    if dk X=1 -- "set -e
+        mkdir -p scratch/x86-docker/probe
+        if [ ! -s $probe_clip10 ]; then
+            ffmpeg -v error -y -i tests/corpus/foreman_cif.y4m -frames:v 3 -pix_fmt yuv420p10le \
+                -strict -1 -f yuv4mpegpipe $probe_clip10.part
+            mv $probe_clip10.part $probe_clip10
+        fi
+        python3 scripts/dispatch_probe.py --build $1 --tiers '$TIERS' --wrapper \"\$QR\" \
+            --clip8 tests/corpus/foreman_cif.y4m --clip10 $probe_clip10 \
+            --work $1/dispatch-probe-$BACKEND" > "$out/$log" 2>&1; then
+        row "$BACKEND" - "dispatch $2" PASS "every cap runs its tiers at 8 and 10 bits, $log"
+        return 0
     fi
-    return 0
+    row "$BACKEND" - "dispatch $2" FAIL "$(grep -m1 'FAIL\|^dispatch: ' "$out/$log" | cut -c1-160); $log"
+    return 1
 }
 
 echo "x86-docker: image $IMAGE, backends [$BACKENDS], tiers [$TIERS], legs [$LEGS]"
@@ -426,88 +371,67 @@ fi
 img_ready || { echo "x86-docker: $IMAGE really is absent; building it"; build_image; }
 img_ready || { echo "x86-docker: no image $IMAGE and it will not build"; exit 1; }
 
+# -- the builds, once for both backends ------------------------------------
+# The compiler runs in the container the same way on either backend, so the
+# QEMU legs execute the very ELF the Rosetta legs do; what the two backends
+# differ in is executing it.
+b8="$B8"; b10="$B10"
+build8ok=1; build10ok=1
+build_dir "$b8" 8 || build8ok=0
+if has_leg test; then build_dir "$b10" 10 || build10ok=0; fi
+# conformance.sh takes the encoder as a single path, so the QEMU legs give it this
+cat > "$out/qcli" <<QEOF
+#!/bin/sh
+exec $qrun_path /work/$b8/cli/yah264 "\$@"
+QEOF
+chmod +x "$out/qcli"
+
 for BACKEND in $BACKENDS; do
     echo
     echo "=== backend: $BACKEND ============================================"
-    if [ "$BACKEND" = rosetta ] && ! rosetta_enabled; then
-        echo "x86-docker: Rosetta is NOT registered for x86-64 in this Docker VM."
-        echo "            Turn on Docker Desktop > Settings > General >"
-        echo "            'Use Rosetta for x86_64/amd64 emulation on Apple Silicon',"
-        echo "            or run this with --backend qemu. Not flipping it from here."
-        row rosetta - "backend select" FAIL "Rosetta not registered"
+    QRUN=""
+    if [ "$BACKEND" = rosetta ]; then
+        if ! rosetta_enabled; then
+            echo "x86-docker: Rosetta is NOT registered for x86-64 in this Docker VM."
+            echo "            Turn on Docker Desktop > Settings > General >"
+            echo "            'Use Rosetta for x86_64/amd64 emulation on Apple Silicon',"
+            echo "            or run this with --backend qemu. Not changing it from here."
+            row rosetta - "backend select" FAIL "Rosetta not registered"
+            continue
+        fi
+    else
+        QRUN="$qrun_path"
+        if ! dk X=1 -- "test -x /opt/qemu/qemu-x86_64" >/dev/null 2>&1; then
+            row qemu - "qemu in the image" FAIL "no /opt/qemu/qemu-x86_64 in $IMAGE; rerun with --build-image"
+            continue
+        fi
+    fi
+    if [ "$build8ok" = 0 ]; then
+        row "$BACKEND" - "legs" SKIP "build8 failed; see the build rows"
         continue
     fi
 
-    bdir="scratch/x86-docker/$BACKEND"
-    # THE QEMU LEG REUSES THE ROSETTA BUILD, and that is sound rather than a
-    # corner cut: both backends run the same Ubuntu gcc over the same sources
-    # with the same flags, so the ELF is the same ELF, and what the two
-    # emulators differ in is EXECUTING it. Compiling again under TCG would cost
-    # an hour to produce the same object files. X86_QEMU_BUILD=1 forces the
-    # separate build when the compiler itself is the thing in question.
-    if [ "$BACKEND" = qemu ] && [ "${X86_QEMU_BUILD:-0}" != 1 ] \
-       && [ -f "$root/scratch/x86-docker/rosetta/build8/build.ninja" ]; then
-        bdir="scratch/x86-docker/rosetta"
-        row qemu - "build" NOTE "reusing the Rosetta build; same compiler, same ELF"
-    fi
-    b8="$bdir/build8"; b10="$bdir/build10"
-
-    # the Rosetta tree is built, probed and reconfigured under Rosetta even on
-    # the QEMU leg, before the flip: under TCG the same work takes an hour
-    built=0
-    if [ "$BACKEND" = rosetta ] || { [ "$bdir" = scratch/x86-docker/rosetta ] && rosetta_enabled; }; then
-        build_and_probe || continue
-        built=1
-    fi
-
-    if [ "$BACKEND" = qemu ]; then
-        if rosetta_enabled; then
-            echo "x86-docker: Rosetta is the default interpreter for x86-64; disabling it"
-            echo "            for this leg and restoring it on the way out."
-            rosetta_off
-        fi
-        if rosetta_enabled; then
-            row qemu - "backend select" FAIL "could not disable the Rosetta binfmt entry"
-            [ "$ROSETTA_OFF" = 1 ] && rosetta_on
-            continue
-        fi
-        if [ "$built" = 0 ]; then
-            build_and_probe || { [ "$ROSETTA_OFF" = 1 ] && rosetta_on; continue; }
-        elif [ "$tierok" = 1 ]; then
-            # the build is probed already; the tiers must also run on the
-            # CPU QEMU models, which is the one the legs below see
-            tier_state > "$out/$BACKEND-probe.log"
-            if tier_check "$out/$BACKEND-probe.log"; then
-                row "$BACKEND" - "tier probe" PASS "the tiers run on the CPU QEMU models"
-            else
-                tierok=0
-                row "$BACKEND" - "tier probe" FAIL "under QEMU: $TC_WHY"
-            fi
-        fi
-    fi
-
     # -- what does the emulated machine say it is ---------------------------
-    flags="$(dk X=1 -- "grep -o 'sse4_2\|avx2\|avx512[a-z]*\|fma\|bmi2' /proc/cpuinfo | sort -u | tr '\n' ' '" 2>/dev/null)"
     arch="$(dk X=1 -- "uname -m" 2>/dev/null)"
     echo "x86-docker: uname -m = $arch"
     if [ "$BACKEND" = rosetta ]; then
+        flags="$(dk X=1 -- "grep -o 'sse4_2\|avx2\|avx512[a-z]*\|fma\|bmi2' /proc/cpuinfo | sort -u | tr '\n' ' '" 2>/dev/null)"
         echo "x86-docker: /proc/cpuinfo: ${flags:-<none>}"
         case " $flags " in
             *" avx2 "*) : ;;
             *) row rosetta - "cpuinfo avx2" FAIL "no avx2 in /proc/cpuinfo under Rosetta" ;;
         esac
     else
-        # qemu-user passes the HOST's /proc/cpuinfo straight through, so under
-        # QEMU that file describes an Apple core and says nothing about what
-        # the guest can execute. The only honest probe is the binary's own
-        # CPUID, which is what the checkasm banner prints below.
-        echo "x86-docker: /proc/cpuinfo is the host's under qemu-user (QEMU_CPU=$QEMU_CPU);"
+        # the container itself runs under the VM's own interpreter, so its
+        # /proc/cpuinfo says nothing about what QEMU gives the binaries; the
+        # binary's own CPUID, below, is the probe that counts
+        echo "x86-docker: binaries under test run in /opt/qemu/qemu-x86_64 -cpu $QEMU_CPU;"
         echo "            the feature probe that counts is the encoder's own CPUID, below."
     fi
 
     # The binary's own CPUID, printed by checkasm, and the AVX-512 assertion
     # that keeps an emulated pass from ever being read as AVX-512 coverage.
-    cpuline="$(dk X=1 -- "$b8/tools/checkasm/checkasm --list 2>/dev/null | head -1")"
+    cpuline="$(dk X=1 -- "\$QR $b8/tools/checkasm/checkasm --list 2>/dev/null | head -1" | tr -d '\r')"
     echo "x86-docker: $cpuline"
     case "$cpuline" in
         *avx512*) row "$BACKEND" - "avx512 absent" FAIL "the emulator reports AVX-512: $cpuline" ;;
@@ -517,19 +441,32 @@ for BACKEND in $BACKENDS; do
         *avx2*) row "$BACKEND" - "cpuid avx2 + fma3" PASS "${cpuline#checkasm: cpu }" ;;
         *) row "$BACKEND" - "cpuid avx2 + fma3" FAIL "the binary does not see avx2: $cpuline" ;;
     esac
+    # QEMU must be what runs the binaries: a model without AVX2 hides it,
+    # which Rosetta never would
+    if [ "$BACKEND" = qemu ]; then
+        lo="$(dk QEMU_CPU=Nehalem -- "\$QR $b8/tools/checkasm/checkasm --list 2>/dev/null | head -1" | tr -d '\r')"
+        case "$lo" in
+            *avx2*) row qemu - "qemu runs the binaries" FAIL "-cpu Nehalem still shows avx2 ($lo)"; continue ;;
+            "checkasm: cpu "*) row qemu - "qemu runs the binaries" PASS "-cpu Nehalem hides avx2: ${lo#checkasm: cpu }" ;;
+            *) row qemu - "qemu runs the binaries" FAIL "no banner under -cpu Nehalem: $lo"; continue ;;
+        esac
+    fi
 
-    # -- the 10-bit build ---------------------------------------------------
+    # -- the dispatch probe, before any tier leg ---------------------------
+    tierok=0; ok10=0
+    dispatch "$b8" build8 && tierok=1
+    if has_leg test && [ "$build10ok" = 1 ]; then dispatch "$b10" build10 && ok10=1; fi
+
+    # -- the 10-bit unit leg -------------------------------------------------
     # Each depth folds its own tier libraries, so this is where the 10-bit
     # kernels meet checkasm (inside meson test) and where a depth-generic
     # mistake in the build files shows up.
     if has_leg test; then
-        if dk X=1 -- "set -e
-            [ -f $b10/build.ninja ] || meson setup $b10 -Ddev_knobs=true -Dbit_depth=10
-            ninja -C $b10 -j$JOBS
-            meson test -C $b10 --print-errorlogs" > "$out/$BACKEND-build10.log" 2>&1; then
-            row "$BACKEND" 10bit "build + unit" PASS "$BACKEND-build10.log"
+        if [ "$ok10" = 1 ]; then
+            run_case "$BACKEND" 10bit "unit" "$out/$BACKEND-build10.log" X=1 \
+                -- "meson test -C $b10 --print-errorlogs \${QR:+--wrapper \$QR}"
         else
-            row "$BACKEND" 10bit "build + unit" FAIL "$BACKEND-build10.log"
+            row "$BACKEND" 10bit "unit" SKIP "build10 is not proven; see above"
         fi
     fi
 
@@ -544,14 +481,14 @@ for BACKEND in $BACKENDS; do
             # and regress.py defaults to build/cli/yah264, which in here is a
             # macOS build directory or nothing at all.
             run_case "$BACKEND" "$tier" "make test" "$out/$BACKEND-$tier-test.log" \
-                "Y264_SIMD_FORCE=$tier" "YAH264=/work/$b8/cli/yah264" \
-                -- "make test BUILD=$b8"
+                "Y264_SIMD_FORCE=$tier" \
+                -- "make test BUILD=$b8 TEST_WRAP=\"\$QR\""
             # checkasm again, explicitly at this tier's rows. `none` has no
             # tier to name, so it runs the whole table with every kernel row
             # gated off by its own cap -- which is the C-only claim.
             isa_arg="--isa $tier"; [ "$tier" = none ] && isa_arg=""
             run_case "$BACKEND" "$tier" "checkasm $isa_arg" "$out/$BACKEND-$tier-checkasm.log" \
-                "Y264_SIMD_FORCE=$tier" -- "$b8/tools/checkasm/checkasm $isa_arg"
+                "Y264_SIMD_FORCE=$tier" -- "\$QR $b8/tools/checkasm/checkasm $isa_arg"
         fi
         if has_leg conformance; then
             # YAH264_CONF_JOBS is pinned to the container's CPU allowance,
@@ -563,7 +500,8 @@ for BACKEND in $BACKENDS; do
             # cores the run was allowed.
             run_case "$BACKEND" "$tier" "conformance --fast" "$out/$BACKEND-$tier-conf.log" \
                 "Y264_SIMD_FORCE=$tier" "YAH264_CONF_FAST=1" "YAH264_CONF_JOBS=$CPUS" \
-                -- "scripts/conformance.sh --fast $b8/cli/yah264"
+                -- "enc=$b8/cli/yah264; [ -n \"\$QR\" ] && enc=scratch/x86-docker/qcli
+                    scripts/conformance.sh --fast \$enc"
         fi
     done
 
@@ -589,7 +527,7 @@ for spec in $CLIPS; do
         for mode in '--crf 23' '--qp 26' \"--bitrate \$rate\"; do
             o=$idir/x.264
             rm -f \"\$o\"
-            $b8/cli/yah264 --input-y4m \"\$src\" --frames $FRAMES \$mode \\
+            \$QR $b8/cli/yah264 --input-y4m \"\$src\" --frames $FRAMES \$mode \\
                 --threads \$t -o \"\$o\" > /dev/null 2> $idir/err \\
                 || { echo \"ENCODE FAILED \$clip t\$t \$mode: \$(head -1 $idir/err)\"; exit 1; }
             [ -s \"\$o\" ] || { echo \"EMPTY OUTPUT \$clip t\$t \$mode\"; exit 1; }
@@ -644,7 +582,7 @@ for spec in foreman_cif:yuv420p10le bus_cif:yuv422p10le mobile_cif:yuv444p10le; 
     for mode in '--crf 23' '--qp 26' '--preset slow --crf 30'; do
         o=$idir/x.264
         rm -f \"\$o\"
-        $b8/cli/yah264 --input-y4m \"\$dst\" --frames $FRAMES \$mode --threads 1 \\
+        \$QR $b8/cli/yah264 --input-y4m \"\$dst\" --frames $FRAMES \$mode --threads 1 \\
             -o \"\$o\" > /dev/null 2> $idir/err \\
             || { echo \"ENCODE FAILED \$clip \$fmt \$mode: \$(head -1 $idir/err)\"; exit 1; }
         [ -s \"\$o\" ] || { echo \"EMPTY OUTPUT \$clip \$fmt \$mode\"; exit 1; }
@@ -671,7 +609,6 @@ done"
         done
     fi
 
-    if [ "$BACKEND" = qemu ] && [ "$ROSETTA_OFF" = 1 ]; then rosetta_on; fi
 done
 
 # ---------------------------------------------------------------------------
