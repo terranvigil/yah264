@@ -11962,6 +11962,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
             if (sz) { rbsp_size = sz; sm = sm2; }
         }
+        last_over = over;               /* the floor below reads the frame kept */
     }
     e->hrd_flat = 0;
     if (floored) {
