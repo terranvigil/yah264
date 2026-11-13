@@ -199,9 +199,12 @@ static int db_qi(int t)
 
 /* THE GATES AT THEIR THRESHOLDS. Each line of a directed plane sits one side
  * of one gate and level with the others: |p0 - q0| at alpha - 1 or alpha,
- * |p1 - p0| at beta - 1 or beta, |q1 - q0| at beta - 1 or beta, and the
- * strong-filter gate |p0 - q0| at (alpha >> 2) + 1 or (alpha >> 2) + 2: eight
- * cases, line l taking case (l + d) % 8. Run at qi 36, 49, 50 and 51 (49 has
+ * |p1 - p0| at beta - 1 or beta, |q1 - q0| at beta - 1 or beta, the
+ * strong-filter gate |p0 - q0| at (alpha >> 2) + 1 or (alpha >> 2) + 2, and
+ * |p2 - p0| or |q2 - q0| at beta, once with a step big enough that the tc
+ * clip binds, so the side gate's +1 to tc shows, and once inside the strong
+ * gate, where the side gate picks the strong filter: twelve cases, line l
+ * taking case (l + d) % 12. Run at qi 36, 49, 50 and 51 (49 has
  * the last distinct alpha and beta; 50 and 51 share alpha 255 and beta 18),
  * at the bottom of the range and mirrored to the top. d is the trial's index
  * among the directed ones: bits 0-1 pick bS, bit 2 a per-group axis (the edge
@@ -218,7 +221,11 @@ static int db_thr(int c, int side, int i, int a, int b)
     case 4: return side ? (i ? b - 1 : 0) : 1;           /* q beta, inside */
     case 5: return side ? (i ? b : 0) : 1;               /* q beta, on it */
     case 6: return side ? (a >> 2) + 1 : 0;              /* strong, inside */
-    default: return side ? (a >> 2) + 2 : 0;             /* strong, on it */
+    case 7: return side ? (a >> 2) + 2 : 0;              /* strong, on it */
+    case 8: return side ? a - 1 : (i == 2 ? b : 0);      /* p2 at beta, clipped */
+    case 9: return side ? (i == 2 ? b : 0) : a - 1;      /* q2 at beta, clipped */
+    case 10: return side ? (a >> 2) + 1 : (i == 2 ? b : 0);     /* p2 at beta, strong */
+    default: return side ? (a >> 2) + 1 + (i == 2 ? b : 0) : 0; /* q2 at beta, strong */
     }
 }
 /* a w x h buffer with its vertical edge before column ex or its horizontal
@@ -231,7 +238,7 @@ static void db_thr_fill(pixel *a, int stride, int w, int h, int ex, int ey, int 
         for (int x = 0; x < w; x++) {
             int side = vert ? x >= ex : y >= ey;
             int i = vert ? (side ? x - ex : ex - 1 - x) : (side ? y - ey : ey - 1 - y);
-            int c = ((vert ? y : x) + d) % 8;
+            int c = ((vert ? y : x) + d) % 12;
             int v = db_thr(c, side, i < 3 ? i : 3, al, be);
             a[y * stride + x] = (pixel)(hi ? PIXEL_MAX - v : v);
         }
