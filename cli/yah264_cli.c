@@ -2248,7 +2248,7 @@ static void tp_split_cap(const yah264_param_t *param, double *target, const doub
 /* the levels a VBV pass 2's GOPs join at, written into the sections with the
  * record that opens the next GOP: the buffer walked over the GOP budgets at
  * the cap's refill, and no less than the next key at the qscale its GOP's
- * budget averages (less the --ipratio default). a GOP after the first starts
+ * budget averages, over --ipratio. a GOP after the first starts
  * there and the one before is held to leave that much. half the buffer left
  * a CBR buffer's top unspent and held every later key of akiyo CIF at
  * 100/150/30 to QP 45. static in the split, so it doesn't move with the
@@ -2259,6 +2259,10 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
 {
     double size = param->rc.vbv_bufsize * 1000.0;
     double rate = param->rc.vbv_maxrate * 1000.0 / rps;
+    /* the encoder's I/P ratio, which --ipratio sets through this variable */
+    const char *ev = getenv("Y264_TP_IPF");
+    double ipf = ev ? atof(ev) / 100.0 : 1.4;
+    if (ipf < 1.0) ipf = 1.4;
     double f = size;
     if (param->rc.vbv_init > 0)
         f = param->rc.vbv_init <= 1.0 ? param->rc.vbv_init * size : param->rc.vbv_init * 1000.0;
@@ -2279,7 +2283,7 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
             fprintf(out[g], "#next %s", first[g + 1][k]);
             double qavg = target[g + 1] > 0.0 ? cw[g + 1] / target[g + 1] : 0.0;
             if (qavg > 0.0)
-                key += (bits + 1.0) * pow(2.0, (qp - 12) / 6.0) / (qavg / 1.4);
+                key += (bits + 1.0) * pow(2.0, (qp - 12) / 6.0) / (qavg / ipf);
         }
         double j = f > key / 0.9 ? f : key / 0.9;
         if (j > 0.97 * size) j = 0.97 * size;
@@ -2311,6 +2315,12 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
     long *rec = calloc((size_t)n_gops, sizeof(long));
     FILE **out = calloc((size_t)n_gops, sizeof(FILE *));
     char (*first)[2][256] = calloc((size_t)n_gops, sizeof *first);
+    if (!w || !cw || !rec || !out || !first) {
+        free(w); free(cw); free(rec); free(out); free(first);
+        fclose(in);
+        fprintf(stderr, "yah264: out of memory splitting '%s'\n", in_path);
+        return -1;
+    }
     long total_rec = 0;
     double total_w = 0.0;
     int cur = -1, bad = 0;
