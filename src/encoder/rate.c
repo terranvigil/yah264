@@ -3005,7 +3005,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         vbv_import_fill(e, c, csz, frames_ahead);
         return 0;
     }
-    if (!e->abr_on) return -1;
+    if (!e->abr_on || c->target_bpf <= 0.0) return -1;   /* not a pass-2 buffer-only export */
     if (e->abr_cum_actual > 0 || e->rcp_n > 0 || e->frame_count > 0) return -1;   /* only before the first frame */
     /* Continue a previous instance's controller instead of the seeds (see
  * yah264.h). Frames of instances in flight between the export and this
