@@ -3656,6 +3656,10 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
     if (type != 12)
         e->nal_framing += (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
                         ? (double)Y264_NAL_START_BYTES : (double)n;
+    /* ...but the underflow count reads the wire, so it gets them apart */
+    if ((type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
+        && n > Y264_NAL_START_BYTES + rbsp_size)
+        e->nal_emu += (double)(n - Y264_NAL_START_BYTES - rbsp_size);
     /* Every byte that crosses the wire, start code included, because that is
  * what a receiver's buffer holds. The count runs across encode calls, so it
  * cannot be read off `off`, which restarts at every one of them. */

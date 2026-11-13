@@ -1056,6 +1056,7 @@ struct yah264_encoder {
     double   tp_framing;        /* pass 2: framing bits of the frames accounted */
     double   nal_framing;       /* bytes written that are not slice payload */
     double   nal_framing_seen;  /* nal_framing at the last rcp_fill */
+    double   nal_emu, nal_emu_seen; /* slice emulation-prevention bytes, the same way */
     double   tp_ebsum;          /* modelled bits of those frames at their coded QP */
     double   tp_kact, tp_kmod;  /* actual / modelled bits of the frames the bias is read on */
 
@@ -1092,6 +1093,7 @@ struct yah264_encoder {
  * and NAL headers, and the parameter-set / SEI /
  * delimiter / filler NALs written since the
  * previous fill */
+        double  emu;            /* the slices' emulation-prevention bits */
         unsigned seq;           /* decide sequence number */
         /* Capacity: one entry per frame decided and not yet accounted. At the
  * zero-lag schedule that is one burst (<= 8) plus the next anchor plus

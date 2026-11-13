@@ -210,8 +210,8 @@ GOP budgets, and no less than the next key's cost. A GOP coded right after
 its predecessor continues its buffer at the exact occupancy; any other starts
 at the planned level, and the one before it leaves at least that much, held
 to it only where what its remaining frames give back at QP 51 couldn't make
-it up. Every GOP takes over its predecessor's spend against its budget,
-whichever worker coded it. When the cap is at or under the target, pass 2
+it up. Every GOP takes over the spend against its budget of the GOP it
+continues from, whichever worker coded it. When the cap is at or under the target, pass 2
 steers to half the next key's planned size, or half the buffer where that
 is less, and a frame the buffer has room for spends it, up to what its
 budget allows. `--nal-hrd` always runs one encoder, and

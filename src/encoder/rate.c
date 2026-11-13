@@ -1050,7 +1050,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
                 }
                 double f = e->tp_shadow + e->vbv.rate;
                 if (f > e->vbv.size) f = e->vbv.size;
-                f -= p->bits + p->framing;
+                f -= p->bits + p->framing + p->emu;
                 if (f < 0.0) { e->tp_unfit++; f = 0.0; }
                 e->tp_shadow = f;
             }
@@ -1225,6 +1225,8 @@ void rcp_fill(yah264_encoder_t *e, double bits)
             p->filled = 1; p->bits = bits;
             p->framing = 8.0 * (e->nal_framing - e->nal_framing_seen);
             e->nal_framing_seen = e->nal_framing;
+            p->emu = 8.0 * (e->nal_emu - e->nal_emu_seen);
+            e->nal_emu_seen = e->nal_emu;
             break;
         }
     }
