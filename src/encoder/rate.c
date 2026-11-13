@@ -1390,8 +1390,8 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
     return 51.0;
 }
 
-/* a pass 2 whose cap is its target: what arrives past a full buffer is
- * never delivered, so a frame with room spends it */
+/* a pass 2 whose cap is at or under its target: what arrives past a full
+ * buffer is never delivered, so a frame with room spends it */
 static int tp_cbr(const yah264_encoder_t *e)
 {
     return e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate;
@@ -1450,7 +1450,8 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         if (tp_cbr(e) && e->tp_spare >= 0.0 && room > e->tp_spare)
             room = e->tp_spare;
         /* a pass-2 GOP spends down to the level the next one joins at by its
-         * last frame: what is left above it overflows */
+         * last frame: the next GOP assumes only that level, so what is left
+         * above it is never spent */
         if (tp_cbr(e) && e->vbv_exit_n > 0) {
             int rem = e->vbv_exit_n - e->vbv_ndec;
             if (rem < 0) rem = 0;
@@ -2098,7 +2099,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * every thread count because pend_pred is a decide-order fact. */
                 qp = tp_qscale2qp(tp_plan_qscale(e, idx, e->tp_actual, pend_pred, pend_lo));
                 en.tp_rec = idx;
-                /* what this frame may spend past its plan and leave the
+                /* what this frame may spend, its plan included, and leave the
                  * frames after it theirs */
                 e->tp_spare = e->tp_target - e->tp_actual - pend_pred - e->tp_framing
                             - (e->tp_ebits[e->tp_n] - e->tp_ebits[idx + 1]);

@@ -192,21 +192,27 @@ count says otherwise. A missing stats file isn't an error: pass 2 then codes
 every frame at the base QP.
 
 **With a VBV**, pass 1 codes as capped ABR at the target, its base QP never
-under 26, so frames are recorded at QPs that say what a finer QP costs.
+under 26, so frames are recorded at QPs that say what a finer QP costs. Each
+of its GOPs starts its rate control afresh, so like GOPs record at like QPs.
 Pass 2 codes one frame at a time, its frame threads on the row wavefront, and
 holds every frame to the buffer by its measured size, as the single-pass
 modes do: a frame that comes out over the fit test, the GOP's exit corridor
 or the whole buffer is re-coded at the QP the overshoot asks for, and at QP 51
-once more without its per-macroblock offsets. Each frame also leaves the
-next frames what they cost at QP 51, priced from their pass-1 records and
-walked back from the next GOP's key. The splitter caps each GOP's budget at
+once more without its per-macroblock offsets, and a picture that still
+doesn't fit is counted and named in a warning at the end. Each frame also
+leaves the next frames what they cost at QP 51, priced from their pass-1
+records, and the next GOP's key what it costs at its planned QP. The
+splitter caps each GOP's budget at
 what the cap delivers over it plus half the buffer, hands the rest to the
 other GOPs, and plans the level each GOP joins at: the buffer walked over the
 GOP budgets, and no less than the next key's cost. A GOP coded right after
-its predecessor continues its buffer at the exact occupancy; any other starts
-at the planned level, and the one before it is held to leave that much. When
-the cap equals the target, a frame the buffer has room for spends it, up to
-what its budget allows.
+its predecessor continues its buffer at the exact occupancy and its spend
+against its budget; any other starts at the planned level, and the one before
+it leaves at least that much, held to it only where what its remaining
+frames give back at QP 51 couldn't make it up. When the cap is at or under
+the target, a frame the buffer has room for spends it, up to what its budget
+allows; under `--nal-hrd cbr` filler counts as spent, and the stream ends
+with the buffer where it began.
 
 ### Frame-level AQ strength by mode
 
@@ -261,7 +267,9 @@ keeps one rate problem:
 
 **Per segment, from the assumed occupancy, the guarantee is strict.** The first
 GOP starts full (or at `--vbv-init`). Every later GOP assumes only the handoff
-level, half the buffer, which is the CRF fill goal's fixed point. That's what
+level, half the buffer, which is the CRF fill goal's fixed point; a two-pass
+pass 2 assumes the level its GOP split planned instead (see
+[Two-pass](#two-pass)). That's what
 chunked delivery needs: each segment decodes legally on its own.
 
 **Capped ABR joins segments explicitly.** A GOP coded right after its
@@ -334,6 +342,7 @@ also go serial:
   (`Y264_VBV_LOW`).
 - Under CBR and under `--nal-hrd` (pass 1 of a two-pass aside), every burst
   coded on a frame pool.
+- Every frame of a two-pass pass 2, which still decides as one thread does.
 
 Within a pipelined burst, a B may not decide more than 6 QP below
 the QP regime its model was calibrated at. The VBV model runs on

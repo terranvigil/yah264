@@ -5461,7 +5461,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         /* pass 3 is pass 2's read plus pass 1's write: the plan is solved from
  * the records that are there, and the coded result is written back over
  * them, so a further pass refines against a real encode instead of the
- * fixed-QP pass 1. Same path, REWRITTEN -- every record is read at open,
+ * pass 1. Same path, REWRITTEN -- every record is read at open,
  * before the file is truncated. */
         e->tp_pass = param->rc.pass == 2 ? 2 : param->rc.pass == 3 ? 3 : 1;
         if (e->tp_pass == 1) {

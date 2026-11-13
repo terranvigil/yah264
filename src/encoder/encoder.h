@@ -1040,7 +1040,7 @@ struct yah264_encoder {
     int      tp_n_next;
     double   tp_join, tp_exit;  /* pass 2: the splitter's join levels, bits; 0 = none */
     double   tp_key;            /* pass 2: the next GOP's key at its planned size, bits */
-    double   tp_spare;          /* pass 2: budget past the plan for this frame, -1 = no cap */
+    double   tp_spare;          /* pass 2: what this frame may spend, its plan included; -1 = no cap */
     double  *tp_resv;           /* [n+1] under a VBV: occupancy record i needs at QP 51 */
     double   tp_resv_cur;       /* the reserve the frame being coded leaves */
     double  *tp_slack;          /* [n+1] what records i.. give the buffer back at QP 51 */

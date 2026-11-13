@@ -1336,7 +1336,8 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_r
 
 /* --- VBV handoff at the END of a segment ------------------------------------
  * rc.vbv_seg_join lets a segment assume it starts at the handoff occupancy
- * (half the buffer) rather than full. That assumption is only sound if the
+ * rather than full: half the buffer, or for a two-pass pass 2 the level its
+ * GOP split planned. That assumption is only sound if the
  * segment before it really did exit at or above that level, which is what this
  * asks of an instance: it will code `nframes` frames and the segment after it
  * starts from the handoff assumption, so steer the buffer to end at or above
