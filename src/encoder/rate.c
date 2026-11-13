@@ -1371,6 +1371,14 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
     return 51.0;
 }
 
+/* A two-pass pass 2 whose cap is its target: what the buffer cannot hold
+ * past full is never delivered, so a frame left room spends it. Without it
+ * bbb 720p at 1200/1200/1200 came out 23% under. */
+static int tp_cbr(const yah264_encoder_t *e)
+{
+    return e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate;
+}
+
 /* VBV clip against the virtual buffer. At an
  * anchor decide the pending set is empty (zero-lag) and this IS the serial
  * computation; only in-burst B decides see the conservative bound, and only in
@@ -1411,7 +1419,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     double newqp = e->qp;
     if (limit > 0.0 && pred > limit) {      /* over budget: shrink the frame */
         newqp = e->qp + 6.0 * log2(pred / limit);
-    } else if (e->vbv_cbr) {
+    } else if (e->vbv_cbr || tp_cbr(e)) {
         /* Spend spare buffer only at CBR (serial rule -- see vbv_cbr's init:
  * capped VBR fills at maxrate and this branch would chase it). */
         double room = rcbuf_overflow(&e->vbv, fill);
