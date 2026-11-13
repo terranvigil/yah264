@@ -525,11 +525,17 @@ st_identity10() {
         for clip in $(clips10); do
             for t in 1 "$TN"; do
                 for mode in "--crf 23" "--preset slow --crf 30"; do
+                    # a stale or empty output would hash the same on every tier
+                    rm -f "$RES/.x.264"
                     # shellcheck disable=SC2086
                     if ! Y264_SIMD_FORCE="$tier" "$Y264_10" --input-y4m "$clip" \
                         --frames "$FRAMES10" $mode --threads "$t" -o "$RES/.x.264" \
                         >/dev/null 2>"$RES/.x.err"; then
                         echo "$tier $(basename "$clip") t$t $mode: ENCODE FAILED" >> "$out"
+                        rc=1; continue
+                    fi
+                    if [ ! -s "$RES/.x.264" ]; then
+                        echo "$tier $(basename "$clip") t$t $mode: EMPTY OUTPUT" >> "$out"
                         rc=1; continue
                     fi
                     printf '%s  %s t%s %s\n' "$(c_sha256 "$RES/.x.264" | cut -c1-32)" \

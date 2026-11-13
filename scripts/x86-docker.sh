@@ -441,8 +441,14 @@ done
     # 4:4:4, so every chroma path's kernels run), encoded at threads 1 at
     # CRF and CQP, md5 against the `none` tier. The CLI links both libraries
     # and picks the 10-bit one from the input.
-    if has_leg identity; then
+    # The none tier is the reference every other tier is compared with, so the
+    # leg refuses to run without it. FRAMES 0 means the whole clip: ffmpeg is
+    # then given no frame limit, and each cached clip is keyed by the count.
+    if has_leg identity && ! printf ' %s ' "$TIERS" | grep -q ' none '; then
+        row "$BACKEND" - "10-bit identity" FAIL "TIERS has no none tier to compare against"
+    elif has_leg identity; then
         idir="scratch/x86-docker/ident10-$BACKEND"
+        fflim=""; [ "$FRAMES" -gt 0 ] && fflim="-frames:v $FRAMES"
         script="set -e
 mkdir -p $idir
 : > $idir/md5.\$Y264_SIMD_FORCE
@@ -450,19 +456,30 @@ for spec in foreman_cif:yuv420p10le bus_cif:yuv422p10le mobile_cif:yuv444p10le; 
     clip=\${spec%%:*}; fmt=\${spec##*:}
     src=tests/corpus/\$clip.y4m
     [ -f \"\$src\" ] || { echo \"MISSING \$src\"; exit 1; }
-    dst=$idir/\$clip-\$fmt.y4m
-    [ -s \"\$dst\" ] || ffmpeg -v error -y -i \"\$src\" -frames:v $FRAMES -pix_fmt \$fmt \\
-        -strict -1 \"\$dst\"
+    dst=$idir/\$clip-\$fmt-f$FRAMES.y4m
+    # a cached clip with no frame in it is a failed earlier run, not a clip
+    head -c 4096 \"\$dst\" 2>/dev/null | grep -q FRAME || rm -f \"\$dst\"
+    if [ ! -s \"\$dst\" ]; then
+        ffmpeg -v error -y -i \"\$src\" $fflim -pix_fmt \$fmt -strict -1 -f yuv4mpegpipe \"\$dst.part\"
+        mv \"\$dst.part\" \"\$dst\"
+    fi
+    head -c 4096 \"\$dst\" | grep -q FRAME || { echo \"NO FRAMES in \$dst\"; exit 1; }
     for mode in '--crf 23' '--qp 26' '--preset slow --crf 30'; do
         o=$idir/x.264
+        rm -f \"\$o\"
         $b8/cli/yah264 --input-y4m \"\$dst\" --frames $FRAMES \$mode --threads 1 \\
             -o \"\$o\" > /dev/null 2> $idir/err \\
             || { echo \"ENCODE FAILED \$clip \$fmt \$mode: \$(head -1 $idir/err)\"; exit 1; }
+        [ -s \"\$o\" ] || { echo \"EMPTY OUTPUT \$clip \$fmt \$mode\"; exit 1; }
         echo \"\$(md5sum < \"\$o\" | cut -d' ' -f1)  \$clip \$fmt \$mode\" \\
             >> $idir/md5.\$Y264_SIMD_FORCE
     done
 done"
         mkdir -p "$root/$idir"
+        # last run's lists must not stand in for a tier that fails to write;
+        # emptied rather than deleted, since a file deleted on the host can
+        # stay unwritable through the container's mount for a while
+        for tier in $TIERS; do : > "$root/$idir/md5.$tier"; done
         for tier in $TIERS; do
             if dk "Y264_SIMD_FORCE=$tier" -- "$script" > "$out/$BACKEND-$tier-ident10.log" 2>&1; then
                 row "$BACKEND" "$tier" "10-bit identity encodes" PASS "$BACKEND-$tier-ident10.log"
