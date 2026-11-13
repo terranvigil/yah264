@@ -903,7 +903,10 @@ struct yah264_encoder {
     unsigned hrd_bp_init, hrd_bp_off;   /* the delay and offset in force */
     double   hrd_tr_cur;                /* removal time of the access unit just opened */
     long     hrd_late;                  /* pictures whose last bit arrived after their removal */
-    long     tp_unfit;                  /* pass-2 pictures over the buffer at the QP ceiling */
+    long     tp_unfit;                  /* pass-2 pictures that underflowed the shadow buffer */
+    double   tp_shadow;                 /* a decoder's buffer, emptied after an underflow */
+    int      tp_shadow_on;
+    int      tp_split;                  /* the stats are a section the GOP splitter wrote */
     long     hrd_last_idr;              /* display index of the last key (IDR or open key), -1 none */
     double   hrd_c51[4];                /* last slice bits at QP 51 per type: I, P, B, an intra frame's second field */
     int      hrd_qfloor[3];             /* per type, the base QP the next frame starts from, -1 none */

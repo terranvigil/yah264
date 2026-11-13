@@ -1032,6 +1032,20 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * only resets when the buffer runs full: after a few hundred pictures of
  * drain the model read 30 kbit of occupancy the stream did not have
  * (sintel, CBR). */
+            /* a pass 2 also walks a decoder's buffer as vbv_check does, which
+             * starts over from empty after an underflow where the model
+             * carries the deficit, to count the pictures that underflowed */
+            if (e->tp_pass >= 2) {
+                if (!e->tp_shadow_on) {
+                    e->tp_shadow = e->vbv.fill;
+                    e->tp_shadow_on = 1;
+                }
+                double f = e->tp_shadow + e->vbv.rate;
+                if (f > e->vbv.size) f = e->vbv.size;
+                f -= p->bits + p->framing;
+                if (f < 0.0) { e->tp_unfit++; f = 0.0; }
+                e->tp_shadow = f;
+            }
             e->vbv.fill = rcbuf_step(&e->vbv, e->vbv.fill, p->bits + p->framing, &empty);
             if (e->vbv_joined && e->vbv.fill > e->vbv_jpk) e->vbv_jpk = e->vbv.fill;
         }

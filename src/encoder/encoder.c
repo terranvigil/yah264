@@ -5531,6 +5531,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 /* the splitter's join levels: start at the first unless the
                  * GOP before hands over its exact occupancy, leave at least
                  * the second */
+                e->tp_split = split;
                 if (e->vbv_on) {
                     if (e->vbv_joined && e->tp_join > 0.0)
                         e->vbv.fill = e->tp_join < e->vbv.size ? e->tp_join : e->vbv.size;
@@ -11879,9 +11880,6 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             rbsp_size = sz;
             sm = sm2;
         }
-        if (e->tp_pass >= 2 && !e->hrd_on
-            && sm_wire_bits(&sm) + 8.0 * (e->nal_framing - e->nal_framing_seen) > fill)
-            e->tp_unfit++;
     }
     e->hrd_flat = 0;
     if (floored) {
@@ -16600,9 +16598,11 @@ void yah264_encoder_close(yah264_encoder_t *e)
             fprintf(stderr, "yah264: warning: %ld access unit(s) arrive after their removal "
                     "time on the declared HRD schedule\n", e->hrd_late);
     }
-    if (e->tp_unfit)
-        fprintf(stderr, "yah264: warning: %ld picture(s) did not fit the VBV buffer at the QP "
-                "ceiling, so the stream underflows there\n", e->tp_unfit);
+    /* a GOP the splitter cut leaves the count to the CLI, which walks the
+     * stream the GOPs make together */
+    if (e->tp_unfit && !e->hrd_on && !e->tp_split)
+        fprintf(stderr, "yah264: warning: %ld picture(s) underflowed the VBV buffer\n",
+                e->tp_unfit);
     if (e->rc_shared) {
         pthread_mutex_lock(&e->rc_shared->mx);
         e->rc_shared->nlive--;

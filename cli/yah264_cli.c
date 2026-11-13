@@ -1324,6 +1324,10 @@ typedef struct {
     pthread_cond_t cv_space;        /* reader waits: a GOP retired */
     pthread_cond_t cv_ready;        /* workers wait: frames or GOPs arrived */
     pthread_cond_t cv_emit;         /* writer waits: the next GOP published */
+    /* a VBV pass 2's buffer, walked over the stream as written */
+    int vw_on;
+    double vw_size, vw_rate, vw_fill, vw_au;
+    long vw_under;
 } gop_job_t;
 
 typedef struct { gop_job_t *j; int wid; } gop_arg_t;
@@ -3065,10 +3069,50 @@ static void gop_order_horizon(int *order, const int *gstart, int n_gops, long ho
  * value outside both is free; -2 keeps -1 meaning failure. */
 #define Y264_GO_SERIAL (-2)
 
+/* the buffer a decoder holds over one GOP's bytes, as vbv_check walks it:
+ * every NAL before a slice belongs to that slice's access unit, and the
+ * buffer starts over from empty after an underflow. a VBV pass 2's GOPs each
+ * count against their own model, which a GOP joining at its planned level
+ * over-reads when the one before fell short of it */
+static void vbv_walk(gop_job_t *job, const uint8_t *buf, size_t sz)
+{
+    size_t i = 0, last = 0;
+    int type = -1;
+    for (;;) {
+        size_t at = sz;
+        int nt = -1;
+        for (; i + 3 < sz; i++)
+            if (buf[i] == 0 && buf[i + 1] == 0 && (buf[i + 2] == 1
+                || (i + 4 < sz && buf[i + 2] == 0 && buf[i + 3] == 1))) {
+                at = i;
+                nt = buf[i + (buf[i + 2] == 1 ? 3 : 4)] & 0x1f;
+                i += buf[i + 2] == 1 ? 3 : 4;
+                break;
+            }
+        if (type >= 0) {
+            job->vw_au += 8.0 * (double)(at - last);
+            if (type == 1 || type == 5) {
+                double f = job->vw_fill + job->vw_rate;
+                if (f > job->vw_size) f = job->vw_size;
+                f -= job->vw_au;
+                if (f < 0.0) { job->vw_under++; f = 0.0; }
+                job->vw_fill = f;
+                job->vw_au = 0.0;
+            }
+        }
+        if (nt < 0)
+            break;
+        last = at;
+        type = nt;
+    }
+}
+
 /* one finished GOP to the output, its --segment-out file and its
  * --frame-stats lines; frees buf */
 static void gop_emit(gop_job_t *job, FILE *out, int idx, uint8_t *buf, size_t sz, int *wr_err)
 {
+    if (job->vw_on && buf && sz)
+        vbv_walk(job, buf, sz);
     if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
         fprintf(stderr, "yah264: error writing the output stream\n");
         *wr_err = 1;
@@ -3840,6 +3884,18 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * under two-pass, whose budget is already per GOP. */
     if (g > 1 && param->rc.bitrate > 0 && param->rc.method != YAH264_RC_2PASS && !g_gop_threads)
         job.rc_shared = g_api->rc_shared_new();
+    if (param->rc.method == YAH264_RC_2PASS && param->rc.pass >= 2
+        && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0) {
+        double fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
+        double fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
+        job.vw_on = 1;
+        job.vw_size = param->rc.vbv_bufsize * 1000.0;
+        job.vw_rate = param->rc.vbv_maxrate * 1000.0 / (fn / fd * (param->interlaced ? 2 : 1));
+        job.vw_fill = param->rc.vbv_init <= 0 ? job.vw_size
+                    : param->rc.vbv_init <= 1.0 ? param->rc.vbv_init * job.vw_size
+                    : param->rc.vbv_init * 1000.0;
+        if (job.vw_fill > job.vw_size) job.vw_fill = job.vw_size;
+    }
     if (early) {
         job.early_t = nthreads;
         job.early_kmin = EARLY_KMIN;
@@ -3919,6 +3975,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         pthread_join(tid[t], NULL);
     if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
     if (job.rc_shared) { g_api->rc_shared_free(job.rc_shared); job.rc_shared = NULL; }
+    if (job.vw_under)
+        fprintf(stderr, "yah264: warning: %ld picture(s) underflowed the VBV buffer\n",
+                job.vw_under);
     if (g_gop_trace) {
         double pc, pi;
         gop_trace_proc(&pc, &pi);
