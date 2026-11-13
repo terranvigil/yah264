@@ -3656,6 +3656,11 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
     if (type != 12)
         e->nal_framing += (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
                         ? (double)Y264_NAL_START_BYTES : (double)n;
+    /* ...but a pass 2 spends to a budget, and filler is part of what it
+     * delivers: left out, the plan read the padded frames as saved bits and
+     * spent them twice (a still image under --nal-hrd cbr, +9.7%) */
+    else if (e->tp_pass >= 2)
+        e->nal_framing += (double)n;
     /* Every byte that crosses the wire, start code included, because that is
  * what a receiver's buffer holds. The count runs across encode calls, so it
  * cannot be read off `off`, which restarts at every one of them. */
@@ -5524,6 +5529,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         e->vbv.fill = e->tp_join < e->vbv.size ? e->tp_join : e->vbv.size;
                     if (e->tp_exit > 0.0)
                         e->vbv_seg_h = e->tp_exit < e->vbv.size ? e->tp_exit : e->vbv.size;
+                    else if (param->nal_hrd == YAH264_NAL_HRD_CBR) {
+                        /* a declared CBR stream delivers its rate: one that
+                         * ends with less in the buffer than it began spent
+                         * the opening buffer on top (grain 150 frames at
+                         * 1500/1500/1500, +8.4%), so it leaves at its start */
+                        e->vbv_seg_h = e->vbv.fill;
+                        e->vbv_exit_n = e->tp_n;
+                        e->vbv_exit_k = 1.0;
+                    }
                 }
                 /* the markers count frames; a pass 1 coded with another
                  * field mode wrote half or twice the records */
