@@ -5,7 +5,8 @@
 
 Parses an Annex-B H.264 elementary stream into access units (7.4.1.2.3: the
 slices of one picture together, leading SPS/PPS/SEI bytes with the following
-AU, filler with the one before), then simulates the decoder buffer with the encoder's own
+AU, filler with the one before; a field is its own AU and brings half a
+frame's refill), then simulates the decoder buffer with the encoder's own
 leaky-bucket law:
 
     fill = init                           # --init, default bufsize (full)
@@ -71,7 +72,7 @@ def parse_aus(data):
     buffer receives before it is removed, and the slices of one picture are
     one AU. Filler and end-of-sequence/stream NALs stay with the picture they
     follow, as hrd_check.py counts them, since CBR pads a picture with filler
-    only where the buffer would otherwise run over."""
+    only where the buffer would otherwise run over. A field is its own AU."""
     n = len(data)
     i = 0
     starts = []  # (offset_of_startcode, offset_of_header)
@@ -193,6 +194,8 @@ def main():
         return 2
 
     size = args.bufsize * 1000.0
+    # a field is removed half a frame period after the one before it, so it
+    # brings half a frame's refill
     rate = args.maxrate * 1000.0 / fps
     fill = min(size * args.init if args.init <= 1 else args.init * 1000.0, size)
     min_fill = fill
@@ -203,8 +206,8 @@ def main():
     for idx, (au_bytes, typ, is_field) in enumerate(aus):
         bits = au_bytes * 8
         total_bits += bits
-        frames += 1.0
-        fill += rate
+        frames += 0.5 if is_field else 1.0
+        fill += 0.5 * rate if is_field else rate
         if fill > size:
             fill = size
             clamps += 1
