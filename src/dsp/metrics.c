@@ -663,7 +663,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
     }
 #endif
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if ((cpu & Y264_CPU_SSE4_ALL) == Y264_CPU_SSE4_ALL) {
         pf->sad[Y264_PU_16x16] = y264_sad_16x16_sse4;
         pf->sad[Y264_PU_16x8]  = y264_sad_16x8_sse4;
@@ -704,7 +704,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->intra16_satd_trio   = y264_intra16_satd_trio_sse4;
     }
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     if ((cpu & Y264_CPU_AVX2_ALL) == Y264_CPU_AVX2_ALL) {
         pf->sad[Y264_PU_16x16] = y264_sad_16x16_avx2;
         pf->sad[Y264_PU_16x8]  = y264_sad_16x8_avx2;
