@@ -2864,12 +2864,42 @@ int vbv_bounded_now(const yah264_encoder_t *e)
 
 
 
+/* A two-pass pass 2 under a VBV, whose GOP instances carry the buffer and
+ * nothing else. */
+static int tp_vbv_join(const yah264_encoder_t *e)
+{
+    return e->tp_pass >= 2 && e->vbv_on;
+}
+
+/* The exporter coded the segment right before this one: its final occupancy
+ * is this segment's first, exactly, so it replaces the handoff assumption.
+ * With frames of other instances in between it is not, and the assumption
+ * stands. */
+static void vbv_import_fill(yah264_encoder_t *e, const yah264_rc_state_t *c, size_t csz,
+                            int frames_ahead)
+{
+    if (e->vbv_on && RC_STATE_HAS(csz, vbv_have) && c->vbv_have && frames_ahead <= 0) {
+        double f = c->vbv_fill;
+        if (f > e->vbv.size) f = e->vbv.size;
+        if (f < 0) f = 0;
+        e->vbv.fill = f;
+        e->vbv_joined = 0;
+    }
+}
+
 YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
 {
     if (e && e->hw) return -1;
-    if (!e || !c || !c->valid || !e->abr_on) return -1;
+    if (!e || !c || !c->valid) return -1;
     size_t csz = rc_state_size(c->size);
     if (!csz) return -1;
+    if (!e->abr_on && tp_vbv_join(e)) {
+        /* a two-pass pass 2 plans its own budget: only the buffer carries */
+        if (e->rcp_n > 0 || e->frame_count > 0) return -1;
+        vbv_import_fill(e, c, csz, frames_ahead);
+        return 0;
+    }
+    if (!e->abr_on) return -1;
     if (e->abr_cum_actual > 0 || e->rcp_n > 0 || e->frame_count > 0) return -1;   /* only before the first frame */
     /* Continue a previous instance's controller instead of the seeds (see
  * yah264.h). Frames of instances in flight between the export and this
@@ -2897,17 +2927,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
     if (RC_STATE_HAS(csz, rf2_kc_cal))
         for (int t = 0; t < 3; t++) { e->bm_rf2kc.k[t] = c->rf2_kc[t]; e->bm_rf2kc.have[t] = c->rf2_kc_cal[t]; }
     e->rf2_opened = 1;                  /* the opening belongs to the first instance only */
-    /* The exporter coded the segment right before this one: its final
- * occupancy is this segment's first, exactly, so it replaces the handoff
- * assumption. With frames of other instances in between it is not, and
- * the assumption stands. */
-    if (e->vbv_on && RC_STATE_HAS(csz, vbv_have) && c->vbv_have && n == 0) {
-        double f = c->vbv_fill;
-        if (f > e->vbv.size) f = e->vbv.size;
-        if (f < 0) f = 0;
-        e->vbv.fill = f;
-        e->vbv_joined = 0;
-    }
+    vbv_import_fill(e, c, csz, frames_ahead);
     return 0;
 }
 
@@ -2964,6 +2984,13 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
     yah264_rc_state_t full, *out = &full;
     memset(out, 0, sizeof *out);
     out->size = dst->size;
+    if (e && !e->hw && !e->abr_on && tp_vbv_join(e)) {
+        out->valid = 1;
+        out->vbv_fill = e->vbv.fill;
+        out->vbv_have = 1;
+        memcpy(dst, out, dsz);
+        return 0;
+    }
     if (!e || e->hw || !e->abr_on) { memcpy(dst, out, dsz); return -1; }
     out->valid = 1;
     out->target_bpf = e->abr_target_bpf;

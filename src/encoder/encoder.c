@@ -5343,9 +5343,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * one it did not have: chimera 1080p at 988 kbit/s capped VBR underflowed
  * at the joins. A sequential caller replaces the assumption with the exact
  * occupancy through yah264_encoder_rc_import; a parallel one pairs it with
- * yah264_encoder_vbv_handoff on the segment before. 2-pass plans against
- * real pass-1 bits and keeps what it had. */
-        if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS) {
+ * yah264_encoder_vbv_handoff on the segment before. A two-pass pass 2 joins
+ * the same way: its GOPs opening on a full buffer they never had was where
+ * most of its underflows were. Pass 1 only records. */
+        if (param->rc.vbv_seg_join && (param->rc.method != YAH264_RC_2PASS || param->rc.pass >= 2)) {
             e->vbv.fill = e->vbv_seg_h;             /* assume only the handoff */
             e->vbv_joined = 1;
         }
