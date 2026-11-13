@@ -2175,6 +2175,14 @@ static void *y4m_reader_seek(void *arg)
 /* the fewest frames a VBV two-pass splits at (encode_threaded) */
 #define TP_SEG_MIN 30
 
+/* a pass-1 record the encoder takes: its type, and finite costs and a QP
+ * in the range any depth codes at */
+static int tp_record_ok(int type, double cplx, double bits, int qp)
+{
+    return type >= 0 && type <= 2 && isfinite(cplx) && cplx >= 0.0
+        && isfinite(bits) && bits >= 0.0 && qp >= -24 && qp <= 51;
+}
+
 static int tp_seg_on(const yah264_param_t *param)
 {
     return param->rc.method == YAH264_RC_2PASS
@@ -2459,9 +2467,16 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
             continue;
         }
         if (!strncmp(ln, TP_MARKER, strlen(TP_MARKER))) {
-            int g, s, e, nr;
-            if (sscanf(ln + strlen(TP_MARKER), "%d %d %d %d", &g, &s, &e, &nr) != 4) {
+            int g, s, e;
+            long nr;
+            if (sscanf(ln + strlen(TP_MARKER), "%d %d %d %ld", &g, &s, &e, &nr) != 4) {
                 fprintf(stderr, "yah264: malformed GOP marker in '%s'\n", in_path);
+                bad = 1; break;
+            }
+            /* a record a picture, two a frame under field coding */
+            if (nr <= 0 || e <= s || nr > (long)(e - s) * (param->interlaced ? 2 : 1)) {
+                fprintf(stderr, "yah264: GOP marker %d in '%s' counts %ld records for "
+                        "frames %d..%d\n", g, in_path, nr, s, e);
                 bad = 1; break;
             }
             if (g < 0 || g >= n_gops || s != gstart[g] || e != gstart[g + 1]) {
@@ -2491,8 +2506,12 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         double cplx, bits;
         if (ln[0] == '#')                       /* the record count below says if it mattered */
             continue;
-        if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
-            break;                              /* malformed: stop, as the encoder does */
+        /* what the encoder would stop at: here the whole file is refused */
+        if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4 || !tp_record_ok(type, cplx, bits, qp)) {
+            fprintf(stderr, "yah264: stats file '%s' has a malformed record in GOP %d\n",
+                    in_path, cur);
+            bad = 1; break;
+        }
         fputs(ln, out[cur]);
         if (rec[cur] < 2)
             memcpy(first[cur][rec[cur]], ln, sizeof ln);
@@ -2516,7 +2535,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
                 fprintf(stderr, "yah264: stats file '%s' has no records for GOP %d "
                         "(frames %d..%d)\n", in_path, g, gstart[g], gstart[g + 1]);
                 bad = 1;
-            } else if (want[g] > 0 && rec[g] != want[g]) {
+            } else if (rec[g] != want[g]) {
                 fprintf(stderr, "yah264: stats file '%s' holds %ld records for GOP %d, "
                         "its marker says %ld\n", in_path, rec[g], g, want[g]);
                 bad = 1;
