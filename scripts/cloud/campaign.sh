@@ -221,6 +221,36 @@ mhz_drift() {   # the plan's 3% rule, reported not enforced: a repeat costs mone
 }
 
 # ---------------------------------------------------------------------------
+# tier_probe <checkasm> <tier...>: every leg that names a tier proves the name
+# means something first. Y264_SIMD_FORCE is read only in a dev_knobs build, and
+# the banner's feature word is the CPU's, not the build's: a -Dsimd=sse4 build
+# on an avx2 part prints avx2 too. So the cap must take (none reads "scalar"),
+# and each other tier needs a checkasm group of its own that --list marks
+# runnable here, which only a compiled tier has. Without both, every tier runs
+# the same code and every identity compare passes.
+tier_probe() {
+    local ck="$1" list capped t rc=0; shift
+    list=$(env -u Y264_SIMD_FORCE -u YAH264_NO_ASM -u Y264_ASM_OFF "$ck" --list 2>/dev/null | tr -d '\r')
+    capped=$(env -u YAH264_NO_ASM -u Y264_ASM_OFF Y264_SIMD_FORCE=none "$ck" --list 2>/dev/null \
+             | head -1 | tr -d '\r')
+    case "$capped" in
+        "checkasm: cpu scalar, "*) ;;
+        *) echo "# Y264_SIMD_FORCE=none did not take in $ck ($capped): build with -Ddev_knobs=true" >&2
+           return 1 ;;
+    esac
+    for t in "$@"; do
+        [ "$t" = none ] && continue
+        printf '%s\n' "$list" | awk -v s="_$t" '
+            { n = length($1) - length(s) }
+            n > 0 && substr($1, n + 1) == s && $NF == "yes" { f = 1 }
+            END { exit !f }' && continue
+        echo "# no ${t} group is runnable in $ck: the tier is not compiled in (-Dsimd=auto) or the CPU lacks it" >&2
+        rc=1
+    done
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # Identity: the md5 of every arm and every tier, over the board clips.
 #
 # It is the cheapest leg and the one the whole campaign rests on, because no
@@ -246,7 +276,8 @@ st_identity() {
     case "$(uname -m)" in
         x86_64|amd64)
             tiers="none sse4 avx2"
-            c_has_avx512 "$CK" && tiers="$tiers avx512" ;;
+            # the gated tier only where it is compiled in, not merely in cpuid
+            c_has_avx512 "$CK" && tier_probe "$CK" avx512 2>/dev/null && tiers="$tiers avx512" ;;
         *)  tiers="none"
             tier_note="# NOTE $(uname -m) is not x86-64: there are no x86 tiers to force here, so only the no-SIMD axis was checked." ;;
     esac
@@ -259,6 +290,8 @@ st_identity() {
             *) echo "# NOTE avx512 absent from this binary/CPU -- not covered here" ;; esac
         [ -n "$tier_note" ] && echo "$tier_note"
     } > "$out"
+    # shellcheck disable=SC2086
+    tier_probe "$CK" $tiers 2>> "$out" || { cat "$out"; return 1; }
     local tier spec clip rate t mode rc=0
     for tier in $tiers; do
         : > "$RES/.md5.$tier"
@@ -492,10 +525,11 @@ clips10() { ls "$CLIPS10_DIR"/*.y4m 2>/dev/null; }
 # under the avx2 name. the line reads "checkasm: cpu <features>, <depth>";
 # the features are matched as whole words between the prefix and the comma.
 # a missing or reworded line, or an x86-64 part with no sse4, is a failure:
-# read as "no tiers" it would pass every leg that uses it
+# read as "no tiers" it would pass every leg that uses it. each tier read
+# here then goes through tier_probe, since the feature word is the CPU's
 has10() { case " $TIERS10_CPU " in *" $1 "*) return 0 ;; esac; return 1; }
 tiers10() {
-    local ck="$C_B10/tools/checkasm/checkasm" line capped
+    local ck="$C_B10/tools/checkasm/checkasm" line have=""
     line=$(env -u Y264_SIMD_FORCE -u YAH264_NO_ASM -u Y264_ASM_OFF "$ck" --list 2>/dev/null \
            | head -1 | tr -d '\r')
     echo "# $line" >&2
@@ -503,22 +537,17 @@ tiers10() {
         "checkasm: cpu "*", "*) ;;
         *) echo "# no 'checkasm: cpu <features>, <depth>' line from checkasm --list" >&2; return 1 ;;
     esac
-    # the tier cap must take: a build that ignores Y264_SIMD_FORCE (no
-    # dev_knobs) runs its default tier under every name
-    capped=$(env -u YAH264_NO_ASM -u Y264_ASM_OFF Y264_SIMD_FORCE=none "$ck" --list 2>/dev/null \
-             | head -1 | tr -d '\r')
-    case "$capped" in
-        "checkasm: cpu scalar, "*) ;;
-        *) echo "# Y264_SIMD_FORCE=none did not take ($capped): build with -Ddev_knobs=true" >&2
-           return 1 ;;
-    esac
     TIERS10_CPU=${line#checkasm: cpu }
     TIERS10_CPU=${TIERS10_CPU%%, *}
     case "$(uname -m)" in
         x86_64|amd64) has10 sse4 || { echo "# an x86-64 part reports no sse4" >&2; return 1; } ;;
     esac
-    has10 sse4 && printf 'sse4 '
-    has10 avx2 && has10 fma3 && has10 bmi2 && printf 'avx2 '
+    has10 sse4 && have="sse4"
+    has10 avx2 && has10 fma3 && has10 bmi2 && have="$have avx2"
+    # shellcheck disable=SC2086
+    tier_probe "$ck" none $have || return 1
+    # shellcheck disable=SC2086
+    [ -n "$have" ] && printf '%s ' $have
     return 0
 }
 
@@ -748,6 +777,8 @@ PY
 st_avx512_ab() {
     [ -x "$Y264" ] || { c_skip "no yah264 binary"; return; }
     c_has_avx512 "$CK" || { c_skip "no AVX-512 in this build/CPU ($Y264_CPU_NAME); the gated tier is not here"; return; }
+    # a build without the tier would time avx2 twice under two names
+    tier_probe "$CK" avx2 avx512 || return 1
     # shellcheck source=/dev/null
     . "$C_SRC/scripts/parity-clips.sh"
     local out="$RES/avx512-ab.txt" frames; frames="$(c_shape 120 12)"
