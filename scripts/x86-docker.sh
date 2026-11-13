@@ -46,7 +46,8 @@
 #   X86_THREADS    encoder thread counts for the identity cmp  ("1")
 #   X86_FRAMES     frames per identity encode, 0 = whole clip  (24)
 #   X86_CLIPS      clip:kbps list                         (parity-clips.sh CLIPS)
-#   QEMU_CPU       the CPU QEMU models                    (max)
+#   QEMU_CPU       the CPU QEMU models; empty picks one per cap that lacks
+#                  the next tier up (qemu64, Nehalem, Haswell-noTSX), max uncapped
 set -uo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,7 +60,7 @@ JOBS="${X86_JOBS:-4}"
 # (owner, 2026-09-25), and at threads 1 a tier difference can only be a kernel.
 ENC_THREADS="${X86_THREADS:-1}"
 FRAMES="${X86_FRAMES:-24}"
-QEMU_CPU="${QEMU_CPU:-max}"
+QEMU_CPU="${QEMU_CPU:-}"
 BACKENDS="rosetta"
 TIERS="none sse4 avx2"
 LEGS="test conformance identity"
@@ -114,15 +115,23 @@ fi
 # holds open, so it is freed by any death, kill -9 included, and there is no
 # pid, clock or leftover to judge. bash has no flock of its own and macOS no
 # flock(1), so perl takes it on the shell's descriptor. Containers are started
-# with that descriptor closed, so a container that outlives a killed run does
-# not hold the lock on its behalf.
+# with that descriptor closed and labelled with this tree, and a run refuses
+# to start while one from a killed run is still writing to the scratch.
 command -v perl >/dev/null 2>&1 || { echo "x86-docker: perl missing; it takes the run lock" >&2; exit 2; }
 exec 9>>"$out/.lock.f"
-if ! perl -e 'use Fcntl qw(:flock); open(my $fh, ">&=", 9) or exit 3;
-              flock($fh, LOCK_EX | LOCK_NB) or exit 1'; then
-    echo "x86-docker: another run (pid $(cat "$out/.lock.pid" 2>/dev/null || echo '?')) holds $out/.lock.f" >&2
-    exit 2
-fi
+perl -e 'eval { require Fcntl; 1 } or exit 4;
+         open(my $fh, ">&=", 9) or exit 3;
+         exit 0 if flock($fh, Fcntl::LOCK_EX() | Fcntl::LOCK_NB());
+         exit 1 if $!{EWOULDBLOCK};
+         print STDERR "$!\n"; exit 5' 2> "$out/.lock.err"
+case $? in
+    0) ;;
+    1) echo "x86-docker: another run (pid $(cat "$out/.lock.pid" 2>/dev/null || echo '?')) holds $out/.lock.f" >&2
+       exit 2 ;;
+    4) echo "x86-docker: this perl has no Fcntl module; it takes the run lock" >&2; exit 2 ;;
+    *) echo "x86-docker: flock on $out/.lock.f failed: $(cat "$out/.lock.err") (does this filesystem support it?)" >&2
+       exit 2 ;;
+esac
 echo $$ > "$out/.lock.pid"
 # the report is this run's from here on; a refused run never touches it
 : > "$report"
@@ -219,22 +228,41 @@ mounts+=(-v "$root/scratch/x86-docker/fixtures:/work/tests/.fixtures")
 # never changes it. The rosetta backend runs everything the default way. The
 # qemu backend runs the same containers, but every binary under test goes
 # through the image's own qemu-x86_64, named on the command line: QR below is
-# that wrapper, empty on the rosetta backend. Only the binaries under test run
-# in QEMU; the shells, meson and ffmpeg around them do not.
+# that wrapper, empty on the rosetta backend. Each capped run gets a CPU model
+# without the tier above its cap, so code above the cap faults whatever path
+# reached it. The encoder the Python tests start goes through it too
+# (YAH264_WRAP); the shells, Python, meson and ffmpeg around them do not.
 rosetta_enabled() {   # read-only: is Rosetta the VM's x86-64 interpreter
     docker run --rm --privileged --platform linux/arm64 alpine sh -c "
         mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null
-        head -1 /proc/sys/fs/binfmt_misc/rosetta 2>/dev/null" 2>/dev/null \
+        head -1 /proc/sys/fs/binfmt_misc/rosetta 2>/dev/null" 2>/dev/null 9>&- \
       | grep -q enabled
 }
 QRUN=""
 qrun_path="/work/scratch/x86-docker/qrun"
 cat > "$out/qrun" <<'QEOF'
 #!/bin/sh
-# an explicit QEMU, so a "qemu" row cannot have run under anything else
-exec /opt/qemu/qemu-x86_64 -cpu "${QEMU_CPU:-max}" "$@"
+# an explicit QEMU, so a "qemu" row cannot have run under anything else. a
+# capped run gets a model without the next tier up; QEMU_CPU overrides
+m="${QEMU_CPU:-}"
+if [ -z "$m" ]; then
+    case "${Y264_SIMD_FORCE:-}" in
+        none) m=qemu64 ;; sse4) m=Nehalem ;; avx2) m=Haswell-noTSX ;; *) m=max ;;
+    esac
+fi
+exec /opt/qemu/qemu-x86_64 -cpu "$m" "$@"
 QEOF
 chmod +x "$out/qrun"
+
+# cpu_for <tier>: the QEMU model a leg capped at <tier> runs on, one without
+# the next tier up. It goes in as QEMU_CPU, not only through the cap, because
+# the tests that start the encoder themselves drop the Y264_* variables
+cpu_for() {
+    if [ -n "$QEMU_CPU" ]; then echo "$QEMU_CPU"; return; fi
+    case "$1" in
+        none) echo qemu64 ;; sse4) echo Nehalem ;; avx2) echo Haswell-noTSX ;; *) echo max ;;
+    esac
+}
 
 # dk <env-assignments...> -- <shell command>
 # One container per call: the run is short-lived and stateless, which is what
@@ -243,7 +271,7 @@ dk() {
     local envs=() a
     while [ "$1" != "--" ]; do envs+=(-e "$1"); shift; done
     shift
-    a=(docker run --rm --platform linux/amd64 --cpus "$CPUS"
+    a=(docker run --rm --platform linux/amd64 --cpus "$CPUS" --label "yah264-x86-docker=$root"
        -u "$(id -u):$(id -g)" -w /work -v "$root:/work" ${mounts[@]+"${mounts[@]}"}
        -e "HOME=/tmp" -e "XDG_CACHE_HOME=/tmp/.cache"
        -e "QEMU_CPU=$QEMU_CPU" -e "QR=$QRUN" "${envs[@]}")
@@ -323,20 +351,12 @@ build_dir() {
 }
 # dispatch <dir> <label>: the dispatch probe on one build dir under this
 # backend; a row either way, 0 when every depth and cap passes
-probe_clip10="scratch/x86-docker/probe/foreman_cif-p10-f3.y4m"
 dispatch() {
     local log="$BACKEND-dispatch-$2.log"
-    if dk X=1 -- "set -e
-        mkdir -p scratch/x86-docker/probe
-        if [ ! -s $probe_clip10 ]; then
-            ffmpeg -v error -y -i tests/corpus/foreman_cif.y4m -frames:v 3 -pix_fmt yuv420p10le \
-                -strict -1 -f yuv4mpegpipe $probe_clip10.part
-            mv $probe_clip10.part $probe_clip10
-        fi
-        python3 scripts/dispatch_probe.py --build $1 --tiers '$TIERS' --wrapper \"\$QR\" \
-            --clip8 tests/corpus/foreman_cif.y4m --clip10 $probe_clip10 \
-            --work $1/dispatch-probe-$BACKEND" > "$out/$log" 2>&1; then
-        row "$BACKEND" - "dispatch $2" PASS "every cap runs its tiers at 8 and 10 bits, $log"
+    if dk X=1 -- "python3 scripts/dispatch_probe.py --build $1 --tiers '$TIERS' --wrapper \"\$QR\" \
+            --source tests/corpus/foreman_cif.y4m --work $1/dispatch-probe-$BACKEND" \
+            > "$out/$log" 2>&1; then
+        row "$BACKEND" - "dispatch $2" PASS "every kernel at its own tier under each cap, 8 and 10 bits, $log"
         return 0
     fi
     row "$BACKEND" - "dispatch $2" FAIL "$(grep -m1 'FAIL\|^dispatch: ' "$out/$log" | cut -c1-160); $log"
@@ -350,7 +370,7 @@ echo "x86-docker: no clocks are read; an emulated run has no speed to report."
 build_image() {
     echo "x86-docker: building $IMAGE"
     docker build --platform linux/amd64 -t "$IMAGE" \
-        -f docker/x86/Dockerfile docker/x86 > "$out/image-build.log" 2>&1 \
+        -f docker/x86/Dockerfile docker/x86 > "$out/image-build.log" 2>&1 9>&- \
       || { echo "x86-docker: image build FAILED, see scratch/x86-docker/image-build.log"; exit 1; }
 }
 [ "$BUILD_IMAGE" = 1 ] && build_image
@@ -370,6 +390,13 @@ if ! img_ready; then
 fi
 img_ready || { echo "x86-docker: $IMAGE really is absent; building it"; build_image; }
 img_ready || { echo "x86-docker: no image $IMAGE and it will not build"; exit 1; }
+# the lock dies with a killed run, but its container can still be writing here
+live="$(docker ps -q --filter "label=yah264-x86-docker=$root" 2>/dev/null 9>&- | tr '\n' ' ')"
+if [ -n "$live" ]; then
+    echo "x86-docker: containers from an earlier run of this tree are still running: $live" >&2
+    echo "            wait for them, or stop them with docker stop $live" >&2
+    exit 2
+fi
 
 # -- the builds, once for both backends ------------------------------------
 # The compiler runs in the container the same way on either backend, so the
@@ -425,7 +452,7 @@ for BACKEND in $BACKENDS; do
         # the container itself runs under the VM's own interpreter, so its
         # /proc/cpuinfo says nothing about what QEMU gives the binaries; the
         # binary's own CPUID, below, is the probe that counts
-        echo "x86-docker: binaries under test run in /opt/qemu/qemu-x86_64 -cpu $QEMU_CPU;"
+        echo "x86-docker: binaries under test run in /opt/qemu/qemu-x86_64 -cpu ${QEMU_CPU:-<per cap>};"
         echo "            the feature probe that counts is the encoder's own CPUID, below."
     fi
 
@@ -444,8 +471,10 @@ for BACKEND in $BACKENDS; do
     # QEMU must be what runs the binaries: a model without AVX2 hides it,
     # which Rosetta never would
     if [ "$BACKEND" = qemu ]; then
-        lo="$(dk QEMU_CPU=Nehalem -- "\$QR $b8/tools/checkasm/checkasm --list 2>/dev/null | head -1" | tr -d '\r')"
+        lo="$(dk QEMU_CPU=Nehalem -- "\$QR $b8/tools/checkasm/checkasm --list > /tmp/l 2>&1; rc=\$?
+            head -1 /tmp/l; [ \$rc = 0 ] || echo \" (rc \$rc: died under -cpu Nehalem; above-SSE4.2 code runs on every path)\"" | tr -d '\r' | tr '\n' ' ')"
         case "$lo" in
+            *"(rc "*) row qemu - "qemu runs the binaries" FAIL "$lo"; continue ;;
             *avx2*) row qemu - "qemu runs the binaries" FAIL "-cpu Nehalem still shows avx2 ($lo)"; continue ;;
             "checkasm: cpu "*) row qemu - "qemu runs the binaries" PASS "-cpu Nehalem hides avx2: ${lo#checkasm: cpu }" ;;
             *) row qemu - "qemu runs the binaries" FAIL "no banner under -cpu Nehalem: $lo"; continue ;;
@@ -464,7 +493,7 @@ for BACKEND in $BACKENDS; do
     if has_leg test; then
         if [ "$ok10" = 1 ]; then
             run_case "$BACKEND" 10bit "unit" "$out/$BACKEND-build10.log" X=1 \
-                -- "meson test -C $b10 --print-errorlogs \${QR:+--wrapper \$QR}"
+                -- "YAH264_WRAP=\"\$QR\" meson test -C $b10 --print-errorlogs \${QR:+--wrapper \$QR --timeout-multiplier 10}"
         else
             row "$BACKEND" 10bit "unit" SKIP "build10 is not proven; see above"
         fi
@@ -481,14 +510,14 @@ for BACKEND in $BACKENDS; do
             # and regress.py defaults to build/cli/yah264, which in here is a
             # macOS build directory or nothing at all.
             run_case "$BACKEND" "$tier" "make test" "$out/$BACKEND-$tier-test.log" \
-                "Y264_SIMD_FORCE=$tier" \
+                "Y264_SIMD_FORCE=$tier" "QEMU_CPU=$(cpu_for "$tier")" \
                 -- "make test BUILD=$b8 TEST_WRAP=\"\$QR\""
             # checkasm again, explicitly at this tier's rows. `none` has no
             # tier to name, so it runs the whole table with every kernel row
             # gated off by its own cap -- which is the C-only claim.
             isa_arg="--isa $tier"; [ "$tier" = none ] && isa_arg=""
             run_case "$BACKEND" "$tier" "checkasm $isa_arg" "$out/$BACKEND-$tier-checkasm.log" \
-                "Y264_SIMD_FORCE=$tier" -- "\$QR $b8/tools/checkasm/checkasm $isa_arg"
+                "Y264_SIMD_FORCE=$tier" "QEMU_CPU=$(cpu_for "$tier")" -- "\$QR $b8/tools/checkasm/checkasm $isa_arg"
         fi
         if has_leg conformance; then
             # YAH264_CONF_JOBS is pinned to the container's CPU allowance,
@@ -499,7 +528,7 @@ for BACKEND in $BACKENDS; do
             # slower than 6, and the number in the log should be the number of
             # cores the run was allowed.
             run_case "$BACKEND" "$tier" "conformance --fast" "$out/$BACKEND-$tier-conf.log" \
-                "Y264_SIMD_FORCE=$tier" "YAH264_CONF_FAST=1" "YAH264_CONF_JOBS=$CPUS" \
+                "Y264_SIMD_FORCE=$tier" "QEMU_CPU=$(cpu_for "$tier")" "YAH264_CONF_FAST=1" "YAH264_CONF_JOBS=$CPUS" \
                 -- "enc=$b8/cli/yah264; [ -n \"\$QR\" ] && enc=scratch/x86-docker/qcli
                     scripts/conformance.sh --fast \$enc"
         fi
@@ -541,7 +570,7 @@ done
         mkdir -p "$root/$idir"
         for tier in $TIERS; do : > "$root/$idir/md5.$tier"; done
         for tier in $TIERS; do
-            if dk "Y264_SIMD_FORCE=$tier" -- "$script" > "$out/$BACKEND-$tier-ident.log" 2>&1; then
+            if dk "Y264_SIMD_FORCE=$tier" "QEMU_CPU=$(cpu_for "$tier")" -- "$script" > "$out/$BACKEND-$tier-ident.log" 2>&1; then
                 row "$BACKEND" "$tier" "identity encodes" PASS "$BACKEND-$tier-ident.log"
             else
                 row "$BACKEND" "$tier" "identity encodes" FAIL "$BACKEND-$tier-ident.log"
@@ -596,7 +625,7 @@ done"
         # stay unwritable through the container's mount for a while
         for tier in $TIERS; do : > "$root/$idir/md5.$tier"; done
         for tier in $TIERS; do
-            if dk "Y264_SIMD_FORCE=$tier" -- "$script" > "$out/$BACKEND-$tier-ident10.log" 2>&1; then
+            if dk "Y264_SIMD_FORCE=$tier" "QEMU_CPU=$(cpu_for "$tier")" -- "$script" > "$out/$BACKEND-$tier-ident10.log" 2>&1; then
                 row "$BACKEND" "$tier" "10-bit identity encodes" PASS "$BACKEND-$tier-ident10.log"
             else
                 row "$BACKEND" "$tier" "10-bit identity encodes" FAIL "$BACKEND-$tier-ident10.log"
