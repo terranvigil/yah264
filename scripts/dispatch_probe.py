@@ -20,6 +20,9 @@
 #   each cap no kernel above the cap is called, and for every kernel that is
 #            called at all, under any cap, the highest tier of it compiled at
 #            or under this cap is the one called, and no other tier of it is;
+#   counts   per clip and configuration, a kernel's tiers together run as
+#            often under every cap that has one of them: at one thread every
+#            cap codes the same bytes, so fewer calls is a C fallback;
 #   coverage every kernel the build has is reached from outside the tier
 #            objects and called under some cap and configuration, unless
 #            ALLOWED says why it can't be.
@@ -30,7 +33,7 @@
 # --source is an 8-bit 4:2:0 CIF clip (the corpus foreman_cif). --wrapper runs
 # the probe binary under, e.g., an explicit qemu-x86_64.
 # Exit 0 when everything passes, 1 on a failure, 2 on a usage error.
-import argparse, os, re, shlex, subprocess, sys
+import argparse, hashlib, os, re, shlex, subprocess, sys
 
 RANK = {"none": 0, "sse4": 1, "avx2": 2, "avx512": 3}
 MEMBER = re.compile(r"([a-z0-9]+)_(sse4|avx2|avx512)(_10)?\.c\.o$")
@@ -42,12 +45,15 @@ NMLINE = re.compile(r"^([^:]+):([^:]+):\s*(?:[0-9a-f]+\s+)?(\S)\s+(\S+)$")
 # kernels no encode can reach, by name without tier or depth suffix. checkasm
 # still tests each of them; these are the encoder paths that never call them
 ALLOWED = {
-    "y264_bilin4_row": "the lowres bilinear row has no caller left",
-    "y264_deblock_luma_h4": "compiled out: the whole-edge kernel takes every edge first",
-    "y264_deblock_luma_v4": "compiled out: the whole-edge kernel takes every edge first",
-    "y264_ssd4x4_map16": "its one caller, a static SSD map in mbcode.c, has no caller",
-    "y264_hpel_hrow": "the band form takes every band; its scratch always fits",
-    "y264_hpel_outrow": "the band form takes every band; its scratch always fits",
+    "y264_bilin4_row": "its call is live, but the lowres subpel build returns early: "
+                       "every lowres buffer has half-pel planes",
+    "y264_deblock_luma_h4": "compiled out at 10 bits; at 8 bits the 16-wide path takes every edge first",
+    "y264_deblock_luma_v4": "compiled out at 10 bits; at 8 bits the 16-wide path takes every edge first",
+    "y264_ssd4x4_map16": "reached only with e4 != NULL, which no caller passes",
+    "y264_hpel_hrow": "10-bit only, when a pooled half-pel build ends on a one-row band "
+                      "(about 40+ threads); the probe runs at one thread",
+    "y264_hpel_outrow": "10-bit only, when a pooled half-pel build ends on a one-row band "
+                        "(about 40+ threads); the probe runs at one thread",
     "y264_intra8x8": "no caller: intra 8x8 goes through intra8x8_edge and from_edge",
     "y264_sa8d_8x8": "a pixel-table entry the encoder never reads",
     "y264_hadamard_ac_8x8": "a pixel-table entry the encoder never reads",
@@ -149,11 +155,15 @@ def link(build, ks, work):
 
 
 def make_clips(source, depths, work):
+    # cached clips are keyed by the source, so another --source can't reuse them
+    st = os.stat(source)
+    key = hashlib.sha1(f"{os.path.realpath(source)}:{st.st_size}:{st.st_mtime_ns}"
+                       .encode()).hexdigest()[:10]
     out = []
     for d in depths:
         for tag, vf, fmt in CLIPS:
             fmt = fmt + ("10le" if d == "10" else "")
-            path = os.path.join(work, f"{tag}-{d}.y4m")
+            path = os.path.join(work, f"{tag}-{d}-{key}.y4m")
             if not os.path.exists(path):
                 r = run(["ffmpeg", "-v", "error", "-y", "-i", source, "-frames:v", "3", *vf,
                          "-pix_fmt", fmt, "-strict", "-1", "-f", "yuv4mpegpipe", path + ".part"])
@@ -190,6 +200,7 @@ def main():
     env = {k: v for k, v in os.environ.items() if k not in KNOBS}
 
     calls = {}          # (depth, cap) -> {symbol: count}, over every clip and config
+    runs = {}           # (depth, clip, config, cap) -> {symbol: count}
     bad = []
     for d, tag, clip in clips:
         for t in tiers:
@@ -204,11 +215,13 @@ def main():
                     bad.append(f"{d}-bit cap {t} {tag} {cname}: the encode failed "
                                f"(rc {r.returncode}): {r.stdout.strip()[-160:]}")
                     continue
+                r1 = runs.setdefault((d, tag, cname, t), {})
                 c = calls.setdefault((d, t), {})
                 for line in open(out):
                     s, n = line.split()
                     if s in ks:
                         c[s] = c.get(s, 0) + int(n)
+                        r1[s] = int(n)
 
     for d in depths:
         mine = {s: k for s, k in ks.items() if k[0] == d}
@@ -239,6 +252,17 @@ def main():
                 bad.append(f"{d}-bit cap {t}: " + "; ".join(why))
             else:
                 print(f"dispatch {d}-bit cap {t}: PASS ({sum(c.values())} kernel calls)")
+        # at threads 1 every cap codes the same bytes, so a kernel runs the
+        # same number of times under every cap that has a tier of it; fewer
+        # under one cap means a call site fell back to C there
+        for tag, cname in sorted({(k[1], k[2]) for k in runs if k[0] == d}):
+            for b in sorted(bases):
+                n = {t: sum(runs[(d, tag, cname, t)].get(s, 0) for s in bases[b].values())
+                     for t in tiers if (d, tag, cname, t) in runs
+                     and any(RANK[tt] <= RANK[t] for tt in bases[b])}
+                if len(set(n.values())) > 1:
+                    bad.append(f"{d}-bit {tag} {cname}: {b} runs "
+                               + ", ".join(f"{v} times at cap {t}" for t, v in n.items()))
         for s, k in sorted(mine.items()):
             if k[3] in ALLOWED or k[1] not in tiers:
                 continue
