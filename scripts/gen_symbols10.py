@@ -31,6 +31,11 @@ usage: scripts/gen_symbols10.py <arm64>/libyah264.a <arm64>/libyah264_10.a \
            <x86-64>/libyah264.a <x86-64>/libyah264_10.a
        (writes src/common/symbols10.h; --stdout prints instead)
 
+It refuses to write a short list: every archive's nm must succeed, an 8-bit
+and a 10-bit archive are required for each of aarch64 and x86-64 (read from
+the first object's header), and a list with fewer names than the header it
+replaces needs --force.
+
 scripts/symbol_check.sh is the gate that fails when this file goes stale.
 """
 
@@ -93,6 +98,9 @@ def defined(archive):
     """
     nm = os.environ.get("NM", "nm")
     out = subprocess.run([nm, "-g", archive], capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit("gen_symbols10: %s -g %s failed: %s"
+                 % (nm, archive, out.stderr.strip().splitlines()[-1:] or "rc %d" % out.returncode))
     raw = set()
     for line in out.stdout.splitlines():
         f = line.split()
@@ -100,6 +108,32 @@ def defined(archive):
             raw.add(f[2])
     macho = any(n.startswith(("_y264_", "_yah264_")) for n in raw)
     return {n[1:] if macho and n.startswith("_") else n for n in raw}
+
+
+def arch(archive):
+    """'aarch64' or 'x86_64' from the archive's first object, else None."""
+    with open(archive, "rb") as f:
+        data = f.read()
+    if not data.startswith(b"!<arch>\n"):
+        return None
+    pos = 8
+    while pos + 60 <= len(data):
+        name = data[pos:pos + 16].decode("latin-1").strip()
+        size = int(data[pos + 48:pos + 58].decode("latin-1").strip() or 0)
+        body = pos + 60
+        if name.startswith("#1/"):          # BSD long name stored ahead of the body
+            n = int(name[3:])
+            name, body, size = data[body:body + n].decode("latin-1"), body + n, size - n
+        hdr = data[body:body + 20]
+        if hdr[:4] == b"\x7fELF":
+            m = int.from_bytes(hdr[18:20], "little")
+            return {62: "x86_64", 183: "aarch64"}.get(m)
+        if hdr[:4] == b"\xcf\xfa\xed\xfe":
+            cpu = int.from_bytes(hdr[4:8], "little")
+            return {0x0100000C: "aarch64", 0x01000007: "x86_64"}.get(cpu)
+        pos = pos + 60 + int(data[pos + 48:pos + 58].decode("latin-1").strip() or 0)
+        pos += pos & 1
+    return None
 
 
 def internal(archive):
@@ -117,16 +151,34 @@ def internal(archive):
 
 def main(argv):
     to_stdout = "--stdout" in argv
+    force = "--force" in argv
     archives = [a for a in argv[1:] if not a.startswith("-")]
     if not archives:
         sys.exit(__doc__)
 
     names = set(OPTIONAL)
+    have = set()
     for a in archives:
         if not os.path.exists(a):
             sys.exit("gen_symbols10: no such archive: " + a)
+        kind = arch(a)
+        if kind is None:
+            sys.exit("gen_symbols10: %s is not an aarch64 or x86-64 archive" % a)
+        depth = 10 if os.path.basename(a).startswith("libyah264_10") else 8
+        have.add((kind, depth))
         names |= internal(a)
+    need = {(k, d) for k in ("aarch64", "x86_64") for d in (8, 10)}
+    if need - have:
+        sys.exit("gen_symbols10: missing archives for %s; both architectures at "
+                 "both depths are needed, or the other architecture's kernels "
+                 "drop out" % ", ".join("%s %d-bit" % m for m in sorted(need - have)))
     internal_names = sorted(names)
+
+    if os.path.exists(OUT) and not force:
+        old = sum(1 for l in open(OUT) if l.startswith("#define ") and len(l.split()) == 3)
+        if len(internal_names) < old:
+            sys.exit("gen_symbols10: %d names against %d in the current header; "
+                     "rerun with --force if the drop is meant" % (len(internal_names), old))
 
     width = max(len(n) for n in internal_names) + 1
     body = "".join("#define %-*s %s_10\n" % (width, n, n) for n in internal_names)
