@@ -475,23 +475,39 @@ FRAMES10="${FRAMES10:-$(c_shape 60 6)}"
 
 clips10() { ls "$CLIPS10_DIR"/*.y4m 2>/dev/null; }
 
+# the tiers this CPU can run, from the 10-bit binary's own feature word: an
+# avx2 row on a part without avx2, fma3 and bmi2 would test the sse4 tier
+# under the avx2 name
+tiers10() {
+    local cpu
+    cpu=$("$C_B10/tools/checkasm/checkasm" --list 2>/dev/null | head -1)
+    echo "# $cpu" >&2
+    case " $cpu " in *" sse4 "*) printf 'sse4 ' ;; esac
+    case " $cpu " in *" avx2 "*) case " $cpu " in *" fma3 "*) case " $cpu " in
+        *" bmi2 "*) printf 'avx2 ' ;; esac ;; esac ;; esac
+}
+
 st_checkasm10() {
     [ -x "$C_B10/tools/checkasm/checkasm" ] || { c_skip "no 10-bit build"; return; }
-    local out="$RES/checkasm10.txt" isa rc=0
-    : > "$out"
+    local out="$RES/checkasm10.txt" isa rc=0 have
+    have=$(tiers10 2> "$out")
     for isa in sse4 avx2; do
-        "$C_B10/tools/checkasm/checkasm" --isa "$isa" >> "$out" 2>&1 || rc=1
+        case " $have " in
+            *" $isa "*) "$C_B10/tools/checkasm/checkasm" --isa "$isa" >> "$out" 2>&1 || rc=1 ;;
+            *) echo "checkasm10 $isa: SKIP, the CPU lacks this tier's features" >> "$out" ;;
+        esac
     done
-    grep -E 'checkasm:|FAIL' "$out"
+    grep -E '^#|checkasm:|FAIL|SKIP' "$out"
     return "$rc"
 }
 
 st_identity10() {
     [ -x "$Y264_10" ] || { c_skip "no 10-bit build"; return; }
     [ -n "$(clips10)" ] || { c_skip "no clips in $CLIPS10_DIR"; return; }
-    local out="$RES/identity10.txt" clip t mode tier rc=0
-    echo "# 10-bit identity, $SKU $DATE, $FRAMES10 frames, tiers none sse4 avx2" > "$out"
-    for tier in none sse4 avx2; do
+    local out="$RES/identity10.txt" clip t mode tier rc=0 have
+    echo "# 10-bit identity, $SKU $DATE, $FRAMES10 frames" > "$out"
+    have=$(tiers10 2>> "$out")
+    for tier in none $have; do
         : > "$RES/.md5.$tier"
         for clip in $(clips10); do
             for t in 1 "$TN"; do
@@ -511,6 +527,9 @@ st_identity10() {
     done
     # above one thread the output may vary run to run, so only t1 must match
     for tier in sse4 avx2; do
+        case " $have " in *" $tier "*) ;;
+            *) echo "$tier vs none: SKIP, the CPU lacks this tier's features" >> "$out"; continue ;;
+        esac
         if diff -q <(grep ' t1 ' "$RES/.md5.none") <(grep ' t1 ' "$RES/.md5.$tier") >/dev/null; then
             echo "$tier vs none, threads 1: IDENTICAL" >> "$out"
         else
