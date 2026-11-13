@@ -1327,6 +1327,7 @@ typedef struct {
     /* a VBV pass 2's buffer, walked over the stream as written */
     int vw_on;
     double vw_size, vw_rate, vw_fill, vw_au;
+    int vw_vcl;                         /* the open access unit has a slice */
     long vw_under;
 } gop_job_t;
 
@@ -3069,41 +3070,77 @@ static void gop_order_horizon(int *order, const int *gstart, int n_gops, long ho
  * value outside both is free; -2 keeps -1 meaning failure. */
 #define Y264_GO_SERIAL (-2)
 
-/* the buffer a decoder holds over one GOP's bytes, as vbv_check walks it:
- * every NAL before a slice belongs to that slice's access unit, and the
- * buffer starts over from empty after an underflow. a VBV pass 2's GOPs each
- * count against their own model, which a GOP joining at its planned level
- * over-reads when the one before fell short of it */
+/* first_mb_in_slice of the slice whose header byte is p[0]: its first ue(v),
+ * read past any emulation-prevention byte */
+static unsigned slice_first_mb(const uint8_t *p, size_t n)
+{
+    uint8_t rb[8];
+    size_t k = 0;
+    int zeros = 0;
+    for (size_t i = 1; i < n && k < sizeof rb; i++) {
+        if (zeros >= 2 && p[i] == 3) { zeros = 0; continue; }
+        zeros = p[i] == 0 ? zeros + 1 : 0;
+        rb[k++] = p[i];
+    }
+    unsigned pos = 0, lz = 0, v = 0;
+    while (pos < 8 * k && !((rb[pos >> 3] >> (7 - (pos & 7))) & 1)) { lz++; pos++; }
+    pos++;
+    for (unsigned j = 0; j < lz && pos < 8 * k; j++, pos++)
+        v = (v << 1) | ((rb[pos >> 3] >> (7 - (pos & 7))) & 1);
+    return (1u << lz) - 1 + v;
+}
+
+/* one access unit off the buffer a decoder holds, which starts over from
+ * empty after an underflow */
+static void vbv_walk_au(gop_job_t *job)
+{
+    double f = job->vw_fill + job->vw_rate;
+    if (f > job->vw_size) f = job->vw_size;
+    f -= job->vw_au;
+    if (f < 0.0) { job->vw_under++; f = 0.0; }
+    job->vw_fill = f;
+    job->vw_au = 0.0;
+    job->vw_vcl = 0;
+}
+
+/* the buffer over one GOP's bytes, grouped into access units as 7.4.1.2.3
+ * has them (and scripts/vbv_check.py counts them): a unit opens at an
+ * AUD/SPS/PPS/SEI or at a slice with first_mb_in_slice 0 that follows a
+ * slice, so the NALs before a picture are its own and its slices are one
+ * picture; filler stays with the picture before it. The open unit carries
+ * over to the next GOP's bytes and closes at the end of the stream. A VBV
+ * pass 2's GOPs each count against their own model, which a GOP joining at
+ * its planned level over-reads when the one before fell short of it */
 static void vbv_walk(gop_job_t *job, const uint8_t *buf, size_t sz)
 {
     size_t i = 0, last = 0;
-    int type = -1;
+    int have = 0;
     for (;;) {
-        size_t at = sz;
-        int nt = -1;
+        size_t at = sz, hdr = sz;
         for (; i + 3 < sz; i++)
             if (buf[i] == 0 && buf[i + 1] == 0 && (buf[i + 2] == 1
                 || (i + 4 < sz && buf[i + 2] == 0 && buf[i + 3] == 1))) {
                 at = i;
-                nt = buf[i + (buf[i + 2] == 1 ? 3 : 4)] & 0x1f;
-                i += buf[i + 2] == 1 ? 3 : 4;
+                hdr = i + (buf[i + 2] == 1 ? 3 : 4);
+                i = hdr;
                 break;
             }
-        if (type >= 0) {
+        if (have)
             job->vw_au += 8.0 * (double)(at - last);
-            if (type == 1 || type == 5) {
-                double f = job->vw_fill + job->vw_rate;
-                if (f > job->vw_size) f = job->vw_size;
-                f -= job->vw_au;
-                if (f < 0.0) { job->vw_under++; f = 0.0; }
-                job->vw_fill = f;
-                job->vw_au = 0.0;
-            }
-        }
-        if (nt < 0)
+        if (hdr >= sz)
             break;
+        int t = buf[hdr] & 0x1f;
+        int opens = 0;
+        if (t == 1 || t == 5)
+            opens = job->vw_vcl && slice_first_mb(buf + hdr, sz - hdr) == 0;
+        else if (t == 6 || t == 7 || t == 8 || t == 9 || (t >= 14 && t <= 18))
+            opens = job->vw_vcl;
+        if (opens)
+            vbv_walk_au(job);
+        if (t == 1 || t == 5)
+            job->vw_vcl = 1;
         last = at;
-        type = nt;
+        have = 1;
     }
 }
 
@@ -3977,6 +4014,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         pthread_join(tid[t], NULL);
     if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
     if (job.rc_shared) { g_api->rc_shared_free(job.rc_shared); job.rc_shared = NULL; }
+    if (job.vw_on && job.vw_vcl)
+        vbv_walk_au(&job);                      /* the stream's last picture */
     if (job.vw_under)
         fprintf(stderr, "yah264: warning: %ld picture(s) underflowed the VBV buffer\n",
                 job.vw_under);

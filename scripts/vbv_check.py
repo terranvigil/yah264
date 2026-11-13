@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """vbv_check.py - stream-side VBV/CPB compliance checker.
 
-Parses an Annex-B H.264 elementary stream into access units (one slice NAL
-per frame in yah264; leading SPS/PPS/SEI bytes attach to the following AU),
-then simulates the decoder buffer with the encoder's own leaky-bucket law:
+Parses an Annex-B H.264 elementary stream into access units (7.4.1.2.3: the
+slices of one picture together, leading SPS/PPS/SEI bytes with the following
+AU, filler with the one before), then simulates the decoder buffer with the encoder's own
+leaky-bucket law:
 
     fill = init                           # --init, default bufsize (full)
     per frame: fill = min(fill + maxrate/fps, bufsize); fill -= au_bits
@@ -41,46 +42,81 @@ there is deliberately no default, because a default framerate is the bug.
 """
 import argparse
 import math
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import h264_syntax as H                                        # noqa: E402
+
+
+def _slice_head(data, off, end, sps):
+    """first_mb_in_slice and field_pic_flag of the slice NAL whose header byte
+    is at `off`, read off a de-emulated prefix of its header."""
+    rb = H.rbsp(data[off + 1:min(end, off + 64)])
+    if sps is None:
+        return H.Bits(rb).ue(), 0
+    try:
+        sh = H.parse_slice_header(rb, data[off] & 0x1F, sps)
+    except (ValueError, IndexError):
+        return H.Bits(rb).ue(), 0
+    return sh["first_mb_in_slice"], sh["field_pic_flag"]
 
 
 def parse_aus(data):
-    """Split an Annex-B stream into per-frame bit counts. Returns a list of
-    (au_bytes, first_slice_nal_type). Non-slice NALs (SPS/PPS/SEI/AUD) and
-    their start codes count toward the NEXT slice's access unit -- that is
-    what the decoder's buffer receives before the frame is removed. Filler
-    data is the exception: it belongs to the access unit it follows
-    (7.4.1.2.3), as hrd_check.py counts it, and CBR pads a picture with it
+    """Split an Annex-B stream into access units (7.4.1.2.3). Returns a list
+    of (au_bytes, first_slice_nal_type, is_field). A new AU opens at an
+    AUD/SPS/PPS/SEI (or types 14-18) after a VCL NAL, or at a slice with
+    first_mb_in_slice 0 after a VCL NAL: non-VCL NALs and their start codes
+    count toward the picture that follows them, which is what the decoder's
+    buffer receives before it is removed, and the slices of one picture are
+    one AU. Filler and end-of-sequence/stream NALs stay with the picture they
+    follow, as hrd_check.py counts them, since CBR pads a picture with filler
     only where the buffer would otherwise run over."""
-    aus = []
     n = len(data)
     i = 0
-    starts = []  # (offset_of_startcode, nal_type)
+    starts = []  # (offset_of_startcode, offset_of_header)
     while i + 3 < n:
         if data[i] == 0 and data[i + 1] == 0:
             if data[i + 2] == 1:
-                starts.append((i, data[i + 3] & 0x1F))
+                starts.append((i, i + 3))
                 i += 3
                 continue
             if i + 4 < n and data[i + 2] == 0 and data[i + 3] == 1:
-                starts.append((i, data[i + 4] & 0x1F))
+                starts.append((i, i + 4))
                 i += 4
                 continue
         i += 1
-    if not starts:
-        return []
-    # AU boundaries: each slice NAL (type 1 or 5) ends an AU at the NEXT
-    # start code (or EOF). Everything since the previous AU's end belongs
-    # to this AU.
-    au_start = starts[0][0]
-    for k, (off, typ) in enumerate(starts):
-        if typ in (1, 5):
-            j = k + 1
-            while j < len(starts) and starts[j][1] == 12:
-                j += 1
-            end = starts[j][0] if j < len(starts) else n
-            aus.append((end - au_start, typ))
-            au_start = end
+    aus = []
+    cur = 0
+    typ = None
+    field = 0
+    seen_vcl = False
+    sps = None
+    for k, (s, h) in enumerate(starts):
+        e = starts[k + 1][0] if k + 1 < len(starts) else n
+        t = data[h] & 0x1F
+        if t == 7:
+            try:
+                sps = H.parse_sps(H.rbsp(data[h + 1:e]))
+            except (ValueError, IndexError):
+                pass
+        opens = False
+        fmb = fld = 0
+        if t in (1, 5):
+            fmb, fld = _slice_head(data, h, e, sps)
+            opens = seen_vcl and fmb == 0
+        elif t in (6, 7, 8, 9, 14, 15, 16, 17, 18):
+            opens = seen_vcl
+        if opens:
+            aus.append((cur, typ, field))
+            cur = 0
+            seen_vcl = False
+        if t in (1, 5) and not seen_vcl:
+            typ, field = t, fld
+            seen_vcl = True
+        cur += e - s
+    if seen_vcl:
+        aus.append((cur, typ, field))
     return aus
 
 
@@ -163,9 +199,11 @@ def main():
     underflows = []
     clamps = 0
     total_bits = 0
-    for idx, (au_bytes, typ) in enumerate(aus):
+    frames = 0.0
+    for idx, (au_bytes, typ, is_field) in enumerate(aus):
         bits = au_bytes * 8
         total_bits += bits
+        frames += 1.0
         fill += rate
         if fill > size:
             fill = size
@@ -177,7 +215,7 @@ def main():
             underflows.append((idx, typ, bits, fill))
             fill = 0  # decoder stalls; keep checking the tail
 
-    kbps = total_bits * fps / len(aus) / 1000.0
+    kbps = total_bits * fps / frames / 1000.0
     # --crf-max buys a quality floor with the buffer model: a frame the buffer
     # would have starved is coded at the ceiling instead and the bucket goes
     # negative. That is the option working, so it is reported as an under-run
@@ -192,7 +230,7 @@ def main():
     # both numbers on this line scale with it. A transcript that does not say
     # which rate it used cannot be audited after the fact -- which is how the
     # 12/36 reading survived long enough to be quoted.
-    print(f"{status} {args.stream}: {len(aus)} frames @ {fps:.4g} fps "
+    print(f"{status} {args.stream}: {frames:g} frames @ {fps:.4g} fps "
           f"[{fps_src}], {kbps:.1f} kbps "
           f"(maxrate {args.maxrate:.0f}, bufsize {args.bufsize:.0f} kbit), "
           f"min-fill {min_fill / 1000.0:.1f} kbit "
