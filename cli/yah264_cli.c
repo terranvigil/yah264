@@ -3115,7 +3115,7 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
         int m = 0;
         /* a two-pass takes its keys a segment of TP_SEG_MIN frames or more at
          * a time, the ones inside forced where the map has them */
-        int seg = tp_seg_on(param);
+        int seg = !g_open_gop && tp_seg_on(param);
         for (int i = 0; i < n; i++)
             if (idr[i] && (!seg || m == 0 || i - job->gop_start[m - 1] >= TP_SEG_MIN))
                 job->gop_start[m++] = i;
@@ -3296,9 +3296,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int keyint = param->keyint > 0 ? param->keyint : 1;
     /* a two-pass under a VBV splits short GOPs into segments of several, one
      * encoder each, keyframes inside on the --keyint grid: every segment start
-     * is a join and a pass 1 started cold */
+     * is a join and a pass 1 started cold. an open GOP is one instance */
     int tp_grid = 0;
-    if (keyint > 1 && keyint < TP_SEG_MIN && tp_split_vbv(param)) {
+    if (keyint > 1 && keyint < TP_SEG_MIN && !g_open_gop && tp_split_vbv(param)) {
         tp_grid = keyint;
         keyint *= (TP_SEG_MIN + keyint - 1) / keyint;
     }
