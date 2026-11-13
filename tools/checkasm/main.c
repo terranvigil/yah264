@@ -313,6 +313,8 @@ static void list_tests(uint32_t cpu, uint32_t isa_bits)
 int main(int argc, char **argv)
 {
     const char *only = NULL, *isa_name = NULL;
+    uint32_t isa_lower = 0;
+    int isa_own = 0, own_have = 0, own_ran = 0;
     int do_list = 0, fails = 0, ran = 0, skipped = 0;
     uint32_t isa_bits = 0xffffffffu;
 
@@ -347,6 +349,13 @@ int main(int argc, char **argv)
             return 2;
         }
         isa_bits = s->bits;
+        /* the tiers under this one: every other named isa whose bits it
+         * contains. a group above them is one of this tier's own */
+        for (const ca_isa *o = isas; o->name; o++)
+            if (o != s && o->bits != 0xffffffffu && !(o->bits & ~s->bits) &&
+                o->bits != s->bits)
+                isa_lower |= o->bits;
+        isa_own = s->bits != 0xffffffffu;
     }
     if (only) {
         int known = 0;
@@ -391,6 +400,8 @@ int main(int argc, char **argv)
                 continue;
             if (t->cpu_mask & ~isa_bits)
                 continue;
+            int own = isa_own && (t->cpu_mask & ~isa_lower);
+            own_have += own;
             if (t->cpu_mask & ~cpu) {
                 printf("  skip %-22s (needs a feature this CPU lacks)\n", t->name);
                 skipped++;
@@ -400,9 +411,22 @@ int main(int argc, char **argv)
             printf("  %-4s %s\n", r ? "FAIL" : "ok", t->name);
             fails += !!r;
             ran++;
+            own_ran += own;
         }
 
     printf("checkasm: %d group(s) run, %d skipped, %d failure(s)\n",
            ran, skipped, fails);
+    /* --isa X asks about X's kernels. with none of them run -- not built, or
+     * a cpu or a cap without X -- the answer is no, not a pass on the lower
+     * tiers' rows */
+    if (isa_own && !own_ran) {
+        if (own_have)
+            printf("checkasm: --isa %s ran none of its %d group(s): the cpu or the "
+                   "Y264_SIMD_FORCE cap lacks %s\n", isa_name, own_have, isa_name);
+        else
+            printf("checkasm: --isa %s: this build has no %s group%s%s\n", isa_name,
+                   isa_name, only ? " in " : "", only ? only : "");
+        return 1;
+    }
     return fails ? 1 : 0;
 }
