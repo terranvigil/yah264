@@ -51,6 +51,18 @@
 #   SET_SECONDS       seconds of each clip per cell (default 6, 2 rehearsing)
 #   LEGS              space-separated subset of the stage names below
 set -uo pipefail
+# perf and awk print and read decimals in the C locale only
+export LC_ALL=C
+
+# THE SIMD KNOBS BELONG TO THE LEGS. Each leg sets the tier it measures; one
+# inherited from the shell would cap every arm, and a tier compared against
+# itself reads as identical.
+for _v in Y264_SIMD_FORCE YAH264_NO_ASM Y264_ASM_OFF; do
+    if [ -n "${!_v+set}" ]; then
+        echo "campaign: $_v is set in the environment; unset it, the legs set the tiers themselves" >&2
+        exit 2
+    fi
+done
 
 C_SELF="$(cd "$(dirname "$0")" && pwd)"
 C_TREE="$(cd "$C_SELF/../.." && pwd)"
@@ -483,15 +495,25 @@ clips10() { ls "$CLIPS10_DIR"/*.y4m 2>/dev/null; }
 # read as "no tiers" it would pass every leg that uses it
 has10() { case " $TIERS10_CPU " in *" $1 "*) return 0 ;; esac; return 1; }
 tiers10() {
-    local line
-    line=$("$C_B10/tools/checkasm/checkasm" --list 2>/dev/null | head -1)
+    local ck="$C_B10/tools/checkasm/checkasm" line capped
+    line=$(env -u Y264_SIMD_FORCE -u YAH264_NO_ASM -u Y264_ASM_OFF "$ck" --list 2>/dev/null \
+           | head -1 | tr -d '\r')
     echo "# $line" >&2
     case "$line" in
-        "checkasm: cpu "*) ;;
-        *) echo "# no 'checkasm: cpu' line from checkasm --list" >&2; return 1 ;;
+        "checkasm: cpu "*", "*) ;;
+        *) echo "# no 'checkasm: cpu <features>, <depth>' line from checkasm --list" >&2; return 1 ;;
+    esac
+    # the tier cap must take: a build that ignores Y264_SIMD_FORCE (no
+    # dev_knobs) runs its default tier under every name
+    capped=$(env -u YAH264_NO_ASM -u Y264_ASM_OFF Y264_SIMD_FORCE=none "$ck" --list 2>/dev/null \
+             | head -1 | tr -d '\r')
+    case "$capped" in
+        "checkasm: cpu scalar, "*) ;;
+        *) echo "# Y264_SIMD_FORCE=none did not take ($capped): build with -Ddev_knobs=true" >&2
+           return 1 ;;
     esac
     TIERS10_CPU=${line#checkasm: cpu }
-    TIERS10_CPU=${TIERS10_CPU%%,*}
+    TIERS10_CPU=${TIERS10_CPU%%, *}
     case "$(uname -m)" in
         x86_64|amd64) has10 sse4 || { echo "# an x86-64 part reports no sse4" >&2; return 1; } ;;
     esac
