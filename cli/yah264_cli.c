@@ -2323,7 +2323,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         free(w); free(cw); free(rec); free(out); free(first);
         fclose(in);
         fprintf(stderr, "yah264: out of memory splitting '%s'\n", in_path);
-        return -1;
+        return -2;
     }
     long total_rec = 0;
     double total_w = 0.0;
@@ -3571,12 +3571,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             int fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
             gop_target = calloc((size_t)n_gops, sizeof(double));
-            if (tp_split_pass2(param->rc.stats, gop_stats, gop_target, gstart,
-                               n_gops, param->rc.bitrate,
-                               (double)fn / fd * (param->interlaced ? 2 : 1), param) != 0) {
-                fprintf(stderr, "yah264: pass 2 cannot use '%s' -- re-run pass 1 "
-                        "with the same --frames/--keyint and this thread count\n",
-                        param->rc.stats);
+            int sr = tp_split_pass2(param->rc.stats, gop_stats, gop_target, gstart,
+                                    n_gops, param->rc.bitrate,
+                                    (double)fn / fd * (param->interlaced ? 2 : 1), param);
+            if (sr != 0) {
+                if (sr == -1)       /* -2 is out of memory, already said */
+                    fprintf(stderr, "yah264: pass 2 cannot use '%s' -- re-run pass 1 "
+                            "with the same --frames/--keyint and this thread count\n",
+                            param->rc.stats);
                 tp_free_paths(gop_stats, n_gops, 1);
                 free(gop_target);
                 pthread_mutex_lock(&job.lock);

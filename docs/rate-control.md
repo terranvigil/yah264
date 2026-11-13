@@ -198,21 +198,23 @@ Pass 2 codes one frame at a time, its frame threads on the row wavefront, and
 holds every frame to the buffer by its measured size, as the single-pass
 modes do: a frame that comes out over the fit test, the GOP's exit corridor
 or the whole buffer is re-coded at the QP the overshoot asks for, and at QP 51
-once more without its per-macroblock offsets, and a picture that still
-doesn't fit is counted and named in a warning at the end. Each frame also
+once more without its per-macroblock offsets. The pictures that underflow
+the buffer anyway are counted over the stream the GOPs make together, and
+named in one warning at the end. Each frame also
 leaves the next frames what they cost at QP 51, priced from their pass-1
 records, and the next GOP's key what it costs at its planned QP. The
 splitter caps each GOP's budget at
 what the cap delivers over it plus half the buffer, hands the rest to the
 other GOPs, and plans the level each GOP joins at: the buffer walked over the
 GOP budgets, and no less than the next key's cost. A GOP coded right after
-its predecessor continues its buffer at the exact occupancy and its spend
-against its budget; any other starts at the planned level, and the one before
-it leaves at least that much, held to it only where what its remaining
-frames give back at QP 51 couldn't make it up. When the cap is at or under
-the target, a frame the buffer has room for spends it, up to what its budget
-allows; under `--nal-hrd cbr` filler counts as spent, and the stream ends
-with the buffer where it began.
+its predecessor continues its buffer at the exact occupancy; any other starts
+at the planned level, and the one before it leaves at least that much, held
+to it only where what its remaining frames give back at QP 51 couldn't make
+it up. Every GOP takes over its predecessor's spend against its budget,
+whichever worker coded it. When the cap is at or under the target, pass 2
+steers to no reserve of its own, and a frame the buffer has room for spends
+it, up to what its budget allows. `--nal-hrd` always runs one encoder, and
+under `--nal-hrd cbr` that encoder ends with the buffer where it began.
 
 ### Frame-level AQ strength by mode
 

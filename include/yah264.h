@@ -1308,8 +1308,8 @@ typedef struct yah264_rc_state {
 /* Export the ABR state after the flush (all frames accounted). out->size must
  * be set (see above). Returns 0 and out->valid = 1 for an ABR instance, and
  * for a pass 2 or 3 under a VBV, whose export carries the buffer occupancy
- * and its spend against its budget; -1 otherwise, with out->valid = 0 when out->size is accepted and
- * nothing written when it is not. */
+ * and its spend against its budget; -1 otherwise, with out->valid = 0 when
+ * out->size is accepted and nothing written when it is not. */
 YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 
 /* --- ABR state carried across GOP-parallel encoder instances ---------------
