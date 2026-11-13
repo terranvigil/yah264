@@ -1437,6 +1437,10 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         /* Spend spare buffer only at CBR (serial rule -- see vbv_cbr's init:
  * capped VBR fills at maxrate and this branch would chase it). */
         double room = rcbuf_overflow(&e->vbv, fill);
+        /* a pass 2 spends no more than its budget allows: a 10-frame clip at
+         * 900/900/900 spent its opening buffer and came out a third over */
+        if (tp_cbr(e) && e->tp_spare >= 0.0 && room > e->tp_spare)
+            room = e->tp_spare;
         /* a pass-2 GOP spends down to the level the next one joins at by its
          * last frame: what is left above it overflows */
         if (tp_cbr(e) && e->vbv_exit_n > 0) {
@@ -1447,6 +1451,10 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         }
         if (room > 0 && pred < room)
             newqp = e->qp + 6.0 * log2(pred / room);
+        /* ...and at most --qpstep under its plan: a B frame pass 1 coded at
+         * almost no bits predicts as nothing, and one dove 8 QP at once */
+        if (tp_cbr(e) && newqp < e->qp - e->qp_step)
+            newqp = e->qp - e->qp_step;
     }
     if (type != 2 && vbv_plan_on(e)) {
         double pq = vbv_burst_plan_qp(e, C, type, is_ref, fill);
@@ -2062,6 +2070,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         en.rceq = rceq;
         abr_scale_used = scale;
     } else if (e->tp_pass >= 2) {
+        e->tp_spare = -1.0;
         if (e->tp_idx < e->tp_n) {
             int idx = e->tp_idx++;
             e->tp_resv_cur = e->tp_resv ? e->tp_resv[idx + 1] : 0.0;
@@ -2078,6 +2087,11 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * every thread count because pend_pred is a decide-order fact. */
                 qp = tp_qscale2qp(tp_plan_qscale(e, idx, e->tp_actual, pend_pred, pend_lo));
                 en.tp_rec = idx;
+                /* what this frame may spend past its plan and leave the
+                 * frames after it theirs */
+                e->tp_spare = e->tp_target - e->tp_actual - pend_pred - e->tp_framing
+                            - (e->tp_ebits[e->tp_n] - e->tp_ebits[idx + 1]);
+                if (e->tp_spare < 0.0) e->tp_spare = 0.0;
             } else {
                 /* The plan-less 2-pass share against the virtual remainder: in-flight frames
  * have already claimed their predicted bits + cq share. */

@@ -1038,6 +1038,7 @@ struct yah264_encoder {
     struct tp_stat tp_next;     /* pass 2: the next GOP's first record (#next) */
     int      tp_have_next;
     double   tp_join, tp_exit;  /* pass 2: the splitter's join levels, bits; 0 = none */
+    double   tp_spare;          /* pass 2: budget past the plan for this frame, -1 = no cap */
     double  *tp_resv;           /* [n+1] under a VBV: occupancy record i needs at QP 51 */
     double   tp_resv_cur;       /* the reserve the frame being coded leaves */
     double   tp_fps;            /* records (pictures) per second, for the drift band */
