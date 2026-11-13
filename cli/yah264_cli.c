@@ -803,6 +803,7 @@ static void usage(const char *argv0)
         "  -p, --pass N       multi-pass: 1 = analysis (writes stats), 2 = final\n"
         "                     (reads them), 3 = read AND write, so a further pass\n"
         "                     refines against a real encode. Pair with --bitrate.\n"
+        "                     Run every pass at one thread, or every pass at more.\n"
         "  --stats PATH       2-pass stats file (default yah264.stats)\n"
         "  (--qp, --bitrate and --crf each select a rate-control mode. Give more\n"
         "   than one and the LAST on the command line wins, as in x264; what the\n"   /* x264-ok */
@@ -2288,9 +2289,8 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
 }
 
 /* under a VBV a GOP spends at most what the cap delivers over it plus half
- * the buffer; past that its share of the budget is never spent (the park_joy
- * GOP of park_joy+sintel at 2500/2500/1250 left the clip 21% under), so a
- * capped GOP keeps its cap and the rest goes to the others by weight */
+ * the buffer; past that its share of the budget is never spent, so a capped
+ * GOP keeps its cap and the rest goes to the others by weight */
 static void tp_split_cap(const yah264_param_t *param, double *target, const double *w,
                          const long *rec, int n_gops, double rps)
 {
@@ -2332,10 +2332,9 @@ static void tp_split_cap(const yah264_param_t *param, double *target, const doub
 /* the levels a VBV pass 2's GOPs join at, written into the sections with the
  * record that opens the next GOP: the buffer walked over the GOP budgets at
  * the cap's refill, and no less than the next key at the qscale its GOP's
- * budget averages, over --ipratio. a GOP after the first starts
- * there and the one before is held to leave that much. half the buffer left
- * a CBR buffer's top unspent and held every later key of akiyo CIF at
- * 100/150/30 to QP 45. static in the split, so it doesn't move with the
+ * budget averages, over --ipratio. a GOP after the first starts there and
+ * the one before is held to leave that much; half the buffer left a CBR
+ * buffer's top unspent. static in the split, so it doesn't move with the
  * worker count */
 static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first)[2][256],
                            const long *rec, const double *cw, const double *target,
@@ -2344,7 +2343,7 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
     double size = param->rc.vbv_bufsize * 1000.0;
     double rate = param->rc.vbv_maxrate * 1000.0 / rps;
     /* the encoder's I/P ratio, which --ipratio sets through this variable */
-    const char *ev = getenv("Y264_TP_IPF");
+    const char *ev = y264_env("Y264_TP_IPF");
     double ipf = ev ? atof(ev) / 100.0 : 1.4;
     if (ipf < 1.0) ipf = 1.4;
     double f = size;
@@ -2378,8 +2377,7 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
             fprintf(out[g + 1], "#join %.0f\n", j);
     }
     /* with the cap at or under the target the last GOP leaves the walked
-     * level too: a buffer it drains is spent on top of its budget (a still
-     * image at 150/150/150 k30 came out 11% over) */
+     * level too: a buffer it drains is spent on top of its budget */
     int g = n_gops - 1;
     if (g > 0 && out[g] && param->rc.vbv_maxrate <= param->rc.bitrate) {
         f += rec[g] * rate - target[g];
@@ -2409,10 +2407,11 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
     double *w = calloc((size_t)n_gops, sizeof(double));
     double *cw = calloc((size_t)n_gops, sizeof(double));
     long *rec = calloc((size_t)n_gops, sizeof(long));
+    long *want = calloc((size_t)n_gops, sizeof(long));
     FILE **out = calloc((size_t)n_gops, sizeof(FILE *));
     char (*first)[2][256] = calloc((size_t)n_gops, sizeof *first);
-    if (!w || !cw || !rec || !out || !first) {
-        free(w); free(cw); free(rec); free(out); free(first);
+    if (!w || !cw || !rec || !want || !out || !first) {
+        free(w); free(cw); free(rec); free(want); free(out); free(first);
         fclose(in);
         fprintf(stderr, "yah264: out of memory splitting '%s'\n", in_path);
         return -2;
@@ -2424,7 +2423,9 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
 
     while (fgets(ln, sizeof ln, in)) {
         if (ln[0] == '\n' || ln[0] == '\0') continue;
-        if (!strncmp(ln, "#threads", 8))         /* the encoder checks it */
+        /* the encoder checks it, in the priming open, which reads this whole
+         * file before any GOP's own section exists */
+        if (!strncmp(ln, "#threads", 8))
             continue;
         if (!strncmp(ln, TP_MARKER, strlen(TP_MARKER))) {
             int g, s, e, nr;
@@ -2440,6 +2441,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
                 bad = 1; break;
             }
             cur = g;
+            want[g] = nr;
             out[g] = fopen(gop_stats[g], "w");
             if (!out[g]) {
                 fprintf(stderr, "yah264: cannot write '%s'\n", gop_stats[g]);
@@ -2456,6 +2458,8 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         }
         int type, qp;
         double cplx, bits;
+        if (ln[0] == '#')                       /* the record count below says if it mattered */
+            continue;
         if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
             break;                              /* malformed: stop, as the encoder does */
         fputs(ln, out[cur]);
@@ -2475,18 +2479,24 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
     /* A section that opened but got no records leaves an empty file, which the
  * encoder reads as "no stats" and codes at base QP. Say so rather than let
  * it look like a plausible encode. */
-    if (!bad)
-        for (int g = 0; g < n_gops; g++)
+    if (!bad) {
+        for (int g = 0; g < n_gops; g++) {
             if (!rec[g]) {
                 fprintf(stderr, "yah264: stats file '%s' has no records for GOP %d "
                         "(frames %d..%d)\n", in_path, g, gstart[g], gstart[g + 1]);
                 bad = 1;
+            } else if (want[g] > 0 && rec[g] != want[g]) {
+                fprintf(stderr, "yah264: stats file '%s' holds %ld records for GOP %d, "
+                        "its marker says %ld\n", in_path, rec[g], g, want[g]);
+                bad = 1;
             }
+        }
+    }
 
     if (bad || total_rec == 0 || total_w <= 0.0) {
         for (int g = 0; g < n_gops; g++)
             if (out[g]) fclose(out[g]);
-        free(w); free(cw); free(rec); free(out); free(first);
+        free(w); free(cw); free(rec); free(want); free(out); free(first);
         return -1;
     }
 
@@ -2505,7 +2515,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
     }
     for (int g = 0; g < n_gops; g++)
         if (out[g]) fclose(out[g]);
-    free(w); free(cw); free(rec); free(out); free(first);
+    free(w); free(cw); free(rec); free(want); free(out); free(first);
     return 0;
 }
 

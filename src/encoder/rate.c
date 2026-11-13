@@ -789,25 +789,19 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
     double goal = e->rck.vbv_fill_frac * e->vbv.size;
     /* a pass-2 GOP the splitter planned steers to the level it leaves at,
      * where that is under half, and the last one to nothing where it plans
-     * none for it: held at half, a GOP that joined low (a cap under the
-     * target) climbed back instead of spending. one encoder for the whole clip keeps half, its reserve,
-     * except under a cap at or under the target (below) */
+     * none: held at half, a GOP that joined low climbed back instead of
+     * spending. one encoder for the clip keeps half, except as below */
     if (e->tp_pass >= 2 && e->tp_exit > 0.0 && e->vbv_seg_h < goal)
         goal = e->vbv_seg_h;
     else if (e->tp_pass >= 2 && e->tp_exit <= 0.0 && e->tp_join > 0.0)
         goal = 0.0;
     /* ...and with a cap at or under its target, to half the next key, or
      * half the buffer where that is less: the cap refills only what the plan
-     * spends, so a reserve held at half the buffer is never spent (cutsx CIF
-     * at 500/500/500, -0.76 dB at one thread), but a buffer the keys nearly
-     * fill needs one held for them (bbb 720p at 800/800/200 lost 1 dB aimed
-     * at nothing). The key is the plan's own where this encoder codes it
-     * (one encoder for the clip), else the splitter's #key. An encoder the
-     * exit corridor holds to its end level over all its frames, the last GOP
-     * of a split and a --nal-hrd cbr stream, steers to nothing: the corridor
-     * keeps the keys their buffer, and steered to a level as well the last
-     * GOP coded under its budget (stefan CIF at 700/700/700 k30 -6%) and
-     * --nal-hrd cbr at a quarter-second buffer lost 0.2-1.2 dB */
+     * spends, so a reserve of half the buffer is never spent, but keys that
+     * nearly fill the buffer need one. the key is this encoder's plan's where
+     * it codes it, else the splitter's #key. an encoder the exit corridor
+     * holds to its end level over all its frames steers to nothing: the
+     * corridor keeps the keys their buffer, and a goal on top starves it */
     if (e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate) {
         int i = e->tp_idx > 0 ? e->tp_idx - 1 : 0;
         double nk = e->tp_nkey && i < e->tp_n ? e->tp_nkey[i] : e->tp_key;
@@ -863,11 +857,8 @@ static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
         limit = 0.9 * e->vbv.size;
     if (e->tp_resv_cur > 0.0) {
         /* pass 2: leave the next frame what it needs at QP 51, out of what
-         * the buffer holds by the frames' real sizes: priced at their
-         * predictions' margin, an anchor still in the ledger left the B
-         * frames after it nothing, and ahead of each key they coded at QP 51
-         * between anchors at QP 28-30 (bbb10s 1080p at 1500/1500/750 k60,
-         * 32 such B frames, -0.35 dB and -0.9 VMAF; tos at 600/600/600) */
+         * the buffer holds by the frames' real sizes: at their predictions'
+         * margin an anchor still in the ledger left its B frames nothing */
         double x = fill + e->tp_fill_gap + e->vbv.rate - e->tp_resv_cur;
         if (x < 0.02 * e->vbv.rate) x = 0.02 * e->vbv.rate;
         if (x < limit) limit = x;
@@ -1487,9 +1478,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         /* Spend spare buffer only at CBR (serial rule -- see vbv_cbr's init:
  * capped VBR fills at maxrate and this branch would chase it). */
         /* by the frames' real sizes, as the reserve reads it: what a full
-         * buffer turns away is lost, and the predictions' margin hid it
-         * (bbb10s 1080p at 1500/1500/750 ran at half the cap with the
-         * buffer at its top) */
+         * buffer turns away is lost, and the predictions' margin hid it */
         double room = rcbuf_overflow(&e->vbv, fill + e->tp_fill_gap);
         /* a pass 2 spends no more than its budget allows: a 10-frame clip at
          * 900/900/900 spent its opening buffer and came out a third over */

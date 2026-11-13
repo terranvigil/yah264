@@ -5566,10 +5566,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         e->vbv_seg_h = e->tp_exit < e->vbv.size ? e->tp_exit : e->vbv.size;
                         /* the last GOP of a split with its cap at or under
                          * the target is held to the level the splitter walked
-                         * to, by its measured sizes too: what it drains
-                         * below that is spent on top of its budget, and a
-                         * still image's P frame priced at nothing coded 66
-                         * kbit (150/150/150 k30, 11% over) */
+                         * to, by its measured sizes too: what it drains below
+                         * that is spent on top of its budget */
                         if (e->tp_key <= 0.0 && param->rc.vbv_maxrate <= param->rc.bitrate) {
                             e->vbv_exit_n = e->tp_n;
                             e->vbv_exit_k = 1.0;
@@ -5577,11 +5575,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         }
                     } else if (param->nal_hrd == YAH264_NAL_HRD_CBR) {
                         /* a declared CBR stream delivers its rate: one that
-                         * ends with less in the buffer than it began spent
-                         * the opening buffer on top (grain 150 frames at
-                         * 1500/1500/1500, +8.4%), so it leaves at its start.
-                         * --nal-hrd always runs one encoder, so this is the
-                         * whole stream */
+                         * ends lower than it began spent the opening buffer
+                         * on top, so it leaves at its start. --nal-hrd always
+                         * runs one encoder, so this is the whole stream */
                         e->vbv_seg_h = e->vbv.fill;
                         e->vbv_exit_n = e->tp_n;
                         e->vbv_exit_k = 1.0;
@@ -5607,6 +5603,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
+                fprintf(e->tp_fp, "#threads %d\n", e->param.threads);
             }
             double bitrate = param->rc.bitrate > 0 ? param->rc.bitrate : 1000;
             /* a record per picture: field coding writes two a frame */
