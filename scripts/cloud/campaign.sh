@@ -134,7 +134,7 @@ fi
 
 ALL_LEGS="identity board-t1-asm board-t1-purec board-tN-asm board-tN-purec
           ffboard bd-at-rate bench-sse4 bench-avx2 bench-avx512 instr-ratio
-          avx512-ab"
+          avx512-ab checkasm10 identity10 board10-t1 board10-tN"
 # Normalised to single spaces before matching: ALL_LEGS wraps across lines, so
 # the token at each line end is followed by a newline and the `case` below
 # never matches it. Unfixed this made board-tN-purec and instr-ratio skip as
@@ -463,6 +463,176 @@ st_instr_ratio() {
 }
 
 # ---------------------------------------------------------------------------
+# The 10-bit legs. The 10-bit library has its own SSE4.2 and AVX2 tiers and no
+# AVX-512 form, so its identity axis is none/sse4/avx2, and the reference is
+# x264 built at --bit-depth=10 (bootstrap's build-x264-10), both arms. The clips
+# are 10-bit Y4M the operator stages in CLIPS10_DIR; the box fetches none.
+
+C_B10="${Y264_BUILD10:-$C_SRC/build-rel10}"
+Y264_10="$C_B10/cli/yah264"
+CLIPS10_DIR="${CLIPS10_DIR:-$CLOUD_WORK/clips10}"
+FRAMES10="${FRAMES10:-$(c_shape 60 6)}"
+
+clips10() { ls "$CLIPS10_DIR"/*.y4m 2>/dev/null; }
+
+st_checkasm10() {
+    [ -x "$C_B10/tools/checkasm/checkasm" ] || { c_skip "no 10-bit build"; return; }
+    local out="$RES/checkasm10.txt" isa rc=0
+    : > "$out"
+    for isa in sse4 avx2; do
+        "$C_B10/tools/checkasm/checkasm" --isa "$isa" >> "$out" 2>&1 || rc=1
+    done
+    grep -E 'checkasm:|FAIL' "$out"
+    return "$rc"
+}
+
+st_identity10() {
+    [ -x "$Y264_10" ] || { c_skip "no 10-bit build"; return; }
+    [ -n "$(clips10)" ] || { c_skip "no clips in $CLIPS10_DIR"; return; }
+    local out="$RES/identity10.txt" clip t mode tier rc=0
+    echo "# 10-bit identity, $SKU $DATE, $FRAMES10 frames, tiers none sse4 avx2" > "$out"
+    for tier in none sse4 avx2; do
+        : > "$RES/.md5.$tier"
+        for clip in $(clips10); do
+            for t in 1 "$TN"; do
+                for mode in "--crf 23" "--preset slow --crf 30"; do
+                    # shellcheck disable=SC2086
+                    if ! Y264_SIMD_FORCE="$tier" "$Y264_10" --input-y4m "$clip" \
+                        --frames "$FRAMES10" $mode --threads "$t" -o "$RES/.x.264" \
+                        >/dev/null 2>"$RES/.x.err"; then
+                        echo "$tier $(basename "$clip") t$t $mode: ENCODE FAILED" >> "$out"
+                        rc=1; continue
+                    fi
+                    printf '%s  %s t%s %s\n' "$(c_sha256 "$RES/.x.264" | cut -c1-32)" \
+                        "$(basename "$clip")" "$t" "$mode" >> "$RES/.md5.$tier"
+                done
+            done
+        done
+    done
+    # above one thread the output may vary run to run, so only t1 must match
+    for tier in sse4 avx2; do
+        if diff -q <(grep ' t1 ' "$RES/.md5.none") <(grep ' t1 ' "$RES/.md5.$tier") >/dev/null; then
+            echo "$tier vs none, threads 1: IDENTICAL" >> "$out"
+        else
+            echo "$tier vs none, threads 1: DIFFERS -- a kernel moved a byte" >> "$out"; rc=1
+        fi
+        diff -q <(grep -v ' t1 ' "$RES/.md5.none") <(grep -v ' t1 ' "$RES/.md5.$tier") >/dev/null \
+            && echo "$tier vs none, threads $TN: identical (informational)" >> "$out" \
+            || echo "$tier vs none, threads $TN: differs (informational)" >> "$out"
+    done
+    cp -f "$RES/.md5.none" "$RES/identity10-md5.txt"
+    rm -f "$RES"/.md5.* "$RES/.x.264" "$RES/.x.err"
+    cat "$out"
+    return "$rc"
+}
+
+# perf10 <outfile-of-rows> <label> <cmd...>: one pinned encode, its instructions
+# and task-clock (CPU seconds) as one row
+perf10() {
+    local rows="$1" label="$2" rep; shift 2
+    rep=$(perf stat -x, -e instructions,task-clock -- "$@" 2>&1 >/dev/null) || {
+        echo "$label ENCFAIL" >> "$rows"; return 1; }
+    local ins
+    ins=$(printf '%s\n' "$rep" | awk -F, '$3 ~ /^instructions/ && $1 ~ /^[0-9]/ {print $1; exit}')
+    printf '%s %s %s\n' "$label" "${ins:-NA}" \
+        "$(printf '%s\n' "$rep" | awk -F, '$3 ~ /^task-clock/ {printf "%.3f", $1 / 1000; exit}')" >> "$rows"
+}
+
+# One thread, pinned: yah264's 10-bit library at each tier and C, x264's 10-bit
+# build with its assembly and as the fair C build; medium preset, CRF 23. Each
+# arm runs REPS times interleaved and the table takes the median CPU time.
+st_board10_t1() {
+    [ -x "$Y264_10" ] || { c_skip "no 10-bit build"; return; }
+    [ -x "${X264_10_ASM:-}" ] && [ -x "${X264_10_C:-}" ] || { c_skip "no 10-bit x264 (build-x264-10)"; return; }
+    [ -n "$(clips10)" ] || { c_skip "no clips in $CLIPS10_DIR"; return; }
+    command -v perf >/dev/null 2>&1 || { c_skip "no perf"; return; }
+    # a VM without PMU passthrough still has task-clock: the instruction
+    # column then reads NA and the CPU-seconds column stands alone
+    c_can_time || { c_skip "an emulated count is the emulator's own"; return; }
+    local reps="${REPS10:-3}" rows="$RES/.board10.rows" out="$RES/board10-t1.txt" clip n r
+    : > "$rows"
+    for clip in $(clips10); do
+        n=$(basename "$clip" .y4m)
+        for r in $(seq 1 "$reps"); do
+            perf10 "$rows" "$n y264-avx2" "${PIN[@]+"${PIN[@]}"}" "$Y264_10" --input-y4m "$clip" \
+                --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
+            perf10 "$rows" "$n y264-sse4" env Y264_SIMD_FORCE=sse4 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
+                --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
+            perf10 "$rows" "$n y264-c" env YAH264_NO_ASM=1 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
+                --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
+            perf10 "$rows" "$n x264-asm" "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --preset medium \
+                --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
+            # x264's own dispatch capped at AVX2, the like-for-like arm on an
+            # AVX-512 part (on an AVX2-only part it equals x264-asm)
+            perf10 "$rows" "$n x264-avx2" "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --asm avx2 \
+                --preset medium --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
+            perf10 "$rows" "$n x264-c" "${PIN[@]+"${PIN[@]}"}" "$X264_10_C" --preset medium \
+                --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
+        done
+    done
+    {
+        echo "# 10-bit, threads 1, $PIN_DESC, $FRAMES10 frames, medium/CRF 23, median of $reps"
+        echo "# $SKU $DATE  $CPU_MODEL"
+        python3 - "$rows" <<'PY'
+import sys, statistics as st
+rows = {}
+for l in open(sys.argv[1]):
+    f = l.split()
+    if len(f) == 4:
+        rows.setdefault((f[0], f[1]), []).append((int(f[2]) if f[2] != "NA" else 0, float(f[3])))
+clips = sorted({c for c, _ in rows})
+print(f"{'clip':<26}{'arm':<11}{'instr':>10}{'cpu s':>9}")
+for c in clips:
+    m = {}
+    for a in ("y264-avx2", "y264-sse4", "y264-c", "x264-asm", "x264-avx2", "x264-c"):
+        v = rows.get((c, a))
+        if not v:
+            continue
+        m[a] = (st.median(i for i, _ in v), st.median(t for _, t in v))
+        ins = f"{m[a][0] / 1e9:>9.2f}G" if m[a][0] else f"{'NA':>10}"
+        print(f"{c:<26}{a:<11}{ins}{m[a][1]:>9.2f}")
+    for y, x in (("y264-avx2", "x264-asm"), ("y264-avx2", "x264-avx2"),
+                 ("y264-sse4", "x264-asm"), ("y264-c", "x264-c")):
+        if y in m and x in m:
+            ir = f"{m[y][0] / m[x][0]:.3f}" if m[x][0] else "NA"
+            print(f"{c:<26}{y + '/' + x:<22} instr {ir}  cpu {m[y][1] / m[x][1]:.3f}")
+PY
+    } > "$out"
+    cp -f "$rows" "$RES/board10-t1.rows"
+    cat "$out"
+}
+
+# Full threads, wall time: yah264 as shipped against x264's 10-bit asm build,
+# alternated, median of REPS10. Reported apart from the one-thread table.
+st_board10_tN() {
+    [ -x "$Y264_10" ] && [ -x "${X264_10_ASM:-}" ] || { c_skip "no 10-bit arms"; return; }
+    [ -n "$(clips10)" ] || { c_skip "no clips in $CLIPS10_DIR"; return; }
+    c_can_time || { c_skip "an emulated wall time is the emulator's"; return; }
+    local reps="${REPS10:-3}" out="$RES/board10-tN.txt" clip n r t0 t1
+    echo "# 10-bit, default threads (tN = $TN vCPUs), $FRAMES10 frames, medium/CRF 23, wall s, median of $reps" > "$out"
+    for clip in $(clips10); do
+        n=$(basename "$clip" .y4m)
+        : > "$RES/.wall"
+        for r in $(seq 1 "$reps"); do
+            t0=$(date +%s.%N); "$Y264_10" --input-y4m "$clip" --frames "$FRAMES10" --crf 23 -o /dev/null >/dev/null 2>&1
+            t1=$(date +%s.%N); echo "y $(awk "BEGIN{print $t1 - $t0}")" >> "$RES/.wall"
+            t0=$(date +%s.%N); "$X264_10_ASM" --preset medium --crf 23 --frames "$FRAMES10" -o /dev/null "$clip" >/dev/null 2>&1
+            t1=$(date +%s.%N); echo "x $(awk "BEGIN{print $t1 - $t0}")" >> "$RES/.wall"
+        done
+        python3 - "$RES/.wall" "$n" >> "$out" <<'PY'
+import sys, statistics as st
+w = {"y": [], "x": []}
+for l in open(sys.argv[1]):
+    k, v = l.split(); w[k].append(float(v))
+y, x = st.median(w["y"]), st.median(w["x"])
+print(f"{sys.argv[2]:<26} yah264 {y:7.2f}  x264 {x:7.2f}  ratio {y / x:.3f}")
+PY
+    done
+    rm -f "$RES/.wall"
+    cat "$out"
+}
+
+# ---------------------------------------------------------------------------
 # The AVX-512 decision leg: AVX-512 against AVX2 on ONE BINARY, through
 # Y264_SIMD_FORCE, with YAH264_NO_ASM=1 as the control column.
 #
@@ -594,6 +764,10 @@ while :; do
     run bench-avx512   st_bench_avx512    600 || break
     run instr-ratio    st_instr_ratio     900 || break
     run avx512-ab      st_avx512_ab      1800 || break
+    run checkasm10     st_checkasm10      300 || break
+    run identity10     st_identity10      900 || break
+    run board10-t1     st_board10_t1     3600 || break
+    run board10-tN     st_board10_tN     1200 || break
     break
 done
 
