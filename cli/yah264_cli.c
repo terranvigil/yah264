@@ -2337,6 +2337,8 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
                 fprintf(stderr, "yah264: cannot write '%s'\n", gop_stats[g]);
                 bad = 1; break;
             }
+            /* the encoder reads #next, #join, #exit and #key only under this */
+            fputs("#split\n", out[g]);
             continue;
         }
         if (cur < 0) {                          /* records before any marker */

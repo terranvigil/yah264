@@ -4426,6 +4426,13 @@ static int level_fit(yah264_encoder_t *e)
     return 0;
 }
 
+/* a level the splitter planned: within the buffer, which the splitter clamps
+ * it to (0.1 to 0.97 of it); anything else is a damaged file, ignored */
+static int tp_level_ok(const yah264_encoder_t *e, double v)
+{
+    return e->vbv_on && isfinite(v) && v >= 0.05 * e->vbv.size && v <= e->vbv.size;
+}
+
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
@@ -5481,22 +5488,27 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * needs to know where each GOP's records start. A file with no
  * markers reads exactly as it always did. */
                 long mframes = 0;
+                int split = 0;      /* a file the GOP splitter wrote */
                 while (fgets(ln, sizeof ln, fp)) {
                     int mg, ms, me, mr;
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
                         mframes += me - ms;
+                    if (!strncmp(ln, "#split", 6))
+                        split = 1;
+                    double mbits = 1536.0 * e->width_in_mbs * e->height_in_mbs
+                                 * (Y264_BIT_DEPTH > 8 ? 2 : 1);
                     struct tp_stat nx = {0};
-                    if (e->tp_n_next < 2
+                    if (split && e->tp_n_next < 2
                         && sscanf(ln, "#next %d %lf %lf %d", &nx.type, &nx.cplx, &nx.bits, &nx.qp) == 4
-                        && isfinite(nx.bits) && nx.bits >= 0.0 && nx.bits < 1e12
+                        && isfinite(nx.bits) && nx.bits >= 0.0 && nx.bits <= mbits
                         && nx.qp >= 0 && nx.qp <= 51)
                         e->tp_next[e->tp_n_next++] = nx;
                     double jv;
-                    if (sscanf(ln, "#join %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                    if (split && sscanf(ln, "#join %lf", &jv) == 1 && tp_level_ok(e, jv))
                         e->tp_join = jv;
-                    if (sscanf(ln, "#exit %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                    if (split && sscanf(ln, "#exit %lf", &jv) == 1 && tp_level_ok(e, jv))
                         e->tp_exit = jv;
-                    if (sscanf(ln, "#key %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                    if (split && sscanf(ln, "#key %lf", &jv) == 1 && tp_level_ok(e, jv))
                         e->tp_key = jv;
                     if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0')
                         continue;
