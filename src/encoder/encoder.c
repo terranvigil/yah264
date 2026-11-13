@@ -5490,8 +5490,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         mframes += me - ms;
                     if (!strncmp(ln, "#split", 6))
                         split = 1;
-                    double mbits = 1536.0 * e->width_in_mbs * e->height_in_mbs
-                                 * (Y264_BIT_DEPTH > 8 ? 2 : 1);
+                    /* a picture's raw samples at its depth, and half again for
+                     * what the syntax adds: a real key at QP <= 14 runs 2000
+                     * bits a macroblock, a 4:4:4 one more */
+                    double mbits = 1.5 * Y264_BIT_DEPTH * e->width_in_mbs * e->height_in_mbs
+                                 * (256.0 + 2.0 * 256.0 / (e->sub_w * e->sub_h));
                     struct tp_stat nx = {0};
                     if (split && e->tp_n_next < 2
                         && sscanf(ln, "#next %d %lf %lf %d", &nx.type, &nx.cplx, &nx.bits, &nx.qp) == 4
