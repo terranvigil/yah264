@@ -118,8 +118,8 @@ bits, so on an AVX-512 machine the 10-bit library runs AVX2.
 Measured at one thread on rented Intel and AMD machines, the AVX2 tier takes
 less CPU time than x264's 10-bit build with its assembly, and retires fewer
 instructions where the machine exposes the counters. The C build does the
-same against x264's fair C build, and the SSE4.2 tier is level with or ahead
-of x264's assembly.
+same against x264's fair C build. The SSE4.2 tier is ahead of x264's
+assembly on most clips and within about 10% on the rest.
 
 | family | 10-bit SSE4.2 and AVX2 | stays C |
 |---|---|---|
