@@ -1225,7 +1225,7 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
             return y264_ssd_8xh_neon(a, as, b, bs, h);
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     /* The x86 tiers select through y264_cpu_tier(), which demands a tier's
      * WHOLE feature set before admitting a kernel out of it: an AVX2 box takes
      * the AVX2 form, an SSE4.2 one the SSE4.2 form, and a build capped at sse4
@@ -1233,7 +1233,7 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
     if (y264_asm_on(Y264_ASM_SSD)) {
         int tier = y264_cpu_tier();
         if (w == 16) {
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
             if (tier >= Y264_TIER_AVX2)
                 return y264_ssd_16xh_avx2(a, as, b, bs, h);
 #endif
@@ -1241,7 +1241,7 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
                 return y264_ssd_16xh_sse4(a, as, b, bs, h);
         }
         if (w == 8) {
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
             if (tier >= Y264_TIER_AVX2)
                 return y264_ssd_8xh_avx2(a, as, b, bs, h);
 #endif
@@ -1974,10 +1974,10 @@ static void ssd4x4_map16(const pixel *a, int as, const pixel *b, int bs, uint32_
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (y264_asm_on(Y264_ASM_SSD)) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_ssd4x4_map16_avx2(a, as, b, bs, out);
             return;
@@ -2062,7 +2062,7 @@ static void ssdsum4x4_c(const pixel *a, int as, const pixel *b, int bs, int nbx,
             e[r * nbx + c] = ee; sum[r * nbx + c] = ss;
         }
 }
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 /* The x86 forms of the two maps, selected the way ssd_block selects: a tier
  * runs only when the CPU has its whole feature set. Returns 0 when no tier
  * applies and the caller takes the C walk. `big` is the 16x16 form. */
@@ -2070,7 +2070,7 @@ static inline int ssdsum4x4_x86(const pixel *a, int as, const pixel *b, int bs,
                                 int big, uint32_t *e, int32_t *sum)
 {
     int tier = y264_asm_on(Y264_ASM_SSD) ? y264_cpu_tier() : Y264_TIER_C;
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     if (tier >= Y264_TIER_AVX2) {
         if (big) y264_ssdsum4x4_16_avx2(a, as, b, bs, e, sum);
         else     y264_ssdsum4x4_8_avx2(a, as, b, bs, e, sum);
@@ -2102,7 +2102,7 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
     if (neon) y264_ssdsum4x4_16_neon(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
 #endif
     int x86 = 0;
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     x86 = ssdsum4x4_x86(ys, f->src_stride[0], yr, f->rec_stride[0], 1, st->e4, st->s4);
 #endif
     if (!neon && !x86) ssdsum4x4_c(ys, f->src_stride[0], yr, f->rec_stride[0], 4, 4, st->e4, st->s4);
@@ -2128,7 +2128,7 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
             if (neon) y264_ssdsum4x4_8_neon(cs, f->src_stride[c], cr, f->rec_stride[c],
                                             st->ec[c - 1], st->sc[c - 1]);
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
             if (x86) (void)ssdsum4x4_x86(cs, f->src_stride[c], cr, f->rec_stride[c], 0,
                                          st->ec[c - 1], st->sc[c - 1]);
 #endif

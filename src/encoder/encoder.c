@@ -6376,19 +6376,32 @@ static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, in
 #if Y264_HAVE_NEON10
     const int hp_neon = y264_asm_on(Y264_ASM_MC) && xe >= 8;
 #endif
+#if Y264_HAVE_SSE4_10
+    const int hp_x86 = (y264_asm_on(Y264_ASM_MC) && xe >= 8) ? y264_cpu_tier() : Y264_TIER_C;
+#endif
     for (int y = 0; y < lh; y++) {
         int y0 = 2 * y, y1 = y0 + 1 < ph ? y0 + 1 : ph - 1, y2 = y0 + 2 < ph ? y0 + 2 : ph - 1;
         const pixel *r0 = src + y0 * ss, *r1 = src + y1 * ss, *r2 = src + y2 * ss;
         pixel *restrict oh = hp[0] + y * lw, *restrict ov = hp[1] + y * lw, *restrict oc = hp[2] + y * lw;
 #if Y264_HAVE_SSE4 && Y264_BIT_DEPTH == 8
         /* the x86 tiers take the clamp-free span as one dispatched row; above
-         * 8 bits the loop below runs, since its rows round to the 8-bit scale */
+         * 8 bits the tiers' own rows run below, rounding to the 8-bit scale */
         y264_lr_hp_row(oh, ov, oc, r0, r1, r2, xe);
 #else
 #if Y264_HAVE_NEON10
         /* the 10-bit kernel rounds to the 8-bit scale as the loop does */
         if (hp_neon)
             y264_lr_hp_row_neon(oh, ov, oc, r0, r1, r2, xe);
+        else
+#endif
+#if Y264_HAVE_AVX2_10
+        if (hp_x86 >= Y264_TIER_AVX2)
+            y264_lr_hp_row_avx2(oh, ov, oc, r0, r1, r2, xe);
+        else
+#endif
+#if Y264_HAVE_SSE4_10
+        if (hp_x86 >= Y264_TIER_SSE4)
+            y264_lr_hp_row_sse4(oh, ov, oc, r0, r1, r2, xe);
         else
 #endif
         for (int x = 0; x < xe; x++) {

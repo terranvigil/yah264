@@ -202,12 +202,22 @@ endif
 # empty placeholder is that the shape -- three libraries, their flags, their
 # macros -- was compiled by every x86 build rather than written blind on the
 # day its first kernel landed. The
-# 10-bit library opts in to nothing, because the x86 lanes are 8-bit.
+# 10-bit library has its own lists below, because the 8-bit kernels' lanes are
+# bytes.
 x86_all_families = ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter']
 x86_tier_families = {
   'sse4'   : ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter'],
   'avx2'   : ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter'],
   'avx512' : ['metrics', 'interp'],
+}
+# The 10-bit library's x86 tiers: one file per family and tier,
+# src/dsp/x86/<family>_<tier>_10.c, on 16-bit lanes, taking the 8-bit kernels'
+# names (symbols10.h suffixes them). A family is listed once it has kernels;
+# what is not listed stays on C at 10 bits. No AVX-512 at 10 bits yet, so that
+# library's tier caps at AVX2.
+x86_10_tier_families = {
+  'sse4'   : ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter'],
+  'avx2'   : ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter'],
 }
 x86_tier_args = {
   'sse4'   : ['-msse4.2'],
@@ -236,6 +246,10 @@ foreach t, on : simd_tiers
 endforeach
 add_project_arguments('-DY264_HAVE_NEON10=@0@'.format(
   have_neon and not is_8bit ? 1 : 0), language : 'c')
+add_project_arguments('-DY264_HAVE_SSE4_10=@0@'.format(
+  have_sse4 and not is_8bit ? 1 : 0), language : 'c')
+add_project_arguments('-DY264_HAVE_AVX2_10=@0@'.format(
+  have_avx2 and not is_8bit ? 1 : 0), language : 'c')
 x86_families_built = []
 foreach f : x86_all_families
   foreach t : x86_tiers
@@ -326,6 +340,10 @@ foreach d : [8, 10]
   endforeach
   args += ['-UY264_HAVE_NEON10', '-DY264_HAVE_NEON10=@0@'.format(
            have_neon and d == 10 ? 1 : 0)]
+  args += ['-UY264_HAVE_SSE4_10', '-DY264_HAVE_SSE4_10=@0@'.format(
+           have_sse4 and d == 10 ? 1 : 0)]
+  args += ['-UY264_HAVE_AVX2_10', '-DY264_HAVE_AVX2_10=@0@'.format(
+           have_avx2 and d == 10 ? 1 : 0)]
   foreach f : x86_all_families
     args += '-UY264_SIMD_' + f.to_upper()
     if d == 8 and f in x86_families_built
@@ -368,6 +386,27 @@ foreach t : x86_tiers
   x86_objects += x86_tier_lib.extract_all_objects(recursive : false)
 endforeach
 
+# The same per-tier libraries for the 10-bit library, built with its exact
+# arguments (the symbols10.h namespace included) and folded into it.
+x86_10_objects = []
+foreach t : x86_tiers
+  tier_srcs = []
+  foreach f : x86_10_tier_families.get(t, [])
+    tier_srcs += 'src/dsp/x86/' + f + '_' + t + '_10.c'
+  endforeach
+  if tier_srcs.length() > 0
+    x86_10_tier_lib = static_library('yah264_10_x86_' + t,
+      tier_srcs,
+      c_args : depth_args['10'] + x86_tier_args[t],
+      include_directories : inc,
+      dependencies : [m_dep],
+      pic : true,
+      gnu_symbol_visibility : 'hidden',
+      install : false)
+    x86_10_objects += x86_10_tier_lib.extract_all_objects(recursive : false)
+  endif
+endforeach
+
 # BOTH forms, and the distinction is worth 12-14% of wall time.
 #
 # Callers outside this tree need a shared object -- the ffmpeg encoder wrapper is
@@ -408,6 +447,7 @@ libyah264_both = both_libraries('yah264',
 
 libyah264_10_both = both_libraries('yah264_10',
   depth_sources['10'],
+  objects : x86_10_objects,
   c_args : depth_args['10'],
   include_directories : inc,
   dependencies : lib_deps,

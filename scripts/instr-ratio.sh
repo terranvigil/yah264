@@ -26,6 +26,7 @@
 # Usage: scripts/instr-ratio.sh [seconds]
 # Env: CLIPS (same format as parity-clips.sh), YAH264, X264_C
 set -uo pipefail
+export LC_ALL=C   # perf and awk decimals
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SECONDS_PER="${1:-6}"
 PRESET="${SET_PRESET:-medium}"
@@ -57,7 +58,10 @@ else
 measure() {  # -> "<instructions> <wall_seconds>"
     local rep t0 t1
     t0=$(date +%s.%N)
-    rep=$(perf stat -x, -e instructions,cycles,task-clock -- "$@" 2>&1 >/dev/null) || { printf '%s\n' "$rep" | grep -m1 . >&2; return 1; }
+    # perf exits 0 when the command dies on a signal; the shell carries the
+    # command's own status out
+    rep=$(perf stat -x, -e instructions,cycles,task-clock -- sh -c '"$@"; exit $?' sh "$@" \
+          2>&1 >/dev/null) || { printf '%s\n' "$rep" | grep -m1 . >&2; return 1; }
     t1=$(date +%s.%N)
     printf '%s %s\n' \
         "$(printf '%s\n' "$rep" | awk -F, '$3 ~ /^instructions/ && $1 ~ /^[0-9]/ {print $1; exit}')" \

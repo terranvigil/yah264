@@ -62,6 +62,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# QEMU for the --backend qemu legs, run EXPLICITLY by scripts/x86-docker.sh as
+# `qemu-x86_64 -cpu <model> <binary>` inside this image. The script never
+# touches the Docker VM's binfmt entries: those are global to the VM, which
+# other sessions share, so flipping them for one run changed what every other
+# container ran under. Debian's qemu-user ships static binaries; only
+# qemu-x86_64 is kept. Ubuntu's own qemu-user is too old for the AVX2 legs (it
+# mis-emulates a 256-bit insert), hence the pinned Debian package, fetched
+# from snapshot.debian.org so the URL outlives the pool's next update.
+ARG QEMU_DEB=https://snapshot.debian.org/archive/debian/20260905T205002Z/pool/main/q/qemu/qemu-user_10.0.13%2Bds-0%2Bdeb13u1_amd64.deb
+ARG QEMU_SHA256=ca6ede739327a20ae5a3498230c8a3a9a072c586e131bc6bcc1201eb1725e336
+RUN curl -fsSL -o /tmp/qemu.deb "$QEMU_DEB" \
+    && echo "$QEMU_SHA256  /tmp/qemu.deb" | sha256sum -c - \
+    && mkdir -p /tmp/q /opt/qemu && cd /tmp/q && ar x /tmp/qemu.deb \
+    && tar -xf data.tar.xz ./usr/bin/qemu-x86_64 \
+    && install -m 755 usr/bin/qemu-x86_64 /opt/qemu/qemu-x86_64 \
+    && cd / && rm -rf /tmp/q /tmp/qemu.deb \
+    && /opt/qemu/qemu-x86_64 --version
+
 # The scripts run as the invoking uid/gid so that nothing they write into the
 # bind-mounted worktree comes back owned by root. That uid has no passwd entry
 # and therefore no home, which meson and pip both want, so give them one that

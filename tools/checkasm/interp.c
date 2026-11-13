@@ -73,7 +73,7 @@ static void mplane(void)
 #define HTAP6(a, b, c, d, e, f) ((a) - 5 * (b) + 20 * (c) + 20 * (d) - 5 * (e) + (f))
 #define HCLIP(v) ((v) < 0 ? 0 : (v) > PIXEL_MAX ? PIXEL_MAX : (v))
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 /* ---- one body per group, the kernel as an argument ------------------------
  *
@@ -399,7 +399,7 @@ static int run_bilin4_row(const char *name, bilin4_row_fn kern)
 }
 #endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*mc_chroma_bi8_fn)(pixel *, int, const pixel *, int, int, int,
                                  const pixel *, int, int, int, int, int);
 /* Two 8x8 chroma compensations averaged in one pass, against the plain C
@@ -545,9 +545,9 @@ static int run_avg_mb420_flat(const char *name, avg_mb420_flat_fn kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 /* ---- the interpolation kernels ------------------------------------------- */
 
 /* The read window a luma kernel DECLARES, phase by phase: the block itself,
@@ -645,7 +645,7 @@ static int run_mc_luma_win(const char *name, mc_luma_fn k16, mc_luma_fn k8,
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
 /* The chroma kernels, at the shapes the dispatcher routes to each of them.
  * `k8` is the fixed 8x8 form where a tier has one and NULL where the 8-wide
@@ -830,16 +830,16 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_SSE4 || Y264_HAVE_NEON10
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 || Y264_HAVE_NEON10
 
 /* ---- the bodies the x86 tiers and the 10-bit NEON tier have rows for ------ */
 
 typedef void (*lr_hp_row_fn)(pixel *, pixel *, pixel *, const pixel *,
                              const pixel *, const pixel *, int);
 
-#if Y264_HAVE_NEON10
+#if Y264_HAVE_NEON10 || Y264_HAVE_SSE4_10
 /* The 10-bit row's scalar form, on the 8-bit scale the lowres planes hold:
  * each pair mean rounds to the 8-bit scale and the result saturates at 255,
  * as the encoder's own lowres build does. */
@@ -1033,7 +1033,7 @@ static int run_hpel_band(const char *name, hpel_band_fn kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_SSE4 || Y264_HAVE_NEON10 */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 || Y264_HAVE_NEON10 */
 
 /* ---- the rows, one thin function per tier -------------------------------- */
 
@@ -1076,7 +1076,14 @@ static int t_hpel_band_neon(void)
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 */
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
+
+/* the 10-bit lowres row rounds to the 8-bit scale, as the NEON10 one does */
+#if Y264_HAVE_SSE4_10
+#define LR_HP_X86_REF lr_hp_row8_ref
+#else
+#define LR_HP_X86_REF y264_lr_hp_row_c
+#endif
 
 static int t_pred_copy_sse4(void)
 { return run_pred_copy("pred_copy_sse4", y264_pred_copy_sse4); }
@@ -1095,10 +1102,12 @@ static int t_hpel_rows_sse4(void)
                        y264_hpel_outrow_sse4); }
 static int t_hpel_band_sse4(void)
 { return run_hpel_band("hpel_band_sse4", y264_hpel_build_band_sse4); }
+#if Y264_HAVE_SSE4  /* no 10-bit twin */
 static int t_bilin4_row_sse4(void)
 { return run_bilin4_row("bilin4_row_sse4", y264_bilin4_row_sse4); }
+#endif
 static int t_lr_hp_row_sse4(void)
-{ return run_lr_hp_row("lr_hp_row_sse4", y264_lr_hp_row_sse4, y264_lr_hp_row_c); }
+{ return run_lr_hp_row("lr_hp_row_sse4", y264_lr_hp_row_sse4, LR_HP_X86_REF); }
 static int t_pixel_avg_wt_2d_sse4(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d_sse4", y264_pixel_avg_wt_2d_sse4); }
 static int t_mc_chroma_bi8_sse4(void)
@@ -1106,9 +1115,9 @@ static int t_mc_chroma_bi8_sse4(void)
 static int t_avg_mb420_flat_sse4(void)
 { return run_avg_mb420_flat("avg_mb420_flat_sse4", y264_avg_mb420_flat_sse4); }
 
-#endif /* Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 
 static int t_pred_copy_avx2(void)
 { return run_pred_copy("pred_copy_avx2", y264_pred_copy_avx2); }
@@ -1127,10 +1136,12 @@ static int t_hpel_rows_avx2(void)
                        y264_hpel_outrow_avx2); }
 static int t_hpel_band_avx2(void)
 { return run_hpel_band("hpel_band_avx2", y264_hpel_build_band_avx2); }
+#if Y264_HAVE_AVX2  /* no 10-bit twin */
 static int t_bilin4_row_avx2(void)
 { return run_bilin4_row("bilin4_row_avx2", y264_bilin4_row_avx2); }
+#endif
 static int t_lr_hp_row_avx2(void)
-{ return run_lr_hp_row("lr_hp_row_avx2", y264_lr_hp_row_avx2, y264_lr_hp_row_c); }
+{ return run_lr_hp_row("lr_hp_row_avx2", y264_lr_hp_row_avx2, LR_HP_X86_REF); }
 static int t_pixel_avg_wt_2d_avx2(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d_avx2", y264_pixel_avg_wt_2d_avx2); }
 static int t_mc_chroma_bi8_avx2(void)
@@ -1138,7 +1149,7 @@ static int t_mc_chroma_bi8_avx2(void)
 static int t_avg_mb420_flat_avx2(void)
 { return run_avg_mb420_flat("avg_mb420_flat_avx2", y264_avg_mb420_flat_avx2); }
 
-#endif /* Y264_HAVE_AVX2 */
+#endif /* Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10 */
 
 /* ---- the oracles ---------------------------------------------------------- */
 
@@ -1530,7 +1541,7 @@ const ca_test ca_mc_tests[] = {
     { "lr_hp_row",         "mc", Y264_CPU_NEON, t_lr_hp_row_neon },
     { "hpel_band",         "mc", Y264_CPU_NEON, t_hpel_band_neon },
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     { "pred_copy_sse4",    "mc", Y264_CPU_SSE4_ALL, t_pred_copy_sse4 },
     { "pred_avg2_sse4",    "mc", Y264_CPU_SSE4_ALL, t_pred_avg2_sse4 },
     { "pixel_avg_wt_sse4", "mc", Y264_CPU_SSE4_ALL, t_pixel_avg_wt_sse4 },
@@ -1538,13 +1549,15 @@ const ca_test ca_mc_tests[] = {
     { "mc_chroma_win_sse4","mc", Y264_CPU_SSE4_ALL, t_mc_chroma_win_sse4 },
     { "hpel_rows_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_rows_sse4 },
     { "hpel_band_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_band_sse4 },
+#if Y264_HAVE_SSE4
     { "bilin4_row_sse4",   "mc", Y264_CPU_SSE4_ALL, t_bilin4_row_sse4 },
+#endif
     { "lr_hp_row_sse4",    "mc", Y264_CPU_SSE4_ALL, t_lr_hp_row_sse4 },
     { "pixel_avg_wt_2d_sse4", "mc", Y264_CPU_SSE4_ALL, t_pixel_avg_wt_2d_sse4 },
     { "mc_chroma_bi8_sse4", "mc", Y264_CPU_SSE4_ALL, t_mc_chroma_bi8_sse4 },
     { "avg_mb420_flat_sse4", "mc", Y264_CPU_SSE4_ALL, t_avg_mb420_flat_sse4 },
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     { "pred_copy_avx2",    "mc", Y264_CPU_AVX2_ALL, t_pred_copy_avx2 },
     { "pred_avg2_avx2",    "mc", Y264_CPU_AVX2_ALL, t_pred_avg2_avx2 },
     { "pixel_avg_wt_avx2", "mc", Y264_CPU_AVX2_ALL, t_pixel_avg_wt_avx2 },
@@ -1552,7 +1565,9 @@ const ca_test ca_mc_tests[] = {
     { "mc_chroma_win_avx2","mc", Y264_CPU_AVX2_ALL, t_mc_chroma_win_avx2 },
     { "hpel_rows_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_rows_avx2 },
     { "hpel_band_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_band_avx2 },
+#if Y264_HAVE_AVX2
     { "bilin4_row_avx2",   "mc", Y264_CPU_AVX2_ALL, t_bilin4_row_avx2 },
+#endif
     { "lr_hp_row_avx2",    "mc", Y264_CPU_AVX2_ALL, t_lr_hp_row_avx2 },
     { "pixel_avg_wt_2d_avx2", "mc", Y264_CPU_AVX2_ALL, t_pixel_avg_wt_2d_avx2 },
     { "mc_chroma_bi8_avx2", "mc", Y264_CPU_AVX2_ALL, t_mc_chroma_bi8_avx2 },

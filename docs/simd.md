@@ -25,8 +25,9 @@ is the developer's view: how the tiers are built, dispatched and tested.
 | AVX2 (with FMA3, BMI2) | x86-64 | every kernel family | the main x86 tier |
 | AVX-512 (F, BW, VL) | x86-64 | pixel metrics only | the CPU reports all three |
 
-The tiers above are 8-bit lanes. The 10-bit library has its own NEON tier on
-aarch64, on 16-bit lanes, and runs C on x86-64 (see "The 10-bit tier" below).
+The tiers above are 8-bit lanes. The 10-bit library has its own tiers on
+16-bit lanes: NEON on aarch64, SSE4.2 and AVX2 on x86-64 (see "The 10-bit
+tiers" below).
 
 SVE rides inside the NEON tier the way dot product does. `y264_cpu_tier()`
 still answers NEON on a Graviton3, and the SVE entries overwrite the NEON
@@ -72,7 +73,7 @@ Outside `src/dsp`, the lowres downscale, the lowres sub-pel planes, plane
 padding, the mb-tree propagate and the entropy coders are C. The entropy
 coders, trellis and RDOQ aren't vectorizable in any useful sense.
 
-### The 10-bit tier
+### The 10-bit tiers
 
 The 10-bit library's NEON kernels live in `src/dsp/arm/<family>_neon10.c` and
 compile into that library only, behind `Y264_HAVE_NEON10`. They take the 8-bit
@@ -103,6 +104,45 @@ saturates at 255. A table lookup reaches 64 bytes, so the directional intra
 modes split their 16-bit table into low and high bytes. The boundary-strength
 kernel reads no samples and is one source both libraries build
 (`src/dsp/arm/loopfilter_bs_neon.c`).
+
+On x86-64 the 10-bit kernels live in `src/dsp/x86/<family>_sse4_10.c` and
+`<family>_avx2_10.c`, with the shared 128-bit bodies in `<family>_x86_10.h`.
+Each tier compiles into its own static library with the 10-bit library's
+arguments and the tier's `-m` flags, and folds into `libyah264_10`. The macros
+are `Y264_HAVE_SSE4_10` and `Y264_HAVE_AVX2_10`, and the kernels take the
+8-bit x86 names, so `arch.h`'s x86 declarations and most dispatch sites are
+shared text between the depths. The tiers answer `Y264_TIER_SSE4` and
+`Y264_TIER_AVX2` and take the same escapes. There's no AVX-512 form at 10
+bits, so on an AVX-512 machine the 10-bit library runs AVX2.
+
+Measured at one thread on rented Intel and AMD machines, the AVX2 tier takes
+less CPU time than x264's 10-bit build with its assembly, and retires fewer
+instructions where the machine exposes the counters. The C build does the
+same against x264's fair C build. The SSE4.2 tier is ahead of x264's
+assembly on most clips and within about 10% on the rest.
+
+| family | 10-bit SSE4.2 and AVX2 | stays C |
+|---|---|---|
+| pixel metrics | every kernel the 8-bit x86 tiers have | none |
+| motion compensation | six-tap luma, chroma at widths 8 and 4, plane fetch, average, weighted average, the half-pel plane build (whole band and rows), the lowres half-pel row, the fused 4:2:0 average and two-list chroma | the lowres bilinear row |
+| transform, quant, scan | every x86 dispatch site | as on 8 bits |
+| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | four-line luma, which the whole-edge kernels make unreachable |
+| intra prediction | 16x16, 8-wide chroma, the routed 8x8 modes and their edge, the six-mode 8x8 forms, the lowres four-mode builder | as on 8 bits |
+
+A 16-wide row of 10-bit samples is exactly one AVX2 register, so the AVX2
+files widen the 16-wide shapes and fold 8-wide blocks two rows per register;
+the narrow shapes are the 128-bit bodies, VEX-encoded. The bounds follow the
+NEON tier's where the arithmetic matches. What differs on x86: there's no
+16-bit absolute-difference sum, so SAD accumulates `abs(a - b)` in 16-bit lanes
+and widens once; the four SATD magnitudes that meet in a lane are four
+coefficients of one tile, which the tile's energy bounds to 32736, so they add
+in int16 before one widening multiply-add; an 8x8 Hadamard coefficient reaches
+65472, so the row transform takes its last stage as 2 * max(|x|, |y|); the
+quant forms `|c| * mf + f` in 32 bits and hands any block with a coefficient at
+or above 2^17 to the C loop; reconstruction clips to 1023 through
+`packus_epi32` and a min, never the byte pack. The boundary-strength and
+per-lane deblock bodies are one header both depths' x86 files include
+(`src/dsp/x86/loopfilter_x86_core.h`).
 
 ### Dispatch
 
@@ -186,7 +226,8 @@ nothing. Encoder-level speed on real hardware does.
 `scripts/x86-docker.sh` (image in `docker/x86/`) runs the x86 battery as
 linux/amd64 on an Apple Silicon Mac. The matrix is {Rosetta, QEMU} x {none,
 SSE4.2, AVX2} x {`make test` with checkasm, fast conformance, an identity
-check against the `none` tier on the board clips}, plus a C-only 10-bit build.
+check against the `none` tier on the board clips}, plus a 10-bit build whose
+unit leg runs checkasm over the 10-bit tiers.
 Neither emulator has AVX-512, and the script asserts that out loud so an
 emulated pass is never read as AVX-512 coverage.
 
@@ -262,7 +303,9 @@ The ranges span sunflower 1080p and crowd_run 4K.
   beats AVX2 on both AMD and Intel.
 - **Wider AVX2.** Several AVX2 kernels re-encode the SSE4.2 body and could use
   the whole register on 16-wide blocks.
-- **10-bit SIMD.** x86-64 has no 10-bit tier.
+- **AVX-512 at 10 bits.** The 10-bit library has no AVX-512 form. Whether
+  one pays is open; x264's 10-bit build retires the same instructions with
+  its AVX-512 paths as without them.
 
 ## Measuring it
 
@@ -272,10 +315,10 @@ The ranges span sunflower 1080p and crowd_run 4K.
 - **Use Rosetta for routine Docker runs and QEMU for an item's final gate.**
   QEMU is several times slower, and emulated runs are real CPU load, so don't
   run them beside a timed run.
-- **One Docker kit session at a time.** Switching to QEMU changes the Docker
-  VM's binary-format registry for every container, so a second session's run
-  can swap the interpreter under the first one's encoders. Check `docker ps`
-  first.
+- **The Docker kit leaves the VM's interpreter alone.** Its QEMU legs run each
+  binary under the image's own `qemu-x86_64`, named on the command line, so
+  one session's run can't change what another's containers run under. Within
+  one worktree, a lock keeps two runs apart.
 - **Compare the two encoders on the same quiet machine.** Build x264 twice:
   with its assembly, and with assembly off but its C free to vectorize. The
   second is the fair match for `-Dsimd=none`.

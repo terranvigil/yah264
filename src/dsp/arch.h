@@ -459,13 +459,12 @@ void y264_quant_8x8_f_n_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
  * C11 intrinsics only: there is no assembly in this tree, and hygiene_check
  * refuses any under src/dsp/x86/.
  *
- * The names below are declared and not yet defined. Wave 1 of
- * docs/simd.md defines the pixel family; nothing calls one until then, and
- * the empty family files under src/dsp/x86/ exist so that the build shape --
- * three static libraries, their -m flags, the per-family opt-in lists -- is
- * exercised by every x86 build from now on rather than written blind on the
- * day the first kernel lands. */
-#if Y264_HAVE_SSE4
+ * The 10-bit library's tiers (`<family>_sse4_10.c`, `_avx2_10.c`, on 16-bit
+ * lanes) take the same names, which src/common/symbols10.h suffixes, so the
+ * declarations below serve both depths. That set is a subset: what has no
+ * 10-bit twin is declared and never defined there, and its dispatch sites
+ * stay behind the 8-bit macro alone. */
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 int  y264_sad_16x16_sse4(const pixel *, int, const pixel *, int);
 int  y264_sad_16x8_sse4(const pixel *, int, const pixel *, int);
@@ -522,16 +521,16 @@ void y264_intra4_mode_search_sse4(const pixel *, int, const pixel *, int,
                            int, int, int, int, int[9]);
 void y264_intra16_satd_trio_sse4(const pixel *, int, const pixel *,
                                    const pixel *, int, int[3]);
-int  y264_ssd_16xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
-int  y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_16xh_sse4(const pixel *a, int as, const pixel *b, int bs, int h);
+int  y264_ssd_8xh_sse4(const pixel *a, int as, const pixel *b, int bs, int h);
 /* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
  * four for an 8x8, out[row4 * n + col4]. */
-void y264_ssdsum4x4_16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_16_sse4(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t e[16], int32_t sum[16]);
-void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_8_sse4(const pixel *a, int as, const pixel *b, int bs,
                            uint32_t e[4], int32_t sum[4]);
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
-void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssd4x4_map16_sse4(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t out[16]);
 
 /* ---- motion compensation, half-pel planes (src/dsp/x86/interp_sse4.c) --------
@@ -573,7 +572,8 @@ void y264_hpel_build_band_sse4(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
  * and r1 over [0, n - 1 + ax]. */
 void y264_bilin4_row_sse4(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
                           int w00, int w10, int w01, int w11);
-/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. The
+ * 10-bit row rounds to the 8-bit scale, as the encoder's lowres build does. */
 void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
 /* The strided weighted average, the fused flat 4:2:0 macroblock average and
@@ -689,9 +689,9 @@ void y264_deblock_chroma2_h_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
                                  int alpha, int beta, const uint8_t bs[4],
                                  const uint8_t tc0tab[3]);
 
-#endif /* Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 
 int  y264_sad_16x16_avx2(const pixel *, int, const pixel *, int);
 int  y264_sad_16x8_avx2(const pixel *, int, const pixel *, int);
@@ -779,7 +779,8 @@ void y264_hpel_build_band_avx2(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
  * and r1 over [0, n - 1 + ax]. */
 void y264_bilin4_row_avx2(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
                           int w00, int w10, int w01, int w11);
-/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. The
+ * 10-bit row rounds to the 8-bit scale, as the encoder's lowres build does. */
 void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
 /* The strided weighted average, the fused flat 4:2:0 macroblock average and
@@ -797,16 +798,16 @@ void y264_mc_chroma_bi8_avx2(pixel *dst, int dstride,
                              const pixel *r0, int s0, int fx0, int fy0,
                              const pixel *r1, int s1, int fx1, int fy1,
                              int w0, int w1);
-int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
-int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_16xh_avx2(const pixel *a, int as, const pixel *b, int bs, int h);
+int  y264_ssd_8xh_avx2(const pixel *a, int as, const pixel *b, int bs, int h);
 /* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
  * four for an 8x8, out[row4 * n + col4]. */
-void y264_ssdsum4x4_16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_16_avx2(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t e[16], int32_t sum[16]);
-void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssdsum4x4_8_avx2(const pixel *a, int as, const pixel *b, int bs,
                            uint32_t e[4], int32_t sum[4]);
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
-void y264_ssd4x4_map16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+void y264_ssd4x4_map16_avx2(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t out[16]);
 
 /* Transform, quant and scan (docs/simd.md). The quant and
@@ -897,7 +898,7 @@ void y264_deblock_chroma2_h_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
                                  int alpha, int beta, const uint8_t bs[4],
                                  const uint8_t tc0tab[3]);
 
-#endif /* Y264_HAVE_AVX2 */
+#endif /* Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10 */
 
 #if Y264_HAVE_AVX512
 /* AVX-512 (avx512f + avx512bw + avx512vl) is a gated tier (`-Davx512=true`,
@@ -938,10 +939,10 @@ int  y264_sa8d_16x16_avx512(const pixel *, int, const pixel *, int);
  * are called from the macroblock code and have no portable twin: the caller's
  * own unfused path is the C form. These two inlines give the call sites one
  * name. On aarch64 they are the NEON symbols at either depth; on x86-64 they
- * pick the tier. `y264_mc_fused_on()` is the question the call site asks
- * before taking either. The lowres bilinear row is 8-bit only:
- * Y264_HAVE_BILIN4_K says whether it is here. */
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+ * pick the tier, at either depth too. `y264_mc_fused_on()` is the question
+ * the call site asks before taking either. The lowres bilinear row is 8-bit
+ * only: Y264_HAVE_BILIN4_K says whether it is here. */
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 #define Y264_HAVE_MC_FUSED 1
 static inline int y264_mc_fused_on(void)
 {
@@ -961,7 +962,7 @@ static inline void y264_avg_mb420_flat_k(pixel *pred, pixel *cu, pixel *cv,
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
     y264_avg_mb420_flat_neon(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
 #else
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     if (y264_cpu_tier() >= Y264_TIER_AVX2) {
         y264_avg_mb420_flat_avx2(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
         return;
@@ -979,7 +980,7 @@ static inline void y264_mc_chroma_bi8_k(pixel *dst, int dstride,
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
     y264_mc_chroma_bi8_neon(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
 #else
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     if (y264_cpu_tier() >= Y264_TIER_AVX2) {
         y264_mc_chroma_bi8_avx2(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
         return;

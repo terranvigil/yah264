@@ -28,6 +28,7 @@ modelled. The VBV columns are a leaky-bucket estimate over the slice sizes,
 not the Annex C gate; run scripts/hrd_check.py on a real encode for that.
 
 Environment: BIN (default build-rel/cli/yah264), CLIP, FRAMES (default 120),
+YAH264_WRAP (a command each encode runs under),
 ONLY (regex on config names), PLAY_BIN, PLAY_ENV (NAME=VALUE words),
 KEEP (directory to keep recordings in).
 """
@@ -36,6 +37,9 @@ import os, re, shlex, subprocess, sys, tempfile, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.environ.get("BIN", os.path.join(ROOT, "build-rel/cli/yah264"))
 PLAY_BIN = os.environ.get("PLAY_BIN", BIN)
+# YAH264_WRAP: a command the encoder runs under (the x86 kit's explicit QEMU)
+WRAP = " ".join(shlex.quote(w) for w in shlex.split(os.environ.get("YAH264_WRAP", "")))
+WRAP = WRAP + " " if WRAP else ""
 PLAY_ENV = os.environ.get("PLAY_ENV", "")
 CLIP = os.environ.get("CLIP", os.path.join(ROOT, "tests/corpus/foreman_cif.y4m"))
 FRAMES = int(os.environ.get("FRAMES", "120"))
@@ -106,7 +110,7 @@ def main():
             continue
         log = os.path.join(work, f"{name}.rcr")
         stats = os.path.join(work, f"{name}.stats")
-        base = f"{{bin}} --input-y4m {shlex.quote(CLIP)} --frames {FRAMES} --threads 1 --no-progress"
+        base = f"{WRAP}{{bin}} --input-y4m {shlex.quote(CLIP)} --frames {FRAMES} --threads 1 --no-progress"
         a = args.replace("PASS2", "").strip()
         if "PASS2" in args:
             _, p = run(base.format(bin=shlex.quote(BIN)) + f" {a} --pass 1 --stats {stats} -o /dev/null", {})

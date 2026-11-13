@@ -61,7 +61,7 @@ static int i4_allowed(int mode, int ht, int hl)
     }
 }
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 /* ---- one body per group, the kernel as an argument ----------------------- */
 
@@ -287,7 +287,7 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
 static int t_intra16x16_neon(void)
@@ -305,7 +305,7 @@ static int t_intra8x8_neon(void)
 }
 #endif
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 static int t_intra16x16_sse4(void)
 {
     return run_intra16x16("intra16x16_sse4", y264_intra16x16_sse4);
@@ -321,7 +321,7 @@ static int t_intra8x8_sse4(void)
 }
 #endif
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 static int t_intra16x16_avx2(void)
 {
     return run_intra16x16("intra16x16_avx2", y264_intra16x16_avx2);
@@ -440,7 +440,7 @@ static int t_intra8x8_dir6_c(void)
     return bad;
 }
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*dir6_fn)(pixel (*)[64], const pixel *);
 typedef void (*dir6rec_fn)(pixel (*)[64], const pixel *, int);
 typedef void (*dvhp_fn)(pixel (*)[64], const pixel *, const pixel *, int, int, int, int);
@@ -556,7 +556,7 @@ static int run_intra8_dvhp(const char *name, dvhp_fn kern)
     ca_guard_free(out);
     return bad;
 }
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
 static int t_intra8x8_dir6_neon(void)
@@ -570,7 +570,7 @@ static int t_intra8_dvhp_neon(void)
 }
 #endif
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*i8edge_struct_fn)(y264_i8_edge_t *, const pixel *, int, int, int, int, int);
 
 /* The edge derivation into the struct against the C one, over all sixteen
@@ -641,7 +641,7 @@ static int t_intra8_dvhp_sse4(void)
 { return run_intra8_dvhp("intra8_dvhp_sse4", y264_intra8_dvhp_sse4); }
 #endif
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 static int t_intra8x8_edge_avx2(void)
 { return run_intra8x8_edge_k("intra8x8_edge_avx2", y264_intra8x8_edge_avx2); }
 static int t_intra8x8_dir6_avx2(void)
@@ -661,7 +661,7 @@ const ca_test ca_predict_tests[] = {
     { "intra8x8_dir6",     "predict", Y264_CPU_NEON, t_intra8x8_dir6_neon },
     { "intra8_dvhp",       "predict", Y264_CPU_NEON, t_intra8_dvhp_neon },
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     { "intra16x16_sse4",   "predict", Y264_CPU_SSE4_ALL, t_intra16x16_sse4 },
     { "intra_chroma_sse4", "predict", Y264_CPU_SSE4_ALL, t_intra_chroma_sse4 },
     { "intra8x8_sse4",     "predict", Y264_CPU_SSE4_ALL, t_intra8x8_sse4 },
@@ -669,7 +669,7 @@ const ca_test ca_predict_tests[] = {
     { "intra8x8_dir6_sse4", "predict", Y264_CPU_SSE4_ALL, t_intra8x8_dir6_sse4 },
     { "intra8_dvhp_sse4",   "predict", Y264_CPU_SSE4_ALL, t_intra8_dvhp_sse4 },
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     { "intra16x16_avx2",   "predict", Y264_CPU_AVX2_ALL, t_intra16x16_avx2 },
     { "intra_chroma_avx2", "predict", Y264_CPU_AVX2_ALL, t_intra_chroma_avx2 },
     { "intra8x8_avx2",     "predict", Y264_CPU_AVX2_ALL, t_intra8x8_avx2 },

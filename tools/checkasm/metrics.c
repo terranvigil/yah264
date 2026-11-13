@@ -991,7 +991,7 @@ static int t_ssdmap_dotprod(void)
 #endif
 #endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 */
 
-#if Y264_HAVE_SSE4 || Y264_HAVE_SVE
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 || Y264_HAVE_SVE
 /* ---- x86-only group bodies -----------------------------------------------
  * The kernels below have NEON twins whose rows predate the shared-body shape
  * and name their symbols directly. These bodies take the kernel as an
@@ -1000,9 +1000,9 @@ static int t_ssdmap_dotprod(void)
 /* Per-4x4 SSD and signed-sum maps, 16x16 and 8x8, against a scalar walk:
  * random, equal, both full-swing signs and random-extreme planes; a sentinel
  * past each output array; then the read window at both tails. */
-typedef void (*ssdsumfn)(const uint8_t *, int, const uint8_t *, int,
+typedef void (*ssdsumfn)(const pixel *, int, const pixel *, int,
                          uint32_t *, int32_t *);
-#if Y264_HAVE_SSE4  /* no SVE twin yet */
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10  /* no SVE twin yet */
 static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
 {
     int bad = 0;
@@ -1019,8 +1019,8 @@ static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
             int nb = big ? 4 : 2;
             uint32_t e[17]; int32_t sm[17];
             e[nb * nb] = 0xdeadbeefu; sm[nb * nb] = 0x5a5a5a5a;
-            (big ? k16 : k8)((const uint8_t *)pa, STRIDE,
-                             (const uint8_t *)pb, STRIDE, e, sm);
+            (big ? k16 : k8)((const pixel *)pa, STRIDE,
+                             (const pixel *)pb, STRIDE, e, sm);
             if (e[nb * nb] != 0xdeadbeefu || sm[nb * nb] != 0x5a5a5a5a) {
                 if (!bad) ca_fail("ssdsum4x4_%d%s: wrote past its output",
                                   big ? 16 : 8, tag);
@@ -1056,8 +1056,8 @@ static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
             ca_pg_fill_pix(&gb, win / sizeof(pixel));
             snprintf(what, sizeof(what), "ssdsum4x4_%d%s", n, tag);
             ca_pg_arm(what);
-            (big ? k16 : k8)((const uint8_t *)a, STRIDE,
-                             (const uint8_t *)b, STRIDE, e, sm);
+            (big ? k16 : k8)((const pixel *)a, STRIDE,
+                             (const pixel *)b, STRIDE, e, sm);
             ca_pg_disarm();
             ca_pg_free(&ga);
             ca_pg_free(&gb);
@@ -1078,7 +1078,7 @@ typedef void (*sadpairfn_x)(const pixel *, int, const pixel *, const pixel *,
 struct sadmultirow_x { const char *n; int pu, w, h; sadtriofn_x k3; sadpairfn_x k2;
                     y264_sad_fn one; };
 
-#if Y264_HAVE_SSE4  /* no SVE twin yet */
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10  /* no SVE twin yet */
 static int run_sad_multi(const struct sadmultirow_x *rows, int n)
 {
     int bad = 0;
@@ -1154,7 +1154,7 @@ static int satd_ref_16x8(const pixel *a, int as, const pixel *b, int bs)
 {
     return ref.satd8x8(a, as, b, bs) + ref.satd8x8(a + 8, as, b + 8, bs);
 }
-#if Y264_HAVE_SSE4  /* no SVE twin yet */
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10  /* no SVE twin yet */
 static int satd_ref_8x16(const pixel *a, int as, const pixel *b, int bs)
 {
     return ref.satd8x8(a, as, b, bs)
@@ -1267,9 +1267,9 @@ static int pg_satd_quad(const char *name, satdx4fn kern)
     }
     return 0;
 }
-#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SVE, the shared-body group bodies */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 || Y264_HAVE_SVE, the shared-body group bodies */
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 static int t_sad_sse4(void)
 {
@@ -1357,9 +1357,9 @@ static int t_ssdsum4x4_sse4(void)
 static int t_ssdmap_sse4(void)
 { return ssdmap_group(y264_ssd4x4_map16_sse4, "_sse4"); }
 
-#endif /* Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 
 static int t_sad_avx2(void)
 {
@@ -1447,7 +1447,7 @@ static int t_ssdsum4x4_avx2(void)
 static int t_ssdmap_avx2(void)
 { return ssdmap_group(y264_ssd4x4_map16_avx2, "_avx2"); }
 
-#endif /* Y264_HAVE_AVX2 */
+#endif /* Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10 */
 
 #if Y264_HAVE_AVX512
 /* The gated tier's rows. Only the shapes the tier carries have one; the rest
@@ -1667,7 +1667,7 @@ const ca_test ca_pixel_tests[] = {
     { "ssd4x4_map",       "pixel", Y264_CPU_NEON, t_ssdmap },
     { "ssdsum4x4",        "pixel", Y264_CPU_NEON, t_ssdsum4x4_neon },
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     { "sad_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_sad_sse4 },
     { "sad_quad_sse4",           "pixel", Y264_CPU_SSE4_ALL, t_sad_quad_sse4 },
     { "sad_trio_pair_sse4",         "pixel", Y264_CPU_SSE4_ALL, t_sad_multi_sse4 },
@@ -1690,7 +1690,7 @@ const ca_test ca_pixel_tests[] = {
     { "ssdsum4x4_sse4",        "pixel", Y264_CPU_SSE4_ALL, t_ssdsum4x4_sse4 },
     { "ssd4x4_map_sse4",       "pixel", Y264_CPU_SSE4_ALL, t_ssdmap_sse4 },
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     { "sad_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_sad_avx2 },
     { "sad_quad_avx2",           "pixel", Y264_CPU_AVX2_ALL, t_sad_quad_avx2 },
     { "sad_trio_pair_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_sad_multi_avx2 },

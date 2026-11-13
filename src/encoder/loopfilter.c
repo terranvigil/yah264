@@ -23,7 +23,7 @@
  * and y264_cpu_tier() for WHICH one. The tier is resolved once per macroblock
  * rather than once per edge segment: a macroblock feeds up to thirty-two
  * segments and the answer cannot change between them. */
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 static int db_have_simd(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
 #endif
 
@@ -53,7 +53,7 @@ static const uint8_t TC0[52][3] = {
  * separately before, and the call site was missed: at BD>8 the predicate
  * compiled to a constant 0 but the unreachable call still needed a declaration
  * that was not there, so a 10-bit build did not compile at all. */
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 #define Y264_DEBLOCK_CHROMA_SIMD 1
 #else
 #define Y264_DEBLOCK_CHROMA_SIMD 0
@@ -189,12 +189,12 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
     if (db_have_simd() && !f->field_pic && f->wp_dup < 0)
         { y264_deblock_strength_neon(&c, g->v, g->h); return; }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     /* The x86 kernels bake in the same two frame rules and compare the same
      * refIdx lanes, so they take the same two exemptions. */
     if (db_have_simd() && !f->field_pic && f->wp_dup < 0) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2)
             { y264_deblock_strength_avx2(&c, g->v, g->h); return; }
 #endif
@@ -266,7 +266,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
     int rs = f->rec_stride[0];
     pixel *Y = f->rec[0];
     int wmb = f->wmb;
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     int tier = db_have_simd() ? y264_cpu_tier() : Y264_TIER_C;
 #endif
     /* Edge QP is the average of the two macroblocks' QPs (8.7.2.2). Constant
@@ -323,20 +323,23 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     continue;
                 }
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
                 if (tier >= Y264_TIER_AVX2) {
                     y264_deblock_luma_v16_avx2(Y + (by0 * 4) * rs + lx, rs, qa, qb,
                                                bsg.v[xb], qtc);
                     continue;
                 }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
                 if (tier >= Y264_TIER_SSE4) {
                     y264_deblock_luma_v16_sse4(Y + (by0 * 4) * rs + lx, rs, qa, qb,
                                                bsg.v[xb], qtc);
                     continue;
                 }
 #endif
+                /* The four-line kernels below are 8-bit only. At 10 bits
+                 * every SIMD tier has taken the edge whole above, so a
+                 * 10-bit build reaches this loop only on C. */
                 for (int yb = 0; yb < 4; yb++) {
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
@@ -386,14 +389,14 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     continue;
                 }
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
                 if (tier >= Y264_TIER_AVX2) {
                     y264_deblock_luma_h16_avx2(Y + ly * rs + mbx * 16, rs, qa, qb,
                                                bsg.h[yb], qtc);
                     continue;
                 }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
                 if (tier >= Y264_TIER_SSE4) {
                     y264_deblock_luma_h16_sse4(Y + ly * rs + mbx * 16, rs, qa, qb,
                                                bsg.h[yb], qtc);
@@ -483,11 +486,11 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
             if (f->cf_idc == 1 && tier >= Y264_TIER_NEON)
                 DB_CHROMA2_EDGES(_neon);
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
             if (f->cf_idc == 1 && !joint_v && tier >= Y264_TIER_AVX2)
                 DB_CHROMA2_EDGES(_avx2);
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
             if (f->cf_idc == 1 && !joint_v && tier >= Y264_TIER_SSE4)
                 DB_CHROMA2_EDGES(_sse4);
 #endif
@@ -531,7 +534,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                         continue;
                     }
 #endif
-#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_AVX2
+#if Y264_DEBLOCK_CHROMA_SIMD && (Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10)
                     if (cstyle && tier >= Y264_TIER_AVX2) {
                         for (int g = 0; g < colspan / 2; g++)
                             y264_deblock_chroma8_h_avx2(C + cy * crs + cx0 + g * 8,
@@ -539,7 +542,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                         continue;
                     }
 #endif
-#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_SSE4
+#if Y264_DEBLOCK_CHROMA_SIMD && (Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10)
                     if (cstyle && tier >= Y264_TIER_SSE4) {
                         for (int g = 0; g < colspan / 2; g++)
                             y264_deblock_chroma8_h_sse4(C + cy * crs + cx0 + g * 8,

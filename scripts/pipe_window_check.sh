@@ -32,12 +32,16 @@ clip=$work/clip.y4m
 ffmpeg -v error -f lavfi -i testsrc2=size=192x144:rate=30 -frames:v "$NF" \
     -pix_fmt yuv420p "$clip" || { echo "pipe window check: clip generation failed"; exit 1; }
 
+# TEST_WRAP (make test) runs the binary under an emulator, which is slower, so
+# the hang alarm is longer there
+read -r -a wrap <<< "${TEST_WRAP:-}"
+alarm=60; [ ${#wrap[@]} -gt 0 ] && alarm=600
 fail=0
 for t in 1 2 4; do
-    perl -e 'alarm 60; exec @ARGV' "$Y" --input-y4m - --threads "$t" --keyint 100 \
+    perl -e '$t = shift; alarm $t; exec @ARGV' "$alarm" ${wrap[@]+"${wrap[@]}"} "$Y" --input-y4m - --threads "$t" --keyint 100 \
         -o "$work/pipe.264" --quiet --no-progress < <(cat "$clip") >/dev/null 2>"$work/err"
     rc=$?
-    "$Y" --input-y4m "$clip" --threads "$t" --keyint 100 \
+    ${wrap[@]+"${wrap[@]}"} "$Y" --input-y4m "$clip" --threads "$t" --keyint 100 \
         -o "$work/file.264" --quiet --no-progress >/dev/null 2>"$work/ferr"
     frc=$?
     if [ $rc -eq 142 ]; then
@@ -68,7 +72,7 @@ done
 # The window is a memory bound every build reads; the forced split is a dev
 # knob, so a release binary skips that case, and a skip exits 2 rather than
 # reading as a pass.
-dev=0; "$Y" --version 2>/dev/null | grep -q "(dev knobs)" && dev=1
+dev=0; ${wrap[@]+"${wrap[@]}"} "$Y" --version 2>/dev/null | grep -q "(dev knobs)" && dev=1
 skipped=0
 for spec in "1 30" "1 1" "4 30 Y264_GOP_FORCE_G=4"; do
     set -- $spec
@@ -78,7 +82,8 @@ for spec in "1 30" "1 1" "4 30 Y264_GOP_FORCE_G=4"; do
         continue
     fi
     t=$1 w=$2 extra=${3:-}
-    perl -e 'alarm 60; exec @ARGV' env Y264_STREAM_WINDOW="$w" $extra "$Y" --input-y4m - \
+    perl -e '$t = shift; alarm $t; exec @ARGV' "$alarm" env Y264_STREAM_WINDOW="$w" $extra \
+        ${wrap[@]+"${wrap[@]}"} "$Y" --input-y4m - \
         --threads "$t" --keyint 100 -o "$work/pipe.264" --quiet --no-progress \
         < <(cat "$clip") >/dev/null 2>"$work/err"
     rc=$?
@@ -107,7 +112,8 @@ if [ "$ram_kb" -gt 0 ] && [ "$ram_kb" -lt $((16 * 1024 * 1024)) ]; then
 else
     ffmpeg -v error -f lavfi -i testsrc2=size=3840x2160:rate=30 -frames:v 12 \
         -pix_fmt yuv420p "$uhd" || { echo "pipe window check: 2160p clip generation failed"; exit 1; }
-    perl -e 'alarm 120; exec @ARGV' env -u Y264_MAX_INPUT_MB "$Y" --input-y4m - \
+    perl -e '$t = shift; alarm $t; exec @ARGV' "$((alarm * 2))" env -u Y264_MAX_INPUT_MB \
+        ${wrap[@]+"${wrap[@]}"} "$Y" --input-y4m - \
         --threads 0 -o "$work/uhd.264" --quiet --no-progress < <(cat "$uhd") >/dev/null 2>"$work/err"
     rc=$?
     if [ $rc -ne 0 ] || [ ! -s "$work/uhd.264" ]; then

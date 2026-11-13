@@ -46,7 +46,7 @@ static const uint8_t TC0[52][3] = {
     {8,11,16},{9,12,18},{10,13,20},{11,15,23},{13,17,25}
 };
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 /* ---- one body per group, the kernel as an argument ----------------------- */
 
@@ -137,20 +137,115 @@ static void luma_edge4_c(pixel *q0, int st, int ls, int bs, int alpha, int beta,
 
 static pixel *ea, *eb;
 
-/* A smooth random walk about mid-grey, with a wide-swing term on alternate
- * trials so both sides of the alpha/beta gate are reached. */
-static void edge_plane(int wide)
+/* mode 0: a smooth random walk about mid-grey; mode 1: the same with a
+ * wide-swing term, so both sides of the alpha/beta gate are reached; modes 2
+ * and 3: a base within eight of 0 or of PIXEL_MAX, noise on the scale of beta
+ * and a random jump across both test edges (column 8 and row 8, toward the
+ * middle of the range), so the filtered samples reach the clip at both ends.
+ * the jump lands on either side, at the edge or one sample past it: past it,
+ * p0 and q0 both sit at the extreme while the far neighbour pulls the delta
+ * outward, which is what pushes p0 or q0 past the range. */
+static void edge_plane(int mode)
 {
+    const int sh = Y264_BIT_DEPTH - 8;
     if (!ea) {
         ea = ca_guard_alloc(STRIDE * PLANE_H * sizeof(pixel));
         eb = ca_guard_alloc(STRIDE * PLANE_H * sizeof(pixel));
     }
-    for (int i = 0; i < STRIDE * PLANE_H; i++)
-        ea[i] = (pixel)clipv((128 << (Y264_BIT_DEPTH - 8)) +
-                             (int)ca_below(32u << (Y264_BIT_DEPTH - 8)) -
-                             (16 << (Y264_BIT_DEPTH - 8)) +
-                             (wide ? (int)ca_below(200u << (Y264_BIT_DEPTH - 8)) -
-                                     (100 << (Y264_BIT_DEPTH - 8)) : 0));
+    if (mode >= 2) {
+        int hi = mode == 3;
+        int pside = (int)ca_below(2), k = ca_below(4) != 0;
+        int base = (int)ca_below(k ? 1 : 8);
+        /* past the edge the jump stays under beta and the edge pair sits at
+         * the extreme, or the gate shuts or the delta falls short of it. it
+         * runs along one axis only, so every line of that edge keeps its
+         * pair at the extreme rather than riding the other axis's jump */
+        unsigned span = 256u << sh, noise = k ? 1u : 24u << sh;
+        int jx = (int)ca_below(span), jy = (int)ca_below(span);
+        /* 5 to 7 (scaled): enough for a delta of one step past the
+         * extreme, small enough to clear the beta gate from qi 30 up */
+        if (k) {
+            jx = (5 + (int)ca_below(3)) << sh;
+            jy = jx;
+            if (ca_below(2)) jx = 0;
+            else jy = 0;
+        }
+        for (int y = 0; y < PLANE_H; y++)
+            for (int x = 0; x < STRIDE; x++) {
+                int qx = pside ? x < 8 - k : x >= 8 + k;
+                int qy = pside ? y < 8 - k : y >= 8 + k;
+                int v = base + (int)ca_below(noise)
+                      + (qx ? jx : 0) + (qy ? jy : 0);
+                ea[y * STRIDE + x] = (pixel)clipv(hi ? PIXEL_MAX - v : v);
+            }
+    } else {
+        for (int i = 0; i < STRIDE * PLANE_H; i++)
+            ea[i] = (pixel)clipv((128 << sh) + (int)ca_below(32u << sh) - (16 << sh) +
+                                 (mode ? (int)ca_below(200u << sh) - (100 << sh) : 0));
+    }
+    memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
+}
+
+/* The trial plan every group shares: the ordinary trials first, drawn as the
+ * group always drew them, with qi under 16 (alpha and beta 0, no line
+ * filtered) one trial in eight; then the extreme planes as extra trials, at a
+ * qi that filters; then the directed ones below. */
+#define DB_EXTRA_OF(n) ((n) / 2)
+enum { DB_DIRECTED = 64 };
+static int db_qi(int t)
+{
+    return (t & 7) == 7 ? (int)ca_below(16) : 16 + (int)ca_below(36);
+}
+
+/* THE GATES AT THEIR THRESHOLDS. Each line of a directed plane sits one side
+ * of one gate and level with the others: |p0 - q0| at alpha - 1 or alpha,
+ * |p1 - p0| at beta - 1 or beta, |q1 - q0| at beta - 1 or beta, the
+ * strong-filter gate |p0 - q0| at (alpha >> 2) + 1 or (alpha >> 2) + 2, and
+ * |p2 - p0| or |q2 - q0| at beta, once with a step big enough that the tc
+ * clip binds, so the side gate's +1 to tc shows, and once inside the strong
+ * gate, where the side gate picks the strong filter: twelve cases, line l
+ * taking case (l + d) % 12. Run at qi 36, 49, 50 and 51 (49 has
+ * the last distinct alpha and beta; 50 and 51 share alpha 255 and beta 18),
+ * at the bottom of the range and mirrored to the top. d is the trial's index
+ * among the directed ones: bits 0-1 pick bS, bit 2 a per-group axis (the edge
+ * direction, the chroma span or a shift of four cases), bit 3 the mirror,
+ * bits 4-5 the qi. */
+static int db_dir_qi(int d) { static const int q[4] = { 36, 49, 50, 51 }; return q[(d >> 4) & 3]; }
+static int db_thr(int c, int side, int i, int a, int b)
+{
+    switch (c) {
+    case 0: return side ? a - 1 : 0;                     /* alpha, inside */
+    case 1: return side ? a : 0;                         /* alpha, on it */
+    case 2: return side ? 1 : (i ? b - 1 : 0);           /* p beta, inside */
+    case 3: return side ? 1 : (i ? b : 0);               /* p beta, on it */
+    case 4: return side ? (i ? b - 1 : 0) : 1;           /* q beta, inside */
+    case 5: return side ? (i ? b : 0) : 1;               /* q beta, on it */
+    case 6: return side ? (a >> 2) + 1 : 0;              /* strong, inside */
+    case 7: return side ? (a >> 2) + 2 : 0;              /* strong, on it */
+    case 8: return side ? a - 1 : (i == 2 ? b : 0);      /* p2 at beta, clipped */
+    case 9: return side ? (i == 2 ? b : 0) : a - 1;      /* q2 at beta, clipped */
+    case 10: return side ? (a >> 2) + 1 : (i == 2 ? b : 0);     /* p2 at beta, strong */
+    default: return side ? (a >> 2) + 1 + (i == 2 ? b : 0) : 0; /* q2 at beta, strong */
+    }
+}
+/* a w x h buffer with its vertical edge before column ex or its horizontal
+ * edge before row ey */
+static void db_thr_fill(pixel *a, int stride, int w, int h, int ex, int ey, int d, int vert)
+{
+    const int sh = Y264_BIT_DEPTH - 8, qi = db_dir_qi(d);
+    const int al = ALPHA[qi] << sh, be = BETA[qi] << sh, hi = d & 8;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int side = vert ? x >= ex : y >= ey;
+            int i = vert ? (side ? x - ex : ex - 1 - x) : (side ? y - ey : ey - 1 - y);
+            int c = ((vert ? y : x) + d) % 12;
+            int v = db_thr(c, side, i < 3 ? i : 3, al, be);
+            a[y * stride + x] = (pixel)(hi ? PIXEL_MAX - v : v);
+        }
+}
+static void db_thr_plane(int d, int vert)
+{
+    db_thr_fill(ea, STRIDE, STRIDE, PLANE_H, 8, 8, d, vert);
     memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
 }
 
@@ -185,12 +280,15 @@ static void luma_pages(const char *name, db_luma_fn v4, db_luma_fn h4)
 static int run_deblock_luma(const char *name, db_luma_fn v4, db_luma_fn h4)
 {
     int bad = 0;
-    for (int t = 0; t < TRIALS * 4; t++) {
-        int qi = 16 + (int)ca_below(36);
-        int bs = 1 + (int)ca_below(4);
+    const int n1 = TRIALS * 4, n2 = n1 + DB_EXTRA_OF(n1);
+    for (int t = 0; t < n2 + DB_DIRECTED; t++) {
+        const int d = t - n2;
+        int qi = t < n1 ? db_qi(t) : d < 0 ? 16 + (int)ca_below(36) : db_dir_qi(d);
+        int bs = d < 0 ? 1 + (int)ca_below(4) : 1 + (d & 3);
         int alpha = ALPHA[qi], beta = BETA[qi];
         int tc0 = TC0[qi][bs < 4 ? bs - 1 : 0];
-        edge_plane(t & 1);
+        if (d >= 0) db_thr_plane(d, !(d & 4));
+        else edge_plane(t < n1 ? t & 1 : 2 + (t & 1));
         ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
         pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
 
@@ -252,17 +350,22 @@ static int run_deblock_luma(const char *name, db_luma_fn v4, db_luma_fn h4)
 static int run_deblock_chroma(const char *name, db_chroma_fn kern)
 {
     int bad = 0;
-    for (int t = 0; t < TRIALS * 8; t++) {
-        int qi = 16 + (int)ca_below(36);
+    const int n1 = TRIALS * 8, n2 = n1 + DB_EXTRA_OF(n1);
+    for (int t = 0; t < n2 + DB_DIRECTED; t++) {
+        const int d = t - n2;
+        int qi = t < n1 ? db_qi(t) : d < 0 ? 16 + (int)ca_below(36) : db_dir_qi(d);
         int alpha = ALPHA[qi], beta = BETA[qi];
         const uint8_t *tc0tab = TC0[qi];
         uint8_t bs[4];
-        for (int k = 0; k < 4; k++) bs[k] = (uint8_t)ca_below(5);
+        for (int k = 0; k < 4; k++)
+            bs[k] = d < 0 ? (uint8_t)ca_below(5) : (uint8_t)(1 + ((k + d) & 3));
         if (t == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
-        int span = (t & 1) ? 2 : 4;
+        int span = (d >= 0 ? d & 4 : t & 1) ? 2 : 4;
         int grp = (span == 4) ? (int)ca_below(2) : 0;
-        edge_plane(t & 2);
+        /* the kernel filters a horizontal edge only */
+        if (d >= 0) db_thr_plane(d, 0);
+        else edge_plane(t < n1 ? t >> 1 & 1 : 2 + (t >> 1 & 1));
         ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
         pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
         for (int i = 0; i < 8; i++) {
@@ -352,9 +455,9 @@ static int run_deblock_strength(const char *name, db_strength_fn kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*db_chroma2_fn)(pixel *, pixel *, int, int, int, int,
                               const uint8_t *, const uint8_t *);
 
@@ -369,18 +472,57 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
     int bad = 0;
     enum { S1 = 40, S2 = 56, H = 12 };
     pixel a1[S1 * H], a2[S2 * H], b1[S1 * H], b2[S2 * H];
-    for (int t = 0; t < TRIALS * 8; t++) {
-        int qi = 16 + (int)ca_below(36);
+    const int n1 = TRIALS * 8, n2 = n1 + n1;
+    for (int t = 0; t < n2 + DB_DIRECTED; t++) {
+        const int d = t - n2, u = t < n1 ? t : t - n1;
+        int qi = t < n1 ? db_qi(t) : d < 0 ? 16 + (int)ca_below(36) : db_dir_qi(d);
         int alpha = ALPHA[qi], beta = BETA[qi];
         const uint8_t *tc0tab = TC0[qi];
         uint8_t bs[4];
-        for (int k = 0; k < 4; k++) bs[k] = (uint8_t)ca_below(5);
+        for (int k = 0; k < 4; k++)
+            bs[k] = d < 0 ? (uint8_t)ca_below(5) : (uint8_t)(1 + ((k + d) & 3));
         if (t == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
         int base = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
         int amp = ((t & 2) ? 6 : 60) << (Y264_BIT_DEPTH - 8);
-        for (int i = 0; i < S1 * H; i++) a1[i] = (pixel)db_clamp_pix(base + (int)ca_below(2 * amp + 1) - amp);
-        for (int i = 0; i < S2 * H; i++) a2[i] = (pixel)db_clamp_pix(base + (int)ca_below(2 * amp + 1) - amp);
+        /* the extra trials sit at the bottom or the top of the range with a
+         * jump across both edges (column 8 and row 4) toward the middle: on
+         * the q side or the p side by trial parity, and at the edge or one
+         * sample past it, as in edge_plane. past it, the edge pair sits at 0
+         * or PIXEL_MAX exactly, so the clip is reached at both ends from both
+         * sides */
+        int ext = t < n1 ? 0 : 2 + (u >> 2 & 1), jx = 0, jy = 0, ps = u & 1, k = 0;
+        if (ext >= 2) {
+            k = u >> 1 & 1;
+            base = (int)ca_below(k ? 1 : 8);
+            amp = k ? 0 : 12 << (Y264_BIT_DEPTH - 8);
+            jx = (int)ca_below((k ? 20u : 256u) << (Y264_BIT_DEPTH - 8));
+            jy = (int)ca_below((k ? 20u : 256u) << (Y264_BIT_DEPTH - 8));
+            /* past the edge, one axis only, as in edge_plane */
+            if (k) {
+                if (u & 16) jx = 0;
+                else jy = 0;
+            }
+        }
+#define CH2_FILL(a, S)                                                          \
+        for (int i = 0; i < (S) * H; i++) {                                     \
+            int v = base + (int)ca_below(2 * amp + 1) - amp;                    \
+            int col = i % (S), row = i / (S);                                   \
+            if (ext >= 2)                                                       \
+                v = base + (int)ca_below(2 * amp + 1)                           \
+                  + ((ps ? col < 8 - k : col >= 8 + k) ? jx : 0)                \
+                  + ((ps ? row < 4 - k : row >= 4 + k) ? jy : 0);               \
+            a[i] = (pixel)db_clamp_pix(ext == 3 ? PIXEL_MAX - v : v);           \
+        }
+        CH2_FILL(a1, S1)
+        CH2_FILL(a2, S2)
+#undef CH2_FILL
+        /* directed trials alternate the vertical and the horizontal gates;
+         * the v pass leaves most of the horizontal edge as it found it */
+        if (d >= 0) {
+            db_thr_fill(a1, S1, S1, H, 8, 4, d, !(d & 4));
+            db_thr_fill(a2, S2, S2, H, 8, 4, d, !(d & 4));
+        }
         memcpy(b1, a1, sizeof a1); memcpy(b2, a2, sizeof a2);
         pixel *e1 = a1 + 2 * S1 + 8, *e2 = a2 + 2 * S2 + 8;
         for (int i = 0; i < 8; i++) {
@@ -478,6 +620,9 @@ static int t_deblock_luma_sse4(void)
     return run_deblock_luma("deblock_luma_sse4", y264_deblock_luma_v4_sse4,
                             y264_deblock_luma_h4_sse4);
 }
+#endif
+
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 static int t_deblock_chroma_sse4(void)
 {
     return run_deblock_chroma("deblock_chroma8_h_sse4",
@@ -496,6 +641,9 @@ static int t_deblock_luma_avx2(void)
     return run_deblock_luma("deblock_luma_avx2", y264_deblock_luma_v4_avx2,
                             y264_deblock_luma_h4_avx2);
 }
+#endif
+
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 static int t_deblock_chroma_avx2(void)
 {
     return run_deblock_chroma("deblock_chroma8_h_avx2",
@@ -509,7 +657,7 @@ static int t_deblock_strength_avx2(void)
 #endif
 
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*db_luma16_fn)(pixel *, int, int, int, const uint8_t *, const uint8_t *);
 
 /* A whole sixteen-line luma edge with four bS values, against four scalar
@@ -519,14 +667,18 @@ static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h
                               db_luma_fn v4, db_luma_fn h4)
 {
     int bad = 0;
-    for (int t = 0; t < TRIALS * 4; t++) {
-        int qi = 16 + (int)ca_below(36);
+    const int n1 = TRIALS * 4, n2 = n1 + DB_EXTRA_OF(n1);
+    for (int t = 0; t < n2 + DB_DIRECTED; t++) {
+        const int d = t - n2;
+        int qi = t < n1 ? db_qi(t) : d < 0 ? 16 + (int)ca_below(36) : db_dir_qi(d);
         int alpha = ALPHA[qi], beta = BETA[qi];
         uint8_t bs[4];
-        for (int k = 0; k < 4; k++) bs[k] = (uint8_t)ca_below(5);
-        if (t % 5 == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
+        for (int k = 0; k < 4; k++)
+            bs[k] = d < 0 ? (uint8_t)ca_below(5) : (uint8_t)(1 + ((k + d) & 3));
+        if (d < 0 && t % 5 == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
         for (int dir = 0; dir < 2; dir++) {
-            edge_plane(t & 1);
+            if (d >= 0) db_thr_plane(d, !dir);
+            else edge_plane(t < n1 ? t & 1 : 2 + (t & 1));
             ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
             memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
             pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
@@ -586,13 +738,16 @@ static int t_deblock_luma16_neon(void)
 }
 #endif
 
-#if Y264_HAVE_NEON10
-/* The 10-bit tier has the whole-edge forms only; the bench's four-call
+#if Y264_HAVE_NEON10 || Y264_HAVE_SSE4_10
+/* The 10-bit tiers have the whole-edge forms only; the bench's four-call
  * baseline is the reference filter's four-line unit. */
 static void c_v4(pixel *q0, int st, int bs, int a, int b, int tc0)
 { luma_edge4_c(q0, 1, st, bs, a, b, tc0); }
 static void c_h4(pixel *q0, int st, int bs, int a, int b, int tc0)
 { luma_edge4_c(q0, st, 1, bs, a, b, tc0); }
+#endif
+
+#if Y264_HAVE_NEON10
 static int t_deblock_luma16_neon(void)
 {
     return run_deblock_luma16("deblock_luma16", y264_deblock_luma_v16_neon,
@@ -613,12 +768,17 @@ static int t_deblock_strength_neon(void)
 }
 #endif
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 static int t_deblock_luma16_sse4(void)
 {
+#if Y264_HAVE_SSE4
     return run_deblock_luma16("deblock_luma16_sse4", y264_deblock_luma_v16_sse4,
                               y264_deblock_luma_h16_sse4,
                               y264_deblock_luma_v4_sse4, y264_deblock_luma_h4_sse4);
+#else
+    return run_deblock_luma16("deblock_luma16_sse4", y264_deblock_luma_v16_sse4,
+                              y264_deblock_luma_h16_sse4, c_v4, c_h4);
+#endif
 }
 static int t_deblock_chroma2_sse4(void)
 {
@@ -627,12 +787,17 @@ static int t_deblock_chroma2_sse4(void)
 }
 #endif
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 static int t_deblock_luma16_avx2(void)
 {
+#if Y264_HAVE_AVX2
     return run_deblock_luma16("deblock_luma16_avx2", y264_deblock_luma_v16_avx2,
                               y264_deblock_luma_h16_avx2,
                               y264_deblock_luma_v4_avx2, y264_deblock_luma_h4_avx2);
+#else
+    return run_deblock_luma16("deblock_luma16_avx2", y264_deblock_luma_v16_avx2,
+                              y264_deblock_luma_h16_avx2, c_v4, c_h4);
+#endif
 }
 static int t_deblock_chroma2_avx2(void)
 {
@@ -657,6 +822,8 @@ const ca_test ca_deblock_tests[] = {
 #endif
 #if Y264_HAVE_SSE4
     { "deblock_luma_sse4",     "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma_sse4 },
+#endif
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     { "deblock_chroma8_h_sse4","deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma_sse4 },
     { "deblock_strength_sse4", "deblock", Y264_CPU_SSE4_ALL, t_deblock_strength_sse4 },
     { "deblock_luma16_sse4",   "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma16_sse4 },
@@ -664,6 +831,8 @@ const ca_test ca_deblock_tests[] = {
 #endif
 #if Y264_HAVE_AVX2
     { "deblock_luma_avx2",     "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma_avx2 },
+#endif
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     { "deblock_chroma8_h_avx2","deblock", Y264_CPU_AVX2_ALL, t_deblock_chroma_avx2 },
     { "deblock_strength_avx2", "deblock", Y264_CPU_AVX2_ALL, t_deblock_strength_avx2 },
     { "deblock_luma16_avx2",   "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma16_avx2 },

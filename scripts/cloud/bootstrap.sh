@@ -410,6 +410,36 @@ st_build_x264() {
     return 0
 }
 
+# The same two arms at --bit-depth=10, for the 10-bit legs: the reference's
+# 10-bit library has its own kernels, so the 8-bit arms say nothing about it.
+# Same recipe: the C arm strips -fno-tree-vectorize. Built after the 8-bit
+# arms, so the installed library under the prefixes stays the 8-bit one.
+st_build_x264_10() {
+    # a binary left by an earlier run would be recorded in bootstrap.ok even
+    # when this rebuild fails, so the old ones go first
+    rm -f "$C_X264"/x264-10-*
+    [ -d "$C_X264/.git" ] || { c_skip "no x264 clone; the x264 stage did not run"; return; }
+    local common=(--disable-lavf --disable-ffms --disable-avs --disable-swscale
+                  --bit-depth=10)
+    ( cd "$C_X264" || exit 1
+      make distclean >/dev/null 2>&1
+      ./configure "${common[@]}" || exit 1
+      make -j"$JOBS" x264 || exit 1
+      cp -f x264 x264-10-asm ) || return 1
+    ( cd "$C_X264" || exit 1
+      make distclean >/dev/null 2>&1
+      ./configure --disable-asm "${common[@]}" || exit 1
+      grep -q 'fno-tree-vectorize' config.mak && \
+          sed -i.bak 's/-fno-tree-vectorize//g' config.mak
+      grep -q 'fno-tree-vectorize' config.mak && \
+          { echo "x264: -fno-tree-vectorize survived the strip"; exit 1; }
+      make -j"$JOBS" x264 || exit 1
+      cp -f x264 x264-10-noasm-autovec ) || return 1
+    [ -x "$C_X264/x264-10-asm" ] && [ -x "$C_X264/x264-10-noasm-autovec" ] || return 1
+    echo "arms: $C_X264/x264-10-asm  $C_X264/x264-10-noasm-autovec"
+    return 0
+}
+
 # ffboard.py runs both encoders as LIBRARIES in one ffmpeg process, which is
 # the control on the CLI board: it removes the question of whether the gap is
 # partly our Y4M reader against theirs. It needs the fork, an installed
@@ -537,6 +567,8 @@ st_ok() {
     okv X264_DIR "$C_X264"
     okv X264_ASM "$C_X264/x264-asm"
     okv X264_C "$C_X264/x264-noasm-autovec"
+    okv X264_10_ASM "$( [ -x "$C_X264/x264-10-asm" ] && echo "$C_X264/x264-10-asm" )"
+    okv X264_10_C "$( [ -x "$C_X264/x264-10-noasm-autovec" ] && echo "$C_X264/x264-10-noasm-autovec" )"
     okv X264_COMMIT "$(git -C "$C_X264" rev-parse HEAD 2>/dev/null)"
     okv FFBOARD_FFMPEG "$C_FFB/FFmpeg/ffmpeg"
     okv Y264LIB "$C_FFB/prefix-y264"
@@ -563,7 +595,8 @@ st_ok() {
 # in the table, exactly like one that skipped itself.
 
 ALL_STAGES="deps clone assets corpus sde-unpack build-y264 build-y264-10
-            build-x264 build-vmaf build-ffmpeg oracles make-test conformance
+            build-x264 build-x264-10 build-vmaf build-ffmpeg oracles make-test
+            conformance
             checkasm-all sde-spr sde-gnr bootstrap.ok"
 # NORMALISED TO SINGLE SPACES FIRST, and that is not tidiness. ALL_STAGES is
 # written across three lines for legibility, so the token at each line end is
@@ -602,6 +635,7 @@ fi
 if [ "$fatal" = 0 ]; then
     run build-y264-10 st_build_y264_10  600
     run build-x264    st_build_x264     900
+    run build-x264-10 st_build_x264_10  900
     run build-vmaf    st_build_vmaf     900
     run build-ffmpeg  st_build_ffmpeg  2400
     run oracles       st_oracles        600

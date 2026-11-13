@@ -13,19 +13,35 @@ The public API takes its suffix in include/yah264.h (YAH264_API); this header is
 the INTERNAL side, force-included into every translation unit of the 10-bit
 library by meson so a 10-bit object both defines and references `<name>_10`.
 
-The list is the union of the archives' defined symbols minus the public ones.
-Feed it archives built WITHOUT the namespace, which is what a plain
-`meson setup build && meson setup build10 -Dbit_depth=10` on a tree with the
-`-include` line removed produces; in practice the 8-bit archive alone is the
-superset, since every 10-bit source file is also an 8-bit one.
+The list is the union of the archives' internal symbols. The 8-bit archive of
+an architecture holds every name its 8-bit build defines; a 10-bit archive
+(libyah264_10*.a, built WITH the namespace) contributes its names with the
+`_10` taken off, which is how the 10-bit-only kernels get in, and any name it
+defines WITHOUT the suffix, which is an entry this header is missing. The
+kernel tiers differ by architecture, so feed it both architectures' archives:
+an aarch64 build and an x86-64 build, each holding both depths. A list made
+from one architecture drops the other's kernels, and the 10-bit library then
+links them unsuffixed. Names that exist only in an optional build (the
+instruction-count profiler, -DY264_IPROF) are listed in OPTIONAL below. The
+SVE kernels are 8-bit only and never collide, so a macOS aarch64 build (which
+has no SVE) gives the same list in every way that matters; a Linux aarch64
+archive adds their names harmlessly.
 
-usage: scripts/gen_symbols10.py build/libyah264.a [build10/libyah264.a ...]
+usage: scripts/gen_symbols10.py <arm64>/libyah264.a <arm64>/libyah264_10.a \
+           <x86-64>/libyah264.a <x86-64>/libyah264_10.a
        (writes src/common/symbols10.h; --stdout prints instead)
+
+It refuses to write a short list: every archive's nm must succeed without
+complaint and yield y264_ names, an 8-bit and a 10-bit archive are required
+for each of aarch64 and x86-64 (read from the first object's header), and a
+list that drops any name the current header has needs --force (--stdout only
+warns, since it writes nothing).
 
 scripts/symbol_check.sh is the gate that fails when this file goes stale.
 """
 
 import os
+import shlex
 import subprocess
 import sys
 
@@ -50,11 +66,13 @@ HEADER = '''/*
  * references `<name>_10`. Nothing here reaches the 8-bit library, the CLI, or
  * an installed header.
  *
- * The list is the union of the two archives' defined symbols minus the public
- * ones, and it is checked rather than trusted: scripts/symbol_check.sh (a leg
- * of `make test`) intersects the two archives and fails on any name they share,
- * so a new non-static symbol that is added here and forgotten fails the gate
- * instead of linking to the wrong depth's code.
+ * The list is the union of the two depths' internal symbols on BOTH
+ * architectures, aarch64 and x86-64, since each has kernel tiers the other
+ * lacks; regenerate it from both (see the script's usage). It is checked
+ * rather than trusted: scripts/symbol_check.sh (a leg of `make test`)
+ * intersects the two archives and fails on any name they share, so a new
+ * non-static symbol that is added here and forgotten fails the gate instead of
+ * linking to the wrong depth's code.
  */
 
 #ifndef YAH264_SYMBOLS10_H
@@ -69,43 +87,122 @@ HEADER = '''/*
 FOOTER = "\n#endif /* YAH264_SYMBOLS10_H */\n"
 
 
+# defined only when the instruction-count profiler is compiled in
+OPTIONAL = ("y264_ip_beg", "y264_ip_end", "y264_ip_scope_end")
+
+
 def defined(archive):
     """Names with external linkage that this archive DEFINES.
 
-    -g is portable; --defined-only is not, so drop the U lines by hand. Apple's
-    nm prefixes an underscore, GNU's does not.
+    -g is portable; --defined-only is not, so drop the U lines by hand. A
+    Mach-O archive's names carry a leading underscore and an ELF one's don't,
+    so the underscore comes off only when the archive is Mach-O.
     """
     nm = os.environ.get("NM", "nm")
-    out = subprocess.run([nm, "-g", archive], capture_output=True, text=True)
-    names = set()
+    cmd = [nm, "-g", archive]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:
+        sys.exit("gen_symbols10: cannot run %s (%s); set NM to an nm that "
+                 "reads this archive" % (shlex.join(cmd), e.strerror))
+    # GNU nm exits 0 on a Mach-O archive it can't read and only complains on
+    # stderr, so any complaint is fatal
+    if out.returncode != 0 or out.stderr.strip():
+        why = out.stderr.strip().splitlines()[-1] if out.stderr.strip() else "rc %d" % out.returncode
+        sys.exit("gen_symbols10: %s failed: %s" % (shlex.join(cmd), why))
+    raw = set()
     for line in out.stdout.splitlines():
         f = line.split()
         if len(f) == 3 and f[1] != "U":
-            names.add(f[2][1:] if f[2].startswith("_") else f[2])
+            raw.add(f[2])
+    macho = any(n.startswith(("_y264_", "_yah264_")) for n in raw)
+    names = {n[1:] if macho and n.startswith("_") else n for n in raw}
+    if not any(n.startswith("y264_") for n in names):
+        sys.exit("gen_symbols10: %s defines no y264_ names; it is not an encoder "
+                 "archive this nm can read" % shlex.join(cmd))
+    return names
+
+
+def arch(archive):
+    """'aarch64' or 'x86_64' from the archive's first object, else None."""
+    with open(archive, "rb") as f:
+        data = f.read()
+    if not data.startswith(b"!<arch>\n"):
+        return None
+    pos = 8
+    while pos + 60 <= len(data):
+        name = data[pos:pos + 16].decode("latin-1").strip()
+        size = int(data[pos + 48:pos + 58].decode("latin-1").strip() or 0)
+        body = pos + 60
+        if name.startswith("#1/"):          # BSD long name stored ahead of the body
+            n = int(name[3:])
+            name, body, size = data[body:body + n].decode("latin-1"), body + n, size - n
+        hdr = data[body:body + 20]
+        if hdr[:4] == b"\x7fELF":
+            m = int.from_bytes(hdr[18:20], "little")
+            return {62: "x86_64", 183: "aarch64"}.get(m)
+        if hdr[:4] == b"\xcf\xfa\xed\xfe":
+            cpu = int.from_bytes(hdr[4:8], "little")
+            return {0x0100000C: "aarch64", 0x01000007: "x86_64"}.get(cpu)
+        pos = pos + 60 + int(data[pos + 48:pos + 58].decode("latin-1").strip() or 0)
+        pos += pos & 1
+    return None
+
+
+def internal(archive):
+    """The archive's internal names as the 8-bit spelling."""
+    ten = os.path.basename(archive).startswith("libyah264_10")
+    names = set()
+    for n in defined(archive):
+        if n.startswith("yah264_"):
+            continue
+        if ten and n.endswith("_10"):
+            n = n[:-3]
+        names.add(n)
     return names
 
 
 def main(argv):
     to_stdout = "--stdout" in argv
+    force = "--force" in argv
     archives = [a for a in argv[1:] if not a.startswith("-")]
     if not archives:
         sys.exit(__doc__)
 
-    names = set()
+    names = set(OPTIONAL)
+    have = set()
     for a in archives:
         if not os.path.exists(a):
             sys.exit("gen_symbols10: no such archive: " + a)
-        names |= defined(a)
+        kind = arch(a)
+        if kind is None:
+            sys.exit("gen_symbols10: %s is not an aarch64 or x86-64 archive" % a)
+        depth = 10 if os.path.basename(a).startswith("libyah264_10") else 8
+        have.add((kind, depth))
+        names |= internal(a)
+    need = {(k, d) for k in ("aarch64", "x86_64") for d in (8, 10)}
+    if need - have:
+        sys.exit("gen_symbols10: missing archives for %s; both architectures at "
+                 "both depths are needed, or the other architecture's kernels "
+                 "drop out" % ", ".join("%s %d-bit" % m for m in sorted(need - have)))
+    internal_names = sorted(names)
 
-    # The public 25 are suffixed by the header's YAH264_API macro, so they must
-    # not be suffixed a second time here. A name already carrying the suffix is
-    # an archive that was built WITH the namespace; skip it rather than emit
-    # `foo_10 -> foo_10_10`.
-    internal = sorted(n for n in names
-                      if not n.startswith("yah264_") and not n.endswith("_10"))
+    # every name the current header has must survive: a count would let names
+    # an extra archive adds (SVE, from a Linux aarch64 build) hide dropped ones.
+    # --stdout is a dry run and only warns, since it overwrites nothing
+    if os.path.exists(OUT) and not force:
+        old = {l.split()[1] for l in open(OUT)
+               if l.startswith("#define ") and len(l.split()) == 3}
+        lost = sorted(old - set(internal_names))
+        if lost:
+            msg = ("gen_symbols10: %d name(s) in the current header are missing "
+                   "from these archives:\n  %s" % (len(lost), "\n  ".join(lost)))
+            if not to_stdout:
+                sys.exit(msg + "\nrerun with --force if the drop is meant")
+            sys.stderr.write(msg + "\n(--stdout: printed anyway)\n")
 
-    width = max(len(n) for n in internal) + 1
-    body = "".join("#define %-*s %s_10\n" % (width, n, n) for n in internal)
+    width = max(len(n) for n in internal_names) + 1
+    body = "".join("#define %-*s %s_10\n" % (width, n, n) for n in internal_names)
     text = HEADER + body + FOOTER
 
     if to_stdout:
@@ -114,7 +211,7 @@ def main(argv):
         with open(OUT, "w") as f:
             f.write(text)
         sys.stderr.write("gen_symbols10: %d internal symbols -> %s\n"
-                         % (len(internal), os.path.normpath(OUT)))
+                         % (len(internal_names), os.path.normpath(OUT)))
     return 0
 
 

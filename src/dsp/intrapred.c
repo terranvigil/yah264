@@ -447,7 +447,7 @@ void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
  * re-argued per instruction set, and nothing in that wave is timed. Which x86
  * tier runs is y264_cpu_tier()'s answer, and it demands a tier's WHOLE feature
  * set before admitting a kernel built with that tier's flags. */
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 #include "../common/cpu.h"
 static int pr_have_simd(void) { return y264_asm_on(Y264_ASM_PRED); }
 #endif
@@ -461,10 +461,10 @@ void y264_intra8x8_edge(y264_i8_edge_t *e, const pixel *rec, int stride,
                         int have_top, int have_left,
                         int have_topleft, int have_topright)
 {
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (pr_have_simd()) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_intra8x8_edge_avx2(e, rec, stride, have_top, have_left,
                                     have_topleft, have_topright);
@@ -487,10 +487,10 @@ void y264_intra8x8_dir6(pixel out[6][64], const y264_i8_edge_t *e)
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (pr_have_simd()) { y264_intra8x8_dir6_neon(out, e->f); return; }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (pr_have_simd()) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) { y264_intra8x8_dir6_avx2(out, e->f); return; }
 #endif
         if (tier >= Y264_TIER_SSE4) { y264_intra8x8_dir6_sse4(out, e->f); return; }
@@ -504,10 +504,10 @@ void y264_intra8x8_dir6_rec(pixel out[6][64], const pixel *rec, int stride)
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (pr_have_simd()) { y264_intra8x8_dir6_rec_neon(out, rec, stride); return; }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (pr_have_simd()) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) { y264_intra8x8_dir6_rec_avx2(out, rec, stride); return; }
 #endif
         if (tier >= Y264_TIER_SSE4) { y264_intra8x8_dir6_rec_sse4(out, rec, stride); return; }
@@ -542,10 +542,10 @@ void y264_intra8_dvhp(pixel out[4][64], const pixel top[8], const pixel left[8],
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
     if (pr_have_simd()) { y264_intra8_dvhp_neon(out, top, left, dc, a, b, c); return; }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (pr_have_simd()) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) { y264_intra8_dvhp_avx2(out, top, left, dc, a, b, c); return; }
 #endif
         if (tier >= Y264_TIER_SSE4) { y264_intra8_dvhp_sse4(out, top, left, dc, a, b, c); return; }
@@ -571,13 +571,13 @@ void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
         break;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     switch (mode) {
     case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
     case Y264_I4_HD: case Y264_I4_VL:
         if (pr_have_simd()) {
             int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
             if (tier >= Y264_TIER_AVX2) {
                 y264_intra8x8_from_edge_avx2(pred, e->f, mode);
                 return;
@@ -605,10 +605,10 @@ void y264_intra16x16(pixel pred[256], const pixel *rec, int stride,
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (pr_have_simd()) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_intra16x16_avx2(pred, rec, stride, mode, have_top, have_left);
             return;
@@ -632,10 +632,10 @@ void y264_intra_chroma(pixel *pred, const pixel *rec, int stride,
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (cw == 8 && pr_have_simd()) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_intra_chroma_avx2(pred, rec, stride, mode, have_top, have_left,
                                    cw, ch);
@@ -680,13 +680,13 @@ void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
         break;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     switch (mode) {
     case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
     case Y264_I4_HD: case Y264_I4_VL:
         if (pr_have_simd()) {
             int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
             if (tier >= Y264_TIER_AVX2) {
                 y264_intra8x8_avx2(pred, rec, stride, mode, have_top, have_left,
                                    have_topleft, have_topright);

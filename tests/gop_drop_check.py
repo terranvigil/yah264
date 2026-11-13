@@ -19,7 +19,12 @@ The input is spliced on the fly from CIF corpus clips (mobile, foreman,
 bus) when they are present, else from synthetic QCIF segments, which have the
 same GOP shape.
 """
-import os, subprocess, sys, tempfile
+import os, shlex, subprocess, sys, tempfile
+
+# YAH264_WRAP: a command the encoder runs under (the x86 kit's explicit QEMU),
+# which is slower, so a hang takes longer to call there
+WRAP = shlex.split(os.environ.get("YAH264_WRAP", ""))
+LIMIT = 600 if WRAP else 60
 
 RUNS = 3
 
@@ -128,13 +133,13 @@ def run_cases(cli, corpus, work, env):
             if os.path.exists(out):
                 os.remove(out)
             try:
-                p = subprocess.run([cli, "--input-y4m", clip, "--threads", t,
-                                    "-o", out, "--quiet", "--no-progress"] + args,
+                p = subprocess.run(WRAP + [cli, "--input-y4m", clip, "--threads", t,
+                                           "-o", out, "--quiet", "--no-progress"] + args,
                                    env=env, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.PIPE, text=True, timeout=60)
+                                   stderr=subprocess.PIPE, text=True, timeout=LIMIT)
                 rc, err = p.returncode, p.stderr.strip()[:200]
             except subprocess.TimeoutExpired:
-                rc, err = "timeout", "hung for 60 s"
+                rc, err = "timeout", f"hung for {LIMIT} s"
             got = coded_frames(out) if os.path.exists(out) else 0
             if rc != 0 or got != want:
                 print(f"FAIL {name}, threads {t}, run {run + 1}: exit {rc}, "
