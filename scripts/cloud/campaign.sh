@@ -590,7 +590,10 @@ st_identity10() {
 # and task-clock (CPU seconds) as one row
 perf10() {
     local rows="$1" label="$2" rep; shift 2
-    rep=$(perf stat -x, -e instructions,task-clock -- "$@" 2>&1 >/dev/null) || {
+    # perf exits 0 when the command dies on a signal, so a shell carries the
+    # command's own status out (and costs every arm the same few instructions)
+    rep=$(perf stat -x, -e instructions,task-clock -- sh -c '"$@"; exit $?' sh "$@" \
+          2>&1 >/dev/null) || {
         echo "$label ENCFAIL" >> "$rows"; return 1; }
     local ins
     ins=$(printf '%s\n' "$rep" | awk -F, '$3 ~ /^instructions/ && $1 ~ /^[0-9]/ {print $1; exit}')
