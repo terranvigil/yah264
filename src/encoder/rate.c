@@ -1402,7 +1402,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * takes the serial emit and its measured-size retry, so the floor there
  * only holds back an anchor the retry already covers (samsung CRF+VBV at
  * one thread read +3.6% BD-VMAF-NEG with the floor, -3.2% without). */
-    if (type != 2 && !e->rcp_vbv_tight && e->pool && e->bm_rvbv.have[type]) {
+    if (type != 2 && !vbv_serial_now(e) && e->pool && e->bm_rvbv.have[type]) {
         int lo = rcbm_qp_floor(&e->bm_rvbv, type, VBV_QPD);
         if (e->qp < lo) e->qp = lo > 51 ? 51 : lo;
     }
@@ -2907,7 +2907,17 @@ static int vbv_abr_bounded(const yah264_encoder_t *e)
  * cannot price a frame for the buffer (a GOP's first frame has no measured
  * scale at all). pass 1 only records, so it stays unbounded. */
     return e->vbv_on && e->tp_pass != 1
-           && (!e->rcp_on || e->rcp_vbv_tight || !e->pool);
+           && (!e->rcp_on || !e->pool || vbv_serial_now(e));
+}
+
+/* a frame on the serial schedule: in a tight burst, and every frame of a VBV
+ * pass 2, which keeps its frame threads for the row wavefront but codes one
+ * frame at a time so the measured-size bound reaches each. its decides still
+ * pop pending frames at the next anchor, as on one thread: popping at fill
+ * moved B frames off the plan (stefan+mobile+akiyo -0.97 dB at t3) */
+int vbv_serial_now(const yah264_encoder_t *e)
+{
+    return e->vbv_on && (e->rcp_vbv_tight || e->tp_pass >= 2);
 }
 
 /* Either bound wants the serial emit: W2 does not know a frame's size until

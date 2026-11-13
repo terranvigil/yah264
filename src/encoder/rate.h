@@ -59,6 +59,7 @@ int rcp_warm(const yah264_encoder_t *e);
 double rcstep_qscale(double q, double last, double lstep, int widen_hi, int widen_lo);
 double vbv_limit_at(const yah264_encoder_t *e, double fill);
 double vbv_bound_limit(const yah264_encoder_t *e, double fill);
+int vbv_serial_now(const yah264_encoder_t *e);
 void tp_build_plan(yah264_encoder_t *e);
 double abr_pbrate_scale(const yah264_encoder_t *e);
 int crf_cplx_env(void);

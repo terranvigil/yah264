@@ -3475,17 +3475,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         int fk = atoi(y264_env("Y264_GOP_FORCE_K"));
         if (fk > 0) { k = fk; force_k = 1; }
     }
-    /* A two-pass pass 2 under a VBV codes each GOP on one thread, so every
-     * frame takes the serial emit and its measured-size bound. With frame
-     * threads its pipelined frames got past the buffer (a GOP join on
-     * stockholm 720p, a cut on meridian 1080p), and taking the serial
-     * schedule only after an intra frame cost the mobile section of
-     * stefan+mobile+akiyo 0.97 dB at three threads. */
-    if (!force_k && param->rc.method == YAH264_RC_2PASS && param->rc.pass >= 2
-        && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0) {
-        k = 1;
-        force_k = 1;
-    }
     /* Size the GOP concurrency to the memory budget (--max-memory, else half
  * of physical RAM). Every GOP worker is a whole encoder, so the workers, not
  * the input, are what an encode holds once the input store is bounded, and

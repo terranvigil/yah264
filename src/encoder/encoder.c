@@ -11536,7 +11536,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     int rc_waits = (e->abr_on || e->vbv_on || e->tp_pass)
                  && (!e->rcp_on || rcp_warm(e)
                      || (type != 2 && !(e->rcp_lag > 0 && !e->vbv_on))
-                     || (e->vbv_on && e->rcp_vbv_tight));
+                     || vbv_serial_now(e));
     if (rc_waits) {
         g_ew_site = 0;
         w2_drain(e, off);               /* prev frame's bits feed this frame's RC */
@@ -12456,7 +12456,7 @@ static int fpipe_ready(yah264_encoder_t *e)
     if (e->fields)
         return 0;
     if ((e->abr_on || e->vbv_on || e->tp_pass) &&
-        (!e->rcp_on || rcp_warm(e) || (e->vbv_on && e->rcp_vbv_tight)))
+        (!e->rcp_on || rcp_warm(e) || vbv_serial_now(e)))
         return 0;
     if (e->fp_state == 0)
         e->fp_state = (e->pool && ntp_pool_nthreads(e->pool) >= Y264_MT_POOL_MIN &&
@@ -13291,7 +13291,7 @@ static int stair_ready(yah264_encoder_t *e)
 {
     if (!stair_clamp_on(e))
         return 0;
-    if (e->rcp_on && (rcp_warm(e) || (e->vbv_on && e->rcp_vbv_tight)))
+    if (e->rcp_on && (rcp_warm(e) || vbv_serial_now(e)))
         return 0;                   /* serial-tight RC feedback while warm
  * or in a tight VBV burst */
     if (!e->pool || ntp_pool_nthreads(e->pool) < Y264_MT_POOL_MIN || !e->wf_warmed)

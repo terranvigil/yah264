@@ -80,6 +80,7 @@
 #define vbv_bound_limit                 vbv_bound_limit_10
 #define vbv_bounded_now                 vbv_bounded_now_10
 #define vbv_limit_at                    vbv_limit_at_10
+#define vbv_serial_now                  vbv_serial_now_10
 #define y264_add4x4_idct                y264_add4x4_idct_10
 #define y264_add4x4_idct_avx2           y264_add4x4_idct_avx2_10
 #define y264_add4x4_idct_c              y264_add4x4_idct_c_10
