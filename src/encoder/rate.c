@@ -2576,9 +2576,12 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, c
  * walk well under the floor. An overspent ledger raises them to the
  * band's top. Each floored frame moves at most TP_LOSLEW QP from the
  * last floored frame of its type; unbounded, the first evidence opened
- * an 18-QP swing on grain. Frames the floor doesn't hold keep the plain
- * band below: held to raising too, detail coded ahead of grain left
- * bits it could use, and the grain walked down to spend them. */
+ * an 18-QP swing on grain. Frames the floor doesn't hold may also lower
+ * the QP, as far as the plain band's 2: held to raising, detail coded
+ * ahead of grain left bits it could use and the grain walked down to
+ * spend them. They keep the floored frames' lower bound and are raised
+ * with them on an overspent ledger, or a ledger the floored frames
+ * overran went uncorrected for every other frame. */
         double rem_lo = e->tp_elo ? e->tp_elo[e->tp_n] - e->tp_elo[idx] : 0.0;
         if (rem_lo > 0) {
             int warm = e->tp_lcnt >= TP_LOWARM && e->tp_lmod >= 1 && e->tp_lact > 0;
@@ -2598,16 +2601,14 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, c
             double kw = kl > k ? kl : k;
             double hi = warm ? TP_LOHI : 1.0;
             double lo = 0.5 / (kw > 1.0 ? (kw < 4.0 ? kw : 4.0) : 1.0);
-            if (!bound) {
+            if (!bound)
                 hi = 2.0;
-                lo = 0.5 / (k > 1.0 ? (k < 4.0 ? k : 4.0) : 1.0);
-            }
             if (eff > 1 && rt > 1) {
                 double s = rt / eff;
                 if (s < lo) s = lo;
                 if (s > hi) s = hi;
                 q /= s;
-            } else if (rt <= 1 && bound)
+            } else if (rt <= 1)
                 q /= lo;
             int ty = e->tp_stats[idx].type;
             if (bound && e->tp_lastq[ty] > 0) {
