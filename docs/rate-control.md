@@ -187,9 +187,49 @@ costs, so when enough of them would be planned far under pass 1 the plan holds
 them at most 15 QP under it, and the runtime prices them at their own measured
 cost as they land. `--pass 3` reads the records and writes them back from a
 real encode, so a further pass refines against it. Pass 2 needs the same
-`--frames`, `--keyint` and `--tff`/`--bff` as pass 1, and warns when the record
-count says otherwise. A missing stats file isn't an error: pass 2 then codes
-every frame at the base QP.
+`--frames`, `--keyint` and `--tff`/`--bff` as pass 1. It refuses a file from
+the other field mode, from another `--keyint`, with a malformed record, or
+whose sections don't hold the records their markers count, and warns of any
+pictures it codes past the file's last record. A VBV on one pass and not the
+other is fine: pass 2 splits as pass 1 recorded. A missing stats file isn't
+an error: pass 2 then codes every frame at the base QP.
+
+**With a VBV**, pass 1 codes as capped ABR at the target, its base QP never
+under 26, so frames are recorded at QPs that say what a finer QP costs. Each
+of its GOPs starts its rate control afresh, so like GOPs record at like QPs.
+Pass 2 codes one frame at a time, its frame threads on the row wavefront, and
+holds every frame to the buffer by its measured size, as the single-pass
+modes do: a frame that comes out over the fit test, the GOP's exit corridor
+or the whole buffer is re-coded at the QP the overshoot asks for, and at QP 51
+once more without its per-macroblock offsets. A raise of 3 QP or more that
+lands under half its limit steps back, bisecting toward the last QP that
+failed, at most four more builds, and keeps the lowest that fits. A picture
+still underflows where it reaches QP 51, or, with GOPs coded in parallel,
+within a GOP coded beside one that reached QP 51 and left the buffer below
+its planned level, since that GOP plans on the level it assumed. Those
+pictures are counted over the stream the GOPs make together, and named in
+one warning at the end. Each frame also
+leaves the next frames what they cost at QP 51, priced from their pass-1
+records, and the next GOP's key what it costs at its planned QP. The
+splitter caps each GOP's budget at
+what the cap delivers over it plus half the buffer, hands the rest to the
+other GOPs, and, with the cap at or under the target, also floors it at what
+arrives over it less half the buffer, the shares then one water level between
+floor and cap that sums to the whole. It plans the level each GOP joins at: the buffer walked over the
+GOP budgets, and no less than the next key's cost; with the cap at or under
+the target the last GOP is held, by its measured sizes, to the level the
+walk ends at. A GOP coded right after
+its predecessor continues its buffer at the exact occupancy; any other starts
+at the planned level, and the one before it leaves at least that much, held
+to it only where what its remaining frames give back at QP 51 couldn't make
+it up. Every GOP takes over the spend against its budget of the GOP it
+continues from, whichever worker coded it. Under a VBV the split's unit is at
+least 30 frames: GOPs shorter than that go to each encoder several at a time,
+keyframes still at `--keyint`, since every split point costs a join. When the cap is at or under the target, pass 2
+steers to half the next key's planned size, or half the buffer where that
+is less, and a frame the buffer has room for spends it, up to what its
+budget allows. `--nal-hrd` always runs one encoder, and
+under `--nal-hrd cbr` that encoder ends with the buffer where it began.
 
 ### Frame-level AQ strength by mode
 
@@ -235,7 +275,8 @@ keeps one rate problem:
   per GOP) or `--gop-threads`.
 - **Two-pass** splits the stats file at the GOP markers a threaded pass 1
   writes, and each GOP takes the share of the budget its complexity earns. A
-  serial pass 1 writes no markers, so its pass 2 runs serially too.
+  serial pass 1 writes no markers, so its pass 2 runs serially too. Under a
+  VBV the GOPs join at levels the splitter plans (see [Two-pass](#two-pass)).
 - **`--keyint 1` with a VBV** runs one encoder: a one-frame GOP has no frame
   of its own to correct the buffer level its segment assumed.
 
@@ -243,7 +284,9 @@ keeps one rate problem:
 
 **Per segment, from the assumed occupancy, the guarantee is strict.** The first
 GOP starts full (or at `--vbv-init`). Every later GOP assumes only the handoff
-level, half the buffer, which is the CRF fill goal's fixed point. That's what
+level, half the buffer, which is the CRF fill goal's fixed point; a two-pass
+pass 2 assumes the level its GOP split planned instead (see
+[Two-pass](#two-pass)). That's what
 chunked delivery needs: each segment decodes legally on its own.
 
 **Capped ABR joins segments explicitly.** A GOP coded right after its
@@ -316,6 +359,7 @@ also go serial:
   (`Y264_VBV_LOW`).
 - Under CBR and under `--nal-hrd` (pass 1 of a two-pass aside), every burst
   coded on a frame pool.
+- Every frame of a two-pass pass 2, which still decides as one thread does.
 
 Within a pipelined burst, a B may not decide more than 6 QP below
 the QP regime its model was calibrated at. The VBV model runs on

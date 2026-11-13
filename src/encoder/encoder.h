@@ -102,6 +102,7 @@ _Static_assert(Y264_STAIR_HOPS == (Y264_STAIR_K - 1) + 1,
  * budget solve and yah264_2pass_stat_weight -- which a GOP-parallel caller
  * uses to size each GOP's share of that budget -- have to agree on it. */
 #define Y264_TP_QCOMP 0.6
+#define Y264_TP_P1_QP 26     /* pass 1's fixed QP, and a VBV pass 1's floor */
 
 #define LR_MV_INVALID  INT16_MIN
 /* Reference legs of a lookahead entry. Fixed roles for now; Q7 generalises to
@@ -902,6 +903,11 @@ struct yah264_encoder {
     unsigned hrd_bp_init, hrd_bp_off;   /* the delay and offset in force */
     double   hrd_tr_cur;                /* removal time of the access unit just opened */
     long     hrd_late;                  /* pictures whose last bit arrived after their removal */
+    long     tp_unfit;                  /* pass-2 pictures that underflowed the shadow buffer */
+    long     tp_past;                   /* pass-2 pictures coded past the last record */
+    double   tp_shadow;                 /* a decoder's buffer, emptied after an underflow */
+    int      tp_shadow_on;
+    int      tp_split;                  /* the stats are a section the GOP splitter wrote */
     long     hrd_last_idr;              /* display index of the last key (IDR or open key), -1 none */
     double   hrd_c51[4];                /* last slice bits at QP 51 per type: I, P, B, an intra frame's second field */
     int      hrd_qfloor[3];             /* per type, the base QP the next frame starts from, -1 none */
@@ -1034,12 +1040,25 @@ struct yah264_encoder {
     double  *tp_elo3;           /* [3][n+1] tp_elo per frame type */
     double   tp_lastq[3];       /* per type: last floor-bound qscale decided, 0 = none */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
+    struct tp_stat tp_next[2];  /* pass 2: the next GOP's first records (#next) */
+    int      tp_n_next;
+    double   tp_join, tp_exit;  /* pass 2: the splitter's join levels, bits; 0 = none */
+    double   tp_key;            /* pass 2: the next GOP's key at its planned size, bits */
+    double   tp_spare;          /* pass 2: what this frame may spend, its plan included; -1 = no cap */
+    double  *tp_resv;           /* [n+1] under a VBV: occupancy record i needs at QP 51 */
+    double  *tp_nkey;           /* [n] the first key after record i at its planned size */
+    double   tp_resv_cur;       /* the reserve the frame being coded leaves */
+    int      tp_hold_end;       /* held over all its frames to the level it ends at */
+    double  *tp_slack;          /* [n+1] what records i.. give the buffer back at QP 51 */
+    double   tp_slack_cur;      /* ...from the record after the frame being coded */
+    double   tp_fill_gap;       /* coded frames' real size against their prediction, at a decide */
     double   tp_fps;            /* records (pictures) per second, for the drift band */
     int      tp_nacc;           /* frames accounted so far */
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_framing;        /* pass 2: framing bits of the frames accounted */
     double   nal_framing;       /* bytes written that are not slice payload */
     double   nal_framing_seen;  /* nal_framing at the last rcp_fill */
+    double   nal_emu, nal_emu_seen; /* slice emulation-prevention bytes, the same way */
     double   tp_ebsum;          /* modelled bits of those frames at their coded QP */
     double   tp_kact, tp_kmod;  /* actual / modelled bits of the frames the bias is read on */
 
@@ -1076,6 +1095,7 @@ struct yah264_encoder {
  * and NAL headers, and the parameter-set / SEI /
  * delimiter / filler NALs written since the
  * previous fill */
+        double  emu;            /* the slices' emulation-prevention bits */
         unsigned seq;           /* decide sequence number */
         /* Capacity: one entry per frame decided and not yet accounted. At the
  * zero-lag schedule that is one burst (<= 8) plus the next anchor plus
