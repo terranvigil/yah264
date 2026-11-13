@@ -154,12 +154,22 @@ static void edge_plane(int mode)
     }
     if (mode >= 2) {
         int hi = mode == 3;
-        int pside = (int)ca_below(2), k = (int)ca_below(2);
-        int base = (int)ca_below(k ? 2 : 8);
+        int pside = (int)ca_below(2), k = ca_below(4) != 0;
+        int base = (int)ca_below(k ? 1 : 8);
         /* past the edge the jump stays under beta and the edge pair sits at
-         * the extreme, or the gate shuts or the delta falls short of it */
-        unsigned span = (k ? 20u : 256u) << sh, noise = k ? 1u : 24u << sh;
+         * the extreme, or the gate shuts or the delta falls short of it. it
+         * runs along one axis only, so every line of that edge keeps its
+         * pair at the extreme rather than riding the other axis's jump */
+        unsigned span = 256u << sh, noise = k ? 1u : 24u << sh;
         int jx = (int)ca_below(span), jy = (int)ca_below(span);
+        /* 5 to 7 (scaled): enough for a delta of one step past the
+         * extreme, small enough to clear the beta gate from qi 30 up */
+        if (k) {
+            jx = (5 + (int)ca_below(3)) << sh;
+            jy = jx;
+            if (ca_below(2)) jx = 0;
+            else jy = 0;
+        }
         for (int y = 0; y < PLANE_H; y++)
             for (int x = 0; x < STRIDE; x++) {
                 int qx = pside ? x < 8 - k : x >= 8 + k;
@@ -401,24 +411,33 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
         int base = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
         int amp = ((t & 2) ? 6 : 60) << (Y264_BIT_DEPTH - 8);
-        /* half the trials (t % 16 >= 8) sit within eight of 0 or of
-         * PIXEL_MAX, with a jump across both edges (column 8 and row 4)
-         * toward the middle, on the q side or the p side by trial parity, so
-         * the clip is reached at both ends from both sides */
-        int ext = t >> 2 & 3, jx = 0, jy = 0;
+        /* half the trials (t % 16 >= 8) sit at the bottom or the top of the
+         * range with a jump across both edges (column 8 and row 4) toward the
+         * middle: on the q side or the p side by trial parity, and at the
+         * edge or one sample past it, as in edge_plane. past it, the edge
+         * pair sits at 0 or PIXEL_MAX exactly, so the clip is reached at both
+         * ends from both sides */
+        int ext = t >> 2 & 3, jx = 0, jy = 0, ps = t & 1, k = 0;
         if (ext >= 2) {
-            base = (int)ca_below(8);
-            amp = 12 << (Y264_BIT_DEPTH - 8);
-            jx = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
-            jy = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
+            k = t >> 1 & 1;
+            base = (int)ca_below(k ? 1 : 8);
+            amp = k ? 0 : 12 << (Y264_BIT_DEPTH - 8);
+            jx = (int)ca_below((k ? 20u : 256u) << (Y264_BIT_DEPTH - 8));
+            jy = (int)ca_below((k ? 20u : 256u) << (Y264_BIT_DEPTH - 8));
+            /* past the edge, one axis only, as in edge_plane */
+            if (k) {
+                if (t & 16) jx = 0;
+                else jy = 0;
+            }
         }
 #define CH2_FILL(a, S)                                                          \
         for (int i = 0; i < (S) * H; i++) {                                     \
             int v = base + (int)ca_below(2 * amp + 1) - amp;                    \
+            int col = i % (S), row = i / (S);                                   \
             if (ext >= 2)                                                       \
                 v = base + (int)ca_below(2 * amp + 1)                           \
-                  + (((i % (S) >= 8) != (t & 1)) ? jx : 0)                      \
-                  + (((i / (S) >= 4) != (t & 1)) ? jy : 0);                     \
+                  + ((ps ? col < 8 - k : col >= 8 + k) ? jx : 0)                \
+                  + ((ps ? row < 4 - k : row >= 4 + k) ? jy : 0);               \
             a[i] = (pixel)db_clamp_pix(ext == 3 ? PIXEL_MAX - v : v);           \
         }
         CH2_FILL(a1, S1)
