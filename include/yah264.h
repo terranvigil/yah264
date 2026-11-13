@@ -1307,8 +1307,8 @@ typedef struct yah264_rc_state {
 
 /* Export the ABR state after the flush (all frames accounted). out->size must
  * be set (see above). Returns 0 and out->valid = 1 for an ABR instance, and
- * for a pass 2 or 3 under a VBV, whose export carries only the buffer
- * occupancy; -1 otherwise, with out->valid = 0 when out->size is accepted and
+ * for a pass 2 or 3 under a VBV, whose export carries the buffer occupancy
+ * and its spend against its budget; -1 otherwise, with out->valid = 0 when out->size is accepted and
  * nothing written when it is not. */
 YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 
@@ -1320,8 +1320,9 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc
  * before the first frame: `state` is an export from an earlier instance;
  * `frames_ahead` is how many frames of OTHER instances lie between that
  * export and this instance's first frame (GOPs still in flight), which the
- * import credits at the target rate. A pass 2 or 3 under a VBV imports only
- * the occupancy (below), since it plans its own budget. Returns 0, or -1 if
+ * import credits at the target rate. A pass 2 or 3 under a VBV imports the
+ * occupancy (below) and the exporter's spend past its budget, which comes
+ * off this instance's. Returns 0, or -1 if
  * the instance is neither, has already coded a frame, or the state is not
  * valid or its size is not accepted (nothing changes). Functions only, so the
  * parameter struct's layout is unchanged. */

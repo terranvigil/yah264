@@ -3014,6 +3014,14 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         /* a two-pass pass 2 plans its own budget: only the buffer carries */
         if (e->rcp_n > 0 || e->frame_count > 0) return -1;
         vbv_import_fill(e, c, csz, frames_ahead);
+        /* and what it spent past its budget, as the ABR carry does: each GOP
+         * hit its own budget to a few percent and the errors of a CBR split
+         * added up (-3 to -4% at three threads, +4% at one) */
+        if (c->cum_target > 0.0) {
+            double err = c->cum_actual - c->cum_target;
+            e->tp_target -= err;
+            e->tp_rem_target -= err;
+        }
         return 0;
     }
     if (!e->abr_on || c->target_bpf <= 0.0) return -1;   /* not a pass-2 buffer-only export */
@@ -3110,6 +3118,8 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
     out->size = dst->size;
     if (e && !e->hw && !e->abr_on && tp_vbv_join(e)) {
         out->valid = 1;
+        out->cum_target = e->tp_target;
+        out->cum_actual = e->tp_actual + e->tp_framing;
         out->vbv_fill = e->vbv.fill;
         out->vbv_have = 1;
         memcpy(dst, out, dsz);
