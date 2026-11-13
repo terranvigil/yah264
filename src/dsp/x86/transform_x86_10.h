@@ -18,11 +18,13 @@
  * columns first.
  *
  * bounds:
- *   - the forward quant forms |c| * mf + f in an unsigned 32-bit lane, exact
- *     while |c| < 2^17 (the largest 10-bit coefficient is the 8x8 DC of a
- *     full-swing residual, 64 * 1023 = 65472), mf <= 20972 (the largest flat
- *     multiplier) and 0 <= f < 2^30. a block outside that takes the scalar
- *     loop, so the kernels are exact on any input.
+ *   - the forward quant forms |c| * mf + f in an unsigned 32-bit lane. it is
+ *     exact for the flat multipliers the callers pass (mf <= 20972) while
+ *     |c| < 2^17 (the largest 10-bit coefficient is the 8x8 DC of a
+ *     full-swing residual, 64 * 1023 = 65472) and 0 <= f < 2^30. a larger
+ *     coefficient or bias takes the scalar loop; the multiplier is not
+ *     checked, since a scaling-matrix row (up to 209712) wraps the lane and
+ *     those callers stay on C.
  *   - reconstruction clips to [0, 1023] with the signed-to-unsigned 32-bit
  *     pack for the floor and a 16-bit min for the top, never the byte pack.
  *
@@ -360,7 +362,9 @@ static inline void t10_quant_scalar(const dctcoef *coef, dctcoef *lev, int n, in
 }
 
 /* nonzero when any of the n coefficients is >= 2^17 in magnitude; |INT_MIN|
- * stays negative and is caught the same way */
+ * stays negative and is caught the same way. the multipliers are not checked:
+ * the flat rows are the only ones passed, and checking costs about half a
+ * percent of a 10-bit encode's instructions */
 static inline int t10_quant_wide(const dctcoef *coef, int n)
 {
     __m128i m = _mm_setzero_si128();

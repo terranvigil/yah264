@@ -188,8 +188,9 @@ void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
 
 /* ---- forward quant ----------------------------------------------------------
  *
- * the 128-bit body eight lanes wide, same domain: a coefficient of 2^17 or
- * more, or a bias outside [0, 2^30), sends the block to the scalar loop. */
+ * the 128-bit body eight lanes wide, same domain (flat multipliers only): a
+ * coefficient of 2^17 or more, or a bias outside [0, 2^30), sends the block
+ * to the scalar loop. */
 static inline __m256i t10_quant8(__m256i c, __m256i mf, __m256i vf, __m128i sh)
 {
     __m256i z = _mm256_setzero_si256();
