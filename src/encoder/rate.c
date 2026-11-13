@@ -860,8 +860,13 @@ static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
     if (e->tp_pass >= 2 && limit > 0.9 * e->vbv.size)
         limit = 0.9 * e->vbv.size;
     if (e->tp_resv_cur > 0.0) {
-        /* pass 2: leave the next frame what it needs at QP 51 */
-        double x = fill + e->vbv.rate - e->tp_resv_cur;
+        /* pass 2: leave the next frame what it needs at QP 51, out of what
+         * the buffer holds by the frames' real sizes: priced at their
+         * predictions' margin, an anchor still in the ledger left the B
+         * frames after it nothing, and ahead of each key they coded at QP 51
+         * between anchors at QP 28-30 (bbb10s 1080p at 1500/1500/750 k60,
+         * 32 such B frames, -0.35 dB and -0.9 VMAF; tos at 600/600/600) */
+        double x = fill + e->tp_fill_gap + e->vbv.rate - e->tp_resv_cur;
         if (x < 0.02 * e->vbv.rate) x = 0.02 * e->vbv.rate;
         if (x < limit) limit = x;
     }
