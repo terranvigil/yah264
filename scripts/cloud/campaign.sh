@@ -221,33 +221,24 @@ mhz_drift() {   # the plan's 3% rule, reported not enforced: a repeat costs mone
 }
 
 # ---------------------------------------------------------------------------
-# tier_probe <checkasm> <tier...>: every leg that names a tier proves the name
-# means something first. Y264_SIMD_FORCE is read only in a dev_knobs build, and
-# the banner's feature word is the CPU's, not the build's: a -Dsimd=sse4 build
-# on an avx2 part prints avx2 too. So the cap must take (none reads "scalar"),
-# and each other tier needs a checkasm group of its own that --list marks
-# runnable here, which only a compiled tier has. Without both, every tier runs
-# the same code and every identity compare passes.
+# tier_probe <build dir> <depth> <tier...>: every leg that names a tier proves
+# the name means something first. Y264_SIMD_FORCE is read only in a dev_knobs
+# build, the banner's feature word is the CPU's rather than the build's, and
+# checkasm calls kernels by name, so none of those says the encoder reaches a
+# kernel: a -Dsimd=sse4 build, a dispatch guard that drops a tier, or a cap
+# mapped to the wrong mask each leave every tier running the same code, and
+# every identity compare passes. scripts/dispatch_probe.py watches the kernel
+# calls of a short encode at that depth under each cap instead: none calls no
+# kernel, and each tier calls a kernel of every family it has, none above it.
 tier_probe() {
-    local ck="$1" list capped t rc=0; shift
-    list=$(env -u Y264_SIMD_FORCE -u YAH264_NO_ASM -u Y264_ASM_OFF "$ck" --list 2>/dev/null | tr -d '\r')
-    capped=$(env -u YAH264_NO_ASM -u Y264_ASM_OFF Y264_SIMD_FORCE=none "$ck" --list 2>/dev/null \
-             | head -1 | tr -d '\r')
-    case "$capped" in
-        "checkasm: cpu scalar, "*) ;;
-        *) echo "# Y264_SIMD_FORCE=none did not take in $ck ($capped): build with -Ddev_knobs=true" >&2
-           return 1 ;;
-    esac
-    for t in "$@"; do
-        [ "$t" = none ] && continue
-        printf '%s\n' "$list" | awk -v s="_$t" '
-            { n = length($1) - length(s) }
-            n > 0 && substr($1, n + 1) == s && $NF == "yes" { f = 1 }
-            END { exit !f }' && continue
-        echo "# no ${t} group is runnable in $ck: the tier is not compiled in (-Dsimd=auto) or the CPU lacks it" >&2
-        rc=1
-    done
-    return "$rc"
+    local dir="$1" depth="$2" clip; shift 2
+    if [ "$depth" = 10 ]; then clip="$(clips10 | head -1)"
+    else clip="$C_SRC/tests/corpus/foreman_cif.y4m"; fi
+    [ -n "$clip" ] && [ -f "$clip" ] || {
+        echo "# tier_probe: no ${depth}-bit clip to probe with (${clip:-none})" >&2; return 1; }
+    python3 "$C_SRC/scripts/dispatch_probe.py" --build "$dir" "--clip$depth" "$clip" \
+        --tiers "none $*" --work "$RES/dispatch-$depth" 2>&1 | sed 's/^/# /' >&2
+    return "${PIPESTATUS[0]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -277,7 +268,7 @@ st_identity() {
         x86_64|amd64)
             tiers="none sse4 avx2"
             # the gated tier only where it is compiled in, not merely in cpuid
-            c_has_avx512 "$CK" && tier_probe "$CK" avx512 2>/dev/null && tiers="$tiers avx512" ;;
+            c_has_avx512 "$CK" && tier_probe "$C_B8" 8 avx512 2>/dev/null && tiers="$tiers avx512" ;;
         *)  tiers="none"
             tier_note="# NOTE $(uname -m) is not x86-64: there are no x86 tiers to force here, so only the no-SIMD axis was checked." ;;
     esac
@@ -291,7 +282,7 @@ st_identity() {
         [ -n "$tier_note" ] && echo "$tier_note"
     } > "$out"
     # shellcheck disable=SC2086
-    tier_probe "$CK" $tiers 2>> "$out" || { cat "$out"; return 1; }
+    tier_probe "$C_B8" 8 $tiers 2>> "$out" || { cat "$out"; return 1; }
     local tier spec clip rate t mode rc=0
     for tier in $tiers; do
         : > "$RES/.md5.$tier"
@@ -545,7 +536,7 @@ tiers10() {
     has10 sse4 && have="sse4"
     has10 avx2 && has10 fma3 && has10 bmi2 && have="$have avx2"
     # shellcheck disable=SC2086
-    tier_probe "$ck" none $have || return 1
+    tier_probe "$C_B10" 10 $have || return 1
     # shellcheck disable=SC2086
     [ -n "$have" ] && printf '%s ' $have
     return 0
@@ -780,7 +771,7 @@ st_avx512_ab() {
     [ -x "$Y264" ] || { c_skip "no yah264 binary"; return; }
     c_has_avx512 "$CK" || { c_skip "no AVX-512 in this build/CPU ($Y264_CPU_NAME); the gated tier is not here"; return; }
     # a build without the tier would time avx2 twice under two names
-    tier_probe "$CK" avx2 avx512 || return 1
+    tier_probe "$C_B8" 8 avx2 avx512 || return 1
     # shellcheck source=/dev/null
     . "$C_SRC/scripts/parity-clips.sh"
     local out="$RES/avx512-ab.txt" frames; frames="$(c_shape 120 12)"
