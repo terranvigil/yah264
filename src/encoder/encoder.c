@@ -11716,8 +11716,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * own entry and the virtual fill equals the committed one -- the walk is
  * here so the two paths read the same quantity by construction rather
  * than by coincidence. */
-        double fill = e->rcp_on ? rcp_vbv_vfill(e, 1) : e->vbv.fill;
-        double limit = vbv_limit_at(e, fill);
+        double fill = e->rcp_on ? rcp_vbv_vfill_bound(e, 1) : e->vbv.fill;
+        double limit = vbv_bound_limit(e, fill);
         /* Capped VBR, an intra frame: it also leaves the reserve the burst
  * plan asks of an intra frame it can price, half the plan's target level
  * (or half of what is there, below that). A GOP instance's first frame is
@@ -11792,8 +11792,9 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             }
             if (nq == e->qp) {
                 /* at the ceiling the per-macroblock offsets still code some
-                 * blocks under 51: under a declared buffer, drop them once */
-                if (!e->hrd_on || e->hrd_flat || (!e->aq_off && !e->mbtree_on))
+                 * blocks under 51: under a declared buffer or a two-pass
+                 * pass 2, drop them once */
+                if ((!e->hrd_on && e->tp_pass < 2) || e->hrd_flat || (!e->aq_off && !e->mbtree_on))
                     break;
                 e->hrd_flat = 1;
             }

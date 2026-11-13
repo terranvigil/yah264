@@ -811,7 +811,7 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
  * NEXT frame's ceiling is looser by exactly that much. Total spend does not
  * fall, it just moves, and the frame that paid for it is worse. It cost a
  * compliance cell (ducks/10000 serial) and spent 600 kbit/s MORE. */
-double vbv_limit_at(const yah264_encoder_t *e, double fill)
+static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
 {
     /* Fit test: don't drain it dry. `fill` is the occupancy the frame is
  * removed FROM -- the buffer law credits a frame's refill after its
@@ -824,7 +824,7 @@ double vbv_limit_at(const yah264_encoder_t *e, double fill)
     /* Never zero: every caller reads "limit <= 0" as "no limit", and an empty
  * buffer is the case that wants the HIGHEST QP, not none. */
     if (limit < 0.01 * e->vbv.rate) limit = 0.01 * e->vbv.rate;
-    if (!e->abr_on) {                               /* CRF has no integrator */
+    if (!e->abr_on && budget) {                     /* CRF has no integrator */
         double b = vbv_fill_budget(e, fill);
         if (b < limit) limit = b;
     }
@@ -842,6 +842,20 @@ double vbv_limit_at(const yah264_encoder_t *e, double fill)
         if (x < limit) limit = x;
     }
     return limit;
+}
+
+double vbv_limit_at(const yah264_encoder_t *e, double fill)
+{
+    return vbv_limit(e, fill, 1);
+}
+
+/* The measured-size bound's ceiling. Pass 2 of a two-pass is held there to
+ * the fit test and the exit corridor only: the half-full budget steers the
+ * predicted clip toward a reserve, and enforcing it on measured sizes too
+ * re-coded frames a plan that never underflowed had room for. */
+double vbv_bound_limit(const yah264_encoder_t *e, double fill)
+{
+    return vbv_limit(e, fill, e->tp_pass < 2);
 }
 
 /* --crf-max: the ceiling on what the VBV may raise a frame to. `base` is the
@@ -1218,16 +1232,31 @@ void rcp_flush_all(yah264_encoder_t *e)
  * before its own entry is pushed and passes 0; the first-frame measured-size
  * bound runs after and passes 1, so both read the occupancy the frame is
  * removed FROM rather than one that already charges the frame against itself. */
-double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
+static double vbv_vfill(const yah264_encoder_t *e, int drop_tail, int meas)
 {
     double rhi = VBV_RHI;
     double fill = e->vbv.fill;
     int n = e->rcp_n - drop_tail;
     for (int i = 0; i < n; i++) {
         const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
-        fill = rcbuf_step(&e->vbv, fill, rhi * p->vpred, NULL);
+        double b = meas && p->filled ? p->bits + p->framing : rhi * p->vpred;
+        fill = rcbuf_step(&e->vbv, fill, b, NULL);
     }
     return fill;
+}
+
+double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
+{
+    return vbv_vfill(e, drop_tail, 0);
+}
+
+/* The occupancy the measured-size bound holds a frame to. A pass 2 charges
+ * the frames already coded at what they coded: B frames wait for the next
+ * anchor to pop, and at their predictions the bound passed a B the buffer
+ * could not hold (foreman CIF at a 60 kbit buffer). */
+double rcp_vbv_vfill_bound(const yah264_encoder_t *e, int drop_tail)
+{
+    return vbv_vfill(e, drop_tail, e->tp_pass >= 2);
 }
 
 /* Capped VBR: plan the whole burst at the anchor (Y264_VBV_PLAN, default on).
@@ -2819,9 +2848,10 @@ static int vbv_abr_bounded(const yah264_encoder_t *e)
  * prediction cannot see: samsung 720p, CRF with a 480 kbit cap, one
  * thread, a 307 kbit anchor into a 277 kbit buffer once weighted P stopped
  * weighting the brightness drift before the cut. */
-    /* and a two-pass pass 2 under --nal-hrd, whose declared buffer has to hold
- * whatever pass 1 planned */
-    return e->vbv_on && (!e->tp_pass || (e->hrd_on && e->tp_pass >= 2))
+    /* and a two-pass pass 2: its plan prices frames from pass 1's bits, which
+ * cannot price a frame for the buffer (a GOP's first frame has no measured
+ * scale at all). pass 1 only records, so it stays unbounded. */
+    return e->vbv_on && e->tp_pass != 1
            && (!e->rcp_on || e->rcp_vbv_tight || !e->pool);
 }
 
