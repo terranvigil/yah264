@@ -2181,39 +2181,23 @@ static int tp_seg_on(const yah264_param_t *param)
         && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
 }
 
-/* a pass 2 takes the split its pass 1 recorded where that is another split
- * of the same --keyint grid, one pass with a VBV and the other without:
- * the split is an option of the pair, not of either. the GOPs land on
- * the grid either way, the segments' inner keys forced there. returns the
- * new GOP count, or 0 to keep its own */
-static int tp_adopt_split(const char *path, const yah264_param_t *param, int n,
-                          const int *own, int n_own, int **out)
+/* whether the split counts a VBV: a pass 2 splits as its pass 1 did, which
+ * records it, so a VBV on one pass only still finds the GOPs pass 1 coded.
+ * a stats file without the line splits by this pass's own */
+static int tp_split_vbv(const yah264_param_t *param)
 {
-    FILE *f = path ? fopen(path, "r") : NULL;
-    if (!f) return 0;
-    int cap = 64, m = 0, ok = 1;
-    int *s = malloc((size_t)(cap + 1) * sizeof(int));
+    int own = tp_seg_on(param);
+    if (param->rc.method != YAH264_RC_2PASS || param->rc.pass < 2 || !param->rc.stats)
+        return own;
+    FILE *f = fopen(param->rc.stats, "r");
+    if (!f) return own;
     char ln[256];
-    while (s && ok && fgets(ln, sizeof ln, f)) {
-        int g, a, b, nr;
-        if (sscanf(ln, TP_MARKER " %d %d %d %d", &g, &a, &b, &nr) != 4)
-            continue;
-        if (g != m || a != (m ? s[m] : 0) || b <= a || a % param->keyint) { ok = 0; break; }
-        if (m + 1 >= cap) {
-            int *t = realloc(s, (size_t)(2 * cap + 1) * sizeof(int));
-            if (!t) { ok = 0; break; }
-            s = t; cap *= 2;
-        }
-        s[m] = a; s[++m] = b;
+    int v = own, x;
+    while (fgets(ln, sizeof ln, f) && ln[0] == '#') {
+        if (sscanf(ln, "#vbv %d", &x) == 1) { v = x != 0; break; }
     }
     fclose(f);
-    if (!s || !ok || m == 0 || s[m] != n
-        || (m == n_own && !memcmp(s, own, (size_t)(m + 1) * sizeof(int)))) {
-        free(s);
-        return 0;
-    }
-    *out = s;
-    return m;
+    return v;
 }
 
 static char *tp_gop_path(const char *base, const char *tag, int g)
@@ -2245,7 +2229,8 @@ static int tp_stats_have_markers(const char *path)
     char ln[256];
     int found = 0;
     while (fgets(ln, sizeof ln, f)) {
-        if (ln[0] == '\n' || ln[0] == '\0' || !strncmp(ln, "#threads", 8)) continue;
+        if (ln[0] == '\n' || ln[0] == '\0' || !strncmp(ln, "#threads", 8)
+            || !strncmp(ln, "#keyint", 7) || !strncmp(ln, "#vbv", 4)) continue;
         found = !strncmp(ln, TP_MARKER, strlen(TP_MARKER));
         break;                                  /* first real line decides */
     }
@@ -2256,7 +2241,7 @@ static int tp_stats_have_markers(const char *path)
 /* Concatenate the per-GOP pass-1 files into the user's stats path, in GOP
  * order, each section preceded by its marker. Returns 0 on success. */
 static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
-                          const int *gstart, int n_gops, int threads)
+                          const int *gstart, int n_gops, const yah264_param_t *param)
 {
     FILE *out = fopen(out_path, "w");
     if (!out) {
@@ -2265,7 +2250,9 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
     }
     /* one thread codes with tools more threads don't, so pass 2 checks
      * that it runs at the same kind (the encoder's stats reader) */
-    fprintf(out, "#threads %d\n", threads);
+    fprintf(out, "#threads %d\n", param->threads);
+    /* and what the split was cut by, which pass 2 splits by in turn */
+    fprintf(out, "#keyint %d\n#vbv %d\n", param->keyint, tp_seg_on(param));
     for (int g = 0; g < n_gops; g++) {
         FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
         char ln[256];
@@ -2425,8 +2412,18 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (ln[0] == '\n' || ln[0] == '\0') continue;
         /* the encoder checks it, in the priming open, which reads this whole
          * file before any GOP's own section exists */
-        if (!strncmp(ln, "#threads", 8))
+        if (!strncmp(ln, "#threads", 8) || !strncmp(ln, "#vbv", 4))
             continue;
+        int ki;
+        if (sscanf(ln, "#keyint %d", &ki) == 1) {
+            /* two keyints can cut the same split, so the markers alone don't say */
+            if (ki != param->keyint) {
+                fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 at --keyint %d, "
+                        "and this pass runs at --keyint %d\n", in_path, ki, param->keyint);
+                bad = 1; break;
+            }
+            continue;
+        }
         if (!strncmp(ln, TP_MARKER, strlen(TP_MARKER))) {
             int g, s, e, nr;
             if (sscanf(ln + strlen(TP_MARKER), "%d %d %d %d", &g, &s, &e, &nr) != 4) {
@@ -3299,10 +3296,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int keyint = param->keyint > 0 ? param->keyint : 1;
     /* a two-pass under a VBV splits short GOPs into segments of several, one
      * encoder each, keyframes inside on the --keyint grid: every segment start
-     * is a join and a pass 1 started cold. a pass 2 whose pass 1 split
-     * otherwise takes that split (tp_adopt_split) */
+     * is a join and a pass 1 started cold */
     int tp_grid = 0;
-    if (keyint > 1 && keyint < TP_SEG_MIN && tp_seg_on(param)) {
+    if (keyint > 1 && keyint < TP_SEG_MIN && tp_split_vbv(param)) {
         tp_grid = keyint;
         keyint *= (TP_SEG_MIN + keyint - 1) / keyint;
     }
@@ -3524,22 +3520,6 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.gop_fst   = job.want_fst ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
         for (int i = 0; i < n_gops; i++) job.gop_start[i] = i * keyint;
         job.gop_start[n_gops] = n;
-        int *adopt = NULL, na = 0;
-        if (param->rc.method == YAH264_RC_2PASS && param->rc.pass >= 2 && param->keyint > 1
-            && !g_open_gop
-            && (na = tp_adopt_split(param->rc.stats, param, n, job.gop_start, n_gops, &adopt)) > 0) {
-            free(job.gop_start); free(job.gop_data); free(job.gop_size); free(job.gop_done);
-            free(job.gop_fst); job_rc_free(&job);
-            n_gops = na;
-            job.gops_cap = n_gops;
-            job_rc_alloc(&job, n_gops);
-            job.gop_start = adopt;
-            job.gop_data  = calloc((size_t)n_gops, sizeof(uint8_t *));
-            job.gop_size  = calloc((size_t)n_gops, sizeof(size_t));
-            job.gop_done  = calloc((size_t)n_gops, 1);
-            job.gop_fst   = job.want_fst ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
-            job.tp_grid = param->keyint;
-        }
         job.n_gops = n_gops;
         job.gops_final = 1;
     } else {
@@ -4174,7 +4154,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * worker calls before it publishes the GOP. */
     int tp_rc = 0;
     if (gop_stats && param->rc.pass != 2)
-        tp_rc = tp_merge_pass1(param->rc.stats, gop_stats, job.gop_start, n_gops, param->threads);
+        tp_rc = tp_merge_pass1(param->rc.stats, gop_stats, job.gop_start, n_gops, param);
     tp_free_paths(gop_stats, n_gops, 1);
     free(gop_target);
 
