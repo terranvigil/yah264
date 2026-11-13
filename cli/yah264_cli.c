@@ -2300,7 +2300,8 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
      * that it runs at the same kind (the encoder's stats reader) */
     fprintf(out, "#threads %d\n", param->threads);
     /* and what the split was cut by, which pass 2 splits by in turn */
-    fprintf(out, "#keyint %d\n#vbv %d\n", param->keyint, split_vbv);
+    fprintf(out, "#keyint %d\n#vbv %d\n#fields %d\n", param->keyint, split_vbv,
+            param->interlaced ? 1 : 0);
     for (int g = 0; g < n_gops; g++) {
         FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
         char ln[256];
@@ -2494,7 +2495,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (ln[0] == '\n' || ln[0] == '\0') continue;
         /* the encoder checks it, in the priming open, which reads this whole
          * file before any GOP's own section exists */
-        if (!strncmp(ln, "#threads", 8) || !strncmp(ln, "#vbv", 4))
+        if (!strncmp(ln, "#threads", 8) || !strncmp(ln, "#vbv", 4) || !strncmp(ln, "#fields", 7))
             continue;
         int ki;
         if (!strncmp(ln, "#keyint", 7) && sscanf(ln, "#keyint %d", &ki) != 1) {

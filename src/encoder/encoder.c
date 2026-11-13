@@ -5473,7 +5473,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             }
             /* one thread codes with tools more threads don't, so a pass 2
              * at the other kind prices the records wrong: say which */
-            fprintf(e->tp_fp, "#threads %d\n", e->param.threads);
+            fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n", e->param.threads,
+                    param->keyint, param->interlaced ? 1 : 0);
             e->qp = Y264_TP_P1_QP;                  /* fixed reference QP for pass 1 */
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
         } else {
@@ -5505,7 +5506,20 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     int mg, ms, me, mr;
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
                         mframes += me - ms;
-                    int p1t;
+                    int p1t, p1k;
+                    /* the options a pass 2 has to share with its pass 1, which
+                     * every pass-1 writer puts at the top */
+                    if ((sscanf(ln, "#keyint %d", &p1k) == 1 && p1k != param->keyint)
+                        || (sscanf(ln, "#fields %d", &p1k) == 1
+                            && (p1k != 0) != (param->interlaced != 0))) {
+                        fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 with %s "
+                                "than this pass's; run both passes with the same --keyint and "
+                                "--tff/--bff\n", param->rc.stats,
+                                ln[1] == 'k' ? "another --keyint" : "another field mode");
+                        fclose(fp);
+                        yah264_encoder_close(e);
+                        return NULL;
+                    }
                     if (sscanf(ln, "#threads %d", &p1t) == 1 && p1t > 0
                         && (p1t == 1) != (e->param.threads == 1))
                         fprintf(stderr, "yah264: warning: stats file '%s' comes from a pass 1 at "
@@ -5635,7 +5649,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
-                fprintf(e->tp_fp, "#threads %d\n", e->param.threads);
+                fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n", e->param.threads,
+                    param->keyint, param->interlaced ? 1 : 0);
             }
             double bitrate = param->rc.bitrate > 0 ? param->rc.bitrate : 1000;
             /* a record per picture: field coding writes two a frame */
