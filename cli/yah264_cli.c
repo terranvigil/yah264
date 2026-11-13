@@ -2237,6 +2237,19 @@ static void tp_free_paths(char **paths, int n, int unlink_them)
     free(paths);
 }
 
+/* True if the stats file holds a line that isn't a '#' one */
+static int tp_stats_have_records(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char ln[256];
+    int found = 0;
+    while (!found && fgets(ln, sizeof ln, f))
+        found = ln[0] != '#' && ln[0] != '\n' && ln[0] != '\0';
+    fclose(f);
+    return found;
+}
+
 /* True if the stats file was written by a threaded pass 1, i.e. carries the GOP
  * markers pass 2 needs to split it. Called before the input is read, so it can
  * only look at the file. */
@@ -2247,9 +2260,9 @@ static int tp_stats_have_markers(const char *path)
     char ln[256];
     int found = 0;
     while (fgets(ln, sizeof ln, f)) {
-        if (ln[0] == '\n' || ln[0] == '\0' || !strncmp(ln, "#threads", 8)
-            || !strncmp(ln, "#keyint", 7) || !strncmp(ln, "#vbv", 4)) continue;
         found = !strncmp(ln, TP_MARKER, strlen(TP_MARKER));
+        if (!found && (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0'))
+            continue;                           /* the header, or a line nobody reads */
         break;                                  /* first real line decides */
     }
     fclose(f);
@@ -2468,6 +2481,10 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (!strncmp(ln, "#threads", 8) || !strncmp(ln, "#vbv", 4))
             continue;
         int ki;
+        if (!strncmp(ln, "#keyint", 7) && sscanf(ln, "#keyint %d", &ki) != 1) {
+            fprintf(stderr, "yah264: stats file '%s' has a malformed #keyint line\n", in_path);
+            bad = 1; break;
+        }
         if (sscanf(ln, "#keyint %d", &ki) == 1) {
             /* two keyints can cut the same split, so the markers alone don't say */
             if (ki != param->keyint) {
@@ -2521,6 +2538,8 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
             fputs("#split\n", out[g]);
             continue;
         }
+        if (cur < 0 && ln[0] == '#')            /* a line this reader doesn't know */
+            continue;
         if (cur < 0) {                          /* records before any marker */
             fprintf(stderr, "yah264: stats file '%s' has records outside any GOP\n",
                     in_path);
@@ -3815,9 +3834,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                                     (double)fn / fd * (param->interlaced ? 2 : 1), param);
             if (sr != 0) {
                 if (sr == -1)       /* -2 is out of memory, already said */
-                    fprintf(stderr, "yah264: pass 2 cannot use '%s' -- run pass 1 into it "
+                    fprintf(stderr, "yah264: pass %d cannot use '%s' -- run pass 1 into it "
                             "again, with this pass's --frames and --keyint\n",
-                            param->rc.stats);
+                            param->rc.pass, param->rc.stats);
                 tp_free_paths(gop_stats, n_gops, 1);
                 free(gop_target);
                 pthread_mutex_lock(&job.lock);
@@ -6391,6 +6410,10 @@ int main(int argc, char **argv)
                                         "encoders cannot produce"
           : (mt_ev && !atoi(mt_ev))   ? "Y264_2PASS_MT=0 pins two-pass to the serial path"
           : !param.rc.stats           ? "two-pass has no --stats path to split per GOP"
+          : param.rc.pass >= 2 && access(param.rc.stats, R_OK) != 0
+                                      ? "this pass's stats file isn't there to split per GOP"
+          : param.rc.pass >= 2 && !tp_stats_have_records(param.rc.stats)
+                                      ? "this pass's stats file holds no records to split"
           :                             "this pass's stats file has no GOP markers to "
                                         "split on, so a serial pass wrote it";
         LOGF(LOG_WARN, "yah264: warning: --threads %d cannot be honoured, "
