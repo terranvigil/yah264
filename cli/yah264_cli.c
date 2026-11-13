@@ -2144,6 +2144,8 @@ static void *y4m_reader_seek(void *arg)
  * a serial pass 1's, and pass 2 stays on the serial path for it. */
 
 #define TP_MARKER "#gop"
+/* the fewest frames a VBV two-pass splits at (encode_threaded) */
+#define TP_SEG_MIN 30
 
 static char *tp_gop_path(const char *base, const char *tag, int g)
 {
@@ -3201,6 +3203,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     size_t y_size = (size_t)W * H,
            c_size = (size_t)(W / g_sub_w) * (H / g_sub_h);
     int keyint = param->keyint > 0 ? param->keyint : 1;
+    /* a two-pass under a VBV splits short GOPs into segments of several, one
+     * encoder each, keyframes inside at --keyint: every segment start is a
+     * join priced at a planned level and a pass-1 ABR started cold, which at
+     * two or three frames a GOP cost 0.3 dB at matched rate (k5-k12: 0.29).
+     * Static in the options, so both passes split alike at any thread count */
+    if (keyint > 1 && keyint < TP_SEG_MIN && param->rc.method == YAH264_RC_2PASS
+        && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0)
+        keyint *= (TP_SEG_MIN + keyint - 1) / keyint;
 
     /* `payload` is what a frame occupies ON DISK, which is what the file length
  * divides by; `per_frame` is what it costs in memory, which is what the
