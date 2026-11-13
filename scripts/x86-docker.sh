@@ -384,8 +384,8 @@ for BACKEND in $BACKENDS; do
     # -- the identity cmp ---------------------------------------------------
     # Every tier encodes the ten board clips at CRF, CQP and ABR, at each
     # thread count, and the md5 of the .264 is compared against the `none`
-    # tier's. No kernel moves a byte, so on this tree -- which has no x86
-    # kernels at all -- a single differing md5 is a defect in this harness.
+    # tier's. No kernel may move a byte, so a single differing md5 is a
+    # kernel defect.
     if has_leg identity; then
         # The md5 lists are keyed by BACKEND, not by build directory: the QEMU
         # leg may be running out of the Rosetta build, and one leg overwriting
@@ -431,7 +431,57 @@ done
             else
                 diff "$base" "$f" > "$out/$BACKEND-$tier-ident.diff"
                 row "$BACKEND" "$tier" "identity vs none" FAIL \
-                    "$(diff "$base" "$f" | grep -c '^<') differ -- HARNESS BUG, this tree has no x86 kernels"
+                    "$(diff "$base" "$f" | grep -c '^<') differ -- a kernel moved a byte"
+            fi
+        done
+    fi
+
+    # The same at 10 bits, through the 10-bit library's own tiers: 10-bit
+    # clips made inside the container from three corpus clips (4:2:0, 4:2:2,
+    # 4:4:4, so every chroma path's kernels run), encoded at threads 1 at
+    # CRF and CQP, md5 against the `none` tier. The CLI links both libraries
+    # and picks the 10-bit one from the input.
+    if has_leg identity; then
+        idir="scratch/x86-docker/ident10-$BACKEND"
+        script="set -e
+mkdir -p $idir
+: > $idir/md5.\$Y264_SIMD_FORCE
+for spec in foreman_cif:yuv420p10le bus_cif:yuv422p10le mobile_cif:yuv444p10le; do
+    clip=\${spec%%:*}; fmt=\${spec##*:}
+    src=tests/corpus/\$clip.y4m
+    [ -f \"\$src\" ] || { echo \"MISSING \$src\"; exit 1; }
+    dst=$idir/\$clip-\$fmt.y4m
+    [ -s \"\$dst\" ] || ffmpeg -v error -y -i \"\$src\" -frames:v $FRAMES -pix_fmt \$fmt \\
+        -strict -1 \"\$dst\"
+    for mode in '--crf 23' '--qp 26' '--preset slow --crf 30'; do
+        o=$idir/x.264
+        $b8/cli/yah264 --input-y4m \"\$dst\" --frames $FRAMES \$mode --threads 1 \\
+            -o \"\$o\" > /dev/null 2> $idir/err \\
+            || { echo \"ENCODE FAILED \$clip \$fmt \$mode: \$(head -1 $idir/err)\"; exit 1; }
+        echo \"\$(md5sum < \"\$o\" | cut -d' ' -f1)  \$clip \$fmt \$mode\" \\
+            >> $idir/md5.\$Y264_SIMD_FORCE
+    done
+done"
+        mkdir -p "$root/$idir"
+        for tier in $TIERS; do
+            if dk "Y264_SIMD_FORCE=$tier" -- "$script" > "$out/$BACKEND-$tier-ident10.log" 2>&1; then
+                row "$BACKEND" "$tier" "10-bit identity encodes" PASS "$BACKEND-$tier-ident10.log"
+            else
+                row "$BACKEND" "$tier" "10-bit identity encodes" FAIL "$BACKEND-$tier-ident10.log"
+            fi
+        done
+        base="$root/$idir/md5.none"
+        for tier in $TIERS; do
+            [ "$tier" = none ] && continue
+            f="$root/$idir/md5.$tier"
+            if [ ! -s "$base" ] || [ ! -s "$f" ]; then
+                row "$BACKEND" "$tier" "10-bit identity vs none" FAIL "an md5 list is missing or empty"
+            elif diff -q "$base" "$f" >/dev/null; then
+                row "$BACKEND" "$tier" "10-bit identity vs none" PASS "$(wc -l < "$f" | tr -d ' ') encodes byte-identical"
+            else
+                diff "$base" "$f" > "$out/$BACKEND-$tier-ident10.diff"
+                row "$BACKEND" "$tier" "10-bit identity vs none" FAIL \
+                    "$(diff "$base" "$f" | grep -c '^<') differ -- a 10-bit kernel moved a byte"
             fi
         done
     fi
