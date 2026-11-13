@@ -16731,6 +16731,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->tp_q);
     free(e->tp_ebits);
     free(e->tp_resv);
+    free(e->tp_nkey);
     free(e->tp_slack);
     free(e->tp_qlo);
     free(e->tp_elo);

@@ -790,19 +790,25 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
     /* a pass-2 GOP the splitter planned steers to the level it leaves at,
      * where that is under half, and the last one to nothing: held at half, a
      * GOP that joined low (a cap under the target) climbed back instead of
-     * spending. one encoder for the whole clip keeps half, its reserve */
+     * spending. one encoder for the whole clip keeps half, its reserve,
+     * except under a cap at or under the target (below) */
     if (e->tp_pass >= 2 && e->tp_exit > 0.0 && e->vbv_seg_h < goal)
         goal = e->vbv_seg_h;
     else if (e->tp_pass >= 2 && e->tp_exit <= 0.0 && e->tp_join > 0.0)
         goal = 0.0;
-    /* ...and with a cap at or under its target, to half the next key: the
-     * cap refills only what the plan spends, so a reserve held at half the
-     * buffer is never spent (cutsx CIF at 500/500/500, -0.76 dB at one
-     * thread), but a buffer the keys nearly fill needs one held for them
-     * (bbb 720p at 800/800/200 lost 1 dB aimed at nothing) */
-    if (e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate
-        && 0.5 * e->tp_key < goal)
-        goal = 0.5 * e->tp_key;
+    /* ...and with a cap at or under its target, to half the next key, or
+     * half the buffer where that is less: the cap refills only what the plan
+     * spends, so a reserve held at half the buffer is never spent (cutsx CIF
+     * at 500/500/500, -0.76 dB at one thread), but a buffer the keys nearly
+     * fill needs one held for them (bbb 720p at 800/800/200 lost 1 dB aimed
+     * at nothing). The key is the plan's own where this encoder codes it
+     * (one encoder for the clip, --nal-hrd), else the splitter's #key */
+    if (e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate) {
+        int i = e->tp_idx > 0 ? e->tp_idx - 1 : 0;
+        double nk = e->tp_nkey && i < e->tp_n ? e->tp_nkey[i] : e->tp_key;
+        if (0.5 * nk < goal)
+            goal = 0.5 * nk;
+    }
     double h = fill > goal ? e->rck.vbv_fill_hup : e->rck.vbv_fill_h;
     if (h <= 0) h = 1.0;
     double allowed = e->vbv.rate + (fill - goal) / h;
@@ -2674,6 +2680,18 @@ void tp_build_plan(yah264_encoder_t *e)
     for (int i = 0; i < n; i++)
         e->tp_ebits[i + 1] = e->tp_ebits[i] + tp_bits_at(e, i, e->tp_q[i]);
     tp_build_reserve(e);
+
+    /* the next key each record has ahead of it, at its planned size: in this
+     * section's records where there is one, else the splitter's #key */
+    e->tp_nkey = malloc((size_t)n * sizeof(*e->tp_nkey));
+    if (e->tp_nkey) {
+        double nk = e->tp_key;
+        for (int i = n - 1; i >= 0; i--) {
+            e->tp_nkey[i] = nk;
+            if (e->tp_stats[i].type == 0)
+                nk = tp_bits_at(e, i, e->tp_q[i]);
+        }
+    }
 
     free(cplx);
     free(pcost);
