@@ -1047,6 +1047,7 @@ struct yah264_encoder {
     double  *tp_resv;           /* [n+1] under a VBV: occupancy record i needs at QP 51 */
     double  *tp_nkey;           /* [n] the first key after record i at its planned size */
     double   tp_resv_cur;       /* the reserve the frame being coded leaves */
+    int      tp_hold_end;       /* held over all its frames to the level it ends at */
     double  *tp_slack;          /* [n+1] what records i.. give the buffer back at QP 51 */
     double   tp_slack_cur;      /* ...from the record after the frame being coded */
     double   tp_fill_gap;       /* coded frames' real size against their prediction, at a decide */

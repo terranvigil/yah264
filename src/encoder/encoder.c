@@ -5573,6 +5573,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         if (e->tp_key <= 0.0 && param->rc.vbv_maxrate <= param->rc.bitrate) {
                             e->vbv_exit_n = e->tp_n;
                             e->vbv_exit_k = 1.0;
+                            e->tp_hold_end = 1;
                         }
                     } else if (param->nal_hrd == YAH264_NAL_HRD_CBR) {
                         /* a declared CBR stream delivers its rate: one that
@@ -5584,6 +5585,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         e->vbv_seg_h = e->vbv.fill;
                         e->vbv_exit_n = e->tp_n;
                         e->vbv_exit_k = 1.0;
+                        e->tp_hold_end = 1;
                     }
                 }
                 /* the markers count frames; a pass 1 coded with another
