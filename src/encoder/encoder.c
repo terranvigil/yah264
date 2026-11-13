@@ -5545,7 +5545,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     s.is_ref = 0;
                     int nf = sscanf(ln, "%d %lf %lf %d %d",
                                     &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
-                    if (nf < 4 || s.type < 0 || s.type > 2 || !isfinite(s.cplx) || s.cplx < 0.0
+                    /* a record ends in its newline: one cut short ("51" read
+                     * as "5") would code something else without a word */
+                    if (nf < 4 || !strchr(ln, '\n') || s.type < 0 || s.type > 2
+                        || !isfinite(s.cplx) || s.cplx < 0.0
                         || s.cplx > mcplx
                         || !isfinite(s.bits) || s.bits < 0.0 || s.bits > mbits
                         || s.qp < 0 || s.qp > 51) {

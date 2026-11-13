@@ -2566,7 +2566,9 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (ln[0] == '#')                       /* the record count below says if it mattered */
             continue;
         /* what the encoder would stop at: here the whole file is refused */
-        if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4
+        /* a record ends in its newline: one cut short ("51" read as "5")
+         * would code something else without a word */
+        if (!strchr(ln, '\n') || sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4
             || !tp_record_ok(type, cplx, bits, qp, tp_pic_bits(param), tp_pic_cplx(param))) {
             fprintf(stderr, "yah264: stats file '%s' has a malformed record in GOP %d\n",
                     in_path, cur);
