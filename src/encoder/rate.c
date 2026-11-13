@@ -2070,6 +2070,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         en.rceq = rceq;
         abr_scale_used = scale;
     } else if (e->tp_pass >= 2) {
+        e->tp_resv_cur = 0.0;                   /* past the last record: none */
         e->tp_spare = -1.0;
         if (e->tp_idx < e->tp_n) {
             int idx = e->tp_idx++;
