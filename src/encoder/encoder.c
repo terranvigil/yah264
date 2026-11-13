@@ -4432,6 +4432,37 @@ static int tp_level_ok(const yah264_encoder_t *e, double v)
     return e->vbv_on && isfinite(v) && v >= 0.05 * e->vbv.size && v <= e->vbv.size;
 }
 
+/* a stats record's fields as pass 1 writes them: integers where it writes
+ * integers, nothing trailing. returns the field count, 4 or 5, else 0 */
+static int tp_parse_record(const char *ln, int *type, double *cplx, double *bits,
+                           int *qp, int *is_ref)
+{
+    const char *p = ln;
+    char *end;
+    long v[3];
+    double d[2];
+    int n = 0;
+    for (int f = 0; f < 5; f++) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\n' || *p == '\r' || !*p) break;
+        if (f == 1 || f == 2) {
+            d[f - 1] = strtod(p, &end);
+        } else {
+            v[f == 0 ? 0 : f - 2] = strtol(p, &end, 10);
+        }
+        if (end == p || (*end && *end != ' ' && *end != '\t' && *end != '\n' && *end != '\r'))
+            return 0;
+        p = end;
+        n++;
+    }
+    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+    if (n < 4 || *p != '\n')
+        return 0;
+    *type = (int)v[0]; *cplx = d[0]; *bits = d[1]; *qp = (int)v[1];
+    *is_ref = n == 5 ? (int)v[2] : 0;
+    return n;
+}
+
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
@@ -5491,6 +5522,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * needs to know where each GOP's records start. A file with no
  * markers reads exactly as it always did. */
                 long mframes = 0;
+                int ngop = 0;
                 int bad_rec = 0;
                 /* ceilings on a record's costs far past anything codable
                  * (sixteen times the raw picture, and a fixed allowance for
@@ -5504,18 +5536,35 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 int first = 1;
                 while (fgets(ln, sizeof ln, fp)) {
                     int mg, ms, me, mr;
-                    if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
+                    if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4) {
+                        /* in order and back to back, as the merge writes them */
+                        if (mg != ngop || ms != mframes || me <= ms) {
+                            fprintf(stderr, "yah264: stats file '%s' has its GOP sections out of "
+                                    "order\n", param->rc.stats);
+                            fclose(fp);
+                            yah264_encoder_close(e);
+                            return NULL;
+                        }
+                        ngop++;
                         mframes += me - ms;
+                    }
                     int p1t, p1k;
                     /* the options a pass 2 has to share with its pass 1, which
                      * every pass-1 writer puts at the top */
+                    if (!strncmp(ln, "#keyint", 7) && sscanf(ln, "#keyint %d", &p1k) != 1) {
+                        fprintf(stderr, "yah264: stats file '%s' has a malformed #keyint line\n",
+                                param->rc.stats);
+                        fclose(fp);
+                        yah264_encoder_close(e);
+                        return NULL;
+                    }
                     if ((sscanf(ln, "#keyint %d", &p1k) == 1 && p1k != param->keyint)
                         || (sscanf(ln, "#fields %d", &p1k) == 1
                             && (p1k != 0) != (param->interlaced != 0))) {
                         fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 with %s "
                                 "than this pass's; run both passes with the same --keyint and "
                                 "--tff/--bff\n", param->rc.stats,
-                                ln[1] == 'k' ? "another --keyint" : "another field mode");
+                                ln[1] != 'k' ? "another field mode" : "another --keyint");
                         fclose(fp);
                         yah264_encoder_close(e);
                         return NULL;
@@ -5557,8 +5606,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * 4 fields and default to 0, the flat-B assumption, so an
  * old stats file still plans. */
                     s.is_ref = 0;
-                    int nf = sscanf(ln, "%d %lf %lf %d %d",
-                                    &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
+                    int nf = tp_parse_record(ln, &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
                     /* a record ends in its newline: one cut short ("51" read
                      * as "5") would code something else without a word */
                     if (nf < 4 || !strchr(ln, '\n') || s.type < 0 || s.type > 2

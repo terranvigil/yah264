@@ -2207,6 +2207,33 @@ static double tp_pic_cplx(const yah264_param_t *param)
     return 64.0 * (double)(1 << d) * tp_pic_samples(param) + 1.0e6;
 }
 
+/* a stats record's four leading fields as pass 1 writes them: integers
+ * where it writes integers, and a fifth integer at most after them */
+static int tp_parse_record(const char *ln, int *type, double *cplx, double *bits, int *qp)
+{
+    const char *p = ln;
+    char *end;
+    int n = 0;
+    for (int f = 0; f < 5; f++) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\n' || *p == '\r' || !*p) break;
+        double d = 0.0;
+        long v = 0;
+        if (f == 1 || f == 2) d = strtod(p, &end);
+        else v = strtol(p, &end, 10);
+        if (end == p || (*end && *end != ' ' && *end != '\t' && *end != '\n' && *end != '\r'))
+            return 0;
+        if (f == 0) *type = (int)v;
+        else if (f == 1) *cplx = d;
+        else if (f == 2) *bits = d;
+        else if (f == 3) *qp = (int)v;
+        p = end;
+        n++;
+    }
+    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+    return n >= 4 && *p == '\n';
+}
+
 static int tp_seg_on(const yah264_param_t *param)
 {
     return param->rc.method == YAH264_RC_2PASS
@@ -2261,7 +2288,7 @@ static int tp_stats_have_records(const char *path)
     char ln[256];
     int found = 0;
     while (!found && fgets(ln, sizeof ln, f))
-        found = ln[0] != '#' && ln[0] != '\n' && ln[0] != '\0';
+        found = ln[0] != '#' && ln[strspn(ln, " \t\r\n")] != '\0';
     fclose(f);
     return found;
 }
@@ -2569,7 +2596,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         /* what the encoder would stop at: here the whole file is refused */
         /* a record ends in its newline: one cut short ("51" read as "5")
          * would code something else without a word */
-        if (!strchr(ln, '\n') || sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4
+        if (!tp_parse_record(ln, &type, &cplx, &bits, &qp)
             || !tp_record_ok(type, cplx, bits, qp, tp_pic_bits(param), tp_pic_cplx(param))) {
             fprintf(stderr, "yah264: stats file '%s' has a malformed record in GOP %d\n",
                     in_path, cur);
