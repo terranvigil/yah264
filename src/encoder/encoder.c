@@ -11712,6 +11712,44 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
 
 
 
+/* how far a built frame runs over what the measured-size bound allows it:
+ * the buffer's limit, and under --nal-hrd the declared buffer too */
+static double bound_over(yah264_encoder_t *e, const struct slice_map *sm, int type,
+                         int is_idr, int is_ref, double limit, double *kovh)
+{
+    double bits = sm_wire_bits(sm);     /* what the buffer is charged */
+    /* a pass 2 also charges what its access unit carries ahead of the
+     * slices, the parameter sets and SEI of a key */
+    if (e->tp_pass >= 2)
+        bits += 8.0 * (e->nal_framing - e->nal_framing_seen);
+    double over = bits / limit;
+    /* --nal-hrd: the declared buffer, which also holds the SEIs and the
+     * emulation bytes the VBV model leaves out, must hold too */
+    if (e->hrd_on) {
+        double room = hrd_room(e, is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE,
+                               e->cur_disp, e->cur_open_key);
+        double sb = hrd_slice_bits(e->rbsp, sm);
+        double ho = room > 0.0 ? sb / room : 64.0;
+        if (ho > over) over = ho;
+        if (*kovh < 0.0) {
+            double hc = 0.0, hk = 0.0;
+            *kovh = 0.0;
+            if (!is_idr
+                && hrd_room_ex(e, YAH264_NAL_SLICE, e->cur_disp, e->cur_open_key, &hc) >= 0.0
+                && hrd_room_ex(e, YAH264_NAL_SLICE_IDR, e->cur_disp, 0, &hk) >= 0.0
+                && hk > hc)
+                *kovh = hk - hc;
+        }
+        double res = hrd_reserve(e, type, hrd_cost51(sb, frame_qp(e, type, is_ref)), *kovh);
+        if (res > 0.0) {
+            double lim = room - res;
+            double hr = lim > 0.0 ? sb / lim : 64.0;
+            if (hr > over) over = hr;
+        }
+    }
+    return over;
+}
+
 static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                       int is_ref, pixel *const src[3])
 {
@@ -11756,6 +11794,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             rcp_reqp(e, type, is_ref);
     }
     int qstart = e->qp;
+    int bound_fail = -1;
     double last_over = 1.0;
     struct slice_map sm;
     size_t rbsp_size = rcr_build_slice(e, type, is_idr, is_ref, src, &sm, 0);
@@ -11839,37 +11878,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
          * percent a step and four tries left it over with no count */
         double kovh = -1.0;     /* what a key's SEIs add over this AU's */
         for (int k = 0; k < (e->hrd_on ? 64 : 4) && limit > 0.0 && forced_qp(e) < 0; k++) {
-            double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
-            /* a pass 2 also charges what its access unit carries ahead of the
-             * slices, the parameter sets and SEI of a key: 1.4 kbit that a
-             * 21 kbit buffer could not hold beside a QP-51 IDR */
-            if (e->tp_pass >= 2)
-                bits += 8.0 * (e->nal_framing - e->nal_framing_seen);
-            double over = bits / limit;
-            /* --nal-hrd: the declared buffer, which also holds the SEIs and
-             * the emulation bytes the VBV model leaves out, must hold too */
-            if (e->hrd_on) {
-                double room = hrd_room(e, is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE,
-                                       e->cur_disp, e->cur_open_key);
-                double sb = hrd_slice_bits(e->rbsp, &sm);
-                double ho = room > 0.0 ? sb / room : 64.0;
-                if (ho > over) over = ho;
-                if (kovh < 0.0) {
-                    double hc = 0.0, hk = 0.0;
-                    kovh = 0.0;
-                    if (!is_idr
-                        && hrd_room_ex(e, YAH264_NAL_SLICE, e->cur_disp, e->cur_open_key, &hc) >= 0.0
-                        && hrd_room_ex(e, YAH264_NAL_SLICE_IDR, e->cur_disp, 0, &hk) >= 0.0
-                        && hk > hc)
-                        kovh = hk - hc;
-                }
-                double res = hrd_reserve(e, type, hrd_cost51(sb, frame_qp(e, type, is_ref)), kovh);
-                if (res > 0.0) {
-                    double lim = room - res;
-                    double hr = lim > 0.0 ? sb / lim : 64.0;
-                    if (hr > over) over = hr;
-                }
-            }
+            double over = bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh);
             last_over = over;
             if (over <= 1.0)
                 break;
@@ -11897,6 +11906,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                 e->hrd_flat = 1;
             }
             int good = e->qp;
+            bound_fail = good;
             e->qp = nq;
             e->chroma_qp = y264_chroma_qp(nq, e->param.chroma_qp_index_offset);
             if (e->rcp_on)
@@ -11918,6 +11928,41 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             }
             rbsp_size = sz;
             sm = sm2;
+        }
+    }
+    /* a pass 2's raise is read off the 1/qscale law, which near a starved
+     * reference moves bits far faster than that, so one step can land far
+     * under the limit with the buffer full: step back while the frame fits
+     * with half its room to spare */
+    if (vbv_bounded_now(e) && e->tp_pass >= 2 && bound_fail >= 0
+        && e->qp - bound_fail >= 3 && forced_qp(e) < 0 && !e->hrd_flat) {
+        double fill = e->rcp_on ? rcp_vbv_vfill_bound(e, 1) : e->vbv.fill;
+        double limit = vbv_bound_limit(e, fill);
+        double kovh = -1.0;
+        double over = limit > 0.0 ? bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh) : 1.0;
+        int fit = e->qp, fail = bound_fail, built = e->qp;
+        for (int t = 0; t < 3 && fit - fail > 1 && over < 0.5 && limit > 0.0; t++) {
+            int mid = (fit + fail) / 2;
+            e->qp = mid;
+            e->chroma_qp = y264_chroma_qp(mid, e->param.chroma_qp_index_offset);
+            if (e->rcp_on)
+                rcp_reqp(e, type, is_ref);
+            struct slice_map sm2;
+            size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
+            if (sz == 0) { built = -1; fail = mid; break; }
+            built = mid;
+            double o2 = bound_over(e, &sm2, type, is_idr, is_ref, limit, &kovh);
+            if (o2 <= 1.0) { fit = mid; rbsp_size = sz; sm = sm2; over = o2; }
+            else fail = mid;
+        }
+        if (built != fit) {
+            e->qp = fit;
+            e->chroma_qp = y264_chroma_qp(fit, e->param.chroma_qp_index_offset);
+            if (e->rcp_on)
+                rcp_reqp(e, type, is_ref);
+            struct slice_map sm2;
+            size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
+            if (sz) { rbsp_size = sz; sm = sm2; }
         }
     }
     e->hrd_flat = 0;
