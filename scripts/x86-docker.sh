@@ -120,7 +120,7 @@ fi
 command -v perl >/dev/null 2>&1 || { echo "x86-docker: perl missing; it takes the run lock" >&2; exit 2; }
 exec 9>>"$out/.lock.f"
 perl -e 'eval { require Fcntl; 1 } or exit 4;
-         open(my $fh, ">&=", 9) or exit 3;
+         open(my $fh, ">&=", 9) or do { print STDERR "cannot reopen descriptor 9: $!\n"; exit 3 };
          exit 0 if flock($fh, Fcntl::LOCK_EX() | Fcntl::LOCK_NB());
          exit 1 if $!{EWOULDBLOCK};
          print STDERR "$!\n"; exit 5' 2> "$out/.lock.err"
@@ -133,8 +133,6 @@ case $? in
        exit 2 ;;
 esac
 echo $$ > "$out/.lock.pid"
-# the report is this run's from here on; a refused run never touches it
-: > "$report"
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -230,8 +228,9 @@ mounts+=(-v "$root/scratch/x86-docker/fixtures:/work/tests/.fixtures")
 # through the image's own qemu-x86_64, named on the command line: QR below is
 # that wrapper, empty on the rosetta backend. Each capped run gets a CPU model
 # without the tier above its cap, so code above the cap faults whatever path
-# reached it. The encoder the Python tests start goes through it too
-# (YAH264_WRAP); the shells, Python, meson and ffmpeg around them do not.
+# reached it. Under `meson test --wrapper` the Python test drivers run in it
+# too, and the encoder they start goes through it again (YAH264_WRAP); the
+# shells, meson, make and ffmpeg around them do not.
 rosetta_enabled() {   # read-only: is Rosetta the VM's x86-64 interpreter
     docker run --rm --privileged --platform linux/arm64 alpine sh -c "
         mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null
@@ -308,9 +307,10 @@ run_case() {   # run_case <backend> <tier> <leg> <log> <env...> -- <cmd>
 # drops a tier, or a cap name mapped to the wrong mask each leave every tier
 # running the same code, and every identity leg then passes. So each build
 # directory's options are read back and set right once if they are not, and
-# scripts/dispatch_probe.py watches the kernel calls of a real encode at each
-# depth under each cap: none calls no kernel, and each tier calls a kernel
-# of every family that has one at that tier, and none above it.
+# scripts/dispatch_probe.py watches the kernel calls of short encodes at each
+# depth under each cap: none calls no kernel, nothing above the cap runs,
+# each kernel runs at the highest tier of it the cap allows and as often as
+# under every other cap, and every kernel is reached but a documented few.
 B8="scratch/x86-docker/build8"; B10="scratch/x86-docker/build10"
 opts_of() {   # opts_of <dir>: "dev_knobs simd bit_depth" as the dir records them
     dk X=1 -- "python3 -c 'import json, sys
@@ -380,7 +380,7 @@ build_image() {
 # so before its image store is up, and taking that at face value turned a whole
 # matrix into a one-line refusal twice in this item's first day. Ask a few
 # times, and only build when the answer has been the same for a while.
-img_ready() { docker image inspect "$IMAGE" >/dev/null 2>&1; }
+img_ready() { docker image inspect "$IMAGE" >/dev/null 2>&1 9>&-; }
 if ! img_ready; then
     echo "x86-docker: $IMAGE not visible yet; waiting for the daemon"
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -397,6 +397,8 @@ if [ -n "$live" ]; then
     echo "            wait for them, or stop them with docker stop $live" >&2
     exit 2
 fi
+# the report is this run's from here on; a refused run never touches it
+: > "$report"
 
 # -- the builds, once for both backends ------------------------------------
 # The compiler runs in the container the same way on either backend, so the

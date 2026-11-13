@@ -38,7 +38,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.environ.get("BIN", os.path.join(ROOT, "build-rel/cli/yah264"))
 PLAY_BIN = os.environ.get("PLAY_BIN", BIN)
 # YAH264_WRAP: a command the encoder runs under (the x86 kit's explicit QEMU)
-WRAP = os.environ.get("YAH264_WRAP", "").strip()
+WRAP = " ".join(shlex.quote(w) for w in shlex.split(os.environ.get("YAH264_WRAP", "")))
 WRAP = WRAP + " " if WRAP else ""
 PLAY_ENV = os.environ.get("PLAY_ENV", "")
 CLIP = os.environ.get("CLIP", os.path.join(ROOT, "tests/corpus/foreman_cif.y4m"))
