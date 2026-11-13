@@ -1444,7 +1444,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     double fill = rcp_vbv_vfill(e, 0);      /* entry not pushed yet: walk them all */
     /* a pass 2's corridor reads the frames already coded at their real size;
      * the fit test keeps the predictions' margin, whose reserve carries a
-     * scene change (stefan+mobile+akiyo lost 0.44 dB on mobile without it) */
+     * scene change */
     e->tp_fill_gap = e->tp_pass >= 2 ? vbv_vfill(e, 0, 1) - fill : 0.0;
     /* The extrapolation guard the pipelined B decides already have, for the
  * anchor of a burst that is not tight: that anchor is coded where no
@@ -2167,7 +2167,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     /* else pass 1 / CQP: e->qp is the fixed base */
     /* a pass 1 under a VBV runs as capped ABR, but never finer than the fixed
      * pass-1 QP: under it the records priced cheap frames dear and pass 2
-     * coded them coarser (sintel 720p's dark stretches, -0.9 dB) */
+     * coded them coarser */
     if (e->tp_pass == 1 && e->abr_on && e->qp < Y264_TP_P1_QP) {
         e->qp = Y264_TP_P1_QP;
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
@@ -2191,8 +2191,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     if (e->vbv_on)
         rcp_vbv_clip(e, Cv, type, is_ref);
     /* the floor holds after the clip too: a pass 1 with its cap at the
-     * target is CBR, whose clip spends a full buffer by lowering the QP
-     * (akiyo recorded B frames at QP 12-22) */
+     * target is CBR, whose clip spends a full buffer by lowering the QP */
     if (e->tp_pass == 1 && e->abr_on && e->qp < Y264_TP_P1_QP) {
         e->qp = Y264_TP_P1_QP;
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
@@ -2608,8 +2607,8 @@ static void tp_build_reserve(yah264_encoder_t *e)
         r = tp_bits51(e->tp_next[k].bits, e->tp_next[k].qp) + (need > 0.0 ? need : 0.0);
     }
     /* the next key at its planned size, which the splitter names: at QP 51 a
-     * still image's key cost almost nothing, and the frames before it spent
-     * the buffer it needed (-0.36 dB at 150/150/150 k30, one thread) */
+     * still image's key costs almost nothing, and the frames before it would
+     * spend the buffer it needs */
     if (e->tp_key > r)
         r = e->tp_key;
     e->tp_resv[n] = r < e->vbv.size ? r : e->vbv.size;
@@ -3048,10 +3047,10 @@ static int tp_vbv_join(const yah264_encoder_t *e)
     return e->tp_pass >= 2 && e->vbv_on;
 }
 
-/* The exporter coded the segment right before this one: its final occupancy
+/* the exporter coded the segment right before this one: its final occupancy
  * is this segment's first, exactly, so it replaces the handoff assumption.
- * With frames of other instances in between it is not, and the assumption
- * stands. */
+ * with frames of other instances in between it is not, and the assumption
+ * stands */
 static void vbv_import_fill(yah264_encoder_t *e, const yah264_rc_state_t *c, size_t csz,
                             int frames_ahead)
 {

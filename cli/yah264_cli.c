@@ -3785,8 +3785,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                                     (double)fn / fd * (param->interlaced ? 2 : 1), param);
             if (sr != 0) {
                 if (sr == -1)       /* -2 is out of memory, already said */
-                    fprintf(stderr, "yah264: pass 2 cannot use '%s' -- re-run pass 1 "
-                            "with the same --frames and --keyint as this pass\n",
+                    fprintf(stderr, "yah264: pass 2 cannot use '%s' -- run pass 1 into it "
+                            "again, with this pass's --frames and --keyint\n",
                             param->rc.stats);
                 tp_free_paths(gop_stats, n_gops, 1);
                 free(gop_target);

@@ -187,9 +187,10 @@ costs, so when enough of them would be planned far under pass 1 the plan holds
 them at most 15 QP under it, and the runtime prices them at their own measured
 cost as they land. `--pass 3` reads the records and writes them back from a
 real encode, so a further pass refines against it. Pass 2 needs the same
-`--frames`, `--keyint` and `--tff`/`--bff` as pass 1, and warns when the record
-count says otherwise; a VBV on one pass and not the other is fine, pass 2
-taking the split pass 1 recorded. A missing stats file isn't an error: pass 2 then codes
+`--frames`, `--keyint` and `--tff`/`--bff` as pass 1. It warns when the record
+count says otherwise, and the GOP split refuses a file whose sections don't
+hold the records their markers count, or from another `--keyint`. A VBV on
+one pass and not the other is fine: pass 2 splits as pass 1 recorded. A missing stats file isn't an error: pass 2 then codes
 every frame at the base QP.
 
 **With a VBV**, pass 1 codes as capped ABR at the target, its base QP never
@@ -199,7 +200,9 @@ Pass 2 codes one frame at a time, its frame threads on the row wavefront, and
 holds every frame to the buffer by its measured size, as the single-pass
 modes do: a frame that comes out over the fit test, the GOP's exit corridor
 or the whole buffer is re-coded at the QP the overshoot asks for, and at QP 51
-once more without its per-macroblock offsets. A picture still underflows
+once more without its per-macroblock offsets. A raise of 3 QP or more that
+lands under half its limit steps back, bisecting toward the last QP that
+failed, at most four more builds, and keeps the lowest that fits. A picture still underflows
 where it reaches QP 51, or where it opens a GOP coded beside one that
 underflowed at QP 51 and so left the buffer under its planned level. Those
 pictures are counted over the stream the GOPs make together, and named in
