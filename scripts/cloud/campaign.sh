@@ -716,7 +716,7 @@ st_board10_tN() {
         if [ "$fail" = 1 ]; then
             echo "$n ENCFAIL" >> "$out"; rc=1; continue
         fi
-        python3 - "$RES/.wall" "$n" >> "$out" <<'PY'
+        python3 - "$RES/.wall" "$n" >> "$out" <<'PY' || rc=1
 import sys, statistics as st
 w = {"y": [], "x": []}
 for l in open(sys.argv[1]):
