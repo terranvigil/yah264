@@ -48,7 +48,10 @@ def parse_aus(data):
     """Split an Annex-B stream into per-frame bit counts. Returns a list of
     (au_bytes, first_slice_nal_type). Non-slice NALs (SPS/PPS/SEI/AUD) and
     their start codes count toward the NEXT slice's access unit -- that is
-    what the decoder's buffer receives before the frame is removed."""
+    what the decoder's buffer receives before the frame is removed. Filler
+    data is the exception: it belongs to the access unit it follows
+    (7.4.1.2.3), as hrd_check.py counts it, and CBR pads a picture with it
+    only where the buffer would otherwise run over."""
     aus = []
     n = len(data)
     i = 0
@@ -72,7 +75,10 @@ def parse_aus(data):
     au_start = starts[0][0]
     for k, (off, typ) in enumerate(starts):
         if typ in (1, 5):
-            end = starts[k + 1][0] if k + 1 < len(starts) else n
+            j = k + 1
+            while j < len(starts) and starts[j][1] == 12:
+                j += 1
+            end = starts[j][0] if j < len(starts) else n
             aus.append((end - au_start, typ))
             au_start = end
     return aus
