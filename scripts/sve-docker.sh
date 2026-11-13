@@ -176,8 +176,12 @@ if has_leg checkasm; then
             fi
         done
     done
-    if dk "$B/tools/checkasm/checkasm --isa sve" > "$out/checkasm-native-sve.log" 2>&1 \
-       && grep -q 'skip .*_sve' "$out/checkasm-native-sve.log"; then
+    # with no SVE here every SVE row skips, so `--isa sve` fails by design,
+    # saying none of its groups ran; anything else is a real failure
+    dk "$B/tools/checkasm/checkasm --isa sve" > "$out/checkasm-native-sve.log" 2>&1
+    if grep -q 'skip .*_sve' "$out/checkasm-native-sve.log" \
+       && grep -q ' 0 failure(s)' "$out/checkasm-native-sve.log" \
+       && grep -q -- '--isa sve ran none of its' "$out/checkasm-native-sve.log"; then
         row "checkasm native --isa sve" PASS "SVE rows skip natively, as they must"
     else
         row "checkasm native --isa sve" FAIL "checkasm-native-sve.log"
