@@ -1484,7 +1484,11 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     } else if (e->vbv_cbr || tp_cbr(e)) {
         /* Spend spare buffer only at CBR (serial rule -- see vbv_cbr's init:
  * capped VBR fills at maxrate and this branch would chase it). */
-        double room = rcbuf_overflow(&e->vbv, fill);
+        /* by the frames' real sizes, as the reserve reads it: what a full
+         * buffer turns away is lost, and the predictions' margin hid it
+         * (bbb10s 1080p at 1500/1500/750 ran at half the cap with the
+         * buffer at its top) */
+        double room = rcbuf_overflow(&e->vbv, fill + e->tp_fill_gap);
         /* a pass 2 spends no more than its budget allows: a 10-frame clip at
          * 900/900/900 spent its opening buffer and came out a third over */
         if (tp_cbr(e) && e->tp_spare >= 0.0 && room > e->tp_spare)
