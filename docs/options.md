@@ -1225,7 +1225,7 @@ one from a serial pass 1 has no GOP markers to split on, so pass 2 quietly stays
 serial for it. Pass 2 also refuses outright, with a message, if the stats file
 describes a different GOP split than the current run computed. That happens if
 you change `--frames` or `--keyint` between passes. Under a VBV, pass 2 codes
-each GOP on one thread, so it uses at most as many threads as there are GOPs.
+one frame at a time in each GOP, its threads on the row wavefront.
 
 ### Memory: the parallel path streams through a bounded window
 

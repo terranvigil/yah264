@@ -1322,8 +1322,9 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc
  * export and this instance's first frame (GOPs still in flight), which the
  * import credits at the target rate. A pass 2 or 3 under a VBV imports only
  * the occupancy (below), since it plans its own budget. Returns 0, or -1 if
- * the instance is neither, has already coded a frame, or the state is not valid or its size is
- * not accepted (nothing changes). Functions only, so the parameter struct's layout is unchanged. */
+ * the instance is neither, has already coded a frame, or the state is not
+ * valid or its size is not accepted (nothing changes). Functions only, so the
+ * parameter struct's layout is unchanged. */
 YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_rc_state_t *state,
                                         int frames_ahead);
 /* With frames_ahead == 0 the import also continues the exporter's VBV buffer

@@ -867,10 +867,9 @@ double vbv_limit_at(const yah264_encoder_t *e, double fill)
     return vbv_limit(e, fill, 1);
 }
 
-/* The measured-size bound's ceiling. Pass 2 of a two-pass is held there to
- * the fit test and the exit corridor only: the half-full budget steers the
- * predicted clip toward a reserve, and enforcing it on measured sizes too
- * re-coded frames a plan that never underflowed had room for. */
+/* the measured-size bound's ceiling: a pass 2 answers there to the fit test,
+ * the corridor and its reserve, not the half-full budget, which re-coded
+ * frames that never underflowed */
 double vbv_bound_limit(const yah264_encoder_t *e, double fill)
 {
     return vbv_limit(e, fill, e->tp_pass < 2);
@@ -1270,10 +1269,9 @@ double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
     return vbv_vfill(e, drop_tail, 0);
 }
 
-/* The occupancy the measured-size bound holds a frame to. A pass 2 charges
- * the frames already coded at what they coded: B frames wait for the next
- * anchor to pop, and at their predictions the bound passed a B the buffer
- * could not hold (foreman CIF at a 60 kbit buffer). */
+/* the occupancy the measured-size bound reads: a pass 2 charges frames
+ * already coded at their real size, since B frames wait for the next anchor
+ * to pop and at their predictions a B the buffer couldn't hold got past */
 double rcp_vbv_vfill_bound(const yah264_encoder_t *e, int drop_tail)
 {
     return vbv_vfill(e, drop_tail, e->tp_pass >= 2);
@@ -1385,9 +1383,8 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
     return 51.0;
 }
 
-/* A two-pass pass 2 whose cap is its target: what the buffer cannot hold
- * past full is never delivered, so a frame left room spends it. Without it
- * bbb 720p at 1200/1200/1200 came out 23% under. */
+/* a pass 2 whose cap is its target: what arrives past a full buffer is
+ * never delivered, so a frame with room spends it */
 static int tp_cbr(const yah264_encoder_t *e)
 {
     return e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate;
@@ -2531,21 +2528,16 @@ static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, 
     }
 }
 
-/* A record's bits at QP 51. Bits fall slower than the 1/qscale law toward
- * the top of the range (an intra frame pass 1 coded at QP 23 cost three
- * times the law's price at 51), so this takes 8 QP a halving, with a margin,
- * as the --nal-hrd reserve does. */
+/* a record's bits at QP 51, at 8 QP a halving and a margin, as the --nal-hrd
+ * reserve prices them: the 1/qscale law priced bbb's IDR at a third of it */
 static double tp_bits51(double bits, int qp)
 {
     return 1.1 * (bits + 1.0) * pow(2.0, (qp - 51) / 8.0);
 }
 
-/* Under a VBV, the occupancy each record needs when it is removed for it and
- * every record after it to fit at QP 51, walked back from the next GOP's
- * first record (the splitter appends it). A frame that takes the buffer under
- * what the next one needs leaves that one a frame no QP fits: the key that
- * opens the next GOP, or a noise frame after an intra frame that took the
- * buffer. */
+/* under a VBV, the occupancy each record needs for it and every record after
+ * it to fit at QP 51, walked back from the next GOP's key (the splitter
+ * appends it): a frame that leaves less leaves the next one no QP that fits */
 static void tp_build_reserve(yah264_encoder_t *e)
 {
     int n = e->tp_n;
@@ -2970,8 +2962,7 @@ int vbv_bounded_now(const yah264_encoder_t *e)
 
 
 
-/* A two-pass pass 2 under a VBV, whose GOP instances carry the buffer and
- * nothing else. */
+/* a VBV pass 2, whose GOP instances carry the buffer and nothing else */
 static int tp_vbv_join(const yah264_encoder_t *e)
 {
     return e->tp_pass >= 2 && e->vbv_on;
