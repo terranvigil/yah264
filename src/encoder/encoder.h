@@ -1030,9 +1030,11 @@ struct yah264_encoder {
     double  *tp_elo;            /* [n+1] modelled bits of floor-bound records before i */
     double   tp_lact, tp_lmod;  /* actual / modelled bits of floor-bound frames with content */
     int      tp_lcnt;           /* such frames landed */
+    double   tp_lact3[3], tp_lmod3[3]; /* the same per frame type */
+    double  *tp_elo3;           /* [3][n+1] tp_elo per frame type */
     double   tp_lastq[3];       /* per type: last floor-bound qscale decided, 0 = none */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
-    double   tp_fps;            /* frames per second, for the drift band */
+    double   tp_fps;            /* records (pictures) per second, for the drift band */
     int      tp_nacc;           /* frames accounted so far */
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_framing;        /* pass 2: framing bits of the frames accounted */
@@ -1051,6 +1053,7 @@ struct yah264_encoder {
     struct rcp_pend {
         int8_t  type, is_ref, dropped, filled;
         int8_t  held;           /* raised by the --nal-hrd hold: off the plan's model */
+        int8_t  rc_type;        /* the rate-control type: an I frame's second field is coded P, quantised I */
         int8_t  tight;          /* decided in a serial-tight VBV burst: pops at
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */

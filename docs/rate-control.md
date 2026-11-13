@@ -176,14 +176,19 @@ since each holds a QP under what the buffer may need.
 ### Two-pass
 
 Pass 1 codes at a fixed base QP of 26 with full analysis (there's no reduced
-first pass) and writes one record per frame: type, complexity, bits, QP,
-is-reference. Pass 2 turns each record into a QP-invariant cost,
-`(bits + 1) x qscale(qp)`, blurs it over neighboring frames (`--cplxblur` 20),
-and solves an offline plan for the whole clip with I and B tied to P by
-`--ipratio` 1.4 and `--pbratio` 1.3. A bounded runtime correction tracks the
-actual spend. `--pass 3` reads the records and writes them back from a real
-encode, so a further pass refines against it. Pass 2 needs the same `--frames`
-and `--keyint` as pass 1. A missing stats file isn't an error: pass 2 then codes
+first pass) and writes one record per picture (two a frame under
+`--tff`/`--bff`): type, complexity, bits, QP, is-reference. Pass 2 turns each
+record into a QP-invariant cost, `(bits + 1) x qscale(qp)`, blurs it over
+neighboring frames (`--cplxblur` 20), and solves an offline plan for the whole
+clip with I and B tied to P by `--ipratio` 1.4 and `--pbratio` 1.3. A bounded
+runtime correction tracks the actual spend. Frames pass 1 coded at almost no
+bits (grain or texture under its quantiser) say nothing about what a finer QP
+costs, so when enough of them would be planned far under pass 1 the plan holds
+them at most 15 QP under it, and the runtime prices them at their own measured
+cost as they land. `--pass 3` reads the records and writes them back from a
+real encode, so a further pass refines against it. Pass 2 needs the same
+`--frames`, `--keyint` and `--tff`/`--bff` as pass 1, and warns when the record
+count says otherwise. A missing stats file isn't an error: pass 2 then codes
 every frame at the base QP.
 
 ### Frame-level AQ strength by mode

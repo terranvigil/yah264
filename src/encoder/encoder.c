@@ -5468,7 +5468,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * whole stream at once, and the GOP-parallel splitter, which
  * needs to know where each GOP's records start. A file with no
  * markers reads exactly as it always did. */
+                long mframes = 0;
                 while (fgets(ln, sizeof ln, fp)) {
+                    int mg, ms, me, mr;
+                    if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
+                        mframes += me - ms;
                     if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0')
                         continue;
                     /* The 5th field (is_ref) was added for the offline plan's
@@ -5492,6 +5496,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     e->tp_sum_cq += pow(cost, e->crf_qcomp);
                 }
                 fclose(fp);
+                /* the markers count frames; a pass 1 coded with another
+                 * field mode wrote half or twice the records */
+                if (mframes > 0 && e->tp_n != mframes * (param->interlaced ? 2 : 1))
+                    fprintf(stderr, "yah264: stats file '%s' holds %d records for %ld pictures; "
+                            "run pass 1 with the same --tff/--bff as this pass or the rate will miss\n",
+                            param->rc.stats, e->tp_n, mframes * (param->interlaced ? 2 : 1));
             }
             if (e->tp_pass == 3) {
                 /* Every record is in e->tp_stats by now, so truncating the file
@@ -5507,12 +5517,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 }
             }
             double bitrate = param->rc.bitrate > 0 ? param->rc.bitrate : 1000;
+            /* a record per picture: field coding writes two a frame */
+            double rps = param->interlaced ? 2.0 * fps : fps;
             e->tp_target = param->rc.tp_target_bits > 0.0
                          ? param->rc.tp_target_bits
-                         : bitrate * 1000.0 * e->tp_n / fps;
+                         : bitrate * 1000.0 * e->tp_n / rps;
             e->tp_rem_target = e->tp_target;
             e->tp_rem_cq = e->tp_sum_cq;
-            e->tp_fps = fps;
+            e->tp_fps = rps;
             /* Every plan gate is resolved HERE, on the API thread at open, into
  * encoder fields -- not into function-local statics. The decide
  * that reads them runs on the stair driver under the pipeline, and
@@ -16633,6 +16645,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->tp_ebits);
     free(e->tp_qlo);
     free(e->tp_elo);
+    free(e->tp_elo3);
     int pw[3] = { e->padded_w, e->padded_w / e->sub_w, e->padded_w / e->sub_w };
     int pb[3] = { Y264_LUMA_BORDER, Y264_CHROMA_BORDER, Y264_CHROMA_BORDER };
     for (int c = 0; c < 3; c++) {

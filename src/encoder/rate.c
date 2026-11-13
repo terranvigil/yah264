@@ -1039,7 +1039,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->abr_cum_target += e->abr_target_bpf;
     }
     if (e->tp_fp)          /* pass 1 and pass 3 both record */
-        fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->type, p->cplx, p->bits,
+        fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->rc_type, p->cplx, p->bits,
                 p->fqp, p->is_ref ? 1 : 0);
     if (e->tp_pass >= 2) {
         e->tp_rem_target -= p->bits;
@@ -1073,6 +1073,8 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
                 e->tp_lact += p->bits;
                 e->tp_lmod += p->pred;
                 e->tp_lcnt++;
+                e->tp_lact3[e->tp_stats[p->tp_rec].type] += p->bits;
+                e->tp_lmod3[e->tp_stats[p->tp_rec].type] += p->pred;
             }
         }
     }
@@ -1712,7 +1714,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * The seq bound in rcp_pop_ready carries the lag instead, on every path. */
     if (type != 2 && e->rcp_lag == 0)
         rcp_commit_filled(e);
-    double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0, pend_lo = 0.0;
+    double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0, pend_lo[3] = { 0.0, 0.0, 0.0 };
     int np = e->rcp_n;
     /* A5b (always on): under the rate-factor controller
      * an in-flight frame (decided, not yet coded) is predicted from ITS OWN
@@ -1748,13 +1750,14 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                      / pow(2.0, (p->fqp - 12) / 6.0)
                    : p->pred;
         if (!e->abr_on && p->tp_rec >= 0 && tp_floor_bound(e, p->tp_rec))
-            pend_lo += p->pred;
+            pend_lo[e->tp_stats[p->tp_rec].type] += p->pred;
         pend_cq += p->cq;
     }
     struct rcp_pend en;
     memset(&en, 0, sizeof en);
     en.tp_rec = -1;                             /* 0 is a valid record index */
     en.type = (int8_t)type;
+    en.rc_type = (int8_t)(e->fld_pic && e->fld_rc_type >= 0 ? e->fld_rc_type : type);
     en.is_ref = (int8_t)is_ref;
     en.cplx = C;
     en.bits = -1.0;
@@ -2205,8 +2208,8 @@ double tp_bits_at(const yah264_encoder_t *e, int i, double q)
 #define TP_IWIN       8
 #define TP_BLUR_SIGMA 0.5
 #define TP_CWARM      4
-#define TP_LOFAR      (12.0 + 6.0 * (Y264_BIT_DEPTH - 8))
-#define TP_LODEPTH    (15.0 + 6.0 * (Y264_BIT_DEPTH - 8))
+#define TP_LOFAR      12.0
+#define TP_LODEPTH    15.0
 #define TP_LOSHARE    0.3
 #define TP_LOWARM     2
 #define TP_LOHI       8.0
@@ -2381,35 +2384,48 @@ static double tp_bisect(yah264_encoder_t *e, const double *cplx, double seed, do
  * +167%. The floor engages when textured frames of this kind that the plan
  * puts more than TP_LOFAR QP under their pass-1 QP carry over TP_LOSHARE of
  * the non-I planned bits (an I frame's planned bits would hide them: dark
- * grain over 120 frames read under the share with the I in it). The P frames
+ * grain over 120 frames read under the share with the I in it), or make up
+ * over TP_LOSHARE of the non-I frames. The count is needed beside the bits:
+ * the model prices these frames at almost nothing, so next to detailed
+ * frames their planned share is tiny however many there are (72 grain
+ * frames beside 72 of a detailed clip read 1% of the bits), and grain that
+ * followed the detail overshot by 90%. The P frames
  * are then held at most TP_LODEPTH under their pass-1 QP and the plan is
  * re-solved; I and B frames follow through the type shaping. Every corpus
- * ladder cell reads under the share and is bit-exact, as is an all-black
- * clip, which has no textured frames. Both depths move with the bit depth:
- * a 10-bit QP has the step of the 8-bit QP 12 under it, so 10-bit grain
- * sits 12 QP further down before the model stops holding. */
+ * ladder rung but sintel's two highest leaves it off, as does an
+ * all-black clip, which has no textured frames. It does engage on
+ * sintel's opening fade at those two rungs, and on static content at rates
+ * well above its ladder (akiyo at 1.5-4 Mbit/s), where the plan puts the
+ * near-skip frames furthest under pass 1. Both distances are the same at
+ * every bit depth: they bound how far the plan extrapolates from pass 1's
+ * own evidence, a ratio of quantiser steps the depth doesn't change. */
 static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, double step_mult)
 {
     int n = e->tp_n;
     double lim = TP_LOBITS * e->width_in_mbs * e->height_in_mbs;
     double tex = (double)e->width_in_mbs * e->height_in_mbs;
     double lo = 0, all = 0;
+    int nlo = 0, nall = 0;
     for (int i = 0; i < n; i++) {
         if (e->tp_stats[i].type == 0)
             continue;
         double b = tp_bits_at(e, i, e->tp_q[i]);
         all += b;
+        nall++;
         if (e->tp_stats[i].bits < lim && e->tp_stats[i].cplx >= tex
-            && e->tp_q[i] < e->tp_qrec[i] * pow(2.0, -TP_LOFAR / 6.0))
+            && e->tp_q[i] < e->tp_qrec[i] * pow(2.0, -TP_LOFAR / 6.0)) {
             lo += b;
+            nlo++;
+        }
     }
-    if (!(lo > TP_LOSHARE * all))
+    if (!(lo > TP_LOSHARE * all) && !(nlo > TP_LOSHARE * nall))
         return;
     e->tp_qlo = malloc((size_t)n * sizeof(*e->tp_qlo));
     e->tp_elo = malloc((size_t)(n + 1) * sizeof(*e->tp_elo));
-    if (!e->tp_qlo || !e->tp_elo) {
-        free(e->tp_qlo); free(e->tp_elo);
-        e->tp_qlo = e->tp_elo = NULL;
+    e->tp_elo3 = malloc((size_t)3 * (n + 1) * sizeof(*e->tp_elo3));
+    if (!e->tp_qlo || !e->tp_elo || !e->tp_elo3) {
+        free(e->tp_qlo); free(e->tp_elo); free(e->tp_elo3);
+        e->tp_qlo = e->tp_elo = e->tp_elo3 = NULL;
         return;
     }
     for (int i = 0; i < n; i++)
@@ -2418,6 +2434,13 @@ static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, 
     e->tp_elo[0] = 0;
     for (int i = 0; i < n; i++)
         e->tp_elo[i + 1] = e->tp_elo[i] + (tp_floor_bound(e, i) ? tp_bits_at(e, i, e->tp_q[i]) : 0.0);
+    for (int t = 0; t < 3; t++) {
+        double *c = e->tp_elo3 + t * (n + 1);
+        c[0] = 0;
+        for (int i = 0; i < n; i++)
+            c[i + 1] = c[i] + (tp_floor_bound(e, i) && e->tp_stats[i].type == t
+                               ? tp_bits_at(e, i, e->tp_q[i]) : 0.0);
+    }
 }
 
 /* Build the plan. Called once at open, on the API thread, after the records
@@ -2485,7 +2508,7 @@ void tp_build_plan(yah264_encoder_t *e)
 }
 
 
-double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, double pend_lo)
+double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, const double pend_lo[3])
 {
     double q = e->tp_q[idx];
     if (!e->tp_corr)
@@ -2541,31 +2564,51 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, d
  * frames with content (tp_kact / tp_kmod, see the accounting). */
         double rem_t = e->tp_target - spent - k * pend - e->tp_framing;
         /* Under the floor, the floored frames are priced at their own measured
- * bias kl, in flight as well as still to come (at more than one thread
- * the in-flight ones otherwise read cheap until they land). Until
- * TP_LOWARM of them have landed the band only raises the QP; after
+ * bias, in flight as well as still to come (at more than one thread
+ * the in-flight ones otherwise read cheap until they land), per frame
+ * type once that type has landed one, else at the pooled kl. Pooled, a
+ * B frame pass 1 coded at a few bits a macroblock misses its model
+ * far more than a P, and on a 24-frame fade the B frames' bias priced
+ * the last P frames many times over and left a third of the target
+ * unspent. Until
+ * TP_LOWARM of them have landed their band only raises the QP; after
  * that it may lower it as far as TP_LOHI asks, so a high target can
  * walk well under the floor. An overspent ledger raises them to the
  * band's top. Each floored frame moves at most TP_LOSLEW QP from the
  * last floored frame of its type; unbounded, the first evidence opened
- * an 18-QP swing on grain. */
+ * an 18-QP swing on grain. Frames the floor doesn't hold may also lower
+ * the QP, as far as the plain band's 2: held to raising, detail coded
+ * ahead of grain left bits it could use and the grain walked down to
+ * spend them. They keep the floored frames' lower bound and are raised
+ * with them on an overspent ledger, or a ledger the floored frames
+ * overran went uncorrected for every other frame. */
         double rem_lo = e->tp_elo ? e->tp_elo[e->tp_n] - e->tp_elo[idx] : 0.0;
         if (rem_lo > 0) {
             int warm = e->tp_lcnt >= TP_LOWARM && e->tp_lmod >= 1 && e->tp_lact > 0;
             double kl = warm ? e->tp_lact / e->tp_lmod : 1.0;
             double rem_hi = rem_m - rem_lo;
-            double rt = e->tp_target - spent - k * (pend - pend_lo) - kl * pend_lo - e->tp_framing;
-            double eff = k * rem_hi + kl * rem_lo;
+            double plo = pend_lo[0] + pend_lo[1] + pend_lo[2];
+            double rt = e->tp_target - spent - k * (pend - plo) - e->tp_framing;
+            double eff = k * rem_hi;
+            int n1 = e->tp_n + 1;
+            for (int t = 0; t < 3; t++) {
+                double kt = e->tp_lmod3[t] >= 1 && e->tp_lact3[t] > 0
+                          ? e->tp_lact3[t] / e->tp_lmod3[t] : kl;
+                rt -= kt * pend_lo[t];
+                eff += kt * (e->tp_elo3[t * n1 + e->tp_n] - e->tp_elo3[t * n1 + idx]);
+            }
             int bound = tp_floor_bound(e, idx);
             double kw = kl > k ? kl : k;
             double hi = warm ? TP_LOHI : 1.0;
             double lo = 0.5 / (kw > 1.0 ? (kw < 4.0 ? kw : 4.0) : 1.0);
+            if (!bound)
+                hi = 2.0;
             if (eff > 1 && rt > 1) {
                 double s = rt / eff;
                 if (s < lo) s = lo;
                 if (s > hi) s = hi;
                 q /= s;
-            } else if (rt <= 1 && bound)
+            } else if (rt <= 1)
                 q /= lo;
             int ty = e->tp_stats[idx].type;
             if (bound && e->tp_lastq[ty] > 0) {
