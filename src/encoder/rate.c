@@ -787,6 +787,14 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
 static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
 {
     double goal = e->rck.vbv_fill_frac * e->vbv.size;
+    /* a pass-2 GOP the splitter planned steers to the level it leaves at,
+     * where that is under half, and the last one to nothing: held at half, a
+     * GOP that joined low (a cap under the target) climbed back instead of
+     * spending. one encoder for the whole clip keeps half, its reserve */
+    if (e->tp_pass >= 2 && e->tp_exit > 0.0 && e->vbv_seg_h < goal)
+        goal = e->vbv_seg_h;
+    else if (e->tp_pass >= 2 && e->tp_exit <= 0.0 && e->tp_join > 0.0)
+        goal = 0.0;
     double h = fill > goal ? e->rck.vbv_fill_hup : e->rck.vbv_fill_h;
     if (h <= 0) h = 1.0;
     double allowed = e->vbv.rate + (fill - goal) / h;
