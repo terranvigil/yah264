@@ -85,7 +85,6 @@ CLIPS="${X86_CLIPS:-$CLIPS}"
 out="$root/scratch/x86-docker"
 mkdir -p "$out"
 report="$out/report.txt"
-: > "$report"
 
 # ---------------------------------------------------------------------------
 # Result bookkeeping. Every leg lands in the same table whatever it did, so a
@@ -111,27 +110,73 @@ fi
 
 # ONE RUN PER WORKTREE. Two runs share the scratch directory: each other's
 # x.264, err, .part and md5 lists, so one run's row would blame a kernel for
-# the other's files. macOS has no flock, so the lock is a directory, and a
-# lock whose holder is gone is taken over.
-lock="$root/scratch/x86-docker/.lock"
-mkdir -p "$root/scratch/x86-docker"
-if ! mkdir "$lock" 2>/dev/null; then
-    holder="$(cat "$lock/pid" 2>/dev/null)"
-    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
-        echo "x86-docker: another run (pid $holder) holds $lock" >&2
-        exit 2
-    fi
-    rm -rf "$lock"
-    mkdir "$lock" || { echo "x86-docker: cannot take $lock" >&2; exit 2; }
-fi
-echo $$ > "$lock/pid"
+# the other's files. macOS has no flock, so the lock is a directory, built
+# aside with its pid already in it and renamed into place: rename(2) will not
+# replace a directory that has a file in it, so of two contenders exactly one
+# lands, and no reader ever sees a lock without its pid. A lock whose holder
+# is gone is moved aside, not deleted, and only under a second short-lived
+# lock that re-checks the holder, so two runs that both saw it stale cannot
+# both take over, and neither can move aside a lock the other just took.
+lock="$out/.lock"
+guard="$out/.lock-takeover"
+rename_dir() { perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$1" "$2"; }
+age_of() { perl -e '@s = stat($ARGV[0]) or exit 1; print time - $s[9]' "$1"; }
+# lock_busy <dir>: the dir is held by a live process, or too new to judge
+lock_busy() {
+    local holder age
+    holder="$(cat "$1/pid" 2>/dev/null)"
+    if [ -n "$holder" ]; then kill -0 "$holder" 2>/dev/null; return; fi
+    age="$(age_of "$1")" || return 1        # gone: not busy
+    [ "$age" -lt 10 ]
+}
+# new_lockdir <prefix>: a fresh dir holding this run's pid
+new_lockdir() {
+    local d
+    d="$(mktemp -d "$1.new.XXXXXX")" || return 1
+    echo $$ > "$d/pid" && echo "$d"
+}
+take_lock() {
+    local mine g n
+    mine="$(new_lockdir "$lock")" || return 1
+    for n in 1 2 3 4 5; do
+        # an empty dir would be replaced by the rename, so a lock left with
+        # no pid by an older version of this script is judged, not renamed over
+        [ -e "$lock" ] || { rename_dir "$mine" "$lock" && return 0; }
+        if lock_busy "$lock"; then
+            rm -rf "$mine"
+            echo "x86-docker: another run (pid $(cat "$lock/pid" 2>/dev/null || echo '?')) holds $lock" >&2
+            return 2
+        fi
+        # stale. take the guard, and judge the lock again under it
+        g="$(new_lockdir "$guard")" || { rm -rf "$mine"; return 1; }
+        if ! rename_dir "$g" "$guard"; then
+            rm -rf "$g"
+            lock_busy "$guard" || { rename_dir "$guard" "$guard.stale.$$.$n" && rm -rf "$guard.stale.$$.$n"; }
+            sleep 1; continue
+        fi
+        if [ -e "$lock" ] && ! lock_busy "$lock" && rename_dir "$lock" "$lock.stale.$$.$n"; then
+            rm -rf "$lock.stale.$$.$n"
+        fi
+        [ "$(cat "$guard/pid" 2>/dev/null)" = $$ ] && rename_dir "$guard" "$guard.done.$$" && rm -rf "$guard.done.$$"
+    done
+    rm -rf "$mine"
+    echo "x86-docker: cannot take $lock" >&2
+    return 1
+}
+take_lock || exit 2
+# the report is this run's from here on; a refused run never touches it
+: > "$report"
 ROSETTA_OFF=0
 cleanup() {
-    [ "$ROSETTA_OFF" = 1 ] && restore_rosetta
-    rm -rf "$lock"
+    if [ "$ROSETTA_OFF" = 1 ]; then restore_rosetta; ROSETTA_OFF=0; fi
+    # only our own lock: a run that lost it must not free another's
+    if [ "$(cat "$lock/pid" 2>/dev/null)" = $$ ] && rename_dir "$lock" "$lock.done.$$"; then
+        rm -rf "$lock.done.$$"
+    fi
 }
 trap cleanup EXIT
-trap 'cleanup; exit 130' INT TERM
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 # compare_lists <backend> <tier> <label> <idir> <diff-name> <what moved>:
 # one tier's md5 list against none's. A count that differs is the harness's
