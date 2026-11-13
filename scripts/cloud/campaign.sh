@@ -584,16 +584,27 @@ st_board10_t1() {
     [ -x "${X264_10_ASM:-}" ] && [ -x "${X264_10_C:-}" ] || { c_skip "no 10-bit x264 (build-x264-10)"; return; }
     [ -n "$(clips10)" ] || { c_skip "no clips in $CLIPS10_DIR"; return; }
     command -v perf >/dev/null 2>&1 || { c_skip "no perf"; return; }
+    # a refusal here would read as every encode failing
+    perf stat -x, -e task-clock -- true >/dev/null 2>&1 \
+        || { c_skip "perf refuses to count; sysctl kernel.perf_event_paranoid=1 or run privileged"; return; }
     # a VM without PMU passthrough still has task-clock: the instruction
     # column then reads NA and the CPU-seconds column stands alone
     c_can_time || { c_skip "an emulated count is the emulator's own"; return; }
-    local reps="${REPS10:-3}" rows="$RES/.board10.rows" out="$RES/board10-t1.txt" clip n
+    local reps="${REPS10:-3}" rows="$RES/.board10.rows" out="$RES/board10-t1.txt" clip n have
+    local arms="y264-sse4 y264-c x264-asm x264-c"
+    have=$(tiers10 2>/dev/null) || { echo "board10-t1: no usable cpu line from checkasm"; return 1; }
+    # the AVX2 arms run only where the CPU has the tier; elsewhere the
+    # default dispatch would be sse4 under the avx2 name
+    case " $have " in *" avx2 "*) arms="y264-avx2 x264-avx2 $arms" ;; esac
     : > "$rows"
     for clip in $(clips10); do
         n=$(basename "$clip" .y4m)
         for _ in $(seq 1 "$reps"); do
-            perf10 "$rows" "$n y264-avx2" "${PIN[@]+"${PIN[@]}"}" "$Y264_10" --input-y4m "$clip" \
-                --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
+            case " $arms " in *" y264-avx2 "*)
+                perf10 "$rows" "$n y264-avx2" env Y264_SIMD_FORCE=avx2 "${PIN[@]+"${PIN[@]}"}" \
+                    "$Y264_10" --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 \
+                    -o /dev/null ;;
+            esac
             perf10 "$rows" "$n y264-sse4" env Y264_SIMD_FORCE=sse4 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
                 --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
             perf10 "$rows" "$n y264-c" env YAH264_NO_ASM=1 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
@@ -602,8 +613,10 @@ st_board10_t1() {
                 --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
             # x264's own dispatch capped at AVX2, the like-for-like arm on an
             # AVX-512 part (on an AVX2-only part it equals x264-asm)
-            perf10 "$rows" "$n x264-avx2" "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --asm avx2 \
-                --preset medium --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
+            case " $arms " in *" x264-avx2 "*)
+                perf10 "$rows" "$n x264-avx2" "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --asm avx2 \
+                    --preset medium --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip" ;;
+            esac
             perf10 "$rows" "$n x264-c" "${PIN[@]+"${PIN[@]}"}" "$X264_10_C" --preset medium \
                 --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
         done
@@ -611,31 +624,35 @@ st_board10_t1() {
     {
         echo "# 10-bit, threads 1, $PIN_DESC, $FRAMES10 frames, medium/CRF 23, median of $reps"
         echo "# $SKU $DATE  $CPU_MODEL"
-        python3 - "$rows" <<'PY'
+        python3 - "$rows" $arms <<'PY'
 import sys, statistics as st
 rows, bad = {}, []
 for l in open(sys.argv[1]):
     f = l.split()
     if len(f) == 4:
-        rows.setdefault((f[0], f[1]), []).append((int(f[2]) if f[2] != "NA" else 0, float(f[3])))
+        # an NA count stays out of the median rather than reading as zero
+        rows.setdefault((f[0], f[1]), []).append((int(f[2]) if f[2] != "NA" else None, float(f[3])))
     else:
         bad.append(" ".join(f))
 clips = sorted({c for c, _ in rows} | {b.split()[0] for b in bad if b})
-arms = ("y264-avx2", "y264-sse4", "y264-c", "x264-asm", "x264-avx2", "x264-c")
+order = ("y264-avx2", "y264-sse4", "y264-c", "x264-asm", "x264-avx2", "x264-c")
+arms = [a for a in order if a in sys.argv[2:]]
 print(f"{'clip':<26}{'arm':<11}{'instr':>10}{'cpu s':>9}")
 for c in clips:
     m = {}
-    for a in ("y264-avx2", "y264-sse4", "y264-c", "x264-asm", "x264-avx2", "x264-c"):
+    for a in arms:
         v = rows.get((c, a))
         if not v:
             continue
-        m[a] = (st.median(i for i, _ in v), st.median(t for _, t in v))
-        ins = f"{m[a][0] / 1e9:>9.2f}G" if m[a][0] else f"{'NA':>10}"
+        counts = [i for i, _ in v if i is not None]
+        m[a] = (st.median(counts) if counts else None, st.median(t for _, t in v))
+        ins = f"{m[a][0] / 1e9:>9.2f}G" if m[a][0] is not None else f"{'NA':>10}"
         print(f"{c:<26}{a:<11}{ins}{m[a][1]:>9.2f}")
     for y, x in (("y264-avx2", "x264-asm"), ("y264-avx2", "x264-avx2"),
                  ("y264-sse4", "x264-asm"), ("y264-c", "x264-c")):
         if y in m and x in m:
-            ir = f"{m[y][0] / m[x][0]:.3f}" if m[x][0] else "NA"
+            ir = (f"{m[y][0] / m[x][0]:.3f}"
+                  if m[y][0] is not None and m[x][0] else "NA")
             print(f"{c:<26}{y + '/' + x:<22} instr {ir}  cpu {m[y][1] / m[x][1]:.3f}")
 missing = [f"{c} {a}" for c in clips for a in arms if (c, a) not in rows]
 for b in bad:
