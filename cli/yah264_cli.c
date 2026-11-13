@@ -1660,7 +1660,11 @@ static void *gop_worker(void *arg)
         yah264_rc_state_t carry;
         int carry_ahead = 0;
         memset(&carry, 0, sizeof carry);
-        if (p.rc.bitrate > 0 && rc_carry_on() && j->rc_state) {
+        /* not into a pass 1: it records what each GOP costs, and a carried
+         * ledger codes identical GOPs at QPs 10 apart (a still image at
+         * 150/150/150 k30, three threads), where the cost law no longer
+         * holds and pass 2 split its budget wrong (-0.8 dB) */
+        if (p.rc.bitrate > 0 && rc_carry_on() && j->rc_state && p.rc.pass != 1) {
             int pred = -1, ahead = 0;
             if (k >= 0) {
                 if (k >= j->nworkers) {
