@@ -16719,6 +16719,10 @@ void yah264_encoder_close(yah264_encoder_t *e)
                 e->tp_unfit);
     /* the picture count isn't known at open on a serial path, a pipe say, so
      * a stats file short of pictures is only found here */
+    /* ...and one with records to spare, from a longer pass 1 */
+    if (e->tp_pass >= 2 && e->tp_idx > 0 && e->tp_idx < e->tp_n)
+        fprintf(stderr, "yah264: warning: the stats file holds %d records and this pass coded "
+                "%d pictures: it covers more than this input\n", e->tp_n, e->tp_idx);
     if (e->tp_past && e->tp_n > 0)
         fprintf(stderr, "yah264: warning: %ld picture(s) coded past the last of the %d records "
                 "in the stats file, at the last QP: the file covers less than this input\n",
