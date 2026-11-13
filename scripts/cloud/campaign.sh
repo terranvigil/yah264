@@ -616,10 +616,11 @@ st_board10_t1() {
     # column then reads NA and the CPU-seconds column stands alone
     c_can_time || { c_skip "an emulated count is the emulator's own"; return; }
     local reps="${REPS10:-3}" rows="$RES/.board10.rows" out="$RES/board10-t1.txt" clip n have
-    local arms="y264-sse4 y264-c x264-asm x264-c"
+    local arms="y264-c x264-asm x264-c"
     have=$(tiers10 2>/dev/null) || { echo "board10-t1: no usable cpu line from checkasm"; return 1; }
-    # the AVX2 arms run only where the CPU has the tier; elsewhere the
-    # default dispatch would be sse4 under the avx2 name
+    # each tier's arms run only where the CPU has the tier: elsewhere the
+    # forced tier falls to a lower one (or to NEON on aarch64) under its name
+    case " $have " in *" sse4 "*) arms="y264-sse4 $arms" ;; esac
     case " $have " in *" avx2 "*) arms="y264-avx2 x264-avx2 $arms" ;; esac
     : > "$rows"
     for clip in $(clips10); do
@@ -630,8 +631,11 @@ st_board10_t1() {
                     "$Y264_10" --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 \
                     -o /dev/null ;;
             esac
-            perf10 "$rows" "$n y264-sse4" env Y264_SIMD_FORCE=sse4 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
-                --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
+            case " $arms " in *" y264-sse4 "*)
+                perf10 "$rows" "$n y264-sse4" env Y264_SIMD_FORCE=sse4 "${PIN[@]+"${PIN[@]}"}" \
+                    "$Y264_10" --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 \
+                    -o /dev/null ;;
+            esac
             perf10 "$rows" "$n y264-c" env YAH264_NO_ASM=1 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
                 --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
             perf10 "$rows" "$n x264-asm" "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --preset medium \
@@ -649,6 +653,7 @@ st_board10_t1() {
     {
         echo "# 10-bit, threads 1, $PIN_DESC, $FRAMES10 frames, medium/CRF 23, median of $reps"
         echo "# $SKU $DATE  $CPU_MODEL"
+        # shellcheck disable=SC2086  # the arm list splits into arguments
         python3 - "$rows" $arms <<'PY'
 import sys, statistics as st
 rows, bad = {}, []
