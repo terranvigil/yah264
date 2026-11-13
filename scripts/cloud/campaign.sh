@@ -608,17 +608,23 @@ st_board10_tN() {
     [ -x "$Y264_10" ] && [ -x "${X264_10_ASM:-}" ] || { c_skip "no 10-bit arms"; return; }
     [ -n "$(clips10)" ] || { c_skip "no clips in $CLIPS10_DIR"; return; }
     c_can_time || { c_skip "an emulated wall time is the emulator's"; return; }
-    local reps="${REPS10:-3}" out="$RES/board10-tN.txt" clip n r t0 t1
+    local reps="${REPS10:-3}" out="$RES/board10-tN.txt" clip n t0 t1 rc=0 fail
     echo "# 10-bit, default threads (tN = $TN vCPUs), $FRAMES10 frames, medium/CRF 23, wall s, median of $reps" > "$out"
     for clip in $(clips10); do
         n=$(basename "$clip" .y4m)
         : > "$RES/.wall"
-        for r in $(seq 1 "$reps"); do
-            t0=$(date +%s.%N); "$Y264_10" --input-y4m "$clip" --frames "$FRAMES10" --crf 23 -o /dev/null >/dev/null 2>&1
+        fail=0
+        for _ in $(seq 1 "$reps"); do
+            t0=$(date +%s.%N)
+            "$Y264_10" --input-y4m "$clip" --frames "$FRAMES10" --crf 23 -o /dev/null >/dev/null 2>&1 || fail=1
             t1=$(date +%s.%N); echo "y $(awk "BEGIN{print $t1 - $t0}")" >> "$RES/.wall"
-            t0=$(date +%s.%N); "$X264_10_ASM" --preset medium --crf 23 --frames "$FRAMES10" -o /dev/null "$clip" >/dev/null 2>&1
+            t0=$(date +%s.%N)
+            "$X264_10_ASM" --preset medium --crf 23 --frames "$FRAMES10" -o /dev/null "$clip" >/dev/null 2>&1 || fail=1
             t1=$(date +%s.%N); echo "x $(awk "BEGIN{print $t1 - $t0}")" >> "$RES/.wall"
         done
+        if [ "$fail" = 1 ]; then
+            echo "$n ENCFAIL" >> "$out"; rc=1; continue
+        fi
         python3 - "$RES/.wall" "$n" >> "$out" <<'PY'
 import sys, statistics as st
 w = {"y": [], "x": []}
@@ -630,6 +636,7 @@ PY
     done
     rm -f "$RES/.wall"
     cat "$out"
+    return "$rc"
 }
 
 # ---------------------------------------------------------------------------
