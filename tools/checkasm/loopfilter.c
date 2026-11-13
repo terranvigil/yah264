@@ -137,20 +137,33 @@ static void luma_edge4_c(pixel *q0, int st, int ls, int bs, int alpha, int beta,
 
 static pixel *ea, *eb;
 
-/* A smooth random walk about mid-grey, with a wide-swing term on alternate
- * trials so both sides of the alpha/beta gate are reached. */
-static void edge_plane(int wide)
+/* mode 0: a smooth random walk about mid-grey; mode 1: the same with a
+ * wide-swing term, so both sides of the alpha/beta gate are reached; modes 2
+ * and 3: a base within eight of 0 or of PIXEL_MAX, noise on the scale of beta
+ * and a random jump across both test edges (column 8 and row 8, toward the
+ * middle of the range), so the filtered samples reach the clip at both ends. */
+static void edge_plane(int mode)
 {
+    const int sh = Y264_BIT_DEPTH - 8;
     if (!ea) {
         ea = ca_guard_alloc(STRIDE * PLANE_H * sizeof(pixel));
         eb = ca_guard_alloc(STRIDE * PLANE_H * sizeof(pixel));
     }
-    for (int i = 0; i < STRIDE * PLANE_H; i++)
-        ea[i] = (pixel)clipv((128 << (Y264_BIT_DEPTH - 8)) +
-                             (int)ca_below(32u << (Y264_BIT_DEPTH - 8)) -
-                             (16 << (Y264_BIT_DEPTH - 8)) +
-                             (wide ? (int)ca_below(200u << (Y264_BIT_DEPTH - 8)) -
-                                     (100 << (Y264_BIT_DEPTH - 8)) : 0));
+    if (mode >= 2) {
+        int hi = mode == 3;
+        int base = (int)ca_below(8);
+        int jx = (int)ca_below(256u << sh), jy = (int)ca_below(256u << sh);
+        for (int y = 0; y < PLANE_H; y++)
+            for (int x = 0; x < STRIDE; x++) {
+                int v = base + (int)ca_below(24u << sh)
+                      + (x >= 8 ? jx : 0) + (y >= 8 ? jy : 0);
+                ea[y * STRIDE + x] = (pixel)clipv(hi ? PIXEL_MAX - v : v);
+            }
+    } else {
+        for (int i = 0; i < STRIDE * PLANE_H; i++)
+            ea[i] = (pixel)clipv((128 << sh) + (int)ca_below(32u << sh) - (16 << sh) +
+                                 (mode ? (int)ca_below(200u << sh) - (100 << sh) : 0));
+    }
     memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
 }
 
@@ -186,11 +199,11 @@ static int run_deblock_luma(const char *name, db_luma_fn v4, db_luma_fn h4)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS * 4; t++) {
-        int qi = 16 + (int)ca_below(36);
+        int qi = (int)ca_below(52);
         int bs = 1 + (int)ca_below(4);
         int alpha = ALPHA[qi], beta = BETA[qi];
         int tc0 = TC0[qi][bs < 4 ? bs - 1 : 0];
-        edge_plane(t & 1);
+        edge_plane(t & 3);
         ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
         pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
 
@@ -253,7 +266,7 @@ static int run_deblock_chroma(const char *name, db_chroma_fn kern)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS * 8; t++) {
-        int qi = 16 + (int)ca_below(36);
+        int qi = (int)ca_below(52);
         int alpha = ALPHA[qi], beta = BETA[qi];
         const uint8_t *tc0tab = TC0[qi];
         uint8_t bs[4];
@@ -262,7 +275,7 @@ static int run_deblock_chroma(const char *name, db_chroma_fn kern)
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
         int span = (t & 1) ? 2 : 4;
         int grp = (span == 4) ? (int)ca_below(2) : 0;
-        edge_plane(t & 2);
+        edge_plane(t >> 1 & 3);
         ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
         pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
         for (int i = 0; i < 8; i++) {
@@ -370,7 +383,7 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
     enum { S1 = 40, S2 = 56, H = 12 };
     pixel a1[S1 * H], a2[S2 * H], b1[S1 * H], b2[S2 * H];
     for (int t = 0; t < TRIALS * 8; t++) {
-        int qi = 16 + (int)ca_below(36);
+        int qi = (int)ca_below(52);
         int alpha = ALPHA[qi], beta = BETA[qi];
         const uint8_t *tc0tab = TC0[qi];
         uint8_t bs[4];
@@ -379,8 +392,27 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
         int base = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
         int amp = ((t & 2) ? 6 : 60) << (Y264_BIT_DEPTH - 8);
-        for (int i = 0; i < S1 * H; i++) a1[i] = (pixel)db_clamp_pix(base + (int)ca_below(2 * amp + 1) - amp);
-        for (int i = 0; i < S2 * H; i++) a2[i] = (pixel)db_clamp_pix(base + (int)ca_below(2 * amp + 1) - amp);
+        /* every fourth pair of trials sits within eight of 0 or of PIXEL_MAX,
+         * with a jump across both edges (column 8 and row 4) toward the
+         * middle, so the clip is reached at both ends */
+        int ext = t >> 2 & 3, jx = 0, jy = 0;
+        if (ext >= 2) {
+            base = (int)ca_below(8);
+            amp = 12 << (Y264_BIT_DEPTH - 8);
+            jx = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
+            jy = (int)ca_below(256u << (Y264_BIT_DEPTH - 8));
+        }
+#define CH2_FILL(a, S)                                                          \
+        for (int i = 0; i < (S) * H; i++) {                                     \
+            int v = base + (int)ca_below(2 * amp + 1) - amp;                    \
+            if (ext >= 2)                                                       \
+                v = base + (int)ca_below(2 * amp + 1) + (i % (S) >= 8 ? jx : 0) \
+                  + (i / (S) >= 4 ? jy : 0);                                    \
+            a[i] = (pixel)db_clamp_pix(ext == 3 ? PIXEL_MAX - v : v);           \
+        }
+        CH2_FILL(a1, S1)
+        CH2_FILL(a2, S2)
+#undef CH2_FILL
         memcpy(b1, a1, sizeof a1); memcpy(b2, a2, sizeof a2);
         pixel *e1 = a1 + 2 * S1 + 8, *e2 = a2 + 2 * S2 + 8;
         for (int i = 0; i < 8; i++) {
@@ -526,13 +558,13 @@ static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h
 {
     int bad = 0;
     for (int t = 0; t < TRIALS * 4; t++) {
-        int qi = 16 + (int)ca_below(36);
+        int qi = (int)ca_below(52);
         int alpha = ALPHA[qi], beta = BETA[qi];
         uint8_t bs[4];
         for (int k = 0; k < 4; k++) bs[k] = (uint8_t)ca_below(5);
         if (t % 5 == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
         for (int dir = 0; dir < 2; dir++) {
-            edge_plane(t & 1);
+            edge_plane(t & 3);
             ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
             memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
             pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
