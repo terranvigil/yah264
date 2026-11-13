@@ -2277,7 +2277,11 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
 
 /* under a VBV a GOP spends at most what the cap delivers over it plus half
  * the buffer; past that its share of the budget is never spent, so a capped
- * GOP keeps its cap and the rest goes to the others by weight */
+ * GOP keeps its cap and the rest goes to the others by weight. with the cap
+ * at or under the target the channel delivers the cap whatever a GOP spends,
+ * and what its buffer can't hold is lost, so a GOP also gets at least what
+ * arrives over it, less half the buffer: then the shares are one water level
+ * between the two bounds that sums to the whole */
 static void tp_split_cap(const yah264_param_t *param, double *target, const double *w,
                          const long *rec, int n_gops, double rps)
 {
@@ -2286,6 +2290,42 @@ static void tp_split_cap(const yah264_param_t *param, double *target, const doub
     double total = 0.0;
     for (int g = 0; g < n_gops; g++)
         total += target[g];
+    if (param->rc.vbv_maxrate <= param->rc.bitrate) {
+        /* bisect the level: the sum is monotone in it, and a fixed number of
+         * halvings keeps the split the same on every run */
+        double hi = 1.0, wsum = 0.0, lsum = 0.0, csum = 0.0;
+        for (int g = 0; g < n_gops; g++) {
+            double lo = rec[g] * rate - 0.5 * size, cap = rec[g] * rate + 0.5 * size;
+            wsum += w[g];
+            lsum += lo > 0.0 ? lo : 0.0;
+            csum += cap;
+            if (w[g] > 0.0 && cap / w[g] > hi) hi = cap / w[g];
+        }
+        if (wsum <= 0.0 || lsum >= total || csum <= total) {
+            /* no level fits: every GOP at the bound that comes closest */
+            for (int g = 0; g < n_gops; g++) {
+                double lo = rec[g] * rate - 0.5 * size, cap = rec[g] * rate + 0.5 * size;
+                target[g] = csum <= total ? cap : lo > 0.0 ? lo : 0.0;
+            }
+            return;
+        }
+        double lo_l = 0.0, hi_l = hi;
+        for (int it = 0; it < 200; it++) {
+            double mid = 0.5 * (lo_l + hi_l), sum = 0.0;
+            for (int g = 0; g < n_gops; g++) {
+                double lo = rec[g] * rate - 0.5 * size, cap = rec[g] * rate + 0.5 * size;
+                double t = mid * w[g];
+                sum += t < lo ? lo : t > cap ? cap : t;
+            }
+            if (sum < total) lo_l = mid; else hi_l = mid;
+        }
+        for (int g = 0; g < n_gops; g++) {
+            double lo = rec[g] * rate - 0.5 * size, cap = rec[g] * rate + 0.5 * size;
+            double t = hi_l * w[g];
+            target[g] = t < lo ? lo : t > cap ? cap : t;
+        }
+        return;
+    }
     char *fixed = calloc((size_t)n_gops, 1);
     if (!fixed)
         return;
@@ -2298,17 +2338,11 @@ static void tp_split_cap(const yah264_param_t *param, double *target, const doub
         if (wf <= 0.0 || left <= 0.0)
             break;
         int more = 0;
-        /* with the cap at or under the target the channel delivers the cap
-         * whatever a GOP spends, and what its buffer can't hold is lost: so a
-         * GOP gets at least what arrives over it, less half the buffer */
-        int cbr = param->rc.vbv_maxrate <= param->rc.bitrate;
         for (int g = 0; g < n_gops; g++) {
             if (fixed[g]) continue;
             target[g] = left * w[g] / wf;
             double cap = rec[g] * rate + 0.5 * size;
-            double lo = rec[g] * rate - 0.5 * size;
             if (target[g] > cap) { target[g] = cap; fixed[g] = 1; more = 1; }
-            else if (cbr && target[g] < lo) { target[g] = lo; fixed[g] = 1; more = 1; }
         }
         if (!more)
             break;
