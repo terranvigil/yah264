@@ -213,7 +213,9 @@ leaves the next frames what they cost at QP 51, priced from their pass-1
 records, and the next GOP's key what it costs at its planned QP. The
 splitter caps each GOP's budget at
 what the cap delivers over it plus half the buffer, hands the rest to the
-other GOPs, and plans the level each GOP joins at: the buffer walked over the
+other GOPs, and, with the cap at or under the target, also floors it at what
+arrives over it less half the buffer, the shares then one water level between
+floor and cap that sums to the whole. It plans the level each GOP joins at: the buffer walked over the
 GOP budgets, and no less than the next key's cost; with the cap at or under
 the target the last GOP is held, by its measured sizes, to the level the
 walk ends at. A GOP coded right after
