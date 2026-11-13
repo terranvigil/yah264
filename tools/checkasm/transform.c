@@ -115,7 +115,7 @@ static const uint8_t flat16[64] = {
  * then inherits the adversarial fills, the corner cases and the page guards
  * of the row it joins instead of restating them, and the two tiers cannot
  * drift apart in what they are asked. */
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 /* Bench lines name the shape, not just the group: a group covers two or three
  * kernels and two identical labels in a bench table cannot be attributed. */
@@ -463,7 +463,7 @@ static int run_dequant(const char *name, dequantfn k4, dequantfn k8)
 
 /* ---- the fused sub-dct / add-idct ---------------------------------------- */
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
 /* Outside the tier guard: the C-against-C batch row at the end of this file
  * uses the same planes and runs in a build with no kernels at all
@@ -480,7 +480,7 @@ static void blocks(void)
     ca_fill(prd, STRIDE * PLANE_H);
 }
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 static int run_sub_dct(const char *name, subfn k4, subfn k8)
 {
@@ -821,7 +821,7 @@ static int t_quant_ac(void)
 { return run_quant_ac("quant_ac", y264_quant_4x4_ac_fneon); }
 #endif
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 Y264_CA_TRANSFORM_ROWS(_sse4, "_sse4")
 static int t_quant_4x4_sse4(void)
 { return run_quant_4x4("quant_4x4_sse4", y264_quant_4x4_sse4); }
@@ -837,7 +837,7 @@ static int t_quant_ac_sse4(void)
 { return run_quant_ac("quant_ac_sse4", y264_quant_4x4_ac_f_sse4); }
 #endif
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 Y264_CA_TRANSFORM_ROWS(_avx2, "_avx2")
 static int t_quant_4x4_avx2(void)
 { return run_quant_4x4("quant_4x4_avx2", y264_quant_4x4_avx2); }
@@ -864,7 +864,7 @@ static int t_quant_ac_sve(void)
 { return run_quant_ac("quant_ac_sve", y264_quant_4x4_ac_f_sve); }
 #endif
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
 /* ---- the trellis lattice, bench only --------------------------------------
  *
@@ -1113,7 +1113,7 @@ const ca_test ca_transform_tests[] = {
     { "scan",            "transform", Y264_CPU_NEON, t_scan_neon },
     { "quant_ac",        "transform", Y264_CPU_NEON, t_quant_ac },
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     { "fdct4x4_sse4",         "transform", Y264_CPU_SSE4_ALL, t_fdct4x4_sse4 },
     { "idct4x4_sse4",         "transform", Y264_CPU_SSE4_ALL, t_idct4x4_sse4 },
     { "fdct8x8_sse4",         "transform", Y264_CPU_SSE4_ALL, t_fdct8x8_sse4 },
@@ -1130,7 +1130,7 @@ const ca_test ca_transform_tests[] = {
     { "quant_ac_sse4",        "transform", Y264_CPU_SSE4_ALL, t_quant_ac_sse4 },
     { "zigzag_abs4_sse4",     "transform", Y264_CPU_SSE4_ALL, t_zigzag_abs4_sse4 },
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     { "fdct4x4_avx2",         "transform", Y264_CPU_AVX2_ALL, t_fdct4x4_avx2 },
     { "idct4x4_avx2",         "transform", Y264_CPU_AVX2_ALL, t_idct4x4_avx2 },
     { "fdct8x8_avx2",         "transform", Y264_CPU_AVX2_ALL, t_fdct8x8_avx2 },
