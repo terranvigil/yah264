@@ -199,9 +199,11 @@ Pass 2 codes one frame at a time, its frame threads on the row wavefront, and
 holds every frame to the buffer by its measured size, as the single-pass
 modes do: a frame that comes out over the fit test, the GOP's exit corridor
 or the whole buffer is re-coded at the QP the overshoot asks for, and at QP 51
-once more without its per-macroblock offsets. The pictures that underflow
-the buffer anyway are counted over the stream the GOPs make together, and
-named in one warning at the end. Each frame also
+once more without its per-macroblock offsets. A picture still underflows
+where it reaches QP 51, or where it opens a GOP coded beside one that
+underflowed at QP 51 and so left the buffer under its planned level. Those
+pictures are counted over the stream the GOPs make together, and named in
+one warning at the end. Each frame also
 leaves the next frames what they cost at QP 51, priced from their pass-1
 records, and the next GOP's key what it costs at its planned QP. The
 splitter caps each GOP's budget at
