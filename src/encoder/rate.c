@@ -2564,6 +2564,11 @@ static void tp_build_reserve(yah264_encoder_t *e)
         double need = r - e->vbv.rate;
         r = tp_bits51(e->tp_next[k].bits, e->tp_next[k].qp) + (need > 0.0 ? need : 0.0);
     }
+    /* the next key at its planned size, which the splitter names: at QP 51 a
+     * still image's key cost almost nothing, and the frames before it spent
+     * the buffer it needed (-0.36 dB at 150/150/150 k30, one thread) */
+    if (e->tp_key > r)
+        r = e->tp_key;
     e->tp_resv[n] = r < e->vbv.size ? r : e->vbv.size;
     e->tp_slack = malloc((size_t)(n + 1) * sizeof(*e->tp_slack));
     if (e->tp_slack) {

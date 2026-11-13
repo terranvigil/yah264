@@ -5491,6 +5491,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         e->tp_join = jv;
                     if (sscanf(ln, "#exit %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
                         e->tp_exit = jv;
+                    if (sscanf(ln, "#key %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                        e->tp_key = jv;
                     if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0')
                         continue;
                     /* The 5th field (is_ref) was added for the offline plan's

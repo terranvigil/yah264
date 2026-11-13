@@ -2285,6 +2285,7 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
         if (j > 0.97 * size) j = 0.97 * size;
         if (j < 0.1 * size) j = 0.1 * size;
         fprintf(out[g], "#exit %.0f\n", j);
+        fprintf(out[g], "#key %.0f\n", key);
         if (out[g + 1])
             fprintf(out[g + 1], "#join %.0f\n", j);
     }
