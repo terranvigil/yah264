@@ -2178,10 +2178,19 @@ static void *y4m_reader_seek(void *arg)
 
 /* a pass-1 record the encoder takes: its type, and finite costs and a QP
  * in the range any depth codes at */
-static int tp_record_ok(int type, double cplx, double bits, int qp)
+static int tp_record_ok(int type, double cplx, double bits, int qp, double mbits)
 {
     return type >= 0 && type <= 2 && isfinite(cplx) && cplx >= 0.0
-        && isfinite(bits) && bits >= 0.0 && qp >= -24 && qp <= 51;
+        && isfinite(bits) && bits >= 0.0 && bits <= mbits && qp >= -24 && qp <= 51;
+}
+
+/* the most a picture can cost: its raw samples at the coded depth, and half
+ * again for the syntax, as the encoder's reader bounds a record */
+static double tp_pic_bits(const yah264_param_t *param)
+{
+    double mbs = (double)((param->width + 15) / 16) * ((param->height + 15) / 16);
+    return 1.5 * (g_api->depth > 8 ? g_api->depth : 8) * mbs
+         * (256.0 + 2.0 * 256.0 / (g_sub_w * g_sub_h));
 }
 
 static int tp_seg_on(const yah264_param_t *param)
@@ -2515,7 +2524,8 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (ln[0] == '#')                       /* the record count below says if it mattered */
             continue;
         /* what the encoder would stop at: here the whole file is refused */
-        if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4 || !tp_record_ok(type, cplx, bits, qp)) {
+        if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4
+            || !tp_record_ok(type, cplx, bits, qp, tp_pic_bits(param))) {
             fprintf(stderr, "yah264: stats file '%s' has a malformed record in GOP %d\n",
                     in_path, cur);
             bad = 1; break;
@@ -2551,7 +2561,9 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         }
     }
 
-    if (bad || total_rec == 0 || total_w <= 0.0) {
+    for (int g = 0; !bad && g < n_gops; g++)
+        if (!isfinite(w[g]) || !isfinite(cw[g])) bad = 1;
+    if (bad || total_rec == 0 || !isfinite(total_w) || total_w <= 0.0) {
         for (int g = 0; g < n_gops; g++)
             if (out[g]) fclose(out[g]);
         free(w); free(cw); free(rec); free(want); free(out); free(first);

@@ -5491,6 +5491,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * markers reads exactly as it always did. */
                 long mframes = 0;
                 int bad_rec = 0;
+                /* a picture's raw samples at its depth, and half again for what
+                 * the syntax adds: a real key at QP <= 14 runs 2000 bits a
+                 * macroblock, a 4:4:4 one more */
+                double mbits = 1.5 * Y264_BIT_DEPTH * e->width_in_mbs * e->height_in_mbs
+                             * (256.0 + 2.0 * 256.0 / (e->sub_w * e->sub_h));
                 int split = 0;      /* a file the GOP splitter wrote */
                 int first = 1;
                 while (fgets(ln, sizeof ln, fp)) {
@@ -5512,11 +5517,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     if (first && !strncmp(ln, "#split", 6) && param->rc.tp_target_bits > 0.0)
                         split = 1;
                     first = 0;
-                    /* a picture's raw samples at its depth, and half again for
-                     * what the syntax adds: a real key at QP <= 14 runs 2000
-                     * bits a macroblock, a 4:4:4 one more */
-                    double mbits = 1.5 * Y264_BIT_DEPTH * e->width_in_mbs * e->height_in_mbs
-                                 * (256.0 + 2.0 * 256.0 / (e->sub_w * e->sub_h));
                     struct tp_stat nx = {0};
                     if (split && e->tp_n_next < 2
                         && sscanf(ln, "#next %d %lf %lf %d", &nx.type, &nx.cplx, &nx.bits, &nx.qp) == 4
@@ -5543,7 +5543,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     int nf = sscanf(ln, "%d %lf %lf %d %d",
                                     &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
                     if (nf < 4 || s.type < 0 || s.type > 2 || !isfinite(s.cplx) || s.cplx < 0.0
-                        || !isfinite(s.bits) || s.bits < 0.0 || s.qp < -24 || s.qp > 51) {
+                        || !isfinite(s.bits) || s.bits < 0.0 || s.bits > mbits
+                        || s.qp < -24 || s.qp > 51) {
                         bad_rec = 1;
                         break;
                     }
