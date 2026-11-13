@@ -5489,8 +5489,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     int mg, ms, me, mr;
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
                         mframes += me - ms;
-                    /* the splitter writes it first; anywhere else it isn't its */
-                    if (first && !strncmp(ln, "#split", 6))
+                    /* the splitter writes it first, and hands the encoder its
+                     * share of the budget: anywhere else, or in a file a
+                     * caller didn't split, it isn't the splitter's, and the
+                     * underflow count stays this encoder's to report */
+                    if (first && !strncmp(ln, "#split", 6) && param->rc.tp_target_bits > 0.0)
                         split = 1;
                     first = 0;
                     /* a picture's raw samples at its depth, and half again for
