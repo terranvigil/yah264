@@ -589,10 +589,16 @@ static int parse_qpfile(const char *path)
 /* Rebase the frame forces onto one GOP instance, exactly as apply_zones does.
  * A force on the instance's own first frame keeps its QP and drops an IDR it
  * does not need to ask for. */
-static void apply_forces(yah264_encoder_t *e, int start, int end)
+static void apply_forces(yah264_encoder_t *e, int start, int end, int grid,
+                         const unsigned char *keys)
 {
-    if (!g_nforces) return;
-    yah264_frame_force_t *f = malloc((size_t)g_nforces * sizeof *f); int m = 0;
+    /* a two-pass segment's keyframes inside it, where the GOP split would
+     * have started GOPs: the --keyint grid or the scan's key map */
+    int nk = 0;
+    for (int d = start + 1; (keys || grid > 0) && d < end; d++)
+        nk += keys ? keys[d] : grid > 0 && d % grid == 0;
+    if (!g_nforces && !nk) return;
+    yah264_frame_force_t *f = malloc((size_t)(g_nforces + nk) * sizeof *f); int m = 0;
     for (int i = 0; i < g_nforces; i++) {
         int d = g_forces[i].disp;
         if (d < start || d >= end) continue;
@@ -613,6 +619,25 @@ static void apply_forces(yah264_encoder_t *e, int start, int end)
             f[m].type = YAH264_FORCE_NONE;
         }
         m++;
+    }
+    for (int d = start + 1; d < end && nk; d++) {
+        if (!(keys ? keys[d] : grid > 0 && d % grid == 0))
+            continue;
+        int k = 0;
+        while (k < m && f[k].disp != d - start) k++;
+        if (k < m) {
+            /* a key frame the GOP split would have placed here: as at a GOP's
+             * first frame, a B can't be one */
+            if (f[k].type == YAH264_FORCE_B) {
+                fprintf(stderr, "yah264: frame %d cannot be coded as a B frame "
+                                "(a key frame is placed here)\n", d);
+                g_force_reject = 1;
+                free(f);
+                return;
+            }
+            f[k].type = YAH264_FORCE_IDR;
+        } else
+            f[m++] = (yah264_frame_force_t){ d - start, YAH264_FORCE_IDR, -1 };
     }
     if (m && g_api->set_frame_forces(e, f, m) < 0) {
         fprintf(stderr, "yah264: qpfile rejected on the GOP at %d\n", start);
@@ -1212,6 +1237,8 @@ typedef struct { uint8_t *y, *u, *v; } frame_t;
 typedef struct {
     const yah264_param_t *param;
     int keyint, width, height;
+    int tp_grid;                        /* two-pass segments: keyframes inside at multiples of this */
+    unsigned char *tp_keys;             /* ...or at these frames, a scan's key map */
     /* Chroma geometry of the frames above, from the Y4M C tag. The store
  * carries it rather than assuming 4:2:0 -- that assumption was the one
  * thing forcing non-4:2:0 input onto the serial encoder. */
@@ -1471,8 +1498,8 @@ static void job_rc_alloc(gop_job_t *j, int n)
  * Every exit of encode_threaded that frees gop_start calls it. */
 static void job_rc_free(gop_job_t *j)
 {
-    free(j->rc_state); free(j->rc_ready); free(j->pull_gop);
-    j->rc_state = NULL; j->rc_ready = NULL; j->pull_gop = NULL;
+    free(j->rc_state); free(j->rc_ready); free(j->pull_gop); free(j->tp_keys);
+    j->rc_state = NULL; j->rc_ready = NULL; j->pull_gop = NULL; j->tp_keys = NULL;
 }
 
 
@@ -1719,7 +1746,7 @@ static void *gop_worker(void *arg)
         }
         apply_video_signal(e);
         if (e) apply_zones(e, start, end);
-        if (e) apply_forces(e, start, end);
+        if (e) apply_forces(e, start, end, j->tp_grid, j->tp_keys);
         FILE *fst = NULL; char *fst_buf = NULL; size_t fst_len = 0;
         yah264_frame_stats_t *st_by = NULL;
         if (g_frame_stats && e) {
@@ -2146,6 +2173,13 @@ static void *y4m_reader_seek(void *arg)
 #define TP_MARKER "#gop"
 /* the fewest frames a VBV two-pass splits at (encode_threaded) */
 #define TP_SEG_MIN 30
+
+static int tp_seg_on(const yah264_param_t *param)
+{
+    return param->rc.method == YAH264_RC_2PASS
+        && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
+}
+
 
 static char *tp_gop_path(const char *base, const char *tag, int g)
 {
@@ -3038,9 +3072,19 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
     if (nidr > 0) {
         job->gop_start = malloc((size_t)(nidr + 1) * sizeof(int));
         int m = 0;
-        for (int i = 0; i < n; i++) if (idr[i]) job->gop_start[m++] = i;
+        /* a two-pass takes its keys a segment of TP_SEG_MIN frames or more at
+         * a time, the ones inside forced where the map has them */
+        int seg = tp_seg_on(param);
+        for (int i = 0; i < n; i++)
+            if (idr[i] && (!seg || m == 0 || i - job->gop_start[m - 1] >= TP_SEG_MIN))
+                job->gop_start[m++] = i;
         job->gop_start[m] = n;
         n_gops = m;
+        if (seg && m < nidr) {
+            free(job->tp_keys);
+            job->tp_keys = malloc((size_t)n);
+            if (job->tp_keys) memcpy(job->tp_keys, idr, (size_t)n);
+        }
     } else {
         job->gop_start = malloc((size_t)(n_gops + 1) * sizeof(int));
         for (int i = 0; i < n_gops; i++) job->gop_start[i] = i * keyint;
@@ -3210,13 +3254,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
            c_size = (size_t)(W / g_sub_w) * (H / g_sub_h);
     int keyint = param->keyint > 0 ? param->keyint : 1;
     /* a two-pass under a VBV splits short GOPs into segments of several, one
-     * encoder each, keyframes inside at --keyint: every segment start is a
-     * join priced at a planned level and a pass-1 ABR started cold, which at
-     * two or three frames a GOP cost 0.3 dB at matched rate (k5-k12: 0.29).
-     * Static in the options, so both passes split alike at any thread count */
-    if (keyint > 1 && keyint < TP_SEG_MIN && param->rc.method == YAH264_RC_2PASS
-        && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0)
+     * encoder each, keyframes inside on the --keyint grid: every segment start
+     * is a join and a pass 1 started cold */
+    int tp_grid = 0;
+    if (keyint > 1 && keyint < TP_SEG_MIN && tp_seg_on(param)) {
+        tp_grid = keyint;
         keyint *= (TP_SEG_MIN + keyint - 1) / keyint;
+    }
 
     /* `payload` is what a frame occupies ON DISK, which is what the file length
  * divides by; `per_frame` is what it costs in memory, which is what the
@@ -3401,6 +3445,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     memset(&job, 0, sizeof job);
     job.param = param;                              /* replaced below with `p` */
     job.keyint = keyint; job.width = W; job.height = H;
+    job.tp_grid = tp_grid;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = whole ? INT_MAX : (int)need;
     job.store_cap = store_cap;
@@ -6289,7 +6334,7 @@ int main(int argc, char **argv)
  * path is what --dump-recon and every unsplittable input take, and a --plan
  * on it was silently dropped. */
     apply_zones(enc, 0, INT_MAX);
-    apply_forces(enc, 0, INT_MAX);
+    apply_forces(enc, 0, INT_MAX, 0, NULL);
     if (g_force_reject)
         return 1;
     if (strcmp(g_api->encoder_backend(enc), "yah264"))
