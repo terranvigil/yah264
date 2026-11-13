@@ -2176,12 +2176,12 @@ static void *y4m_reader_seek(void *arg)
 /* the fewest frames a VBV two-pass splits at (encode_threaded) */
 #define TP_SEG_MIN 30
 
-/* a pass-1 record the encoder takes: its type, and finite costs and a QP
- * in the range any depth codes at */
+/* a pass-1 record the encoder takes: its type, finite costs no bigger than
+ * a picture can cost, and a frame QP, which pass 1 writes in 0..51 */
 static int tp_record_ok(int type, double cplx, double bits, int qp, double mbits)
 {
     return type >= 0 && type <= 2 && isfinite(cplx) && cplx >= 0.0
-        && isfinite(bits) && bits >= 0.0 && bits <= mbits && qp >= -24 && qp <= 51;
+        && isfinite(bits) && bits >= 0.0 && bits <= mbits && qp >= 0 && qp <= 51;
 }
 
 /* the most a picture can cost: its raw samples at the coded depth, and half

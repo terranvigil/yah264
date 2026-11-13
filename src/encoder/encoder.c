@@ -5544,7 +5544,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                                     &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
                     if (nf < 4 || s.type < 0 || s.type > 2 || !isfinite(s.cplx) || s.cplx < 0.0
                         || !isfinite(s.bits) || s.bits < 0.0 || s.bits > mbits
-                        || s.qp < -24 || s.qp > 51) {
+                        || s.qp < 0 || s.qp > 51) {
                         bad_rec = 1;
                         break;
                     }
