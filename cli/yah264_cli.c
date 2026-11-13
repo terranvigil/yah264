@@ -2212,7 +2212,7 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
  * and must not be papered over -- positional stats applied to the wrong frames
  * is precisely the silent-garbage case this format change exists to stop. */
 static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_target,
-                          const int *gstart, int n_gops, int bitrate, double fps)
+                          const int *gstart, int n_gops, int bitrate, double rps)
 {
     FILE *in = fopen(in_path, "r");
     if (!in) {
@@ -2290,10 +2290,11 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
 
     /* The whole clip's budget, computed exactly as the serial reader computes
  * it -- from the RECORD count, not the frame count, so a dropped frame
- * moves both paths' targets the same way. Each GOP then takes the share its
- * own complexity earns. */
+ * moves both paths' targets the same way, at rps records a second (two a
+ * frame under field coding). Each GOP then takes the share its own
+ * complexity earns. */
     double total_target = (double)(bitrate > 0 ? bitrate : 1000) * 1000.0
-                        * (double)total_rec / fps;
+                        * (double)total_rec / rps;
     for (int g = 0; g < n_gops; g++)
         gop_target[g] = total_target * w[g] / total_w;
 
@@ -3418,7 +3419,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
             gop_target = calloc((size_t)n_gops, sizeof(double));
             if (tp_split_pass2(param->rc.stats, gop_stats, gop_target, gstart,
-                               n_gops, param->rc.bitrate, (double)fn / fd) != 0) {
+                               n_gops, param->rc.bitrate,
+                               (double)fn / fd * (param->interlaced ? 2 : 1)) != 0) {
                 fprintf(stderr, "yah264: pass 2 cannot use '%s' -- re-run pass 1 "
                         "with the same --frames/--keyint and this thread count\n",
                         param->rc.stats);

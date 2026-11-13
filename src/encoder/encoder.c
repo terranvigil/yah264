@@ -5507,12 +5507,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 }
             }
             double bitrate = param->rc.bitrate > 0 ? param->rc.bitrate : 1000;
+            /* a record per picture: field coding writes two a frame */
+            double rps = param->interlaced ? 2.0 * fps : fps;
             e->tp_target = param->rc.tp_target_bits > 0.0
                          ? param->rc.tp_target_bits
-                         : bitrate * 1000.0 * e->tp_n / fps;
+                         : bitrate * 1000.0 * e->tp_n / rps;
             e->tp_rem_target = e->tp_target;
             e->tp_rem_cq = e->tp_sum_cq;
-            e->tp_fps = fps;
+            e->tp_fps = rps;
             /* Every plan gate is resolved HERE, on the API thread at open, into
  * encoder fields -- not into function-local statics. The decide
  * that reads them runs on the stair driver under the pipeline, and
