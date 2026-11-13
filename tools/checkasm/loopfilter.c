@@ -46,7 +46,7 @@ static const uint8_t TC0[52][3] = {
     {8,11,16},{9,12,18},{10,13,20},{11,15,23},{13,17,25}
 };
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 
 /* ---- one body per group, the kernel as an argument ----------------------- */
 
@@ -352,9 +352,9 @@ static int run_deblock_strength(const char *name, db_strength_fn kern)
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*db_chroma2_fn)(pixel *, pixel *, int, int, int, int,
                               const uint8_t *, const uint8_t *);
 
@@ -478,6 +478,9 @@ static int t_deblock_luma_sse4(void)
     return run_deblock_luma("deblock_luma_sse4", y264_deblock_luma_v4_sse4,
                             y264_deblock_luma_h4_sse4);
 }
+#endif
+
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 static int t_deblock_chroma_sse4(void)
 {
     return run_deblock_chroma("deblock_chroma8_h_sse4",
@@ -496,6 +499,9 @@ static int t_deblock_luma_avx2(void)
     return run_deblock_luma("deblock_luma_avx2", y264_deblock_luma_v4_avx2,
                             y264_deblock_luma_h4_avx2);
 }
+#endif
+
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 static int t_deblock_chroma_avx2(void)
 {
     return run_deblock_chroma("deblock_chroma8_h_avx2",
@@ -509,7 +515,7 @@ static int t_deblock_strength_avx2(void)
 #endif
 
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*db_luma16_fn)(pixel *, int, int, int, const uint8_t *, const uint8_t *);
 
 /* A whole sixteen-line luma edge with four bS values, against four scalar
@@ -586,13 +592,16 @@ static int t_deblock_luma16_neon(void)
 }
 #endif
 
-#if Y264_HAVE_NEON10
-/* The 10-bit tier has the whole-edge forms only; the bench's four-call
+#if Y264_HAVE_NEON10 || Y264_HAVE_SSE4_10
+/* The 10-bit tiers have the whole-edge forms only; the bench's four-call
  * baseline is the reference filter's four-line unit. */
 static void c_v4(pixel *q0, int st, int bs, int a, int b, int tc0)
 { luma_edge4_c(q0, 1, st, bs, a, b, tc0); }
 static void c_h4(pixel *q0, int st, int bs, int a, int b, int tc0)
 { luma_edge4_c(q0, st, 1, bs, a, b, tc0); }
+#endif
+
+#if Y264_HAVE_NEON10
 static int t_deblock_luma16_neon(void)
 {
     return run_deblock_luma16("deblock_luma16", y264_deblock_luma_v16_neon,
@@ -613,12 +622,17 @@ static int t_deblock_strength_neon(void)
 }
 #endif
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 static int t_deblock_luma16_sse4(void)
 {
+#if Y264_HAVE_SSE4
     return run_deblock_luma16("deblock_luma16_sse4", y264_deblock_luma_v16_sse4,
                               y264_deblock_luma_h16_sse4,
                               y264_deblock_luma_v4_sse4, y264_deblock_luma_h4_sse4);
+#else
+    return run_deblock_luma16("deblock_luma16_sse4", y264_deblock_luma_v16_sse4,
+                              y264_deblock_luma_h16_sse4, c_v4, c_h4);
+#endif
 }
 static int t_deblock_chroma2_sse4(void)
 {
@@ -627,12 +641,17 @@ static int t_deblock_chroma2_sse4(void)
 }
 #endif
 
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 static int t_deblock_luma16_avx2(void)
 {
+#if Y264_HAVE_AVX2
     return run_deblock_luma16("deblock_luma16_avx2", y264_deblock_luma_v16_avx2,
                               y264_deblock_luma_h16_avx2,
                               y264_deblock_luma_v4_avx2, y264_deblock_luma_h4_avx2);
+#else
+    return run_deblock_luma16("deblock_luma16_avx2", y264_deblock_luma_v16_avx2,
+                              y264_deblock_luma_h16_avx2, c_v4, c_h4);
+#endif
 }
 static int t_deblock_chroma2_avx2(void)
 {
@@ -657,6 +676,8 @@ const ca_test ca_deblock_tests[] = {
 #endif
 #if Y264_HAVE_SSE4
     { "deblock_luma_sse4",     "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma_sse4 },
+#endif
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     { "deblock_chroma8_h_sse4","deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma_sse4 },
     { "deblock_strength_sse4", "deblock", Y264_CPU_SSE4_ALL, t_deblock_strength_sse4 },
     { "deblock_luma16_sse4",   "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma16_sse4 },
@@ -664,6 +685,8 @@ const ca_test ca_deblock_tests[] = {
 #endif
 #if Y264_HAVE_AVX2
     { "deblock_luma_avx2",     "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma_avx2 },
+#endif
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     { "deblock_chroma8_h_avx2","deblock", Y264_CPU_AVX2_ALL, t_deblock_chroma_avx2 },
     { "deblock_strength_avx2", "deblock", Y264_CPU_AVX2_ALL, t_deblock_strength_avx2 },
     { "deblock_luma16_avx2",   "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma16_avx2 },
