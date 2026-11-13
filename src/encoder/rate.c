@@ -2391,14 +2391,13 @@ static double tp_bisect(yah264_encoder_t *e, const double *cplx, double seed, do
  * followed the detail overshot by 90%. The P frames
  * are then held at most TP_LODEPTH under their pass-1 QP and the plan is
  * re-solved; I and B frames follow through the type shaping. Every corpus
- * ladder cell but sintel's two highest rungs reads under both shares and is
- * bit-exact, as is an all-black clip, which has no textured frames; on
- * those two rungs sintel's opening fade is half the frames. Both
- * distances are the same at every bit depth: they bound how far the plan
- * extrapolates from pass 1's own evidence, a ratio of quantiser steps
- * the depth doesn't change. With 12 QP added at 10 bits, a dark HDR
- * title pass 1 coded near skip was planned 15-19 QP under it, out of
- * the floor's reach, and overshot its target up to fourfold. */
+ * ladder rung but sintel's two highest leaves it off and is bit-exact, as
+ * does an all-black clip, which has no textured frames. It does engage on
+ * sintel's opening fade at those two rungs, and on static content at rates
+ * well above its ladder (akiyo at 1.5-4 Mbit/s), where the plan puts the
+ * near-skip frames furthest under pass 1. Both distances are the same at
+ * every bit depth: they bound how far the plan extrapolates from pass 1's
+ * own evidence, a ratio of quantiser steps the depth doesn't change. */
 static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, double step_mult)
 {
     int n = e->tp_n;
