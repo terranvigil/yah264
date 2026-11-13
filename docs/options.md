@@ -1224,8 +1224,12 @@ along GOP boundaries. Pass 2 needs a stats file that a *threaded* pass 1 wrote:
 one from a serial pass 1 has no GOP markers to split on, so pass 2 quietly stays
 serial for it. Pass 2 also refuses outright, with a message, if the stats file
 describes a different GOP split than the current run computed. That happens if
-you change `--frames` or `--keyint` between passes. Under a VBV, pass 2 codes
-one frame at a time in each GOP, its threads on the row wavefront.
+you change `--frames` or `--keyint` between passes. Under a VBV and a
+`--keyint` under 30, each encoder takes whole GOPs, 30 frames or more at a
+time, keyframes still on the `--keyint` grid; a pass 2 whose pass 1 split the
+other way, one with a VBV and one without, takes pass 1's split. Under a VBV,
+pass 2 codes one frame at a time in each GOP, its threads on the row
+wavefront.
 
 ### Memory: the parallel path streams through a bounded window
 

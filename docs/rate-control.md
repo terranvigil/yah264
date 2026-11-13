@@ -188,7 +188,8 @@ them at most 15 QP under it, and the runtime prices them at their own measured
 cost as they land. `--pass 3` reads the records and writes them back from a
 real encode, so a further pass refines against it. Pass 2 needs the same
 `--frames`, `--keyint` and `--tff`/`--bff` as pass 1, and warns when the record
-count says otherwise. A missing stats file isn't an error: pass 2 then codes
+count says otherwise; a VBV on one pass and not the other is fine, pass 2
+taking the split pass 1 recorded. A missing stats file isn't an error: pass 2 then codes
 every frame at the base QP.
 
 **With a VBV**, pass 1 codes as capped ABR at the target, its base QP never
