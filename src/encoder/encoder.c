@@ -11777,6 +11777,11 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         double kovh = -1.0;     /* what a key's SEIs add over this AU's */
         for (int k = 0; k < (e->hrd_on ? 64 : 4) && limit > 0.0 && forced_qp(e) < 0; k++) {
             double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
+            /* a pass 2 also charges what its access unit carries ahead of the
+             * slices, the parameter sets and SEI of a key: 1.4 kbit that a
+             * 21 kbit buffer could not hold beside a QP-51 IDR */
+            if (e->tp_pass >= 2)
+                bits += 8.0 * (e->nal_framing - e->nal_framing_seen);
             double over = bits / limit;
             /* --nal-hrd: the declared buffer, which also holds the SEIs and
              * the emulation bytes the VBV model leaves out, must hold too */
@@ -11851,6 +11856,9 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             rbsp_size = sz;
             sm = sm2;
         }
+        if (e->tp_pass >= 2 && !e->hrd_on
+            && sm_wire_bits(&sm) + 8.0 * (e->nal_framing - e->nal_framing_seen) > fill)
+            e->tp_unfit++;
     }
     e->hrd_flat = 0;
     if (floored) {
@@ -16569,6 +16577,9 @@ void yah264_encoder_close(yah264_encoder_t *e)
             fprintf(stderr, "yah264: warning: %ld access unit(s) arrive after their removal "
                     "time on the declared HRD schedule\n", e->hrd_late);
     }
+    if (e->tp_unfit)
+        fprintf(stderr, "yah264: warning: %ld picture(s) did not fit the VBV buffer at the QP "
+                "ceiling, so the stream underflows there\n", e->tp_unfit);
     if (e->rc_shared) {
         pthread_mutex_lock(&e->rc_shared->mx);
         e->rc_shared->nlive--;
