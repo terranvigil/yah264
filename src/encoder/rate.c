@@ -1423,6 +1423,14 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         /* Spend spare buffer only at CBR (serial rule -- see vbv_cbr's init:
  * capped VBR fills at maxrate and this branch would chase it). */
         double room = rcbuf_overflow(&e->vbv, fill);
+        /* a pass-2 GOP spends down to the level the next one joins at by its
+         * last frame: what is left above it overflows */
+        if (tp_cbr(e) && e->vbv_exit_n > 0) {
+            int rem = e->vbv_exit_n - e->vbv_ndec;
+            if (rem < 0) rem = 0;
+            double r2 = fill + e->vbv.rate - (e->vbv_seg_h + rem * e->vbv_exit_k * e->vbv.rate);
+            if (r2 > room) room = r2;
+        }
         if (room > 0 && pred < room)
             newqp = e->qp + 6.0 * log2(pred / room);
     }
@@ -3029,7 +3037,8 @@ YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *e, int nframes)
 {
     if (!e || e->hw || !e->vbv_on || nframes <= 0) return -1;
     if (e->frame_count > 0 || e->vbv_ndec > 0) return -1;
-    e->vbv_exit_n = nframes;
+    /* a pass 2 decides per picture, two a frame under field coding */
+    e->vbv_exit_n = e->tp_pass >= 2 && e->fields ? 2 * nframes : nframes;
     /* Half of the refill a frame leaves at the average rate (the target
  * under a bitrate, the cap otherwise), floored so a CBR-like pair, which
  * leaves none on average, still gets a corridor rather than a wall. */
@@ -3037,6 +3046,12 @@ YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *e, int nframes)
                 ? 1.0 - (double)e->param.rc.bitrate / e->param.rc.vbv_maxrate : 0.5;
     double k = 0.5 * keep;
     if (k < 0.1) k = 0.1;
+    /* a pass 2's level is where its plan ends the GOP, so only its last
+     * frames answer to it: climbing at a quarter of the refill from a key
+     * that drained the buffer held a whole 30-frame GOP at 350/350/350 under
+     * the corridor, 7% under target */
+    if (e->tp_pass >= 2)
+        k = 1.0;
     e->vbv_exit_k = k;
     return 0;
 }

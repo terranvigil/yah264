@@ -5483,6 +5483,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     if (sscanf(ln, "#next %d %lf %lf %d", &e->tp_next.type, &e->tp_next.cplx,
                                &e->tp_next.bits, &e->tp_next.qp) == 4)
                         e->tp_have_next = 1;
+                    double jv;
+                    if (sscanf(ln, "#join %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                        e->tp_join = jv;
+                    if (sscanf(ln, "#exit %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                        e->tp_exit = jv;
                     if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0')
                         continue;
                     /* The 5th field (is_ref) was added for the offline plan's
@@ -5506,6 +5511,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     e->tp_sum_cq += pow(cost, e->crf_qcomp);
                 }
                 fclose(fp);
+                /* the splitter's join levels: start at the first unless the
+                 * GOP before hands over its exact occupancy, leave at least
+                 * the second */
+                if (e->vbv_on) {
+                    if (e->vbv_joined && e->tp_join > 0.0)
+                        e->vbv.fill = e->tp_join < e->vbv.size ? e->tp_join : e->vbv.size;
+                    if (e->tp_exit > 0.0)
+                        e->vbv_seg_h = e->tp_exit < e->vbv.size ? e->tp_exit : e->vbv.size;
+                }
                 /* the markers count frames; a pass 1 coded with another
                  * field mode wrote half or twice the records */
                 if (mframes > 0 && e->tp_n != mframes * (param->interlaced ? 2 : 1))
