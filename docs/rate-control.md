@@ -191,6 +191,21 @@ real encode, so a further pass refines against it. Pass 2 needs the same
 count says otherwise. A missing stats file isn't an error: pass 2 then codes
 every frame at the base QP.
 
+**With a VBV**, pass 1 codes as capped ABR at the target, never finer than QP
+26. At a fixed QP 26 the buffer pinned it at QP 51 wherever the cap sits well
+under QP 26's rate, and records of frames coded there say little about what a
+finer QP costs. Pass 2 then holds every frame to the buffer by its measured
+size, as the single-pass modes do: a frame that comes out over the fit test or
+the GOP's exit corridor is re-coded at the QP the overshoot asks for, and at
+QP 51 once more without its per-macroblock offsets. Each frame also leaves the
+next frames what they cost at QP 51, priced from their pass-1 records and
+walked back from the next GOP's opening key, which the splitter appends to
+each GOP's section. A GOP coded right after its predecessor continues its
+buffer at the exact occupancy, and any other starts from the handoff level,
+as capped ABR does. When the cap equals the target, a frame the buffer has
+room for spends it, since what arrives past a full buffer is never delivered.
+Each pass-2 GOP runs on one thread, so the bound reaches every frame.
+
 ### Frame-level AQ strength by mode
 
 Per-MB AQ is `--aq-strength` (0.4 in every rate-controlled mode, 0 at CQP)
@@ -235,7 +250,9 @@ keeps one rate problem:
   per GOP) or `--gop-threads`.
 - **Two-pass** splits the stats file at the GOP markers a threaded pass 1
   writes, and each GOP takes the share of the budget its complexity earns. A
-  serial pass 1 writes no markers, so its pass 2 runs serially too.
+  serial pass 1 writes no markers, so its pass 2 runs serially too. Under a
+  VBV each pass-2 GOP gets one thread and carries the buffer across joins
+  (see [Two-pass](#two-pass)).
 - **`--keyint 1` with a VBV** runs one encoder: a one-frame GOP has no frame
   of its own to correct the buffer level its segment assumed.
 
