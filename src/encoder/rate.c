@@ -1216,7 +1216,9 @@ void rcp_reqp(yah264_encoder_t *e, int type, int is_ref)
     int nf = frame_qp(e, type, is_ref);
     double r = pow(2.0, (double)(p->fqp - nf) / 6.0);   /* bits track 1/qscale */
     p->acc_qp += e->qp - p->base_qp;    /* the rate factor credits the QP coded */
-    if (e->hrd_on && e->tp_pass >= 2)
+    /* a pass-2 frame the buffer raised is no longer the plan's: keep it out
+     * of the model bias */
+    if (e->tp_pass >= 2)
         p->held = 1;
     p->base_qp = e->qp;
     p->fqp = nf;
