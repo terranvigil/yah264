@@ -5490,6 +5490,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * needs to know where each GOP's records start. A file with no
  * markers reads exactly as it always did. */
                 long mframes = 0;
+                int bad_rec = 0;
                 int split = 0;      /* a file the GOP splitter wrote */
                 int first = 1;
                 while (fgets(ln, sizeof ln, fp)) {
@@ -5542,8 +5543,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     int nf = sscanf(ln, "%d %lf %lf %d %d",
                                     &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
                     if (nf < 4 || s.type < 0 || s.type > 2 || !isfinite(s.cplx) || s.cplx < 0.0
-                        || !isfinite(s.bits) || s.bits < 0.0 || s.qp < -24 || s.qp > 51)
-                        break;                      /* malformed: stop, as before */
+                        || !isfinite(s.bits) || s.bits < 0.0 || s.qp < -24 || s.qp > 51) {
+                        bad_rec = 1;
+                        break;
+                    }
                     if (e->tp_n == cap) {
                         cap *= 2;
                         e->tp_stats = realloc(e->tp_stats, (size_t)cap * sizeof(*e->tp_stats));
@@ -5556,6 +5559,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     e->tp_sum_cq += pow(cost, e->crf_qcomp);
                 }
                 fclose(fp);
+                /* a malformed record cuts the file short at it, and the rest
+                 * would code at the last QP: refuse it rather */
+                if (bad_rec) {
+                    fprintf(stderr, "yah264: stats file '%s' has a malformed record after "
+                            "%d: run pass 1 into it again\n", param->rc.stats, e->tp_n);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
                 /* a file that is there but holds nothing (a pass 1 or 3
                  * killed before its first record) is not a pass to plan from */
                 if (e->tp_n == 0) {
@@ -16694,6 +16705,12 @@ void yah264_encoder_close(yah264_encoder_t *e)
     if (e->tp_unfit && !e->hrd_on && !e->tp_split)
         fprintf(stderr, "yah264: warning: %ld picture(s) underflowed the VBV buffer\n",
                 e->tp_unfit);
+    /* the picture count isn't known at open on a serial path, a pipe say, so
+     * a stats file short of pictures is only found here */
+    if (e->tp_past)
+        fprintf(stderr, "yah264: warning: %ld picture(s) coded past the last of the %d records "
+                "in the stats file, at the last QP: the file covers less than this input\n",
+                e->tp_past, e->tp_n);
     if (e->rc_shared) {
         pthread_mutex_lock(&e->rc_shared->mx);
         e->rc_shared->nlive--;

@@ -2154,7 +2154,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
             tp_scaleterm = scaleterm;
             tp_have = 1;
-        }
+        } else
+            e->tp_past++;
     } else if (e->tp_pass == 0 && e->crf_on) {
         /* CRF+VBV rides rcp too (the VBV virtual buffer needs the FIFO): the
  * serial CRF decision on the arrival-captured Cme -- the same signal

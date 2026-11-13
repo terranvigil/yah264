@@ -904,6 +904,7 @@ struct yah264_encoder {
     double   hrd_tr_cur;                /* removal time of the access unit just opened */
     long     hrd_late;                  /* pictures whose last bit arrived after their removal */
     long     tp_unfit;                  /* pass-2 pictures that underflowed the shadow buffer */
+    long     tp_past;                   /* pass-2 pictures coded past the last record */
     double   tp_shadow;                 /* a decoder's buffer, emptied after an underflow */
     int      tp_shadow_on;
     int      tp_split;                  /* the stats are a section the GOP splitter wrote */
