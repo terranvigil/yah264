@@ -23,8 +23,8 @@
  *     |c| < 2^17 (the largest 10-bit coefficient is the 8x8 DC of a
  *     full-swing residual, 64 * 1023 = 65472) and 0 <= f < 2^30. a larger
  *     coefficient or bias takes the scalar loop; the multiplier is not
- *     checked, since a scaling-matrix row (up to 209712) wraps the lane and
- *     those callers stay on C.
+ *     checked, since a scaling-matrix row (up to 16x the flat multiplier)
+ *     wraps the lane and those callers stay on C.
  *   - reconstruction clips to [0, 1023] with the signed-to-unsigned 32-bit
  *     pack for the floor and a 16-bit min for the top, never the byte pack.
  *

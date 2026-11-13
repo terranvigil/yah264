@@ -25,11 +25,15 @@
  * q = (|c| * mf + f) >> qbits, sign restored. The reference forms the product
  * in 64 bits; here it is u32, which is exact for the flat multipliers the
  * callers pass (mf <= 20972) when |c| < 2^17: the product is under 2.75e9,
- * and f is at most 2^26, leaving the sum under 2^32. Every coefficient the
- * 10-bit transforms produce is under 2^17 (the 8x8 DC of a full-swing
- * residual is 64 * 1023 = 65472). A block holding a larger value takes the
- * scalar loop. The multiplier is not checked: a scaling-matrix row (up to
- * 209712) would wrap the lane, and every such caller stays on C. */
+ * and the bias stays in the callers' range (a rounding offset of at most one
+ * step, f <= 2^26), leaving the sum under 2^32. Every coefficient the 10-bit
+ * transforms produce is under 2^17 (the 8x8 DC of a full-swing residual is
+ * 64 * 1023 = 65472). A block holding a larger value takes the scalar loop.
+ * Neither the multiplier nor the bias is checked: a scaling-matrix row (up
+ * to 16x the flat multiplier) would wrap the lane, and every such caller
+ * stays on C; a Y264_DZ_INTRA or Y264_DZ_INTER deadzone far above one step
+ * (about 1470 at the highest 8x8 QP) would wrap it too, where the x86 tiers
+ * fall back to C. */
 #define QUANT_SAFE (1u << 17)
 
 static inline int32x4_t quant4_u32(int32x4_t c, uint32x4_t mf, uint32x4_t vf,
