@@ -203,9 +203,10 @@ modes do: a frame that comes out over the fit test, the GOP's exit corridor
 or the whole buffer is re-coded at the QP the overshoot asks for, and at QP 51
 once more without its per-macroblock offsets. A raise of 3 QP or more that
 lands under half its limit steps back, bisecting toward the last QP that
-failed, at most four more builds, and keeps the lowest that fits. A picture still underflows
-where it reaches QP 51, or where it opens a GOP coded beside one that
-underflowed at QP 51 and so left the buffer under its planned level. Those
+failed, at most four more builds, and keeps the lowest that fits. A picture
+still underflows where it reaches QP 51, or, with GOPs coded in parallel,
+within a GOP coded beside one that reached QP 51 and left the buffer below
+its planned level, since that GOP plans on the level it assumed. Those
 pictures are counted over the stream the GOPs make together, and named in
 one warning at the end. Each frame also
 leaves the next frames what they cost at QP 51, priced from their pass-1
