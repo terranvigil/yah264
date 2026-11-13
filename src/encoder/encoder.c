@@ -5460,8 +5460,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 yah264_encoder_close(e);
                 return NULL;
             }
-            e->qp = Y264_TP_P1_QP;                    /* fixed reference QP for pass 1 */
-            e->chroma_qp = y264_chroma_qp(26, e->param.chroma_qp_index_offset);
+            e->qp = Y264_TP_P1_QP;                  /* fixed reference QP for pass 1 */
+            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
         } else {
             FILE *fp = fopen(param->rc.stats, "r");
             if (fp) {
