@@ -2391,8 +2391,8 @@ static double tp_bisect(yah264_encoder_t *e, const double *cplx, double seed, do
  * followed the detail overshot by 90%. The P frames
  * are then held at most TP_LODEPTH under their pass-1 QP and the plan is
  * re-solved; I and B frames follow through the type shaping. Every corpus
- * ladder rung but sintel's two highest leaves it off and is bit-exact, as
- * does an all-black clip, which has no textured frames. It does engage on
+ * ladder rung but sintel's two highest leaves it off, as does an
+ * all-black clip, which has no textured frames. It does engage on
  * sintel's opening fade at those two rungs, and on static content at rates
  * well above its ladder (akiyo at 1.5-4 Mbit/s), where the plan puts the
  * near-skip frames furthest under pass 1. Both distances are the same at
