@@ -855,6 +855,13 @@ static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
         int rem = e->vbv_exit_n - e->vbv_ndec;      /* frames after this one */
         if (rem < 0) rem = 0;
         double need = e->vbv_seg_h - rem * e->vbv_exit_k * e->vbv.rate;
+        /* a pass 2 knows what its remaining frames give back at QP 51: it
+         * leaves what they can't make up, and no more. charged only for its
+         * last frames, a GOP that drained in its body starved its tail at QP
+         * 50-51 (f10 CIF at 600/600/600 k30, three threads), or could not
+         * reach the level at all and the next GOP's key underflowed */
+        if (e->tp_pass >= 2 && e->tp_slack)
+            need = e->vbv_seg_h - e->tp_slack_cur;
         double x = fill + e->vbv.rate - need;
         if (x < 0.02 * e->vbv.rate) x = 0.02 * e->vbv.rate;
         if (x < limit) limit = x;
@@ -2072,6 +2079,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         if (e->tp_idx < e->tp_n) {
             int idx = e->tp_idx++;
             e->tp_resv_cur = e->tp_resv ? e->tp_resv[idx + 1] : 0.0;
+            e->tp_slack_cur = e->tp_slack ? e->tp_slack[idx + 1] : 0.0;
             struct tp_stat *s = &e->tp_stats[idx];
             double scaleterm = (s->bits + 1) * pow(2.0, (s->qp - 12) / 6.0);
             en.cq = pow(scaleterm, e->crf_qcomp);
@@ -2552,6 +2560,13 @@ static void tp_build_reserve(yah264_encoder_t *e)
         r = tp_bits51(e->tp_next[k].bits, e->tp_next[k].qp) + (need > 0.0 ? need : 0.0);
     }
     e->tp_resv[n] = r < e->vbv.size ? r : e->vbv.size;
+    e->tp_slack = malloc((size_t)(n + 1) * sizeof(*e->tp_slack));
+    if (e->tp_slack) {
+        e->tp_slack[n] = 0.0;
+        for (int i = n - 1; i >= 0; i--)
+            e->tp_slack[i] = e->tp_slack[i + 1] + e->vbv.rate
+                           - tp_bits51(e->tp_stats[i].bits, e->tp_stats[i].qp);
+    }
     for (int i = n - 1; i >= 0; i--) {
         double need = e->tp_resv[i + 1] - e->vbv.rate;
         r = tp_bits51(e->tp_stats[i].bits, e->tp_stats[i].qp) + (need > 0.0 ? need : 0.0);
