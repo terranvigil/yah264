@@ -803,16 +803,16 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
      * fill needs one held for them (bbb 720p at 800/800/200 lost 1 dB aimed
      * at nothing). The key is the plan's own where this encoder codes it
      * (one encoder for the clip, --nal-hrd), else the splitter's #key. Past
-     * the last key, the level the splitter plans the last GOP to leave, high
-     * as it may be: what it drains below that is spent on top of its budget
-     * (a still image at 150/150/150 k30 came out 11% over); else half */
+     * the last key of a split, nothing: the exit corridor holds that GOP to
+     * the level the splitter walks to, and steered to it as well the GOP
+     * coded under its budget (stefan CIF at 700/700/700 k30 -6%) */
     if (e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate) {
         int i = e->tp_idx > 0 ? e->tp_idx - 1 : 0;
         double nk = e->tp_nkey && i < e->tp_n ? e->tp_nkey[i] : e->tp_key;
         if (nk > 0.0 && 0.5 * nk < goal)
             goal = 0.5 * nk;
         else if (nk <= 0.0 && e->tp_exit > 0.0)
-            goal = e->vbv_seg_h;
+            goal = 0.0;
     }
     double h = fill > goal ? e->rck.vbv_fill_hup : e->rck.vbv_fill_h;
     if (h <= 0) h = 1.0;
