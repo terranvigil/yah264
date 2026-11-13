@@ -862,7 +862,7 @@ static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
          * reach the level at all and the next GOP's key underflowed */
         if (e->tp_pass >= 2 && e->tp_slack)
             need = e->vbv_seg_h - e->tp_slack_cur;
-        double x = fill + e->vbv.rate - need;
+        double x = fill + e->tp_fill_gap + e->vbv.rate - need;
         if (x < 0.02 * e->vbv.rate) x = 0.02 * e->vbv.rate;
         if (x < limit) limit = x;
     }
@@ -1409,6 +1409,10 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     if (vs <= 0.0)
         return;                             /* nothing calibrated yet */
     double fill = rcp_vbv_vfill(e, 0);      /* entry not pushed yet: walk them all */
+    /* a pass 2's corridor reads the frames already coded at their real size;
+     * the fit test keeps the predictions' margin, whose reserve carries a
+     * scene change (stefan+mobile+akiyo lost 0.44 dB on mobile without it) */
+    e->tp_fill_gap = e->tp_pass >= 2 ? vbv_vfill(e, 0, 1) - fill : 0.0;
     /* The extrapolation guard the pipelined B decides already have, for the
  * anchor of a burst that is not tight: that anchor is coded where no
  * measured-size retry can reach it (the stair publishes its rows to the B
@@ -1479,6 +1483,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         e->rcp_posti_left = q - e->crf_pre_qp >= e->rck.vbv_posti_raise ? (int)e->rck.vbv_posti_n : 0;
     e->qp = q;
     e->chroma_qp = y264_chroma_qp(q, e->param.chroma_qp_index_offset);
+    e->tp_fill_gap = 0.0;
 }
 
 /* Per-burst VBV fallback trigger, at anchor ARRIVAL on the API thread with

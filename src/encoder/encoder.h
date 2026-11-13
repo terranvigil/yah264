@@ -1043,6 +1043,7 @@ struct yah264_encoder {
     double   tp_resv_cur;       /* the reserve the frame being coded leaves */
     double  *tp_slack;          /* [n+1] what records i.. give the buffer back at QP 51 */
     double   tp_slack_cur;      /* ...from the record after the frame being coded */
+    double   tp_fill_gap;       /* coded frames' real size against their prediction, at a decide */
     double   tp_fps;            /* records (pictures) per second, for the drift band */
     int      tp_nacc;           /* frames accounted so far */
     double   tp_actual;         /* bits coded so far (committed) */
