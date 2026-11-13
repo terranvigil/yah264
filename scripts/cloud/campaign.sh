@@ -665,17 +665,19 @@ st_board10_t1() {
                     "$Y264_10" --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 \
                     -o /dev/null ;;
             esac
+            # every arm execs through env, the x264 ones with nothing to set,
+            # so no arm carries an exec the others don't
             perf10 "$rows" "$n y264-c" env YAH264_NO_ASM=1 "${PIN[@]+"${PIN[@]}"}" "$Y264_10" \
                 --input-y4m "$clip" --frames "$FRAMES10" --crf 23 --threads 1 -o /dev/null
-            perf10 "$rows" "$n x264-asm" "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --preset medium \
+            perf10 "$rows" "$n x264-asm" env "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --preset medium \
                 --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
             # x264's own dispatch capped at AVX2, the like-for-like arm on an
             # AVX-512 part (on an AVX2-only part it equals x264-asm)
             case " $arms " in *" x264-avx2 "*)
-                perf10 "$rows" "$n x264-avx2" "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --asm avx2 \
+                perf10 "$rows" "$n x264-avx2" env "${PIN[@]+"${PIN[@]}"}" "$X264_10_ASM" --asm avx2 \
                     --preset medium --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip" ;;
             esac
-            perf10 "$rows" "$n x264-c" "${PIN[@]+"${PIN[@]}"}" "$X264_10_C" --preset medium \
+            perf10 "$rows" "$n x264-c" env "${PIN[@]+"${PIN[@]}"}" "$X264_10_C" --preset medium \
                 --crf 23 --threads 1 --frames "$FRAMES10" -o /dev/null "$clip"
         done
     done
