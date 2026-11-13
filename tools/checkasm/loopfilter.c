@@ -191,7 +191,7 @@ static void edge_plane(int mode)
  * filtered) one trial in eight; then the extreme planes as extra trials, at a
  * qi that filters; then the directed ones below. */
 #define DB_EXTRA_OF(n) ((n) / 2)
-enum { DB_DIRECTED = 48 };
+enum { DB_DIRECTED = 64 };
 static int db_qi(int t)
 {
     return (t & 7) == 7 ? (int)ca_below(16) : 16 + (int)ca_below(36);
@@ -199,12 +199,15 @@ static int db_qi(int t)
 
 /* THE GATES AT THEIR THRESHOLDS. Each line of a directed plane sits one side
  * of one gate and level with the others: |p0 - q0| at alpha - 1 or alpha,
- * |p1 - p0| at beta - 1 or beta, |q1 - q0| at beta - 1 or beta, six cases
- * rotating along the edge. Run at qi 36, 50 and 51 (alpha 255 at the top),
+ * |p1 - p0| at beta - 1 or beta, |q1 - q0| at beta - 1 or beta, and the
+ * strong-filter gate |p0 - q0| at (alpha >> 2) + 1 or (alpha >> 2) + 2: eight
+ * cases, line l taking case (l + d) % 8. Run at qi 36, 49, 50 and 51 (49 has
+ * the last distinct alpha and beta; 50 and 51 share alpha 255 and beta 18),
  * at the bottom of the range and mirrored to the top. d is the trial's index
- * among the directed ones: bits 0-1 rotate the cases and pick bS, bit 2 the
- * edge direction, bit 3 the mirror, bits 4-5 the qi. */
-static int db_dir_qi(int d) { static const int q[3] = { 36, 50, 51 }; return q[(d >> 4) % 3]; }
+ * among the directed ones: bits 0-1 pick bS, bit 2 a per-group axis (the edge
+ * direction, the chroma span or a shift of four cases), bit 3 the mirror,
+ * bits 4-5 the qi. */
+static int db_dir_qi(int d) { static const int q[4] = { 36, 49, 50, 51 }; return q[(d >> 4) & 3]; }
 static int db_thr(int c, int side, int i, int a, int b)
 {
     switch (c) {
@@ -213,27 +216,29 @@ static int db_thr(int c, int side, int i, int a, int b)
     case 2: return side ? 1 : (i ? b - 1 : 0);           /* p beta, inside */
     case 3: return side ? 1 : (i ? b : 0);               /* p beta, on it */
     case 4: return side ? (i ? b - 1 : 0) : 1;           /* q beta, inside */
-    default: return side ? (i ? b : 0) : 1;              /* q beta, on it */
+    case 5: return side ? (i ? b : 0) : 1;               /* q beta, on it */
+    case 6: return side ? (a >> 2) + 1 : 0;              /* strong, inside */
+    default: return side ? (a >> 2) + 2 : 0;             /* strong, on it */
     }
 }
 /* a w x h buffer with its vertical edge before column ex or its horizontal
  * edge before row ey */
-static void db_thr_fill(pixel *a, int stride, int w, int h, int ex, int ey, int d)
+static void db_thr_fill(pixel *a, int stride, int w, int h, int ex, int ey, int d, int vert)
 {
     const int sh = Y264_BIT_DEPTH - 8, qi = db_dir_qi(d);
-    const int al = ALPHA[qi] << sh, be = BETA[qi] << sh, vert = !(d & 4), hi = d & 8;
+    const int al = ALPHA[qi] << sh, be = BETA[qi] << sh, hi = d & 8;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
             int side = vert ? x >= ex : y >= ey;
             int i = vert ? (side ? x - ex : ex - 1 - x) : (side ? y - ey : ey - 1 - y);
-            int c = ((vert ? y : x) + d) % 6;
+            int c = ((vert ? y : x) + d) % 8;
             int v = db_thr(c, side, i < 3 ? i : 3, al, be);
             a[y * stride + x] = (pixel)(hi ? PIXEL_MAX - v : v);
         }
 }
-static void db_thr_plane(int d)
+static void db_thr_plane(int d, int vert)
 {
-    db_thr_fill(ea, STRIDE, STRIDE, PLANE_H, 8, 8, d);
+    db_thr_fill(ea, STRIDE, STRIDE, PLANE_H, 8, 8, d, vert);
     memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
 }
 
@@ -275,7 +280,7 @@ static int run_deblock_luma(const char *name, db_luma_fn v4, db_luma_fn h4)
         int bs = d < 0 ? 1 + (int)ca_below(4) : 1 + (d & 3);
         int alpha = ALPHA[qi], beta = BETA[qi];
         int tc0 = TC0[qi][bs < 4 ? bs - 1 : 0];
-        if (d >= 0) db_thr_plane(d);
+        if (d >= 0) db_thr_plane(d, !(d & 4));
         else edge_plane(t < n1 ? t & 1 : 2 + (t & 1));
         ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
         pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
@@ -349,10 +354,10 @@ static int run_deblock_chroma(const char *name, db_chroma_fn kern)
             bs[k] = d < 0 ? (uint8_t)ca_below(5) : (uint8_t)(1 + ((k + d) & 3));
         if (t == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
         if (t == 1) bs[0] = bs[1] = bs[2] = bs[3] = 0;
-        int span = (t & 1) ? 2 : 4;
+        int span = (d >= 0 ? d & 4 : t & 1) ? 2 : 4;
         int grp = (span == 4) ? (int)ca_below(2) : 0;
         /* the kernel filters a horizontal edge only */
-        if (d >= 0) db_thr_plane(d | 4);
+        if (d >= 0) db_thr_plane(d, 0);
         else edge_plane(t < n1 ? t >> 1 & 1 : 2 + (t >> 1 & 1));
         ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
         pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
@@ -508,8 +513,8 @@ static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn
         /* directed trials alternate the vertical and the horizontal gates;
          * the v pass leaves most of the horizontal edge as it found it */
         if (d >= 0) {
-            db_thr_fill(a1, S1, S1, H, 8, 4, d);
-            db_thr_fill(a2, S2, S2, H, 8, 4, d);
+            db_thr_fill(a1, S1, S1, H, 8, 4, d, !(d & 4));
+            db_thr_fill(a2, S2, S2, H, 8, 4, d, !(d & 4));
         }
         memcpy(b1, a1, sizeof a1); memcpy(b2, a2, sizeof a2);
         pixel *e1 = a1 + 2 * S1 + 8, *e2 = a2 + 2 * S2 + 8;
@@ -665,7 +670,7 @@ static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h
             bs[k] = d < 0 ? (uint8_t)ca_below(5) : (uint8_t)(1 + ((k + d) & 3));
         if (d < 0 && t % 5 == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
         for (int dir = 0; dir < 2; dir++) {
-            if (d >= 0) db_thr_plane((d & ~4) | (dir ? 4 : 0));
+            if (d >= 0) db_thr_plane(d, !dir);
             else edge_plane(t < n1 ? t & 1 : 2 + (t & 1));
             ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
             memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
