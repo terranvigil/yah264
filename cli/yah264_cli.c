@@ -2214,8 +2214,7 @@ static int tp_seg_on(const yah264_param_t *param)
 }
 
 /* whether the split counts a VBV: a pass 2 splits as its pass 1 did, which
- * records it, so a VBV on one pass only still finds the GOPs pass 1 coded.
- * a stats file without the line splits by this pass's own */
+ * records it, so a VBV on one pass only still finds the GOPs pass 1 coded */
 static int tp_split_vbv(const yah264_param_t *param)
 {
     int own = tp_seg_on(param);
@@ -2227,6 +2226,9 @@ static int tp_split_vbv(const yah264_param_t *param)
     int v = own, x;
     while (fgets(ln, sizeof ln, f) && ln[0] == '#') {
         if (sscanf(ln, "#vbv %d", &x) == 1) { v = x != 0; break; }
+        /* markers with no #vbv ahead of them: a pass 1 from before the
+         * line, and every one of those split on the plain grid */
+        if (!strncmp(ln, TP_MARKER, strlen(TP_MARKER))) { v = 0; break; }
     }
     fclose(f);
     return v;
