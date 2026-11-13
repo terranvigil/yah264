@@ -4421,8 +4421,8 @@ static int level_fit(yah264_encoder_t *e)
     return 0;
 }
 
-/* a level the splitter planned: within the buffer, which the splitter clamps
- * it to (0.1 to 0.97 of it); anything else is a damaged file, ignored */
+/* a join level the splitter planned: it clamps them to 0.1 to 0.97 of the
+ * buffer, so anything outside 0.05 to 1 of it is a damaged file, ignored */
 static int tp_level_ok(const yah264_encoder_t *e, double v)
 {
     return e->vbv_on && isfinite(v) && v >= 0.05 * e->vbv.size && v <= e->vbv.size;
@@ -5506,8 +5506,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         e->tp_join = jv;
                     if (split && sscanf(ln, "#exit %lf", &jv) == 1 && tp_level_ok(e, jv))
                         e->tp_exit = jv;
-                    if (split && sscanf(ln, "#key %lf", &jv) == 1 && tp_level_ok(e, jv))
-                        e->tp_key = jv;
+                    /* a key may cost more than the buffer: clamp it there */
+                    if (split && sscanf(ln, "#key %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                        e->tp_key = e->vbv_on && jv > e->vbv.size ? e->vbv.size : jv;
                     if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0')
                         continue;
                     /* The 5th field (is_ref) was added for the offline plan's
