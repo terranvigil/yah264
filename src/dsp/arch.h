@@ -572,7 +572,8 @@ void y264_hpel_build_band_sse4(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
  * and r1 over [0, n - 1 + ax]. */
 void y264_bilin4_row_sse4(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
                           int w00, int w10, int w01, int w11);
-/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. The
+ * 10-bit row rounds to the 8-bit scale, as the encoder's lowres build does. */
 void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
 /* The strided weighted average, the fused flat 4:2:0 macroblock average and
@@ -778,7 +779,8 @@ void y264_hpel_build_band_avx2(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
  * and r1 over [0, n - 1 + ax]. */
 void y264_bilin4_row_avx2(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
                           int w00, int w10, int w01, int w11);
-/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. The
+ * 10-bit row rounds to the 8-bit scale, as the encoder's lowres build does. */
 void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
 /* The strided weighted average, the fused flat 4:2:0 macroblock average and
@@ -937,10 +939,10 @@ int  y264_sa8d_16x16_avx512(const pixel *, int, const pixel *, int);
  * are called from the macroblock code and have no portable twin: the caller's
  * own unfused path is the C form. These two inlines give the call sites one
  * name. On aarch64 they are the NEON symbols at either depth; on x86-64 they
- * pick the tier. `y264_mc_fused_on()` is the question the call site asks
+ * pick the tier, at either depth too. `y264_mc_fused_on()` is the question the call site asks
  * before taking either. The lowres bilinear row is 8-bit only:
  * Y264_HAVE_BILIN4_K says whether it is here. */
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 #define Y264_HAVE_MC_FUSED 1
 static inline int y264_mc_fused_on(void)
 {
@@ -960,7 +962,7 @@ static inline void y264_avg_mb420_flat_k(pixel *pred, pixel *cu, pixel *cv,
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
     y264_avg_mb420_flat_neon(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
 #else
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     if (y264_cpu_tier() >= Y264_TIER_AVX2) {
         y264_avg_mb420_flat_avx2(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
         return;
@@ -978,7 +980,7 @@ static inline void y264_mc_chroma_bi8_k(pixel *dst, int dstride,
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10
     y264_mc_chroma_bi8_neon(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
 #else
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     if (y264_cpu_tier() >= Y264_TIER_AVX2) {
         y264_mc_chroma_bi8_avx2(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
         return;

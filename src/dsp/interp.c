@@ -151,7 +151,7 @@ static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
 #undef MB
 
 
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 /* Clamped source tile, so an out-of-window block can still run the kernel.
  *
  * The kernel path's guard is `ix >= 2 - Y264_LUMA_BORDER`: past that the six-tap
@@ -289,10 +289,10 @@ void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_pred_copy_avx2(dst, dstride, s, sstride, w, h);
             return;
@@ -316,10 +316,10 @@ void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_pred_avg2_avx2(dst, dstride, s1, s2, sstride, w, h);
             return;
@@ -352,11 +352,11 @@ void y264_mc_luma_hp(pixel *dst, int dstride,
  * lies in [-16320, 32672] and fits int16, so the row loops below keep 16-bit
  * lanes (twice the lanes of the int form when vectorised); the flat pair is
  * exactly the rounding average. Anything else takes the int form. */
-#if Y264_BIT_DEPTH <= 8
 static inline int avg_wt_i16_ok(int w0, int w1)
 {
     return w0 + w1 == 64 && w0 >= -64 && w0 <= 128;
 }
+#if Y264_BIT_DEPTH <= 8
 static inline void avg_wt_row(pixel *dst, const pixel *a, const pixel *b, int n,
                               int w0, int w1)
 {
@@ -407,12 +407,12 @@ void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
-    /* the kernels keep 16-bit lanes, which is exact only inside the implicit
-     * weight domain; anything else is the int form below */
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
+    /* the 8-bit kernels keep 16-bit lanes, exact only inside the implicit
+     * weight domain, and both depths keep that contract; else the int form */
     if (y264_asm_on(Y264_ASM_MC) && avg_wt_i16_ok(w0, w1)) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_pixel_avg_wt_2d_avx2(dst, ds, a, as, b, bs, w, h, w0, w1);
             return;
@@ -436,10 +436,10 @@ void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     if (y264_asm_on(Y264_ASM_MC)) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2) {
             y264_pixel_avg_wt_avx2(dst, a, b, n, w0, w1);
             return;
@@ -476,13 +476,13 @@ void y264_mc_luma_b(pixel *dst, int dstride,
     if (y264_asm_on(Y264_ASM_MC) && w <= 16 && h <= 16)
         Y264_MC_LUMA_TIER(y264_mc_luma_neon16, y264_mc_luma_neon8);
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     /* The x86 tiers select through y264_cpu_tier(), which demands a tier's
  * WHOLE feature set before admitting a kernel out of it. Both tiers are
  * bit-exact with the portable body below and with each other. */
     if (y264_asm_on(Y264_ASM_MC) && w <= 16 && h <= 16) {
         int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (tier >= Y264_TIER_AVX2)
             Y264_MC_LUMA_TIER(y264_mc_luma16_avx2, y264_mc_luma8_avx2);
 #endif
@@ -596,7 +596,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     if (xin0 < x0) xin0 = x0;
     if (xin1 > x1) xin1 = x1;
     if (xin1 < xin0) xin1 = xin0;                   /* tiny frame: no interior */
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4
+#if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     /* Which tier owns the two row kernels for this band, or Y264_TIER_C for
  * none: the span test is the kernels' own contract (they step back to end on
  * the span and need eight columns to do it), and it is asked once per band
@@ -615,12 +615,12 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         return;
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     /* The same band form at the x86 tiers, under the same two conditions. */
     if (hpel_tier >= Y264_TIER_SSE4 && x1 - x0 >= 16 &&
-        (size_t)6 * (size_t)(x1 - x0 + 32) + (size_t)12 * (size_t)(x1 - x0)
+        (size_t)6 * (size_t)(x1 - x0 + 32) * sizeof(pixel) + (size_t)12 * (size_t)(x1 - x0)
             <= (size_t)sstride * sizeof(int32_t) * (size_t)(y1 - y0 + 5)) {
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (hpel_tier >= Y264_TIER_AVX2)
             y264_hpel_build_band_avx2(Hp, Vp, Cp, stride, ref, rstride, pw, ph,
                                       border, (uint8_t *)(void *)scratch, y0, y1);
@@ -657,13 +657,13 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             x = xin1;
         } else
 #endif
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
         if (hpel_tier >= Y264_TIER_AVX2) {
             y264_hpel_hrow_avx2(srow, row, xin0, xin1);
             x = xin1;
         } else
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
         if (hpel_tier >= Y264_TIER_SSE4) {
             y264_hpel_hrow_sse4(srow, row, xin0, xin1);
             x = xin1;
@@ -717,9 +717,9 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             mid = 1;
         }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
         if (hpel_tier >= Y264_TIER_SSE4 && v1 - v0 >= 8) {
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
             if (hpel_tier >= Y264_TIER_AVX2)
                 y264_hpel_outrow_avx2(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                       r0, r1, r2, r3, r4, r5, v0, v1);
@@ -845,7 +845,7 @@ void y264_mc_chroma(pixel *dst, int dstride,
         }
     }
 #endif
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     /* The same two shapes at the x86 tiers, and the same two kernels: the
  * 8-wide form serves every even height, so there is no third symbol here
  * where NEON has one for the 8x8 block. */
@@ -859,7 +859,7 @@ void y264_mc_chroma(pixel *dst, int dstride,
             ix + w + 1 <= pw + Y264_CHROMA_BORDER &&
             iy + h + 1 <= ph + Y264_CHROMA_BORDER) {
             int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2
+#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
             if (tier >= Y264_TIER_AVX2) {
                 if (w == 4)
                     y264_mc_chroma_w4h_avx2(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
