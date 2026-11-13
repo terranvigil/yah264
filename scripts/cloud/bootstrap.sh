@@ -415,6 +415,9 @@ st_build_x264() {
 # Same recipe: the C arm strips -fno-tree-vectorize. Built after the 8-bit
 # arms, so the installed library under the prefixes stays the 8-bit one.
 st_build_x264_10() {
+    # a binary left by an earlier run would be recorded in bootstrap.ok even
+    # when this rebuild fails, so the old ones go first
+    rm -f "$C_X264"/x264-10-*
     [ -d "$C_X264/.git" ] || { c_skip "no x264 clone; the x264 stage did not run"; return; }
     local common=(--disable-lavf --disable-ffms --disable-avs --disable-swscale
                   --bit-depth=10)
