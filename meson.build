@@ -216,8 +216,8 @@ x86_tier_families = {
 # what is not listed stays on C at 10 bits. No AVX-512 at 10 bits yet, so that
 # library's tier caps at AVX2.
 x86_10_tier_families = {
-  'sse4'   : ['metrics'],
-  'avx2'   : ['metrics'],
+  'sse4'   : ['metrics', 'intrapred'],
+  'avx2'   : ['metrics', 'intrapred'],
 }
 x86_tier_args = {
   'sse4'   : ['-msse4.2'],

@@ -85,8 +85,8 @@ void y264_intra8_dvhp(pixel out[4][64], const pixel top[8], const pixel left[8],
                       int dc, int a, int b, int c);
 void y264_intra8_dvhp_c(pixel out[4][64], const pixel top[8], const pixel left[8],
                         int dc, int a, int b, int c);
-/* x86 only (8-bit): the edge derivation into both views of the struct. They
- * are declared here rather than in arch.h because they take the struct. */
+/* x86 only, both depths: the edge derivation into both views of the struct,
+ * declared here rather than in arch.h because it takes the struct. */
 void y264_intra8x8_edge_sse4(y264_i8_edge_t *e, const pixel *rec, int stride,
                              int have_top, int have_left,
                              int have_topleft, int have_topright);
