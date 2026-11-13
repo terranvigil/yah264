@@ -2484,7 +2484,14 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
                 fprintf(stderr, "yah264: malformed GOP marker in '%s'\n", in_path);
                 bad = 1; break;
             }
-            /* a record a picture, two a frame under field coding */
+            /* a record a picture, two a frame under field coding: more than
+             * one a frame is a field-coded pass 1, and no more is a frame one */
+            if (nr > 0 && e > s && (nr > e - s) != (param->interlaced != 0)) {
+                fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 %s --tff/--bff, and "
+                        "this pass runs %s; run both passes with the same field order\n", in_path,
+                        nr > e - s ? "with" : "without", param->interlaced ? "with" : "without");
+                bad = 1; break;
+            }
             if (nr <= 0 || e <= s || nr > (long)(e - s) * (param->interlaced ? 2 : 1)) {
                 fprintf(stderr, "yah264: GOP marker %d in '%s' counts %ld records for "
                         "frames %d..%d\n", g, in_path, nr, s, e);

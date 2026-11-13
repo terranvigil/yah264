@@ -187,11 +187,12 @@ costs, so when enough of them would be planned far under pass 1 the plan holds
 them at most 15 QP under it, and the runtime prices them at their own measured
 cost as they land. `--pass 3` reads the records and writes them back from a
 real encode, so a further pass refines against it. Pass 2 needs the same
-`--frames`, `--keyint` and `--tff`/`--bff` as pass 1. It warns when the record
-count says otherwise, and the GOP split refuses a file whose sections don't
-hold the records their markers count, or from another `--keyint`. A VBV on
-one pass and not the other is fine: pass 2 splits as pass 1 recorded. A missing stats file isn't an error: pass 2 then codes
-every frame at the base QP.
+`--frames`, `--keyint` and `--tff`/`--bff` as pass 1. It refuses a file from
+the other field mode, from another `--keyint`, with a malformed record, or
+whose sections don't hold the records their markers count, and warns of any
+pictures it codes past the file's last record. A VBV on one pass and not the
+other is fine: pass 2 splits as pass 1 recorded. A missing stats file isn't
+an error: pass 2 then codes every frame at the base QP.
 
 **With a VBV**, pass 1 codes as capped ABR at the target, its base QP never
 under 26, so frames are recorded at QPs that say what a finer QP costs. Each

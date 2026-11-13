@@ -5607,10 +5607,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 }
                 /* the markers count frames; a pass 1 coded with another
                  * field mode wrote half or twice the records */
-                if (mframes > 0 && e->tp_n != mframes * (param->interlaced ? 2 : 1))
-                    fprintf(stderr, "yah264: stats file '%s' holds %d records for %ld pictures; "
-                            "run pass 1 with the same --tff/--bff as this pass or the rate will miss\n",
-                            param->rc.stats, e->tp_n, mframes * (param->interlaced ? 2 : 1));
+                if (mframes > 0 && (e->tp_n > mframes) != (param->interlaced != 0)) {
+                    fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 %s --tff/--bff, "
+                            "and this pass runs %s; run both passes with the same field order\n",
+                            param->rc.stats, e->tp_n > mframes ? "with" : "without",
+                            param->interlaced ? "with" : "without");
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
             }
             if (e->tp_pass == 3) {
                 /* Every record is in e->tp_stats by now, so truncating the file
