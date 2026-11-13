@@ -282,6 +282,9 @@ rosetta_enabled() {
       | grep -q enabled
 }
 restore_rosetta() { binfmt 1; }
+# the flag is set BEFORE the flip, so a signal mid-flip still restores
+rosetta_off() { ROSETTA_OFF=1; binfmt 0; }
+rosetta_on() { binfmt 1; ROSETTA_OFF=0; }
 
 # dk <env-assignments...> -- <shell command>
 # One container per call: the run is short-lived and stateless, which is what
@@ -309,9 +312,9 @@ run_case() {   # run_case <backend> <tier> <leg> <log> <env...> -- <cmd>
     if [ "$be" = rosetta ] && [ "$rc" = $SIGILL ]; then
         row "$be" "$tier" "$leg" NOTE "SIGILL under Rosetta -- rerunning under QEMU"
         local keep="$BACKEND"; BACKEND=qemu
-        binfmt 0
+        rosetta_off
         dk "$@" > "$log.qemu" 2>&1; rc=$?
-        binfmt 1
+        rosetta_on
         BACKEND="$keep"
         [ "$rc" = 0 ] && { row "$be" "$tier" "$leg" PASS "emulator (QEMU; Rosetta SIGILL)"; return 0; }
         row "$be" "$tier" "$leg" FAIL "rc=$rc under QEMU too, $(basename "$log").qemu"
@@ -322,6 +325,79 @@ run_case() {   # run_case <backend> <tier> <leg> <log> <env...> -- <cmd>
 }
 
 # ---------------------------------------------------------------------------
+# THE TIERS MUST BE THERE. Y264_SIMD_FORCE is read only in a dev_knobs build,
+# and the checkasm banner prints the CPU's features, not the build's: a stale
+# build8 configured at -Dsimd=none or sse4 still prints avx2, every tier then
+# runs the same code, and every identity leg passes. So the build's options
+# are read back, set right once if they are not, and every tier the legs
+# name must have a checkasm group of its own that --list marks runnable,
+# which only a compiled tier has.
+tier_state() {   # the build's options, the capped banner, the uncapped table
+    dk X=1 -- "python3 -c 'import json, sys
+o = {x[\"name\"]: x[\"value\"] for x in json.load(sys.stdin)}
+print(\"opts\", str(o.get(\"dev_knobs\")).lower(), o.get(\"simd\"))' < <(meson introspect --buildoptions $b8)
+        printf 'capped '; Y264_SIMD_FORCE=none $b8/tools/checkasm/checkasm --list 2>/dev/null | head -1
+        env -u Y264_SIMD_FORCE $b8/tools/checkasm/checkasm --list 2>/dev/null | sed 1d" 2>&1 | tr -d '\r'
+}
+read_opts() {    # read_opts <state file>: OPT_KNOBS, OPT_SIMD
+    OPT_KNOBS="$(awk '$1 == "opts" { print $2; exit }' "$1")"
+    OPT_SIMD="$(awk '$1 == "opts" { print $3; exit }' "$1")"
+}
+tier_check() {   # tier_check <state file>: 0 when every tier in TIERS is real; else TC_WHY
+    local t miss=""
+    case "$(awk '$1 == "capped" { sub(/^capped /, ""); print; exit }' "$1")" in
+        "checkasm: cpu scalar, "*) ;;
+        *) TC_WHY="Y264_SIMD_FORCE=none does not take in $b8"; return 1 ;;
+    esac
+    for t in $TIERS; do
+        [ "$t" = none ] && continue
+        awk -v s="_$t" '{ n = length($1) - length(s) }
+            n > 0 && substr($1, n + 1) == s && $NF == "yes" { f = 1 }
+            END { exit !f }' "$1" || miss="$miss $t"
+    done
+    [ -z "$miss" ] && return 0
+    TC_WHY="no runnable checkasm group for:$miss (not compiled in, or the CPU lacks it)"
+    return 1
+}
+# build_and_probe: build8, then its options and its tiers. 1 only when the
+# build itself fails; a failed probe leaves tierok=0 and the tier legs skip
+build_and_probe() {
+    local was
+    tierok=0
+    if ! dk X=1 -- "set -e
+        [ -f $b8/build.ninja ] || meson setup $b8 -Ddev_knobs=true -Dsimd=auto
+        ninja -C $b8 -j$JOBS" > "$out/$BACKEND-build8.log" 2>&1; then
+        row "$BACKEND" - "build" FAIL "$BACKEND-build8.log"
+        return 1
+    fi
+    tier_state > "$out/$BACKEND-probe.log"
+    read_opts "$out/$BACKEND-probe.log"
+    row "$BACKEND" - "build -Dsimd=${OPT_SIMD:-?}" PASS "dev_knobs=${OPT_KNOBS:-?}, $BACKEND-build8.log"
+    if [ "$OPT_KNOBS $OPT_SIMD" != "true auto" ]; then
+        was="dev_knobs=${OPT_KNOBS:-?} simd=${OPT_SIMD:-?}"
+        # a dir from another meson version refuses `configure`; setup
+        # --reconfigure is the second try. the log holds the real error
+        if dk X=1 -- "meson configure $b8 -Ddev_knobs=true -Dsimd=auto && ninja -C $b8 -j$JOBS" \
+               > "$out/$BACKEND-devknobs.log" 2>&1 \
+           || dk X=1 -- "meson setup --reconfigure $b8 -Ddev_knobs=true -Dsimd=auto && ninja -C $b8 -j$JOBS" \
+               >> "$out/$BACKEND-devknobs.log" 2>&1; then
+            tier_state > "$out/$BACKEND-probe.log"
+            read_opts "$out/$BACKEND-probe.log"
+            row "$BACKEND" - "reconfigure" NOTE "was $was; now dev_knobs=$OPT_KNOBS simd=$OPT_SIMD"
+        else
+            row "$BACKEND" - "reconfigure" FAIL "was $was; $BACKEND-devknobs.log"
+            return 0
+        fi
+    fi
+    if tier_check "$out/$BACKEND-probe.log"; then
+        tierok=1
+        row "$BACKEND" - "tier probe" PASS "the cap takes; a runnable group for each of: $TIERS"
+    else
+        row "$BACKEND" - "tier probe" FAIL "$TC_WHY"
+    fi
+    return 0
+}
+
 echo "x86-docker: image $IMAGE, backends [$BACKENDS], tiers [$TIERS], legs [$LEGS]"
 echo "x86-docker: --cpus $CPUS, ninja -j$JOBS, encoder threads [$ENC_THREADS], frames $FRAMES"
 echo "x86-docker: no clocks are read; an emulated run has no speed to report."
@@ -353,45 +429,13 @@ img_ready || { echo "x86-docker: no image $IMAGE and it will not build"; exit 1;
 for BACKEND in $BACKENDS; do
     echo
     echo "=== backend: $BACKEND ============================================"
-    if [ "$BACKEND" = qemu ]; then
-        if rosetta_enabled; then
-            echo "x86-docker: Rosetta is the default interpreter for x86-64; disabling it"
-            echo "            for this leg and restoring it on the way out."
-            binfmt 0
-            ROSETTA_OFF=1
-        fi
-        if rosetta_enabled; then
-            row qemu - "backend select" FAIL "could not disable the Rosetta binfmt entry"
-            continue
-        fi
-    else
-        if ! rosetta_enabled; then
-            echo "x86-docker: Rosetta is NOT registered for x86-64 in this Docker VM."
-            echo "            Turn on Docker Desktop > Settings > General >"
-            echo "            'Use Rosetta for x86_64/amd64 emulation on Apple Silicon',"
-            echo "            or run this with --backend qemu. Not flipping it from here."
-            row rosetta - "backend select" FAIL "Rosetta not registered"
-            continue
-        fi
-    fi
-
-    # -- step one, always: what does the emulated machine say it is ----------
-    flags="$(dk X=1 -- "grep -o 'sse4_2\|avx2\|avx512[a-z]*\|fma\|bmi2' /proc/cpuinfo | sort -u | tr '\n' ' '" 2>/dev/null)"
-    arch="$(dk X=1 -- "uname -m" 2>/dev/null)"
-    echo "x86-docker: uname -m = $arch"
-    if [ "$BACKEND" = rosetta ]; then
-        echo "x86-docker: /proc/cpuinfo: ${flags:-<none>}"
-        case " $flags " in
-            *" avx2 "*) : ;;
-            *) row rosetta - "cpuinfo avx2" FAIL "no avx2 in /proc/cpuinfo under Rosetta" ;;
-        esac
-    else
-        # qemu-user passes the HOST's /proc/cpuinfo straight through, so under
-        # QEMU that file describes an Apple core and says nothing about what
-        # the guest can execute. The only honest probe is the binary's own
-        # CPUID, which is what the checkasm banner prints below.
-        echo "x86-docker: /proc/cpuinfo is the host's under qemu-user (QEMU_CPU=$QEMU_CPU);"
-        echo "            the feature probe that counts is the encoder's own CPUID, below."
+    if [ "$BACKEND" = rosetta ] && ! rosetta_enabled; then
+        echo "x86-docker: Rosetta is NOT registered for x86-64 in this Docker VM."
+        echo "            Turn on Docker Desktop > Settings > General >"
+        echo "            'Use Rosetta for x86_64/amd64 emulation on Apple Silicon',"
+        echo "            or run this with --backend qemu. Not flipping it from here."
+        row rosetta - "backend select" FAIL "Rosetta not registered"
+        continue
     fi
 
     bdir="scratch/x86-docker/$BACKEND"
@@ -408,14 +452,57 @@ for BACKEND in $BACKENDS; do
     fi
     b8="$bdir/build8"; b10="$bdir/build10"
 
-    # -- the build ----------------------------------------------------------
-    if dk X=1 -- "set -e
-        [ -f $b8/build.ninja ] || meson setup $b8 -Ddev_knobs=true -Dsimd=auto
-        ninja -C $b8 -j$JOBS" > "$out/$BACKEND-build8.log" 2>&1; then
-        row "$BACKEND" - "build -Dsimd=auto" PASS "$BACKEND-build8.log"
+    # the Rosetta tree is built, probed and reconfigured under Rosetta even on
+    # the QEMU leg, before the flip: under TCG the same work takes an hour
+    built=0
+    if [ "$BACKEND" = rosetta ] || { [ "$bdir" = scratch/x86-docker/rosetta ] && rosetta_enabled; }; then
+        build_and_probe || continue
+        built=1
+    fi
+
+    if [ "$BACKEND" = qemu ]; then
+        if rosetta_enabled; then
+            echo "x86-docker: Rosetta is the default interpreter for x86-64; disabling it"
+            echo "            for this leg and restoring it on the way out."
+            rosetta_off
+        fi
+        if rosetta_enabled; then
+            row qemu - "backend select" FAIL "could not disable the Rosetta binfmt entry"
+            [ "$ROSETTA_OFF" = 1 ] && rosetta_on
+            continue
+        fi
+        if [ "$built" = 0 ]; then
+            build_and_probe || { [ "$ROSETTA_OFF" = 1 ] && rosetta_on; continue; }
+        elif [ "$tierok" = 1 ]; then
+            # the build is probed already; the tiers must also run on the
+            # CPU QEMU models, which is the one the legs below see
+            tier_state > "$out/$BACKEND-probe.log"
+            if tier_check "$out/$BACKEND-probe.log"; then
+                row "$BACKEND" - "tier probe" PASS "the tiers run on the CPU QEMU models"
+            else
+                tierok=0
+                row "$BACKEND" - "tier probe" FAIL "under QEMU: $TC_WHY"
+            fi
+        fi
+    fi
+
+    # -- what does the emulated machine say it is ---------------------------
+    flags="$(dk X=1 -- "grep -o 'sse4_2\|avx2\|avx512[a-z]*\|fma\|bmi2' /proc/cpuinfo | sort -u | tr '\n' ' '" 2>/dev/null)"
+    arch="$(dk X=1 -- "uname -m" 2>/dev/null)"
+    echo "x86-docker: uname -m = $arch"
+    if [ "$BACKEND" = rosetta ]; then
+        echo "x86-docker: /proc/cpuinfo: ${flags:-<none>}"
+        case " $flags " in
+            *" avx2 "*) : ;;
+            *) row rosetta - "cpuinfo avx2" FAIL "no avx2 in /proc/cpuinfo under Rosetta" ;;
+        esac
     else
-        row "$BACKEND" - "build -Dsimd=auto" FAIL "$BACKEND-build8.log"
-        continue
+        # qemu-user passes the HOST's /proc/cpuinfo straight through, so under
+        # QEMU that file describes an Apple core and says nothing about what
+        # the guest can execute. The only honest probe is the binary's own
+        # CPUID, which is what the checkasm banner prints below.
+        echo "x86-docker: /proc/cpuinfo is the host's under qemu-user (QEMU_CPU=$QEMU_CPU);"
+        echo "            the feature probe that counts is the encoder's own CPUID, below."
     fi
 
     # The binary's own CPUID, printed by checkasm, and the AVX-512 assertion
@@ -447,7 +534,11 @@ for BACKEND in $BACKENDS; do
     fi
 
     # -- the tier matrix ----------------------------------------------------
+    # a tier the probe could not find would run the default code under its
+    # name, so without the probe the matrix is skipped, not run
+    [ "$tierok" = 1 ] || row "$BACKEND" - "tier legs" SKIP "the build's tiers are not proven; see above"
     for tier in $TIERS; do
+        [ "$tierok" = 1 ] || break
         if has_leg test; then
             # YAH264= as well as BUILD=: `make test` hands regress.py no path
             # and regress.py defaults to build/cli/yah264, which in here is a
@@ -481,27 +572,7 @@ for BACKEND in $BACKENDS; do
     # thread count, and the md5 of the .264 is compared against the `none`
     # tier's. No kernel may move a byte, so a single differing md5 is a
     # kernel defect.
-    # THE CAP MUST TAKE. Y264_SIMD_FORCE is read only in a dev_knobs build;
-    # in any other the tiers all run the default and compare identical. The
-    # build is configured with dev_knobs, but a stale build directory may not
-    # be, so it is probed, reconfigured once if needed, and the identity legs
-    # refuse to run without it.
-    capok=1
-    if has_leg identity; then
-        capline() { dk "Y264_SIMD_FORCE=none" -- "$b8/tools/checkasm/checkasm --list | head -1" 2>/dev/null | tr -d '\r'; }
-        case "$(capline)" in
-            "checkasm: cpu scalar, "*) ;;
-            *) dk X=1 -- "meson configure $b8 -Ddev_knobs=true && ninja -C $b8 -j$JOBS" \
-                   > "$out/$BACKEND-devknobs.log" 2>&1
-               case "$(capline)" in
-                   "checkasm: cpu scalar, "*) row "$BACKEND" - "tier cap" NOTE "reconfigured with -Ddev_knobs=true" ;;
-                   *) capok=0
-                      row "$BACKEND" - "tier cap" FAIL "Y264_SIMD_FORCE=none does not take in $b8" ;;
-               esac ;;
-        esac
-    fi
-
-    if has_leg identity && [ "$capok" = 1 ]; then
+    if has_leg identity && [ "$tierok" = 1 ]; then
         # The md5 lists are keyed by BACKEND, not by build directory: the QEMU
         # leg may be running out of the Rosetta build, and one leg overwriting
         # the other's lists would compare two backends by accident.
@@ -552,7 +623,7 @@ done
     # and picks the 10-bit one from the input.
     # FRAMES 0 means the whole clip: ffmpeg is then given no frame limit, and
     # each cached clip is keyed by the count.
-    if has_leg identity && [ "$capok" = 1 ]; then
+    if has_leg identity && [ "$tierok" = 1 ]; then
         idir="scratch/x86-docker/ident10-$BACKEND"
         fflim=""; [ "$FRAMES" -gt 0 ] && fflim="-frames:v $FRAMES"
         script="set -e
@@ -600,7 +671,7 @@ done"
         done
     fi
 
-    if [ "$BACKEND" = qemu ] && [ "$ROSETTA_OFF" = 1 ]; then restore_rosetta; ROSETTA_OFF=0; fi
+    if [ "$BACKEND" = qemu ] && [ "$ROSETTA_OFF" = 1 ]; then rosetta_on; fi
 done
 
 # ---------------------------------------------------------------------------
