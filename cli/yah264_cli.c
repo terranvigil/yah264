@@ -2176,21 +2176,35 @@ static void *y4m_reader_seek(void *arg)
 /* the fewest frames a VBV two-pass splits at (encode_threaded) */
 #define TP_SEG_MIN 30
 
-/* a pass-1 record the encoder takes: its type, finite costs no bigger than
- * a picture can cost, and a frame QP, which pass 1 writes in 0..51 */
-static int tp_record_ok(int type, double cplx, double bits, int qp, double mbits)
+/* a pass-1 record the encoder takes: its type, finite costs under a ceiling
+ * no picture comes near, and a frame QP, which pass 1 writes in 0..51 */
+static int tp_record_ok(int type, double cplx, double bits, int qp, double mbits, double mcplx)
 {
-    return type >= 0 && type <= 2 && isfinite(cplx) && cplx >= 0.0
+    return type >= 0 && type <= 2 && isfinite(cplx) && cplx >= 0.0 && cplx <= mcplx
         && isfinite(bits) && bits >= 0.0 && bits <= mbits && qp >= 0 && qp <= 51;
 }
 
-/* the most a picture can cost: its raw samples at the coded depth, and half
- * again for the syntax, as the encoder's reader bounds a record */
-static double tp_pic_bits(const yah264_param_t *param)
+/* a picture's raw samples */
+static double tp_pic_samples(const yah264_param_t *param)
 {
     double mbs = (double)((param->width + 15) / 16) * ((param->height + 15) / 16);
-    return 1.5 * (g_api->depth > 8 ? g_api->depth : 8) * mbs
-         * (256.0 + 2.0 * 256.0 / (g_sub_w * g_sub_h));
+    return mbs * (256.0 + 2.0 * 256.0 / (g_sub_w * g_sub_h));
+}
+
+/* the ceilings the encoder's reader puts on a record:
+ * sixteen times the raw picture and a fixed allowance for headers, far past
+ * what CABAC at QP 0 on noise or a tiny frame's headers reach, and only
+ * there to keep the weights finite */
+static double tp_pic_bits(const yah264_param_t *param)
+{
+    int d = g_api->depth > 8 ? g_api->depth : 8;
+    return 16.0 * d * tp_pic_samples(param) + 1.0e6;
+}
+
+static double tp_pic_cplx(const yah264_param_t *param)
+{
+    int d = g_api->depth > 8 ? g_api->depth : 8;
+    return 64.0 * (double)(1 << d) * tp_pic_samples(param) + 1.0e6;
 }
 
 static int tp_seg_on(const yah264_param_t *param)
@@ -2551,7 +2565,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
             continue;
         /* what the encoder would stop at: here the whole file is refused */
         if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4
-            || !tp_record_ok(type, cplx, bits, qp, tp_pic_bits(param))) {
+            || !tp_record_ok(type, cplx, bits, qp, tp_pic_bits(param), tp_pic_cplx(param))) {
             fprintf(stderr, "yah264: stats file '%s' has a malformed record in GOP %d\n",
                     in_path, cur);
             bad = 1; break;
@@ -3834,8 +3848,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                                     (double)fn / fd * (param->interlaced ? 2 : 1), param);
             if (sr != 0) {
                 if (sr == -1)       /* -2 is out of memory, already said */
-                    fprintf(stderr, "yah264: pass %d cannot use '%s' -- run pass 1 into it "
-                            "again, with this pass's --frames and --keyint\n",
+                    fprintf(stderr, "yah264: pass %d cannot use '%s' (the line above says "
+                            "why): it was damaged, or a pass 1 with other options wrote it\n",
                             param->rc.pass, param->rc.stats);
                 tp_free_paths(gop_stats, n_gops, 1);
                 free(gop_target);

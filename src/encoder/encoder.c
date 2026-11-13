@@ -5491,11 +5491,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * markers reads exactly as it always did. */
                 long mframes = 0;
                 int bad_rec = 0;
-                /* a picture's raw samples at its depth, and half again for what
-                 * the syntax adds: a real key at QP <= 14 runs 2000 bits a
-                 * macroblock, a 4:4:4 one more */
-                double mbits = 1.5 * Y264_BIT_DEPTH * e->width_in_mbs * e->height_in_mbs
+                /* ceilings on a record's costs far past anything codable
+                 * (sixteen times the raw picture, and a fixed allowance for
+                 * headers), the same as the CLI's splitter puts: only there
+                 * to keep the plan's sums finite */
+                double msamp = e->width_in_mbs * e->height_in_mbs
                              * (256.0 + 2.0 * 256.0 / (e->sub_w * e->sub_h));
+                double mbits = 16.0 * Y264_BIT_DEPTH * msamp + 1.0e6;
+                double mcplx = 64.0 * (double)(1 << Y264_BIT_DEPTH) * msamp + 1.0e6;
                 int split = 0;      /* a file the GOP splitter wrote */
                 int first = 1;
                 while (fgets(ln, sizeof ln, fp)) {
@@ -5543,6 +5546,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     int nf = sscanf(ln, "%d %lf %lf %d %d",
                                     &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
                     if (nf < 4 || s.type < 0 || s.type > 2 || !isfinite(s.cplx) || s.cplx < 0.0
+                        || s.cplx > mcplx
                         || !isfinite(s.bits) || s.bits < 0.0 || s.bits > mbits
                         || s.qp < 0 || s.qp > 51) {
                         bad_rec = 1;
@@ -5564,7 +5568,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                  * would code at the last QP: refuse it rather */
                 if (bad_rec) {
                     fprintf(stderr, "yah264: stats file '%s' has a malformed record after "
-                            "%d: run pass 1 into it again\n", param->rc.stats, e->tp_n);
+                            "%d: it was damaged, or isn't one this encoder wrote\n", param->rc.stats, e->tp_n);
                     yah264_encoder_close(e);
                     return NULL;
                 }
