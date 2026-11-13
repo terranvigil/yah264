@@ -795,12 +795,14 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
         goal = e->vbv_seg_h;
     else if (e->tp_pass >= 2 && e->tp_exit <= 0.0 && e->tp_join > 0.0)
         goal = 0.0;
-    /* ...and with a cap at or under its target, to nothing at all: the cap
-     * refills only what the plan spends, so a reserve held at half the
+    /* ...and with a cap at or under its target, to half the next key: the
+     * cap refills only what the plan spends, so a reserve held at half the
      * buffer is never spent (cutsx CIF at 500/500/500, -0.76 dB at one
-     * thread); the corridor and the key reserve keep what the joins need */
-    if (e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate)
-        goal = 0.0;
+     * thread), but a buffer the keys nearly fill needs one held for them
+     * (bbb 720p at 800/800/200 lost 1 dB aimed at nothing) */
+    if (e->tp_pass >= 2 && e->param.rc.vbv_maxrate <= e->param.rc.bitrate
+        && 0.5 * e->tp_key < goal)
+        goal = 0.5 * e->tp_key;
     double h = fill > goal ? e->rck.vbv_fill_hup : e->rck.vbv_fill_h;
     if (h <= 0) h = 1.0;
     double allowed = e->vbv.rate + (fill - goal) / h;

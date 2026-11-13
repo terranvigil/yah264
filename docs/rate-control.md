@@ -212,8 +212,8 @@ at the planned level, and the one before it leaves at least that much, held
 to it only where what its remaining frames give back at QP 51 couldn't make
 it up. Every GOP takes over its predecessor's spend against its budget,
 whichever worker coded it. When the cap is at or under the target, pass 2
-steers to no reserve of its own, and a frame the buffer has room for spends
-it, up to what its budget allows. `--nal-hrd` always runs one encoder, and
+steers to half the next key instead of half the buffer, and a frame the
+buffer has room for spends it, up to what its budget allows. `--nal-hrd` always runs one encoder, and
 under `--nal-hrd cbr` that encoder ends with the buffer where it began.
 
 ### Frame-level AQ strength by mode
