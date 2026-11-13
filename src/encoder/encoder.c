@@ -5719,7 +5719,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->abr_rf2 = 0;
         if (e->abr_on) {
             if (!e->mbtree_on) {
-                fprintf(stderr, "yah264: the rate-factor ABR model needs mb-tree (bframes > 0); using the per-frame model\n");
+                if (!e->tp_pass)    /* a VBV pass 1 runs as ABR, not by request */
+                    fprintf(stderr, "yah264: the rate-factor ABR model needs mb-tree (bframes > 0); using the per-frame model\n");
             } else {
                 e->abr_rf2 = 1;          /* the ledger opens at the first decide */
             }
