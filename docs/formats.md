@@ -156,8 +156,8 @@ layout is the likelier cause than the dispatch itself.
   the CABAC 8x8 chroma context init values.
 - **4:2:2 and 4:4:4 against x264.** Both recon-match, but no BD board exists
   for them yet.
-- **10-bit x86 speed.** The SSE4.2 and AVX2 tiers have no reading on real
-  hardware yet, and there's no AVX-512 form (see [simd.md](simd.md)).
+- **AVX-512 at 10 bits.** The x86 tiers stop at AVX2 (see
+  [simd.md](simd.md)).
 
 ## Measuring it
 

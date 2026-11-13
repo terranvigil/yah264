@@ -115,6 +115,12 @@ shared text between the depths. The tiers answer `Y264_TIER_SSE4` and
 `Y264_TIER_AVX2` and take the same escapes. There's no AVX-512 form at 10
 bits, so on an AVX-512 machine the 10-bit library runs AVX2.
 
+Measured at one thread on rented Intel and AMD machines, the AVX2 tier takes
+less CPU time than x264's 10-bit build with its assembly, and retires fewer
+instructions where the machine exposes the counters. The C build does the
+same against x264's fair C build, and the SSE4.2 tier is level with or ahead
+of x264's assembly.
+
 | family | 10-bit SSE4.2 and AVX2 | stays C |
 |---|---|---|
 | pixel metrics | every kernel the 8-bit x86 tiers have | none |
@@ -297,9 +303,9 @@ The ranges span sunflower 1080p and crowd_run 4K.
   beats AVX2 on both AMD and Intel.
 - **Wider AVX2.** Several AVX2 kernels re-encode the SSE4.2 body and could use
   the whole register on 16-wide blocks.
-- **10-bit x86 on real hardware.** The 10-bit SSE4.2 and AVX2 tiers are
-  checked under emulation only. Their speed against x264's 10-bit build, and
-  whether an AVX-512 form pays at 10 bits, need a rented x86 box.
+- **AVX-512 at 10 bits.** The 10-bit library has no AVX-512 form. Whether
+  one pays is open; x264's 10-bit build retires the same instructions with
+  its AVX-512 paths as without them.
 
 ## Measuring it
 
