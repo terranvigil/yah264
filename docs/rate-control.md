@@ -206,7 +206,9 @@ records, and the next GOP's key what it costs at its planned QP. The
 splitter caps each GOP's budget at
 what the cap delivers over it plus half the buffer, hands the rest to the
 other GOPs, and plans the level each GOP joins at: the buffer walked over the
-GOP budgets, and no less than the next key's cost. A GOP coded right after
+GOP budgets, and no less than the next key's cost; with the cap at or under
+the target the last GOP is held, by its measured sizes, to the level the
+walk ends at. A GOP coded right after
 its predecessor continues its buffer at the exact occupancy; any other starts
 at the planned level, and the one before it leaves at least that much, held
 to it only where what its remaining frames give back at QP 51 couldn't make
