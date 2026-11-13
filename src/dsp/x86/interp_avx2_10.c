@@ -3,18 +3,17 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * At 16 bits a sample, a 16-wide row is exactly one 256-bit register: the luma
- * row filters, the plane fetches and averages at width 16, and the half-pel
- * build's rows step sixteen columns per register here. The chroma shapes are
- * eight or four columns, so the upper lane takes the next rows instead.
+ * a 16-wide row of 16-bit samples is one 256-bit register, so the luma row
+ * filters, the width-16 fetches and averages and the half-pel build step
+ * sixteen columns a register. chroma is eight or four wide, so the upper lane
+ * takes the next rows instead.
  *
- * The in-lane operations used below (unpack, pack, hadd) keep the columns in
- * order wherever an unpack is undone by a pack; where they would not (an int32
- * pack of two separately loaded halves, a horizontal pair sum), a 64-bit
- * permute puts the quarters back.
+ * the in-lane unpack, pack and hadd keep columns in order where a pack undoes
+ * an unpack; where not (an int32 pack of two separately loaded halves, a
+ * horizontal pair sum), a 64-bit permute puts the quarters back.
  *
- * Shapes with no second half to fill, and the tails of the step-back rows, are
- * the shared 128-bit bodies, VEX-encoded here.
+ * shapes with no second half to fill, and the step-back row tails, use the
+ * shared 128-bit bodies, VEX-encoded.
  */
 #include "dsp/x86/interp_x86_10.h"
 
@@ -65,7 +64,7 @@ static inline __m256i i10_tap6_32x8(__m256i a, __m256i b, __m256i c,
     return _mm256_add_epi32(_mm256_sub_epi32(s05, m5), m20);
 }
 
-/* the in-lane int32 pack of lo:hi undone by the unpack that split them */
+/* lo:hi must come from an in-lane unpack, which this pack undoes */
 static inline __m256i i10_clip32_256(__m256i lo, __m256i hi)
 {
     return _mm256_min_epu16(_mm256_packus_epi32(lo, hi), _mm256_set1_epi16(PIXEL_MAX));
@@ -135,9 +134,9 @@ void y264_mc_luma8_avx2(pixel *dst, int dstride, const pixel *ref, int rstride,
                         int ix, int iy, int fx, int fy, int h)
 { i10_mc_luma8(dst, dstride, ref, rstride, ix, iy, fx, fy, h); }
 
-/* ---- chroma ------------------------------------------------------------------
+/* ---- chroma -----------------------------------------------------------------
  *
- * The u16 bilinear of interp_x86_10.h with rows in both lanes. */
+ * the u16 bilinear of interp_x86_10.h, rows in both lanes. */
 struct i10_cw256 { __m256i a, b, c, d; };
 
 static inline struct i10_cw256 i10_cweights256(int fx, int fy)
@@ -160,8 +159,8 @@ static inline __m256i i10_bilin256(__m256i A, __m256i B, __m256i C, __m256i D,
     return _mm256_srli_epi16(_mm256_add_epi16(v, _mm256_set1_epi16(32)), 6);
 }
 
-/* output rows y and y + 1 of an 8-wide block from source rows r .. r + 2s:
- * the lower pair of row y is the upper pair of row y + 1 */
+/* output rows y and y + 1 from source rows r .. r + 2s: row y's lower source
+ * row is row y + 1's upper */
 static inline __m256i i10_bilin8x2(const pixel *r, int s, const struct i10_cw256 *w)
 {
     __m128i a0 = i10_ld8(r), b0 = i10_ld8(r + 1);
@@ -194,7 +193,7 @@ void y264_mc_chroma_w8h_avx2(pixel *dst, int dstride, const pixel *ref,
                           ix, iy + y, fx, fy, h - y);
 }
 
-/* four output rows per pass, two per lane */
+/* four output rows a pass, two a lane */
 void y264_mc_chroma_w4h_avx2(pixel *dst, int dstride, const pixel *ref,
                              int rstride, int ix, int iy, int fx, int fy, int h)
 {
@@ -225,7 +224,7 @@ void y264_mc_chroma_w4h_avx2(pixel *dst, int dstride, const pixel *ref,
                           ix, iy + y, fx, fy, h - y);
 }
 
-/* ---- fetches and averages ---------------------------------------------------- */
+/* ---- fetches and averages ------------------------------------------------ */
 
 void y264_pred_copy_avx2(pixel *dst, int dstride, const pixel *s, int sstride,
                          int w, int h)
@@ -327,10 +326,10 @@ void y264_mc_chroma_bi8_avx2(pixel *dst, int dstride,
     }
 }
 
-/* ---- the half-pel plane build ------------------------------------------------- */
+/* ---- the half-pel plane build -------------------------------------------- */
 
-/* Sixteen columns per pass, then the 128-bit step stepped back onto the span;
- * the caller guarantees eight columns, so the wide loop may not run at all. */
+/* the span is only guaranteed eight columns, so the wide loop may not run;
+ * the 128-bit step backs up onto the span for the tail */
 void y264_hpel_hrow_avx2(int32_t *srow, const pixel *row, int x0, int x1)
 {
     const __m256i k = _mm256_set1_epi32(10240);
@@ -402,11 +401,11 @@ static inline void hpb_c_avx2(const uint16_t *t0, const uint16_t *t1,
 
 I10_BAND_BODY(y264_hpel_build_band_avx2, 16, hpb_hsum_avx2, hpb_hv_avx2, hpb_c_avx2)
 
-/* ---- the lowres half-pel row ---------------------------------------------------
+/* ---- the lowres half-pel row ------------------------------------------------
  *
- * Sixteen outputs from thirty-two vertical means. The pair sum works inside
- * each 128-bit lane, so its quarters come out as outputs 0-3, 8-11, 4-7,
- * 12-15 and a 64-bit permute orders them. */
+ * sixteen outputs from 32 vertical means. the pair sum is per 128-bit lane,
+ * so quarters come out as outputs 0-3, 8-11, 4-7, 12-15 and a 64-bit permute
+ * orders them. */
 static inline __m256i i10_lr_m256(__m256i a, __m256i b)
 {
     return _mm256_srli_epi16(_mm256_add_epi16(_mm256_add_epi16(a, b),

@@ -4,21 +4,21 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * A row of eight int32 coefficients is exactly one 256-bit register, which is
- * the shape the wide forms here are built on: an 8x8 transform holds its
- * block in eight registers and transposes with in-lane unpacks and four lane
- * crossings, and the quant, dequant and 8x8 scan stream eight lanes at a
- * time. The batched 4x4 forward puts two horizontally adjacent blocks in the
- * two 128-bit lanes, where the 4x4 transpose runs on each independently.
+ * a row of eight int32 coefficients is one 256-bit register: an 8x8
+ * transform holds its block in eight registers and transposes with in-lane
+ * unpacks and four lane crossings, and quant, dequant and the 8x8 scan run
+ * eight lanes at a time. the batched 4x4 forward puts two horizontally
+ * adjacent blocks in the two 128-bit lanes, where the 4x4 transpose runs on
+ * each independently.
  *
- * The lone 4x4 shapes and the byte-domain 8x8 scan mask have no second half
- * to fill; they are the shared 128-bit bodies, VEX-encoded here.
+ * the lone 4x4 shapes and the byte-domain 8x8 scan mask have no second half
+ * to fill; they use the shared 128-bit bodies, VEX-encoded.
  */
 #include "dsp/x86/transform_x86_10.h"
 
 #if Y264_HAVE_AVX2_10
 
-/* ---- 256-bit plumbing ----------------------------------------------------- */
+/* ---- 256-bit plumbing ---------------------------------------------------- */
 
 static inline __m256i t10_ldc8(const dctcoef *p)
 {
@@ -72,7 +72,7 @@ static inline void t10_trn8w(__m256i v[8])
        v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);                       \
 } while (0)
 
-/* ---- 8x8 transforms -------------------------------------------------------- */
+/* ---- 8x8 transforms ------------------------------------------------------ */
 
 static inline void t10_fdct8_rows(__m256i v[8], dctcoef coef[64])
 {
@@ -140,7 +140,7 @@ void y264_add8x8_idct8_avx2(pixel *dst, int ds, const pixel *pred, int ps,
                                     _mm256_extracti128_si256(v[i], 1)));
 }
 
-/* ---- 4x4 transforms -------------------------------------------------------- */
+/* ---- 4x4 transforms ------------------------------------------------------ */
 
 void y264_fdct4x4_avx2(const dctcoef diff[16], dctcoef coef[16])
 { t10_fdct4x4(diff, coef); }
@@ -156,10 +156,9 @@ void y264_add4x4_idct_avx2(pixel *dst, int ds, const pixel *pred, int ps,
                            const dctcoef coef[16])
 { t10_add4x4_idct(dst, ds, pred, ps, coef); }
 
-/* Two horizontally adjacent 4x4 blocks: a row of eight samples widens to one
- * register whose low lane is block A's row and high lane block B's, and the
- * 4x4 forward runs on both lanes at once. An odd last block takes the 128-bit
- * body. */
+/* two adjacent 4x4 blocks a pass: an 8-sample row widens to one register,
+ * the left block in the low lane and the right in the high. an odd last block
+ * takes the 128-bit body. */
 void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps)
@@ -189,9 +188,8 @@ void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
 
 /* ---- forward quant ----------------------------------------------------------
  *
- * The 128-bit body's arithmetic eight lanes wide, with the same domain: a
- * block holding a coefficient of 2^17 or more, or a bias outside [0, 2^30),
- * takes the reference's loop. */
+ * the 128-bit body eight lanes wide, same domain: a coefficient of 2^17 or
+ * more, or a bias outside [0, 2^30), sends the block to the scalar loop. */
 static inline __m256i t10_quant8(__m256i c, __m256i mf, __m256i vf, __m128i sh)
 {
     __m256i z = _mm256_setzero_si256();
@@ -261,7 +259,7 @@ int y264_quant_4x4_ac_f_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
     return any;
 }
 
-/* ---- dequant ----------------------------------------------------------------*/
+/* ---- dequant ------------------------------------------------------------- */
 
 static inline void t10_dequantw(const dctcoef *lev, dctcoef *coef, int n, int qp,
                                 const int32_t *lsrow, int point)
@@ -291,11 +289,11 @@ void y264_dequant_8x8_avx2(const dctcoef lev[64], dctcoef coef[64], int qp,
 
 /* ---- scans ------------------------------------------------------------------
  *
- * The 8x8 absolute scan over eight row registers: each scan group of eight is
+ * the 8x8 absolute scan over eight row registers: each scan group of eight is
  * a lane permute of every row it draws on, blended in where the control is
- * not -1 (a -1 control is all ones, so its blend keeps what is there).
- * Generated from y264_zigzag8: for scan group k and row j, the column each
- * position reads, or -1 where another row owns it. */
+ * not -1 (all ones, so the blend keeps what is there). controls come from
+ * y264_zigzag8: for scan group k and row j, the column each position reads,
+ * or -1 where another row owns it. */
 static const uint8_t t10_zzw_src[36] = {
     0, 1, 2, 0, 1, 2, 3, 4, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3,
     4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 3, 4, 5, 6, 7, 5, 6, 7

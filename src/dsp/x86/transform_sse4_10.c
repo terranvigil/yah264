@@ -4,10 +4,9 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Every kernel is a 128-bit body from transform_x86_10.h under its SSE4.2
- * name. The names are the 8-bit tier's, and src/common/symbols10.h gives each
- * its _10 suffix, so arch.h declares one prototype set and the dispatch sites
- * are shared text.
+ * each kernel is a transform_x86_10.h body under its SSE4.2 name. the names
+ * are the 8-bit tier's; src/common/symbols10.h adds the _10 suffix, so arch.h
+ * keeps one prototype set and the dispatch sites are shared.
  */
 #include "dsp/x86/transform_x86_10.h"
 
@@ -110,11 +109,10 @@ void y264_dequant_8x8_sse4(const dctcoef lev[64], dctcoef coef[64], int qp,
 void y264_zigzag_abs_4x4_sse4(int out[16], const dctcoef in[16])
 { t10_zigzag_abs_4x4(out, in); }
 
-/* The 8x8 absolute scan at 128 bits: sixteen source registers of four int32
- * (raster 4j to 4j + 3), sixteen scan groups of four, each the OR of byte
- * shuffles of the registers it draws on. The abs is taken after the gather,
- * on the int the reference reads. Generated from y264_zigzag8 like the
- * scan-mask controls in transform_x86_10.h. */
+/* sixteen source registers of four int32 (raster 4j to 4j + 3), sixteen scan
+ * groups of four, each the OR of byte shuffles of the registers it draws on.
+ * abs comes after the gather, on the int the reference reads. controls come
+ * from y264_zigzag8, like the scan mask's. */
 static const uint8_t t10_zz8_src[52] = {
      0,  2,  4,  0,  2,  4,  6,  8,  1,  2,  4,  3,  4,  6,  8,  8, 10, 12,
      1,  3,  5,  6,  1,  3,  5,  7,  8, 10, 12, 14,  9, 10, 12, 14,  3,  5,

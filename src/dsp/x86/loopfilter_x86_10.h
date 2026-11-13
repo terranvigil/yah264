@@ -3,26 +3,24 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The 16-bit-sample twins of the whole-edge forms in loopfilter_x86.h: the
+ * 16-bit-sample twins of the whole-edge forms in loopfilter_x86.h: the
  * sixteen-line luma edges, the two-plane 4:2:0 chroma edges and the
- * eight-line chroma horizontal edge. Every body here is `static inline` and
- * 128-bit: loopfilter_sse4_10.c wraps each one under its SSE4.2 name, and
- * loopfilter_avx2_10.c wraps the chroma8 one the same way (VEX-encoded there)
- * and writes its own 256-bit forms for the others.
+ * eight-line chroma horizontal edge. every body is static inline and
+ * 128-bit: the SSE4.2 file wraps them all, the AVX2 file wraps the chroma8
+ * one and writes 256-bit forms for the rest.
  *
- * The filter arithmetic is loopfilter_x86_core.h's, the per-lane bodies the
- * 8-bit tier runs, because they already work on 16-bit lanes. What changes is
- * the edge of each kernel: a 10-bit sample IS a lane, so there is no widening
- * on the way in and no saturating pack on the way out (that pack clips to
- * 255), the transposes move 16-bit lanes rather than bytes, and alpha and beta
- * are scaled by 4 before the lanes see them (tc0 is scaled in the parameter
- * helpers). Every lane bound holds at 10 bits: a sample is at most 1023, the
- * widest sum is the strong filter's 8 * 1023 + 4 = 8188, a delta is clipped
- * to tc <= 25 * 4 + 2, and p0/q0 are clipped to PIXEL_MAX.
+ * the filter arithmetic is loopfilter_x86_core.h's per-lane bodies, which
+ * already run on 16-bit lanes. only each kernel's edge changes: a 10-bit
+ * sample is a lane, so nothing widens on the way in and no saturating pack
+ * (it clips to 255) runs on the way out; transposes move 16-bit lanes; and
+ * alpha and beta are scaled by 4 first (the parameter helpers scale tc0).
+ * every lane bound holds: a sample is <= 1023, the widest sum is the strong
+ * filter's 8 * 1023 + 4 = 8188, a delta is clipped to tc <= 25 * 4 + 2, and
+ * p0/q0 clip to PIXEL_MAX.
  *
- * Loads and stores are sized to the filter's window: a vertical luma edge
- * reads and writes eight samples per row (p3 and q3 go back unchanged), a
- * horizontal one eight rows, a chroma edge four samples or four rows.
+ * loads and stores are sized to the filter's window: a vertical luma edge
+ * moves eight samples a row (p3 and q3 go back unchanged), a horizontal one
+ * eight rows, a chroma edge four samples or four rows.
  */
 #ifndef YAH264_DSP_X86_LOOPFILTER_X86_10_H
 #define YAH264_DSP_X86_LOOPFILTER_X86_10_H
@@ -48,9 +46,8 @@ static inline void lf10_st8(pixel *p, __m128i v)
     _mm_storeu_si128((__m128i *)(void *)p, v);
 }
 
-/* Eight rows of eight 16-bit lanes transposed in place, which is its own
- * inverse. Every step stays inside a 128-bit half, so at 256 bits it
- * transposes the two halves' 8x8 blocks independently. */
+/* in place and its own inverse. every step stays in a 128-bit half, so at
+ * 256 bits it transposes each half's 8x8 independently. */
 #define LF10_TRN8(P, V, v) do {                                               \
     V a0_ = P##_unpacklo_epi16(v[0], v[1]), a1_ = P##_unpackhi_epi16(v[0], v[1]);\
     V a2_ = P##_unpacklo_epi16(v[2], v[3]), a3_ = P##_unpackhi_epi16(v[2], v[3]);\
@@ -66,8 +63,8 @@ static inline void lf10_st8(pixel *p, __m128i v)
     v[6] = P##_unpacklo_epi64(b3_, b7_); v[7] = P##_unpackhi_epi64(b3_, b7_); \
 } while (0)
 
-/* Eight rows of four 16-bit samples (the low halves of r[0..7]) to the four
- * sample positions, eight rows each. In-half as well. */
+/* eight rows of four samples (the low halves of r[0..7]) to the four sample
+ * positions, eight rows each; also in-half */
 #define LF10_TRN4X8(P, V, r, c) do {                                          \
     V a0_ = P##_unpacklo_epi16(r[0], r[1]), a1_ = P##_unpacklo_epi16(r[2], r[3]);\
     V a2_ = P##_unpacklo_epi16(r[4], r[5]), a3_ = P##_unpacklo_epi16(r[6], r[7]);\
@@ -79,9 +76,9 @@ static inline void lf10_st8(pixel *p, __m128i v)
 
 /* ---- luma, sixteen lines, eight a pass ----------------------------------- *
  *
- * bS 1-3 and bS 4 are tested per half, since a half is one pass: bS & 3 is
- * nonzero exactly for 1-3 and bS & 4 exactly for 4. A half whose two bS
- * values are both 0 is not touched. */
+ * bS 1-3 and bS 4 are tested per half, as a half is one pass: bS & 3 is
+ * nonzero exactly for 1-3, bS & 4 exactly for 4. a half whose two bS values
+ * are both 0 is skipped. */
 static inline void lf10_luma_lanes_half(__m128i s[8], int alpha, int beta,
                                         __m128i tc0b, __m128i bs4b, __m128i nzb,
                                         int b0, int b1, int g, __m128i o[6])
@@ -93,8 +90,8 @@ static inline void lf10_luma_lanes_half(__m128i s[8], int alpha, int beta,
         o, ((b0 | b1) & 3) != 0, ((b0 | b1) & 4) != 0);
 }
 
-/* Horizontal edge: eight columns a pass, the samples across the edge running
- * down the rows, so each sample position is one load. */
+/* eight columns a pass; the samples across the edge run down the rows, so
+ * each sample position is one load */
 static inline void lf10_luma_h16(pixel *q0p, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3])
 {
@@ -116,8 +113,8 @@ static inline void lf10_luma_h16(pixel *q0p, int stride, int alpha, int beta,
     }
 }
 
-/* Vertical edge: eight rows of p3..q3 a pass, one register each, transposed
- * so the samples across the edge become registers and back. */
+/* eight rows of p3..q3 a pass, transposed so each sample position across
+ * the edge is a register, then back */
 static inline void lf10_luma_v16(pixel *q0p, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3])
 {
@@ -145,8 +142,7 @@ static inline void lf10_luma_v16(pixel *q0p, int stride, int alpha, int beta,
 
 /* ---- chroma (chromaStyleFilteringFlag == 1) ------------------------------ */
 
-/* Horizontal edge of one plane, eight columns: the 4:2:0 and 4:2:2
- * single-plane form. */
+/* one plane, eight columns: the 4:2:0 and 4:2:2 single-plane form */
 static inline void lf10_chroma8_h(pixel *q0p, int stride, int alpha, int beta,
                                   const uint8_t bs[4], const uint8_t tc0tab[3],
                                   int span, int g)
@@ -161,8 +157,8 @@ static inline void lf10_chroma8_h(pixel *q0p, int stride, int alpha, int beta,
     lf10_st8(q0p, qo);
 }
 
-/* Horizontal 4:2:0 edge, both planes: Cb and Cr share the edge's bS, alpha,
- * beta and tc, so one parameter set-up serves two eight-lane passes. */
+/* 4:2:0, both planes: Cb and Cr share the edge's bS, alpha, beta and tc, so
+ * one parameter set-up serves two eight-lane passes */
 static inline void lf10_chroma2_h(pixel *cbq0, pixel *crq0, int cbs, int crs,
                                   int alpha, int beta, const uint8_t bs[4],
                                   const uint8_t tc0tab[3])
@@ -183,8 +179,8 @@ static inline void lf10_chroma2_h(pixel *cbq0, pixel *crq0, int cbs, int crs,
     }
 }
 
-/* p0 and q0 of eight rows back into place, one four-byte store per row:
- * `lo` holds rows 0-3 as (p0, q0) pairs and `hi` rows 4-7. */
+/* one four-byte store a row; lo holds rows 0-3 as (p0, q0) pairs, hi rows
+ * 4-7 */
 static inline void lf10_st_p0q0(pixel *q, int st, __m128i lo, __m128i hi)
 {
     int32_t w[8];
@@ -194,8 +190,8 @@ static inline void lf10_st_p0q0(pixel *q, int st, __m128i lo, __m128i hi)
         memcpy(q - 1 + y * st, &w[y], 4);
 }
 
-/* Vertical 4:2:0 edge, both planes: each row's p1 p0 q0 q1 is one eight-byte
- * load, and only p0 and q0 go back. */
+/* 4:2:0, both planes: each row's p1 p0 q0 q1 is one eight-byte load, and
+ * only p0 and q0 go back */
 static inline void lf10_chroma2_v(pixel *cbq0, pixel *crq0, int cbs, int crs,
                                   int alpha, int beta, const uint8_t bs[4],
                                   const uint8_t tc0tab[3])

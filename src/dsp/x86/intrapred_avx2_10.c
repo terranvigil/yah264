@@ -3,16 +3,15 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * At 16 bits a sample, a 16x16 prediction row is exactly one 256-bit register
- * and two eight-wide chroma rows are another, so those two builders are
- * written out here: fills a row (or two) to a store, and the plane modes'
- * int32 sums eight to a register, packed and put back in order with one
- * qword permute.
+ * a 16x16 row of 16-bit samples is one 256-bit register and two 8-wide
+ * chroma rows are another, so those builders are written out here: a fill is
+ * one store per row (or two), and the plane modes keep eight int32 sums a
+ * register, packed and reordered with one qword permute.
  *
- * The 8x8 forms keep the shared 128-bit bodies, VEX-encoded: an 8x8 row is
- * one xmm, and the byte-plane shuffles that build the directional modes work
- * on sixteen-entry windows, which a 256-bit shuffle would only duplicate
- * across lanes. The edge derivation widens its integer view.
+ * the 8x8 forms keep the shared 128-bit bodies, VEX-encoded: an 8x8 row is
+ * one xmm, and the directional byte-plane shuffles work on sixteen-entry
+ * windows that a 256-bit shuffle would only duplicate across lanes. the edge
+ * derivation widens its integer view.
  */
 #include "dsp/x86/intrapred_x86_10.h"
 
@@ -23,9 +22,8 @@ static inline void ip10_st16(pixel *p, __m256i v)
     _mm256_storeu_si256((__m256i *)(void *)p, v);
 }
 
-/* sixteen int32 sums (in order, eight per register) to sixteen clipped
- * samples. packus works per 128-bit lane, so the qwords come out as
- * (lo 0-3, hi 0-3, lo 4-7, hi 4-7) and the permute straightens them. */
+/* packus is per 128-bit lane, so the qwords come out as (lo 0-3, hi 0-3,
+ * lo 4-7, hi 4-7) and the permute straightens them */
 static inline __m256i ip10_clip16(__m256i lo, __m256i hi)
 {
     __m256i p = _mm256_packus_epi32(_mm256_srai_epi32(lo, 5),

@@ -3,29 +3,22 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The 16-bit-sample twins of metrics_x86.h and metrics_sse4.c. Every body here
- * is `static inline` and 128-bit: metrics_sse4_10.c wraps each one under its
- * SSE4.2 name, and metrics_avx2_10.c wraps the narrow shapes the same way
- * (VEX-encoded there) and writes its own 256-bit forms for the 16-wide ones.
+ * 16-bit-sample twins of metrics_x86.h and metrics_sse4.c. every body is
+ * static inline and 128-bit: the SSE4.2 file wraps them all, the AVX2 file
+ * wraps the narrow shapes and writes its own 256-bit 16-wide forms.
  *
- * The arithmetic is the 8-bit kernels' with the load stage swapped: a row of
- * eight samples is one register, and a - b in 16-bit wraparound is the exact
- * signed residual because both samples are at most 1023. What moves are the
- * lane bounds, restated at each kernel. The two that shape the code:
+ * a - b in 16-bit wraparound is the exact residual, as both are <= 1023. the
+ * bounds that shape the code:
+ *   - a 4x4 Hadamard coefficient is <= 16 * 1023 = 16368, and the four
+ *     magnitudes the SATD core adds in a lane are <= 32736, so int16 holds.
+ *   - an 8x8 coefficient reaches 64 * 1023 = 65472, so the row transform
+ *     stops a stage short and takes the last as 2 * max(|x|, |y|).
  *
- *   - a 4x4 Hadamard coefficient is at most 16 * 1023 = 16368, and the
- *     four magnitudes the SATD core adds in a lane are bounded by the tile's
- *     energy to 32736, so they still meet in int16 (see the core).
- *   - an 8x8 coefficient reaches 64 * 1023 = 65472, past int16, so the row
- *     transform stops one stage short and takes the last stage through
- *     |x + y| + |x - y| = 2 * max(|x|, |y|) on values that still fit.
+ * x86 has no 16-bit SAD instruction: SAD is sub, abs and add, kept in 16-bit
+ * lanes for as many rows as the bound allows.
  *
- * There is no 16-bit sum of absolute differences on x86, so SAD is a subtract,
- * an absolute value and an add per register, accumulated in 16-bit lanes for
- * as many rows as the bound allows and widened once.
- *
- * Loads are sized to the block, never to the register: checkasm maps each
- * kernel's window against a PROT_NONE page at both ends.
+ * loads are sized to the block, never the register: checkasm puts a
+ * PROT_NONE page at both ends of each kernel's window.
  */
 #ifndef YAH264_DSP_X86_METRICS_X86_10_H
 #define YAH264_DSP_X86_METRICS_X86_10_H
@@ -64,7 +57,7 @@ static inline int m10_hsum32(__m128i v)
     return _mm_cvtsi128_si32(v);
 }
 
-/* eight non-negative 16-bit lanes, each <= 32767, summed */
+/* lanes must be <= 32767: the madd reads them signed */
 static inline int m10_hsum16(__m128i v)
 {
     return m10_hsum32(_mm_madd_epi16(v, _mm_set1_epi16(1)));
@@ -77,10 +70,8 @@ static inline __m128i m10_absdiff(__m128i a, __m128i b)
 
 /* ---- SAD -----------------------------------------------------------------
  *
- * A 16-wide row is two registers whose differences add before they reach the
- * accumulator: <= 2046 per lane per row, <= 32736 after sixteen rows. An
- * 8-wide row is <= 1023 per lane. Both stay inside a signed lane, which is
- * what the widening multiply-add needs. */
+ * a 16-wide row adds its two registers first: <= 2046 a lane a row, <= 32736
+ * after sixteen rows (8-wide, half that), still signed for the madd. */
 static inline int m10_sad_16xh(const pixel *a, int as, const pixel *b, int bs,
                                int h)
 {
@@ -101,8 +92,8 @@ static inline int m10_sad_8xh(const pixel *a, int as, const pixel *b, int bs,
     return m10_hsum16(acc);
 }
 
-/* The batches: one source load per row feeds every candidate. n is a
- * compile-time constant at every call site, so the loops unroll. */
+/* one source load a row feeds every candidate; n is constant at each call
+ * site, so the loops unroll */
 static inline void m10_sad_n_16xh(const pixel *src, int ss, const pixel *const *r,
                                   int rs, int h, int n, int *scores)
 {
@@ -137,14 +128,12 @@ static inline void m10_sad_n_8xh(const pixel *src, int ss, const pixel *const *r
 
 /* ---- the SATD core -------------------------------------------------------
  *
- * Four residual rows of eight columns -> the 32 coefficient magnitudes of the
- * two 4x4 tiles they span, as four int32 partial sums. The vertical butterfly
- * is between whole rows (<= 4092 per lane); the horizontal one is the
- * hadd/hsub pair twice (<= 8184, then <= 16368). The four magnitudes that
- * meet in a lane are four coefficients of one tile, and by Cauchy-Schwarz any
- * four of a tile's coefficients sum to at most 2 * sqrt(sum c^2) =
- * 2 * 4 * sqrt(sum d^2) <= 32736, so they add inside a signed lane before
- * the one widening multiply-add. The same holds for a tile of samples. */
+ * four residual rows of eight -> two 4x4 tiles' magnitude sums in four int32
+ * lanes. lanes reach 4092 after the vertical butterfly, 8184 then 16368 after
+ * the two hadd/hsub stages. the four magnitudes in a lane belong to one tile,
+ * and by Cauchy-Schwarz they sum to <= 2 * sqrt(sum c^2) =
+ * 8 * sqrt(sum d^2) <= 32736, so they add in int16 before the madd. a tile of
+ * samples obeys the same bound. */
 static inline __m128i m10_satd_rows8(__m128i d0, __m128i d1, __m128i d2, __m128i d3)
 {
     const __m128i one = _mm_set1_epi16(1);
@@ -161,9 +150,8 @@ static inline __m128i m10_satd_rows8(__m128i d0, __m128i d1, __m128i d2, __m128i
     return _mm_madd_epi16(_mm_add_epi16(_mm_add_epi16(a, b), _mm_add_epi16(c, d)), one);
 }
 
-/* One 4x4 tile held as two rows per register; the vertical butterfly crosses
- * the register halves (see metrics_x86.h). The two magnitudes per lane add to
- * <= 32736. */
+/* one 4x4 tile, two rows a register: the vertical butterfly crosses the
+ * register halves. two magnitudes a lane add to <= 32736. */
 static inline __m128i m10_satd_tile4(__m128i d01, __m128i d23)
 {
     __m128i w01 = _mm_shuffle_epi32(d01, 0x4e);
@@ -211,7 +199,7 @@ static inline void m10_satd_quad_8x8(const pixel *src, int ss, const pixel *r0,
                                      const pixel *r1, const pixel *r2,
                                      const pixel *r3, int rs, int scores[4])
 {
-    /* the source rows are loaded once for the four candidates */
+    /* source rows load once for all four candidates */
     const pixel *const r[4] = { r0, r1, r2, r3 };
     __m128i s[8];
     for (int i = 0; i < 8; i++)
@@ -225,8 +213,7 @@ static inline void m10_satd_quad_8x8(const pixel *src, int ss, const pixel *r0,
     }
 }
 
-/* SATD against (p + q + 1) >> 1, which PAVGW is exactly; p and q share a
- * stride. */
+/* against (p + q + 1) >> 1, which PAVGW is exactly; p and q share a stride */
 static inline int m10_satd_avg_wxh(const pixel *src, int ss, const pixel *p,
                                    const pixel *q, int ps, int w, int h)
 {
@@ -246,12 +233,10 @@ static inline int m10_satd_avg_wxh(const pixel *src, int ss, const pixel *p,
 
 /* ---- the 8x8 Walsh-Hadamard ----------------------------------------------
  *
- * The column pass runs between eight row registers (<= 8184 per lane, residual
- * or sample alike). The row pass's first two stages run inside a register
- * (<= 16368, then <= 32736); the third would reach 65472, so it is taken as
- * 2 * max(|x|, |y|) of each neighbouring pair instead. This returns the max
- * in the even lanes of each pair; the odd lanes are don't-care and the caller
- * drops them in its multiply-add. */
+ * the column pass is <= 8184 a lane, residual or sample. the row pass's first
+ * two in-register stages reach 16368 and 32736; the third would reach 65472,
+ * so it is taken as 2 * max(|x|, |y|) of each pair. the max lands in the even
+ * lane; the odd lane is don't-care and the caller's madd drops it. */
 static inline __m128i m10_had8_rowmax(__m128i v)
 {
     __m128i s4 = _mm_shuffle_epi32(v, 0x4e);
@@ -282,9 +267,8 @@ static inline __m128i m10_had8_rowmax(__m128i v)
     (o)[6] = _mm_add_epi16(b6_, b7_); (o)[7] = _mm_sub_epi16(b6_, b7_);      \
 } while (0)
 
-/* Half the sum of the 64 coefficient magnitudes of the 8x8 transform of d.
- * The multiply-add by (1, 0) keeps each pair's max (<= 32736) and drops the
- * don't-care lane. */
+/* half the 64 magnitudes' sum: the madd by (1, 0) keeps each pair's max
+ * (<= 32736) and drops the don't-care lane */
 static inline int m10_had8x8_half(const __m128i d[8])
 {
     const __m128i keep = _mm_set1_epi32(1);
@@ -303,8 +287,7 @@ static inline int m10_sa8d_8x8(const pixel *a, int as, const pixel *b, int bs)
     return (2 * m10_had8x8_half(d) + 2) >> 2;
 }
 
-/* The pixel sum of an 8x8 (<= 65472) is its transform's DC, so the AC
- * magnitude never forms the DC twice. */
+/* the pixel sum (<= 65472) is the DC, so subtracting it leaves the AC */
 static inline long m10_hadamard_ac_8x8(const pixel *p, int stride)
 {
     __m128i d[8], s = _mm_setzero_si128();
@@ -317,9 +300,9 @@ static inline long m10_hadamard_ac_8x8(const pixel *p, int stride)
 
 /* ---- the psy texture terms -----------------------------------------------
  *
- * Four rows of eight samples as two 4x4 tiles, with each tile's DC (its
- * sample sum, <= 16368) handed back from lanes 0 and 1 of the first hadd
- * pair. The four magnitudes in a lane fit int16, as in the SATD core. */
+ * four rows of eight as two 4x4 tiles; lanes 0 and 1 of the first hadd pair
+ * are the tiles' DCs (sample sums, <= 16368). lanes fit int16 as in the SATD
+ * core. */
 static inline __m128i m10_tex_group8(const pixel *p, int stride, int dc[2])
 {
     const __m128i one = _mm_set1_epi16(1);
@@ -382,8 +365,8 @@ static inline void m10_texture_ac48_16x16(const pixel *p, int stride, long out[2
 
 /* ---- variance -------------------------------------------------------------
  *
- * The sum lanes take two samples a row, <= 32736 after sixteen rows; a
- * square pair is <= 2093058 and a lane of the square sum <= 33.5M. */
+ * a sum lane takes two samples a row, <= 32736 after sixteen rows; a square
+ * lane takes four squares a row, <= 16 * 4 * 1023^2 ~= 67M. */
 static inline void m10_var_16x16(const pixel *p, int stride, uint32_t out[2])
 {
     __m128i s1 = _mm_setzero_si128(), s2 = s1;
@@ -399,12 +382,12 @@ static inline void m10_var_16x16(const pixel *p, int stride, uint32_t out[2])
 
 /* ---- the fused Intra4x4 nine-mode cost -----------------------------------
  *
- * Every 4x4 prediction sample is one entry of a 64-entry table over the flat
- * edge E = { l3, l3, l2, l1, l0, tl, t0..t7, t7 ... }: the 121 filter F
- * (0-15), the pair average H (16-31), E itself (32-47) and DC (48). The index
- * rows restate the C builder's per-mode formulas (see metrics_x86.h). A byte
- * shuffle reaches sixteen entries, so the 16-bit table is held as its low and
- * high bytes, looked up with the same indices and interleaved back. */
+ * every prediction sample is an entry of a 64-entry table over the flat edge
+ * E = { l3, l3, l2, l1, l0, tl, t0..t7, t7 ... }: the 121 filter (0-15), the
+ * pair average (16-31), E itself (32-47) and DC (48). the index rows restate
+ * the C builder's per-mode formulas. a byte shuffle reaches sixteen entries,
+ * so the 16-bit table is split into low and high bytes, looked up with the
+ * same indices and interleaved back. */
 static const uint8_t m10_i4_idx[9][16] = {
     { 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41 }, /* V  */
     { 36, 36, 36, 36, 35, 35, 35, 35, 34, 34, 34, 34, 33, 33, 33, 33 }, /* H  */
@@ -439,7 +422,7 @@ static inline void m10_split_bytes(__m128i v0, __m128i v1, __m128i *lo, __m128i 
     *hi = _mm_packus_epi16(_mm_srli_epi16(v0, 8), _mm_srli_epi16(v1, 8));
 }
 
-/* The nine predictions, each as rows 0-1 (p01) and rows 2-3 (p23). */
+/* rows 0-1 of each prediction in p01, rows 2-3 in p23 */
 static inline void m10_i4_preds(__m128i p01[9], __m128i p23[9], const pixel *rec,
                                 int rs, int ht, int hl, int htl, int htr)
 {
@@ -506,8 +489,8 @@ static inline void m10_intra4_mode_search(const pixel *src, int ss, const pixel 
                                              _mm_sub_epi16(p23[m], s23)));
 }
 
-/* All three I16x16 predictions are broadcasts, so one pass of source loads
- * forms the three residuals in registers. */
+/* all three I16x16 predictions are broadcasts, so one pass of source loads
+ * forms the three residuals */
 static inline void m10_intra16_satd_trio(const pixel *src, int ss, const pixel *top,
                                          const pixel *left, int dc, int costs[3])
 {
@@ -544,10 +527,10 @@ static inline void m10_intra16_satd_trio(const pixel *src, int ss, const pixel *
 
 /* ---- SSD and the per-4x4 maps ---------------------------------------------
  *
- * A squared residual reaches 1023^2, so PMADDWD of the residual with itself
- * (a pair of squares per int32 lane, <= 2093058) does the widening. A 16x16
- * total is <= 2.68e8, inside the int the callers take. The 4x4 signed sums
- * ride in int16 lanes (four rows of +-1023) and widen through a pair add. */
+ * a squared residual reaches 1023^2, so a madd of the residual with itself
+ * widens (two squares an int32 lane, <= 2093058). a 16x16 total is
+ * <= 2.68e8, inside the callers' int. the 4x4 signed sums stay in int16 (four
+ * rows of +-1023) and widen through a pair add. */
 static inline int m10_ssd_16xh(const pixel *a, int as, const pixel *b, int bs, int h)
 {
     __m128i acc = _mm_setzero_si128();
@@ -629,8 +612,8 @@ static inline void m10_ssd4x4_map16(const pixel *a, int as, const pixel *b, int 
 
 /* ---- every 128-bit kernel under one tier's names --------------------------
  *
- * The SSE4.2 file instantiates the whole list; the AVX2 file instantiates the
- * shapes it has no wider form for. */
+ * the SSE4.2 file instantiates the whole list, the AVX2 file only the shapes
+ * it has no wider form for. */
 #define M10_SAD(T, w, h)                                                        \
 int y264_sad_##w##x##h##_##T(const pixel *a, int as, const pixel *b, int bs)    \
 { return m10_sad_##w##xh(a, as, b, bs, h); }

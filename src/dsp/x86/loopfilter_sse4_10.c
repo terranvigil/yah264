@@ -3,13 +3,12 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Every kernel is a 128-bit body from loopfilter_x86_10.h, or for the
- * strength derivation from loopfilter_x86_core.h, under its SSE4.2 name. The
- * names are the 8-bit tier's, and src/common/symbols10.h gives each its _10
- * suffix, so arch.h declares one prototype set and the dispatch sites are
- * shared text.
+ * each kernel is a loopfilter_x86_10.h body (for the strength derivation,
+ * loopfilter_x86_core.h's) under its SSE4.2 name. the names are the 8-bit
+ * tier's; src/common/symbols10.h adds the _10 suffix, so arch.h keeps one
+ * prototype set and the dispatch sites are shared.
  *
- * The four-line luma forms have no 10-bit twin: the whole-edge ones take
+ * the four-line luma forms have no 10-bit twin: the whole-edge ones take
  * every x86 luma edge before the four-line sites are reached.
  */
 #include "dsp/x86/loopfilter_x86_10.h"

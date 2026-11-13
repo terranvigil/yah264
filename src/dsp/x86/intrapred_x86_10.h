@@ -3,33 +3,29 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The 16-bit-sample twins of intrapred_x86.h. Every body here is `static
- * inline` and 128-bit: intrapred_sse4_10.c wraps each one under its SSE4.2
- * name, and intrapred_avx2_10.c wraps the 8x8 ones the same way (VEX-encoded
- * there) and writes its own 256-bit 16x16 and chroma builders, where a row of
- * sixteen samples, or two rows of eight, is one register.
+ * 16-bit-sample twins of intrapred_x86.h. every body is static inline and
+ * 128-bit: the SSE4.2 file wraps them all, the AVX2 file wraps the 8x8 ones
+ * and writes 256-bit 16x16 and chroma builders, where sixteen samples or two
+ * rows of eight fill a register.
  *
- * The routing is the 8-bit tiers': 16x16 and cw == 8 chroma take every mode,
- * 8x8 the five branchy diagonals, 4x4 nothing. What moves at 10 bits:
+ * routing is the 8-bit tiers': 16x16 and cw == 8 chroma take every mode, 8x8
+ * the five branchy diagonals, 4x4 nothing. what changes at 10 bits:
+ *   - the 8x8 filters run on u16 lanes. (a + 2b + c + 2) >> 2 is
+ *     ((a + c) >> 1) rounded-averaged with b, and the inner halving must
+ *     truncate: a + c <= 2046 fits u16, so it is an add and a shift, never
+ *     pavgw, which rounds and gives the wrong filter.
+ *   - a pshufb reaches only eight 16-bit samples, so each filtered window is
+ *     split into low-byte and high-byte planes of sixteen entries, both go
+ *     through the same 8-bit control, and the results interleave back. the
+ *     controls stay the 8-bit tiers' numbers; sixteen make two output rows.
+ *   - the plane modes leave int16. at 16x16 |a| <= 16 * 2046 = 32736 and
+ *     |b|, |c| <= (5 * 36828 + 32) >> 6 = 2877, so a sum reaches 78784;
+ *     8-wide chroma reaches 32736 + 4 * 5435 + 8 * 2877 + 16 = 77508. both
+ *     run in int32 and clip with packus_epi32 (negatives to 0), then a min
+ *     against 1023.
  *
- *   - the 8x8 filters run on u16 lanes. (a + 2b + c + 2) >> 2 is still
- *     ((a + c) >> 1 rounded-averaged with b), and the inner halving add must
- *     TRUNCATE: a + c <= 2046 fits a u16 lane, so it is an add and a shift,
- *     never pavgw, which rounds and gives the wrong filter.
- *   - a sample is two bytes, so a pshufb reaches only eight of them. The
- *     filtered windows are split into a low-byte and a high-byte plane of
- *     sixteen entries each, both planes go through the same 8-bit shuffle
- *     control, and the two results interleave back into samples. So the
- *     controls are the 8-bit tiers' numbers, and sixteen of them make two
- *     output rows.
- *   - the plane modes leave int16. At 16x16 |a| <= 16 * 2046 = 32736 and
- *     |b|, |c| <= (5 * 36828 + 32) >> 6 = 2877, so a sum reaches 78784; 8-wide
- *     chroma reaches 32736 + 4 * 5435 + 8 * 2877 + 16 = 77508. Both run on
- *     int32 lanes, and the clip is packus_epi32 (negatives to 0) then a
- *     min against 1023.
- *
- * Loads are sized to the block, never to the register: checkasm maps each
- * kernel's window against a PROT_NONE page at both ends.
+ * loads are sized to the block, never the register: checkasm puts a
+ * PROT_NONE page at both ends of each kernel's window.
  */
 #ifndef YAH264_DSP_X86_INTRAPRED_X86_10_H
 #define YAH264_DSP_X86_INTRAPRED_X86_10_H
@@ -67,8 +63,10 @@ static inline __m128i ip10_clip(__m128i lo, __m128i hi)
 
 /* ---- the 8x8 filters ------------------------------------------------------
  *
- * Over eight positions from in[0 .. 9]: F[i] = (e[i] + 2e[i+1] + e[i+2] + 2) >> 2
- * and H[i] = (e[i] + e[i+1] + 1) >> 1. The halving add truncates (see top).
+ * over eight positions from in[0 .. 9]:
+ *   F[i] = (e[i] + 2e[i+1] + e[i+2] + 2) >> 2
+ *   H[i] = (e[i] + e[i+1] + 1) >> 1
+ * F's halving add truncates (see the top of the file).
  */
 static inline __m128i ip10_f121(__m128i a, __m128i b, __m128i c)
 {
@@ -82,7 +80,7 @@ static inline void ip10_fh8(const pixel *in, __m128i *f, __m128i *h)
     *h = _mm_avg_epu16(a, b);
 }
 
-/* sixteen samples as two byte planes: entry i's low byte at lo[i], high at hi[i] */
+/* sixteen samples as byte planes: lo[i] and hi[i] are entry i's bytes */
 typedef struct { __m128i lo, hi; } ip10_win;
 
 static inline ip10_win ip10_planes(__m128i a, __m128i b)
@@ -96,15 +94,15 @@ static inline ip10_win ip10_planes(__m128i a, __m128i b)
 
 /* ---- the shuffle controls -------------------------------------------------
  *
- * The 8-bit tiers' six-mode controls, unchanged: one row of 64 per (mode,
+ * the 8-bit tiers' six-mode controls, unchanged: one row of 64 per (mode,
  * window), the window entry each output sample reads, or -1 where the other
- * window owns it. The windows are
+ * window owns it. the windows are
  *
  *   FLO = F[0..15]   FHI = F[9..24]   HLO = H[0..15]   HHI = H[9..24]
  *
  * and HU's own S = { F[0..5], H[0..6], e[0], (e[1] + 3 e[0] + 2) >> 2, 0 }.
- * They restate y264_intra8x8_dir6_idx, and checkasm holds every lane to the
- * C builder.
+ * they restate y264_intra8x8_dir6_idx; checkasm holds every lane to the C
+ * builder.
  */
 static const int8_t ip10_dir6_shuf[9][64] = {
     {   /* DDL from FHI */
@@ -173,9 +171,9 @@ static inline __m128i ip10_ctl(int row, int k)
     return _mm_loadu_si128((const __m128i *)(const void *)(ip10_dir6_shuf[row] + k));
 }
 
-/* Outputs k .. k + 15 of one mode: each plane through the control (two
- * windows OR-ed where the mode has two, since -1 lanes come out zero), then
- * the planes zipped back into samples. `b` may be NULL. */
+/* outputs k .. k + 15 of one mode: each plane through the control (two
+ * windows OR-ed where the mode has two, as -1 lanes come out zero), then the
+ * planes zipped back into samples. b may be NULL. */
 static inline void ip10_emit16(pixel *out, int k, const ip10_win *a, int ra,
                                const ip10_win *b, int rb)
 {
@@ -197,7 +195,7 @@ static inline void ip10_emit64(pixel out[64], const ip10_win *a, int ra,
         ip10_emit16(out, k, a, ra, b, rb);
 }
 
-/* The four windows over the flat edge array; the reads end at e[26]. */
+/* the four windows over the flat edge array; reads end at e[26] */
 typedef struct { ip10_win flo, fhi, hlo, hhi; __m128i f0, h0; } ip10_dirwin;
 
 static inline void ip10_dirwin_build(ip10_dirwin *w, const pixel e[32])
@@ -226,7 +224,7 @@ static inline ip10_win ip10_hu_window(__m128i f0, __m128i h0, const pixel e[32])
     return ip10_planes(s0, s1);
 }
 
-/* ---- Intra8x8 from a precomputed edge (VERT/DDR/VR/HD/VL) ----------------- */
+/* ---- Intra8x8 from a precomputed edge (VERT/DDR/VR/HD/VL) ---------------- */
 static inline void ip10_i8_from_edge(pixel pred[64], const pixel e[32], int mode)
 {
     if (mode == Y264_I4_VERT) {
@@ -246,7 +244,7 @@ static inline void ip10_i8_from_edge(pixel pred[64], const pixel e[32], int mode
     }
 }
 
-/* ---- the six directional modes from one filter pass ----------------------- */
+/* ---- the six directional modes from one filter pass ---------------------- */
 static inline void ip10_i8_dir6(pixel out[6][64], const pixel e[32])
 {
     ip10_dirwin w;
@@ -264,13 +262,13 @@ static inline void ip10_i8_dir6(pixel out[6][64], const pixel e[32])
 
 /* ---- the filtered edge of one Intra8x8 block, as registers ----------------
  *
- * 8.3.2.2.1's endpoint rules are the ordinary 121 filter with the source
- * replicated: t[0]'s left neighbour is the corner (or t[0] itself without
- * one), t[15]'s right neighbour is itself, and likewise down the left column.
- * Returns the filtered corner and leaves t[0..7], t[8..15] and l[0..7] in
- * *t0, *t1, *lf, zero for a side that is not available. Nothing outside the
- * available neighbours is read: eight top samples without a top right, the
- * corner only with a top left.
+ * 8.3.2.2.1's endpoint rules are the plain 121 filter with the source
+ * replicated: t[0]'s left neighbour is the corner (or t[0] without one),
+ * t[15]'s right neighbour is itself, and likewise down the left column.
+ * returns the filtered corner; t[0..7], t[8..15] and l[0..7] land in *t0,
+ * *t1, *lf, zero for a missing side. nothing outside the available
+ * neighbours is read: eight top samples without a top right, the corner only
+ * with a top left.
  */
 static inline int ip10_edge_regs(const pixel *rec, int stride, int have_top,
                                  int have_left, int have_topleft,
@@ -323,8 +321,8 @@ static inline int ip10_edge_regs(const pixel *rec, int stride, int have_top,
     return (3 * rtl + rl0 + 2) >> 2;
 }
 
-/* The flat view { l7..l0, tl, t0..t15, t15, t15, 0... } from those registers;
- * the tail replications fold DDL's endpoint into the ordinary filter. */
+/* the flat view { l7..l0, tl, t0..t15, t15, t15, 0... }; the tail
+ * replication folds DDL's endpoint into the plain filter */
 static inline void ip10_edge_flat(pixel f[32], __m128i t0, __m128i t1,
                                   __m128i lf, int tl)
 {
@@ -339,7 +337,7 @@ static inline void ip10_edge_flat(pixel f[32], __m128i t0, __m128i t1,
 }
 
 /* ---- Intra16x16 ------------------------------------------------------------
- * The plane's lane bound is at the top of this file. */
+ * the plane's lane bound is at the top of the file. */
 static inline int ip10_hsum8(__m128i v)
 {
     v = _mm_madd_epi16(v, _mm_set1_epi16(1));
@@ -437,7 +435,7 @@ static inline void ip10_i16(pixel pred[256], const pixel *rec, int stride,
     }
 }
 
-/* ---- Intra chroma (cw == 8; ch == 8 or 16) ---------------------------------- */
+/* ---- intra chroma (cw == 8; ch == 8 or 16) ------------------------------- */
 
 /* the per-4x4 DC of 8.3.4.1 for block row `by`, both columns */
 static inline __m128i ip10_ichroma_dc_row(const pixel *top, const pixel *left,
@@ -532,10 +530,10 @@ static inline void ip10_ichroma(pixel *pred, const pixel *rec, int stride,
 
 /* ---- the lowres estimate's four base 8x8 predictions -----------------------
  *
- * DC, vertical, horizontal and the plane with a, b, c already derived. The
- * estimate's samples are on the 8-bit scale at every depth, so |a| <= 8160
- * and |b|, |c| <= 1355 and a + 16 + b(x - 3) + c(y - 3) stays inside int16;
- * arguments outside that bound take the scalar form, as on the NEON tier.
+ * DC, vertical, horizontal and the plane, with a, b, c already derived. the
+ * estimate's samples are on the 8-bit scale at every depth, so |a| <= 8160,
+ * |b|, |c| <= 1355 and a + 16 + b(x - 3) + c(y - 3) stays in int16;
+ * arguments past that bound take the scalar form, as on the NEON tier.
  */
 static inline void ip10_i8_dvhp(pixel out[4][64], const pixel top[8],
                                 const pixel left[8], int dc, int a, int b, int c)

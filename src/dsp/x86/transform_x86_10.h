@@ -4,33 +4,30 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The int32 twins of transform_x86.h. At 10 bits a coefficient is an int32
- * (dctcoef), so every transform here runs on four int32 lanes per register,
- * the C reference's own width, and is exact wherever the reference's int
- * arithmetic is. transform_sse4_10.c wraps each body under its SSE4.2 name;
- * transform_avx2_10.c wraps the shapes with no second half the same way
- * (VEX-encoded there) and writes 256-bit forms where a row of eight int32 or
- * a pair of 4x4 blocks fills a ymm.
+ * int32 twins of transform_x86.h. a 10-bit coefficient is an int32
+ * (dctcoef), so every transform runs four int32 lanes a register, the C
+ * reference's own width, and is exact wherever its int arithmetic is. the
+ * SSE4.2 file wraps every body; the AVX2 file wraps the shapes with no second
+ * half and writes 256-bit forms where eight int32 or two 4x4 blocks fill a
+ * ymm.
  *
- * The 1-D passes are macros over the register type and its add, subtract and
- * shift so that both widths run the identical algebra. Wherever a pass shifts
- * (both 8x8 transforms, the 4x4 inverse) the order is the reference's: rows,
- * then columns, as transpose -> pass -> transpose -> pass. The 4x4 forward
- * has no shift, so its passes commute and it runs columns first.
+ * the 1-D passes are macros over the register type and its add, sub and
+ * shift, so both widths run identical algebra. where a pass shifts (both 8x8
+ * transforms, the 4x4 inverse) the order is the reference's, rows then
+ * columns; the 4x4 forward has no shift, so its passes commute and it runs
+ * columns first.
  *
- * Bounds that move from 8 bits:
- *
- *   - the forward quant forms |c| * mf + f in an unsigned 32-bit lane. That is
- *     exact while |c| < 2^17 (the largest coefficient the 10-bit transforms
- *     produce is the 8x8 DC of a full-swing residual, 64 * 1023 = 65472),
- *     mf <= 20972 (the largest flat multiplier) and 0 <= f < 2^30: the sum
- *     stays under 2^32. A block outside that takes the reference's scalar
+ * bounds:
+ *   - the forward quant forms |c| * mf + f in an unsigned 32-bit lane, exact
+ *     while |c| < 2^17 (the largest 10-bit coefficient is the 8x8 DC of a
+ *     full-swing residual, 64 * 1023 = 65472), mf <= 20972 (the largest flat
+ *     multiplier) and 0 <= f < 2^30. a block outside that takes the scalar
  *     loop, so the kernels are exact on any input.
- *   - reconstruction clips to [0, 1023]: the signed-to-unsigned 32-bit pack
- *     takes the floor and a 16-bit min the top. Never the byte pack.
+ *   - reconstruction clips to [0, 1023] with the signed-to-unsigned 32-bit
+ *     pack for the floor and a 16-bit min for the top, never the byte pack.
  *
- * Loads are sized to the block, never to the register: checkasm maps each
- * kernel's window against a PROT_NONE page at both ends.
+ * loads are sized to the block, never the register: checkasm puts a
+ * PROT_NONE page at both ends of each kernel's window.
  */
 #ifndef YAH264_DSP_X86_TRANSFORM_X86_10_H
 #define YAH264_DSP_X86_TRANSFORM_X86_10_H
@@ -44,7 +41,7 @@
 #error "transform_x86_10.h is the 10-bit library's x86 tier"
 #endif
 
-/* ---- loads and stores ------------------------------------------------------ */
+/* ---- loads and stores ---------------------------------------------------- */
 
 static inline __m128i t10_ldc(const dctcoef *p)
 {
@@ -74,8 +71,7 @@ static inline __m128i t10_diff4(const pixel *s, const pixel *p)
                          _mm_cvtepu16_epi32(t10_ldp4(p)));
 }
 
-/* pred + res for eight samples, clipped to [0, 1023]: the 32-bit unsigned
- * pack saturates at zero and the min takes the top */
+/* the unsigned 32-bit pack floors at zero, the min takes the top */
 static inline __m128i t10_recon8(const pixel *pred, __m128i r0, __m128i r1)
 {
     __m128i p = t10_ldp8(pred);
@@ -86,7 +82,7 @@ static inline __m128i t10_recon8(const pixel *pred, __m128i r0, __m128i r1)
 
 /* ---- the 1-D passes --------------------------------------------------------
  *
- * Transcriptions of the scalar passes in src/dsp/transform.c, with ADD, SUB
+ * transcriptions of the scalar passes in src/dsp/transform.c, with ADD, SUB
  * and the arithmetic shifts as parameters. */
 
 #define T10_FDCT4_1D(V, ADD, SUB, r0, r1, r2, r3) do {                        \
@@ -151,8 +147,7 @@ static inline __m128i t10_recon8(const pixel *pred, __m128i r0, __m128i r1)
     (m4) = SUB(b6_, b1_);                                                     \
 } while (0)
 
-/* 4x4 of int32, in-lane: at 256 bits the same sequence transposes two blocks,
- * one per 128-bit half. */
+/* in-lane, so at 256 bits it transposes two 4x4 blocks, one a half */
 #define T10_TRN4(V, UL32, UH32, UL64, UH64, r0, r1, r2, r3) do {              \
     V t0_ = UL32(r0, r1), t1_ = UH32(r0, r1);                                 \
     V t2_ = UL32(r2, r3), t3_ = UH32(r2, r3);                                 \
@@ -168,7 +163,7 @@ static inline __m128i t10_recon8(const pixel *pred, __m128i r0, __m128i r1)
     T10_TRN4(__m128i, _mm_unpacklo_epi32, _mm_unpackhi_epi32,                 \
              _mm_unpacklo_epi64, _mm_unpackhi_epi64, r0, r1, r2, r3)
 
-/* ---- 4x4 transforms -------------------------------------------------------- */
+/* ---- 4x4 transforms ------------------------------------------------------ */
 
 /* columns first (the passes commute), then rows, then back to row order */
 static inline void t10_fdct4_rows(__m128i r0, __m128i r1, __m128i r2, __m128i r3,
@@ -241,8 +236,8 @@ static inline void t10_add4x4_idct(pixel *dst, int ds, const pixel *pred, int ps
 
 /* ---- 8x8 transforms at 128 bits ---------------------------------------------
  *
- * v[i][0] is columns 0-3 of row i and v[i][1] columns 4-7. The 8x8 transpose
- * is the four 4x4 tile transposes with the off-diagonal pair swapped. */
+ * v[i][0] is columns 0-3 of row i, v[i][1] columns 4-7. the 8x8 transpose is
+ * the four tile transposes with the off-diagonal pair swapped. */
 static inline void t10_trn8(__m128i v[8][2])
 {
     __m128i a0 = v[0][0], a1 = v[1][0], a2 = v[2][0], a3 = v[3][0];
@@ -337,11 +332,11 @@ static inline void t10_add8x8_idct8(pixel *dst, int ds, const pixel *pred, int p
 
 /* ---- forward quant ---------------------------------------------------------
  *
- * q = (|c| * mf + f) >> qbits, sign restored, the sum in an unsigned 32-bit
- * lane (see the top of the file for when that is exact). The sign comes back
- * through a compare and a blend, not a sign-multiply: a zero coefficient
- * takes the positive branch in the reference, and a bias of a whole step or
- * more makes its level nonzero. */
+ * q = (|c| * mf + f) >> qbits with the sign restored, in an unsigned 32-bit
+ * lane (exact in the domain at the top of the file). the sign comes back
+ * through a compare and blend, not a sign-multiply: the reference treats a
+ * zero coefficient as positive, and a bias of a whole step makes its level
+ * nonzero. */
 #define T10_QUANT_SAFE (1 << 17)
 #define T10_QUANT_FMAX (1u << 30)
 
@@ -406,10 +401,10 @@ static inline int t10_quant_ac_tail(const dctcoef *coef, dctcoef *lev, dctcoef *
 
 /* ---- dequant ---------------------------------------------------------------
  *
- * The reference's int multiply and shift, four lanes at a time: (lev * ls)
- * scaled up once qp/6 reaches the block's shift point, rounded down by the
- * remainder below it. The low 32 bits of the product are the reference's int
- * product wherever that is defined (levels to +-65535 at every qp). */
+ * the reference's int multiply and shift: lev * ls is shifted up once qp/6
+ * reaches the block's shift point, and down with rounding below it. the low
+ * 32 bits of the product are the reference's int product wherever that is
+ * defined (levels to +-65535 at every qp). */
 static inline void t10_dequant(const dctcoef *lev, dctcoef *coef, int n, int qp,
                                const int32_t *lsrow, int point)
 {
@@ -430,10 +425,10 @@ static inline void t10_dequant(const dctcoef *lev, dctcoef *coef, int n, int qp,
 
 /* ---- scans -----------------------------------------------------------------
  *
- * The 4x4 zig-zag over four rows of int32 r0-r3: scan 0-3 is raster 0 1 4 8,
- * 4-7 is 5 2 3 6, 8-11 is 9 12 13 10 and 12-15 is 7 11 14 15. The outer two
- * groups are unpacks; the inner two are a shuffle of two rows each and a
- * blend of their middle lanes. */
+ * 4x4 zig-zag over int32 rows r0-r3: scan 0-3 is raster 0 1 4 8, 4-7 is
+ * 5 2 3 6, 8-11 is 9 12 13 10, 12-15 is 7 11 14 15. the outer groups are
+ * unpacks, the inner two a shuffle of two rows each and a blend of their
+ * middle lanes. */
 static inline void t10_zz4(const dctcoef in[16], __m128i g[4])
 {
     __m128i r0 = t10_ldc(in), r1 = t10_ldc(in + 4);
@@ -454,8 +449,8 @@ static inline void t10_zigzag_abs_4x4(int out[16], const dctcoef in[16])
         t10_stc(out + 4 * i, _mm_abs_epi32(g[i]));
 }
 
-/* |v| >= 2 written as (v > 1) | (-1 > v), the reference's (unsigned)(v + 1) > 2u
- * for every int32 */
+/* |v| >= 2 as (v > 1) | (-1 > v), the reference's (unsigned)(v + 1) > 2u for
+ * every int32 */
 static inline __m128i t10_big4(__m128i v)
 {
     return _mm_or_si128(_mm_cmpgt_epi32(v, _mm_set1_epi32(1)),
@@ -478,13 +473,12 @@ static inline void t10_zigzag_scan_4x4(dctcoef out[16], const dctcoef in[16],
     *obig = !_mm_testz_si128(big, big);
 }
 
-/* The 8x8 nonzero mask and |level| >= 2 flag. Neither needs the levels in
- * scan order, so the block is narrowed to a byte per level with two
- * saturating packs, which keep zero as zero and -1..1 as themselves, and each
- * sixteen-position scan group is a byte shuffle of the three or four source
- * registers it draws on. The controls are generated from y264_zigzag8: for
- * scan group k and source register j (raster 16j to 16j + 15), the byte of j
- * each position reads, or -1 where another register owns it. */
+/* the 8x8 nonzero mask and |level| >= 2 flag need no scan-order levels, so
+ * two saturating packs narrow each level to a byte (zero stays zero, -1..1
+ * stay themselves) and each sixteen-position scan group is a byte shuffle of
+ * the three or four registers it draws on. controls come from y264_zigzag8:
+ * for scan group k and source register j (raster 16j to 16j + 15), the byte
+ * of j each position reads, or -1 where another register owns it. */
 static const uint8_t t10_zzb_src[14] = { 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3 };
 static const uint8_t t10_zzb_off[5] = { 0, 3, 7, 11, 14 };
 static const int8_t t10_zzb_msk[14][16] = {

@@ -3,11 +3,10 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Every kernel is a 128-bit body from interp_x86_10.h under its SSE4.2 name.
- * The names are the 8-bit tier's, and src/common/symbols10.h gives each its
- * _10 suffix, so arch.h declares one prototype set and the dispatch sites are
- * shared text. The lowres bilinear row has no twin: no 10-bit caller builds
- * a bilinear lowres plane.
+ * each kernel is an interp_x86_10.h body under its SSE4.2 name. the names are
+ * the 8-bit tier's; src/common/symbols10.h adds the _10 suffix, so arch.h
+ * keeps one prototype set and the dispatch sites are shared. the lowres
+ * bilinear row has no twin: no 10-bit caller builds a bilinear lowres plane.
  */
 #include "dsp/x86/interp_x86_10.h"
 
@@ -59,8 +58,8 @@ void y264_mc_chroma_bi8_sse4(pixel *dst, int dstride,
                              int w0, int w1)
 { i10_mc_chroma_bi8(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1); }
 
-/* The two row kernels need a span of eight; the last pass steps back to end
- * on it, recomputing columns that are pure functions of the source. */
+/* the row kernels need a span of eight; the last pass backs up to end on it,
+ * recomputing columns that are pure functions of the source */
 void y264_hpel_hrow_sse4(int32_t *srow, const pixel *row, int x0, int x1)
 {
     for (int x = x0; x < x1; x += 8) {

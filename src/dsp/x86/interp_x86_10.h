@@ -3,30 +3,26 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * The 16-bit-sample twins of interp_x86.h. Every body here is `static inline`
- * and 128-bit: interp_sse4_10.c wraps each one under its SSE4.2 name, and
- * interp_avx2_10.c wraps the narrow shapes the same way (VEX-encoded there)
- * and writes its own 256-bit forms where a 16-wide row is one register.
+ * 16-bit-sample twins of interp_x86.h. every body is static inline and
+ * 128-bit: the SSE4.2 file wraps them all, the AVX2 file wraps the narrow
+ * shapes and writes 256-bit forms where a 16-wide row is one register.
  *
- * A row of eight samples is one register. What moves from 8 bits are the
- * lane bounds, restated at each kernel; the three that shape the code:
+ * the bounds that shape the code:
+ *   - a six-tap of 10-bit samples spans [-10230, 42966], past int16 and u16.
+ *     it is formed mod 2^16 with 10240 = 320 * 32 added, so the exact sum is
+ *     in [10, 53206] and fits u16. a half-pel sample is then
+ *     ((sum + 16) >> 5) - 320, saturated at 0 and clipped at PIXEL_MAX; the
+ *     offset is a multiple of 32, so the shift stays exact.
+ *   - the centre filters those offset sums vertically in int32, where the
+ *     offset grows to 32 * 10240 = 320 * 1024 and comes off after the >> 10.
+ *   - chroma bilinear weights sum to 64, so a weighted sum is <= 65472 and
+ *     the rounding add stays in u16.
  *
- *   - the six-tap of 10-bit samples spans [-10230, 42966], past both int16
- *     and u16. It is formed in modular 16-bit arithmetic with 10240 = 320 * 32
- *     added, which puts the exact sum in [10, 53206], inside u16. A half-pel
- *     sample is then ((sum + 16) >> 5) - 320, saturated at 0 and clipped at
- *     PIXEL_MAX; the offset is a multiple of 32, so the shift stays exact.
- *   - the centre plane filters those offset sums vertically in int32, where
- *     the offset has grown to 32 * 10240 = 320 * 1024 and comes off after
- *     the >> 10 the same way.
- *   - the chroma bilinear weights sum to 64, so a weighted sum is at most
- *     64 * 1023 = 65472 and the rounding add stays inside u16.
+ * no byte pack does the clip: every output clips to [0, 1023] through
+ * packus_epi32 or subs_epu16, then min_epu16.
  *
- * No byte pack is a clip here: every output clips to [0, 1023] through
- * packus_epi32 and min_epu16, or subs_epu16 and min_epu16.
- *
- * Loads are sized to the block, never to the register: checkasm maps each
- * kernel's window against a PROT_NONE page at both ends.
+ * loads are sized to the block, never the register: checkasm puts a
+ * PROT_NONE page at both ends of each kernel's window.
  */
 #ifndef YAH264_DSP_X86_INTERP_X86_10_H
 #define YAH264_DSP_X86_INTERP_X86_10_H
@@ -41,11 +37,10 @@
 #error "interp_x86_10.h is the 10-bit library's x86 tier"
 #endif
 
-/* the stride of a luma kernel's own half-pel planes: room for the 17th
- * column the odd phases read */
+/* half-pel plane stride: room for the 17th column the odd phases read */
 #define I10_ST 24
 
-/* ---- loads and stores ----------------------------------------------------- */
+/* ---- loads and stores ---------------------------------------------------- */
 
 static inline __m128i i10_ld8(const pixel *p)
 {
@@ -78,10 +73,10 @@ static inline __m128i i10_clip32(__m128i lo, __m128i hi)
     return _mm_min_epu16(_mm_packus_epi32(lo, hi), _mm_set1_epi16(PIXEL_MAX));
 }
 
-/* ---- the six-tap ----------------------------------------------------------- */
+/* ---- the six-tap --------------------------------------------------------- */
 
-/* (a + f) + 10240 + 20(c + d) - 5(b + e) in modular 16-bit lanes; the exact
- * value lies in [10, 53206], so the lane read unsigned is the sum itself. */
+/* (a + f) + 10240 + 20(c + d) - 5(b + e) mod 2^16; the exact value is in
+ * [10, 53206], so the lane read unsigned is the sum itself */
 static inline __m128i i10_tap6_off(__m128i a, __m128i b, __m128i c,
                                    __m128i d, __m128i e, __m128i f)
 {
@@ -98,7 +93,7 @@ static inline __m128i i10_half(__m128i sum)
                          _mm_set1_epi16(PIXEL_MAX));
 }
 
-/* the same tap over int32 lanes, for values that no longer fit 16 bits */
+/* the same tap in int32, for values past 16 bits */
 static inline __m128i i10_tap6_32(__m128i a, __m128i b, __m128i c,
                                   __m128i d, __m128i e, __m128i f)
 {
@@ -110,8 +105,8 @@ static inline __m128i i10_tap6_32(__m128i a, __m128i b, __m128i c,
     return _mm_add_epi32(_mm_sub_epi32(s05, m5), m20);
 }
 
-/* the centre sample of eight columns from six rows of offset horizontal sums:
- * the vertical tap of u16 values <= 53206 reaches 42 * 53206, int32 */
+/* centre from six rows of offset horizontal sums: a vertical tap of u16
+ * values <= 53206 reaches 42 * 53206, so int32 */
 static inline __m128i i10_centre(__m128i c0, __m128i c1, __m128i c2,
                                  __m128i c3, __m128i c4, __m128i c5)
 {
@@ -127,8 +122,7 @@ static inline __m128i i10_centre(__m128i c0, __m128i c1, __m128i c2,
                       _mm_srai_epi32(_mm_add_epi32(hi, k), 10));
 }
 
-/* offset horizontal sums of eight columns; `p` addresses column x - 2, and
- * the six loads read exactly p[0 .. 12] */
+/* p is column x - 2; the six loads read exactly p[0 .. 12] */
 static inline __m128i i10_hsum8(const pixel *p)
 {
     return i10_tap6_off(i10_ld8(p), i10_ld8(p + 1), i10_ld8(p + 2),
@@ -151,19 +145,17 @@ static inline pixel i10_vcol(const pixel *q, int rs)
 
 /* ---- the luma interpolation -------------------------------------------------
  *
- * The 8-bit kernels' plane scheme: build whichever of G (integer), H, V and J
- * (centre) the phase reads, over the block plus one column and row, then emit
- * each row as one plane or the rounding average of two (avg_epu16 is
- * (a + b + 1) >> 1). The tiers differ only in how they filter a sixteen-column
- * row, so the body is written once and takes the row steps as macro
- * parameters, each producing n8 groups of eight columns:
+ * build whichever of G (integer), H, V and J (centre) the phase reads, over
+ * the block plus one column and row, then emit each row as one plane or the
+ * rounding average of two. tiers differ only in how they filter a 16-column
+ * row, so the row steps are macro parameters, each making n8 groups of eight:
  *
  *   HCL(p, out)            horizontal half-pel samples from column ix - 2
  *   HSUM(p, out)           the offset horizontal sums, unclipped
  *   VCL(p, rs, out)        vertical half-pel samples
  *   JCL(c, out)            the centre from six rows of sums at stride I10_ST
  *
- * The window is columns [ix-2, ix+w+2] and rows [iy-2, iy+h+3].
+ * the window is columns [ix-2, ix+w+2] and rows [iy-2, iy+h+3].
  */
 #define I10_LUMA_BODY(NAME, W, HCL, HSUM, VCL, JCL)                            \
 static void NAME(pixel *dst, int dstride, const pixel *ref, int rstride,       \
@@ -275,11 +267,10 @@ static inline void i10_jcl_x(const uint16_t *c, pixel *out, int n8)
 
 I10_LUMA_BODY(i10_mc_luma8, 8, I10_HCL8, I10_HSUM8, I10_VCL8, I10_JCL8)
 
-/* ---- chroma bilinear ---------------------------------------------------------
+/* ---- chroma bilinear --------------------------------------------------------
  *
- * (cA*A + cB*B + cC*C + cD*D + 32) >> 6 in u16 lanes: the weights sum to 64,
- * so the sum is at most 65472 and the rounding add at most 65504, which is
- * the modular arithmetic read unsigned, exactly. */
+ * (cA*A + cB*B + cC*C + cD*D + 32) >> 6 in u16 lanes: weights sum to 64, so
+ * the sum is <= 65472 and <= 65504 with the rounding add, exact unsigned. */
 struct i10_cw { __m128i a, b, c, d; };
 
 static inline struct i10_cw i10_cweights(int fx, int fy)
@@ -326,8 +317,8 @@ static inline __m128i i10_rows4(const pixel *p, const pixel *q)
     return _mm_unpacklo_epi64(i10_ld4(p), i10_ld4(q));
 }
 
-/* Width 4 packs two output rows per register, lanes 0-3 row y and 4-7 row
- * y + 1; the dispatcher routes even heights only. */
+/* two output rows a register, lanes 0-3 row y and 4-7 row y + 1; only even
+ * heights are dispatched here */
 static inline void i10_mc_chroma_w4h(pixel *dst, int dstride, const pixel *ref,
                                      int rstride, int ix, int iy, int fx, int fy, int h)
 {
@@ -347,7 +338,7 @@ static inline void i10_mc_chroma_w4h(pixel *dst, int dstride, const pixel *ref,
     }
 }
 
-/* ---- the half-pel plane fetches ----------------------------------------------- */
+/* ---- the half-pel plane fetches ------------------------------------------ */
 
 static inline void i10_pred_copy(pixel *dst, int dstride, const pixel *s,
                                  int sstride, int w, int h)
@@ -375,13 +366,12 @@ static inline void i10_pred_avg2(pixel *dst, int dstride, const pixel *s1,
     }
 }
 
-/* ---- the weighted average --------------------------------------------------------
+/* ---- the weighted average ---------------------------------------------------
  *
- * Clip1((a*w0 + b*w1 + 32) >> 6). The flat (32, 32) pair is the rounding
- * average. Otherwise the two samples are interleaved against the weight pair
- * and one multiply-add forms the sum in int32: a sample is <= 1023, so any
- * int16 weight pair gives at most 2 * 1023 * 32768 in magnitude. A weight
- * outside int16 takes the scalar form, as the C does it. */
+ * Clip1((a*w0 + b*w1 + 32) >> 6). the flat (32, 32) pair is the rounding
+ * average. otherwise a and b interleave against the weight pair and one madd
+ * forms the int32 sum: any int16 pair gives at most 2 * 1023 * 32768. a
+ * weight outside int16 takes the scalar path, as in C. */
 static inline int i10_wt_ok(int w0, int w1)
 {
     return w0 >= -32768 && w0 <= 32767 && w1 >= -32768 && w1 <= 32767;
@@ -438,8 +428,8 @@ static inline void i10_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
         i10_wt_row(dst, a, b, w, w0, w1);
 }
 
-/* A 4:2:0 macroblock's flat bi-average: luma 16x16 into pred (stride 16),
- * each chroma 8x8 into its plane (stride 8). */
+/* luma 16x16 into pred (stride 16), each chroma 8x8 into its plane
+ * (stride 8) */
 static inline void i10_avg_mb420_flat(pixel *pred, pixel *cu, pixel *cv,
                                       const pixel *l0, int s0, const pixel *l1, int s1,
                                       const pixel *u0, const pixel *v0, int t0,
@@ -455,8 +445,8 @@ static inline void i10_avg_mb420_flat(pixel *pred, pixel *cu, pixel *cv,
     }
 }
 
-/* Two in-window 8x8 chroma bilinears, one per list, averaged in the same pass;
- * each list reads nine columns of nine rows. */
+/* one 8x8 chroma bilinear per list, averaged in the same pass; each list
+ * reads nine columns of nine rows */
 static inline void i10_mc_chroma_bi8(pixel *dst, int dstride,
                                      const pixel *r0, int s0, int fx0, int fy0,
                                      const pixel *r1, int s1, int fx1, int fy1,
@@ -480,10 +470,10 @@ static inline void i10_mc_chroma_bi8(pixel *dst, int dstride,
     }
 }
 
-/* ---- the half-pel plane build rows -------------------------------------------------
+/* ---- the half-pel plane build rows ------------------------------------------
  *
- * srow[x] = the exact six-tap, int32; the offset comes off after widening.
- * Reads row[x - 2 .. x + 10]. */
+ * srow[x] is the exact six-tap in int32; the offset comes off after
+ * widening. reads row[x - 2 .. x + 10]. */
 static inline void i10_hrow8(int32_t *srow, const pixel *row, int x)
 {
     __m128i t = i10_hsum8(row + x - 2), z = _mm_setzero_si128();
@@ -494,9 +484,8 @@ static inline void i10_hrow8(int32_t *srow, const pixel *row, int x)
                      _mm_sub_epi32(_mm_unpackhi_epi16(t, z), k));
 }
 
-/* H, V and C at eight columns from x: H rescales the middle int32 row (a
- * six-tap, <= 42966 in magnitude), C is the vertical tap over the six int32
- * rows (<= 42 * 42966, int32), V the vertical tap over the six sample rows. */
+/* H rescales the middle int32 row (<= 42966 in magnitude), C taps the six
+ * int32 rows vertically (<= 42 * 42966, int32), V taps the six sample rows */
 static inline void i10_outrow8(pixel *Hr, pixel *Vr, pixel *Cr,
                                const int32_t *s0, const int32_t *s1, const int32_t *s2,
                                const int32_t *s3, const int32_t *s4, const int32_t *s5,
@@ -519,26 +508,24 @@ static inline void i10_outrow8(pixel *Hr, pixel *Vr, pixel *Cr,
                                           i10_ld8(r4 + x), i10_ld8(r5 + x))));
 }
 
-/* ---- the half-pel plane build, a whole band ------------------------------------------
+/* ---- the half-pel plane build, a whole band ---------------------------------
  *
- * The 8-bit band's scheme on 16-bit samples: each source row clamped into a
- * padded copy once, its offset horizontal sums kept in u16, and a ring of six
- * of each feeding every output row:
+ * each source row is clamped into a padded copy once and its offset
+ * horizontal sums kept in u16; a ring of six of each feeds every output row:
  *
  *   H = the half-pel sample of the centre sum row
  *   V = the same of the vertical offset tap over the padded rows
  *   C = the centre over the six sum rows (i10_centre)
  *
- * `mem` holds 6 * (W + 32) samples and 6 * W sums, 12 * (W + 32) + 12 * W
- * bytes, W = pw + 2 * border >= 16. STEP is the tier's column step (8 or
- * 16), and the three macro parameters its steps:
+ * mem holds 6 * (W + 32) samples and 6 * W sums, 12 * (W + 32) + 12 * W
+ * bytes, W = pw + 2 * border >= 16. STEP is the tier's column step (8 or 16):
  *
  *   HSUM(pad, t)            offset sums of pad[0 .. STEP + 4]
  *   HV(t2, p0 .. p5, H, V)  H and V of one step
- *   C(t0 .. t5, out)        the centre of one step
+ *   CEN(t0 .. t5, out)      the centre of one step
  *
- * The last pass of every row steps back to end on the span; each step is a
- * pure function of the padded rows, so the overlap recomputes the same values.
+ * a row's last step backs up to end on the span; steps are pure functions of
+ * the padded rows, so the overlap rewrites the same values.
  */
 #define I10_BAND_BODY(NAME, STEP, HSUM, HV, CEN)                               \
 void NAME(pixel *Hp, pixel *Vp, pixel *Cp, int stride,                         \
@@ -588,19 +575,17 @@ void NAME(pixel *Hp, pixel *Vp, pixel *Cp, int stride,                         \
     }                                                                          \
 }
 
-/* ---- the lowres half-pel planes, on the 8-bit scale ------------------------------------
+/* ---- the lowres half-pel planes, on the 8-bit scale -------------------------
  *
- * The lowres planes hold 8-bit samples at every depth: each pair mean of
- * 10-bit samples rounds straight to the 8-bit scale, m = (a + b + 4) >> 3
- * (<= 256), and the final mean of two adjacent ones saturates at 255, as the
- * encoder's own build does. A pair sum is at most 2046, u16.
+ * lowres planes hold 8-bit samples at every depth: a 10-bit pair mean rounds
+ * straight to 8 bits, m = (a + b + 4) >> 3 (<= 256), and the mean of two
+ * adjacent ones saturates at 255, as the C build does. a pair sum is <= 2046.
  *
- * The horizontal mean pairs ADJACENT columns of the vertical means, so the
- * eight outputs from x are the pair sums of sixteen vertical means, which is
- * what hadd_epi16 forms in order. oh pairs columns (2x+1, 2x+2) of rows 0
- * and 1, ov (2x, 2x+1) of rows 1 and 2 and oc (2x+1, 2x+2) of rows 1 and 2,
- * so the three planes read the rows from 2x and 2x + 1 only: r0[2x+1 ..
- * 2x+16] and r1, r2[2x .. 2x+16]. */
+ * the horizontal mean pairs adjacent columns of the vertical means, so eight
+ * outputs from x are the pair sums of sixteen vertical means, in the order
+ * hadd_epi16 forms them. oh pairs columns (2x+1, 2x+2) of rows 0 and 1, ov
+ * (2x, 2x+1) of rows 1 and 2, oc (2x+1, 2x+2) of rows 1 and 2, so the reads
+ * are r0[2x+1 .. 2x+16] and r1, r2[2x .. 2x+16]. */
 static inline __m128i i10_lr_m(__m128i a, __m128i b)
 {
     return _mm_srli_epi16(_mm_add_epi16(_mm_add_epi16(a, b), _mm_set1_epi16(4)), 3);

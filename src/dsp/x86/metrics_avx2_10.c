@@ -3,16 +3,14 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * At 16 bits a sample, a 16-wide row is exactly one 256-bit register, which
- * is the shape the wide forms here are built on: its low lane is columns 0-7
- * and its high lane columns 8-15, and every hadd, hsub, shuffle and blend this
- * family uses works on the two lanes independently. So the 128-bit sequences
- * of metrics_x86_10.h lift unchanged and the high lane simply carries the
- * right-hand tiles. An 8-wide block folds rows i and i + 4 (or i + 8) into the
- * two lanes for the same effect.
+ * a 16-wide row of 16-bit samples is one 256-bit register, columns 0-7 in the
+ * low lane and 8-15 in the high. every hadd, hsub, shuffle and blend used here
+ * is per lane, so the metrics_x86_10.h sequences lift as is and the high lane
+ * carries the right-hand tiles. an 8-wide block folds rows i and i + 4 (or
+ * i + 8) into the two lanes instead.
  *
- * Shapes with no second half to fill (a lone 4x4 SATD, one 8x8 transform) are
- * the shared 128-bit bodies, VEX-encoded here.
+ * shapes with no second half to fill (a lone 4x4 SATD, one 8x8 transform)
+ * use the shared 128-bit bodies, VEX-encoded.
  */
 #include "dsp/x86/metrics_x86_10.h"
 
@@ -54,8 +52,8 @@ static inline __m256i m10_absdiff256(__m256i a, __m256i b)
 
 /* ---- SAD -----------------------------------------------------------------
  *
- * One row per register at width 16 (<= 1023 per lane per row, <= 16368 after
- * sixteen); two rows per register at width 8. */
+ * one row a register at width 16 (<= 1023 a lane a row, <= 16368 after
+ * sixteen); two rows a register at width 8. */
 #define M10_SAD16_AVX2(h)                                                       \
 int y264_sad_16x##h##_avx2(const pixel *a, int as, const pixel *b, int bs)      \
 {                                                                               \
@@ -134,8 +132,8 @@ M10_SADN(avx2, 8, 4)
 
 /* ---- SATD ----------------------------------------------------------------
  *
- * m10_satd_rows8 at twice the width: four 4x4 tiles per pass, the same
- * bounds per lane. */
+ * m10_satd_rows8 at twice the width: four 4x4 tiles a pass, same lane
+ * bounds. */
 static inline __m256i satd_rows16(__m256i d0, __m256i d1, __m256i d2, __m256i d3)
 {
     const __m256i one = _mm256_set1_epi16(1);
@@ -203,7 +201,7 @@ void y264_satd_quad_8x8_avx2(const pixel *src, int ss, const pixel *r0,
                              const pixel *r1, const pixel *r2, const pixel *r3,
                              int rs, int scores[4])
 {
-    /* the folded source is built once for the four candidates */
+    /* the folded source is built once for all four candidates */
     const pixel *const r[4] = { r0, r1, r2, r3 };
     __m256i s[4];
     for (int i = 0; i < 4; i++)
@@ -216,7 +214,7 @@ void y264_satd_quad_8x8_avx2(const pixel *src, int ss, const pixel *r0,
     }
 }
 
-/* SATD against (p + q + 1) >> 1; p and q share a stride */
+/* against (p + q + 1) >> 1; p and q share a stride */
 #define M10_SATD_AVG16_AVX2(h)                                                  \
 int y264_satd_avg_16x##h##_avx2(const pixel *src, int ss, const pixel *p,       \
                                 const pixel *q, int ps)                         \
@@ -257,8 +255,8 @@ M10_SATD_AVG8_AVX2(8)
 
 /* ---- the 8x8 Walsh-Hadamard, two blocks at a time ------------------------
  *
- * A 16-wide row carries the left block's row in its low lane and the right
- * block's in its high lane. The bounds are m10_had8_rowmax's. */
+ * the left block's row in the low lane, the right block's in the high;
+ * bounds as in m10_had8_rowmax. */
 static inline __m256i had8_rowmax256(__m256i v)
 {
     __m256i s4 = _mm256_shuffle_epi32(v, 0x4e);
@@ -308,7 +306,7 @@ int y264_sa8d_16x16_avx2(const pixel *a, int as, const pixel *b, int bs)
                                     m10_ld16(b + (8 * h + i) * bs));
         had8x8_half_pair(d, &q[2 * h], &q[2 * h + 1]);
     }
-    /* each quadrant carries its own rounding, as the reference's does */
+    /* each quadrant rounds on its own, as the C kernel's 8x8 calls do */
     return ((2 * q[0] + 2) >> 2) + ((2 * q[1] + 2) >> 2)
          + ((2 * q[2] + 2) >> 2) + ((2 * q[3] + 2) >> 2);
 }
@@ -318,8 +316,8 @@ long y264_hadamard_ac_8x8_avx2(const pixel *p, int stride)
 
 /* ---- the psy texture terms ----------------------------------------------- */
 
-/* four rows of sixteen samples as four 4x4 tiles, with their DCs: lanes 0 and
- * 1 of each 128-bit half of the first hadd pair */
+/* four rows of sixteen as four 4x4 tiles; the DCs are lanes 0 and 1 of each
+ * 128-bit half of the first hadd pair */
 static inline __m256i tex_group16(const pixel *p, int stride, int dc[4])
 {
     const __m256i one = _mm256_set1_epi16(1);
@@ -384,7 +382,7 @@ void y264_texture_ac48_16x16_avx2(const pixel *p, int stride, long out[2])
     out[1] = e8;
 }
 
-/* ---- variance: a sum lane takes a sample a row (<= 16368) ---------------- */
+/* ---- variance: a sum lane <= 16368, a square lane <= 32 * 1023^2 -------- */
 
 void y264_var_16x16_avx2(const pixel *p, int stride, uint32_t out[2])
 {
@@ -484,15 +482,15 @@ int y264_ssd_8xh_avx2(const pixel *a, int as, const pixel *b, int bs, int h)
         acc = _mm256_add_epi32(acc, _mm256_madd_epi16(d, d));
     }
     int s = m10_hsum32_256(acc);
-    /* every caller's height is even; an odd tail is not dropped */
+    /* callers' heights are even, but an odd tail still counts */
     if (y < h)
         s += m10_ssd_8xh(a + y * as, as, b + y * bs, bs, h - y);
     return s;
 }
 
-/* A 16-wide row's pair sums already sit two blocks per lane; one hadd of the
- * squares against the widened sums leaves (e, e, s, s) per lane, and a 64-bit
- * permute orders them for the two stores. */
+/* a 16-wide row's pair sums sit two blocks a lane; one hadd of squares
+ * against widened sums leaves (e, e, s, s) a lane, and a 64-bit permute
+ * orders them for the two stores */
 void y264_ssdsum4x4_16_avx2(const pixel *a, int as, const pixel *b, int bs,
                             uint32_t e[16], int32_t sum[16])
 {
