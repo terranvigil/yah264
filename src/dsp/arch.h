@@ -939,9 +939,9 @@ int  y264_sa8d_16x16_avx512(const pixel *, int, const pixel *, int);
  * are called from the macroblock code and have no portable twin: the caller's
  * own unfused path is the C form. These two inlines give the call sites one
  * name. On aarch64 they are the NEON symbols at either depth; on x86-64 they
- * pick the tier, at either depth too. `y264_mc_fused_on()` is the question the call site asks
- * before taking either. The lowres bilinear row is 8-bit only:
- * Y264_HAVE_BILIN4_K says whether it is here. */
+ * pick the tier, at either depth too. `y264_mc_fused_on()` is the question
+ * the call site asks before taking either. The lowres bilinear row is 8-bit
+ * only: Y264_HAVE_BILIN4_K says whether it is here. */
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 #define Y264_HAVE_MC_FUSED 1
 static inline int y264_mc_fused_on(void)

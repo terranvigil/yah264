@@ -21,10 +21,11 @@
 # libraries at all: meson extracts their objects straight into the 8-bit
 # library, which is exactly why every kernel name in them ALSO appears in
 # libyah264.a. The 10-bit library's `libyah264_10_x86_<tier>.a` fold into
-# libyah264_10.a the same way. That is the fold working, not a collision, so the tier archives
-# are excluded here. They were invisible to this check while the tier files
-# were empty -- an archive with no symbols in it collides with nothing -- so
-# the first x86 kernel (docs/simd.md) is what made the glob wrong.
+# libyah264_10.a the same way. That is the fold working, not a collision, so
+# the tier archives are excluded here. They were invisible to this check while
+# the tier files were empty -- an archive with no symbols in it collides with
+# nothing -- so the first x86 kernel (docs/simd.md) is what made the glob
+# wrong.
 # The pairing this check exists for is one DEPTH against the other.
 #
 # usage: scripts/symbol_check.sh [builddir...]   (default: build)
@@ -50,7 +51,9 @@ for d in $dirs; do
     keep=
     for a in "$d"/libyah264*.a; do
         [ -f "$a" ] || continue
-        case "$a" in *"/libyah264_x86_"*|*"/libyah264_10_x86_"*) continue ;; esac
+        case "$a" in
+            *"/libyah264_x86_"*|*"/libyah264_10_x86_"*) continue ;;
+        esac
         keep="$keep $a"
     done
     # shellcheck disable=SC2086
