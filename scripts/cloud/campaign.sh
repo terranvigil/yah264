@@ -477,20 +477,33 @@ clips10() { ls "$CLIPS10_DIR"/*.y4m 2>/dev/null; }
 
 # the tiers this CPU can run, from the 10-bit binary's own feature word: an
 # avx2 row on a part without avx2, fma3 and bmi2 would test the sse4 tier
-# under the avx2 name
+# under the avx2 name. the line reads "checkasm: cpu <features>, <depth>";
+# the features are matched as whole words between the prefix and the comma.
+# a missing or reworded line, or an x86-64 part with no sse4, is a failure:
+# read as "no tiers" it would pass every leg that uses it
+has10() { case " $TIERS10_CPU " in *" $1 "*) return 0 ;; esac; return 1; }
 tiers10() {
-    local cpu
-    cpu=$("$C_B10/tools/checkasm/checkasm" --list 2>/dev/null | head -1)
-    echo "# $cpu" >&2
-    case " $cpu " in *" sse4 "*) printf 'sse4 ' ;; esac
-    case " $cpu " in *" avx2 "*) case " $cpu " in *" fma3 "*) case " $cpu " in
-        *" bmi2 "*) printf 'avx2 ' ;; esac ;; esac ;; esac
+    local line
+    line=$("$C_B10/tools/checkasm/checkasm" --list 2>/dev/null | head -1)
+    echo "# $line" >&2
+    case "$line" in
+        "checkasm: cpu "*) ;;
+        *) echo "# no 'checkasm: cpu' line from checkasm --list" >&2; return 1 ;;
+    esac
+    TIERS10_CPU=${line#checkasm: cpu }
+    TIERS10_CPU=${TIERS10_CPU%%,*}
+    case "$(uname -m)" in
+        x86_64|amd64) has10 sse4 || { echo "# an x86-64 part reports no sse4" >&2; return 1; } ;;
+    esac
+    has10 sse4 && printf 'sse4 '
+    has10 avx2 && has10 fma3 && has10 bmi2 && printf 'avx2 '
+    return 0
 }
 
 st_checkasm10() {
     [ -x "$C_B10/tools/checkasm/checkasm" ] || { c_skip "no 10-bit build"; return; }
     local out="$RES/checkasm10.txt" isa rc=0 have
-    have=$(tiers10 2> "$out")
+    have=$(tiers10 2> "$out") || { cat "$out"; return 1; }
     for isa in sse4 avx2; do
         case " $have " in
             *" $isa "*) "$C_B10/tools/checkasm/checkasm" --isa "$isa" >> "$out" 2>&1 || rc=1 ;;
@@ -506,7 +519,7 @@ st_identity10() {
     [ -n "$(clips10)" ] || { c_skip "no clips in $CLIPS10_DIR"; return; }
     local out="$RES/identity10.txt" clip t mode tier rc=0 have
     echo "# 10-bit identity, $SKU $DATE, $FRAMES10 frames" > "$out"
-    have=$(tiers10 2>> "$out")
+    have=$(tiers10 2>> "$out") || { cat "$out"; return 1; }
     for tier in none $have; do
         : > "$RES/.md5.$tier"
         for clip in $(clips10); do
