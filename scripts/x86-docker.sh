@@ -103,6 +103,57 @@ row() {   # row <backend> <tier> <leg> <PASS|FAIL|SKIP|NOTE> <detail>
 }
 has_leg() { case " $LEGS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# the identity legs compare every tier with none, so they need it
+if has_leg identity && ! printf ' %s ' "$TIERS" | grep -q ' none '; then
+    echo "x86-docker: --tiers '$TIERS' has no none tier for the identity legs to compare against" >&2
+    exit 2
+fi
+
+# ONE RUN PER WORKTREE. Two runs share the scratch directory: each other's
+# x.264, err, .part and md5 lists, so one run's row would blame a kernel for
+# the other's files. macOS has no flock, so the lock is a directory, and a
+# lock whose holder is gone is taken over.
+lock="$root/scratch/x86-docker/.lock"
+mkdir -p "$root/scratch/x86-docker"
+if ! mkdir "$lock" 2>/dev/null; then
+    holder="$(cat "$lock/pid" 2>/dev/null)"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+        echo "x86-docker: another run (pid $holder) holds $lock" >&2
+        exit 2
+    fi
+    rm -rf "$lock"
+    mkdir "$lock" || { echo "x86-docker: cannot take $lock" >&2; exit 2; }
+fi
+echo $$ > "$lock/pid"
+ROSETTA_OFF=0
+cleanup() {
+    [ "$ROSETTA_OFF" = 1 ] && restore_rosetta
+    rm -rf "$lock"
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
+
+# compare_lists <backend> <tier> <label> <idir> <diff-name> <what moved>:
+# one tier's md5 list against none's. A count that differs is the harness's
+# fault (an encode went missing), never a kernel's.
+compare_lists() {
+    local be="$1" tier="$2" label="$3" base="$root/$4/md5.none" f="$root/$4/md5.$2" nb nf
+    if [ ! -s "$base" ] || [ ! -s "$f" ]; then
+        row "$be" "$tier" "$label" FAIL "an md5 list is missing or empty"
+        return
+    fi
+    nb=$(wc -l < "$base" | tr -d ' '); nf=$(wc -l < "$f" | tr -d ' ')
+    if [ "$nb" != "$nf" ]; then
+        row "$be" "$tier" "$label" FAIL "harness fault: $nf encodes against none's $nb"
+    elif diff -q "$base" "$f" >/dev/null; then
+        row "$be" "$tier" "$label" PASS "$nf encodes byte-identical"
+    else
+        diff "$base" "$f" > "$out/$5"
+        row "$be" "$tier" "$label" FAIL \
+            "$(diff "$base" "$f" | grep -c '^[<>]') lines differ -- $6"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # The mounts. The worktree goes in read-write at /work; the corpus goes in
 # READ-ONLY and is never copied, because it is ~25 GB of Y4M that is not ours
@@ -262,7 +313,7 @@ for BACKEND in $BACKENDS; do
             echo "x86-docker: Rosetta is the default interpreter for x86-64; disabling it"
             echo "            for this leg and restoring it on the way out."
             binfmt 0
-            trap restore_rosetta EXIT INT TERM
+            ROSETTA_OFF=1
         fi
         if rosetta_enabled; then
             row qemu - "backend select" FAIL "could not disable the Rosetta binfmt entry"
@@ -385,7 +436,27 @@ for BACKEND in $BACKENDS; do
     # thread count, and the md5 of the .264 is compared against the `none`
     # tier's. No kernel may move a byte, so a single differing md5 is a
     # kernel defect.
+    # THE CAP MUST TAKE. Y264_SIMD_FORCE is read only in a dev_knobs build;
+    # in any other the tiers all run the default and compare identical. The
+    # build is configured with dev_knobs, but a stale build directory may not
+    # be, so it is probed, reconfigured once if needed, and the identity legs
+    # refuse to run without it.
+    capok=1
     if has_leg identity; then
+        capline() { dk "Y264_SIMD_FORCE=none" -- "$b8/tools/checkasm/checkasm --list | head -1" 2>/dev/null | tr -d '\r'; }
+        case "$(capline)" in
+            "checkasm: cpu scalar, "*) ;;
+            *) dk X=1 -- "meson configure $b8 -Ddev_knobs=true && ninja -C $b8 -j$JOBS" \
+                   > "$out/$BACKEND-devknobs.log" 2>&1
+               case "$(capline)" in
+                   "checkasm: cpu scalar, "*) row "$BACKEND" - "tier cap" NOTE "reconfigured with -Ddev_knobs=true" ;;
+                   *) capok=0
+                      row "$BACKEND" - "tier cap" FAIL "Y264_SIMD_FORCE=none does not take in $b8" ;;
+               esac ;;
+        esac
+    fi
+
+    if has_leg identity && [ "$capok" = 1 ]; then
         # The md5 lists are keyed by BACKEND, not by build directory: the QEMU
         # leg may be running out of the Rosetta build, and one leg overwriting
         # the other's lists would compare two backends by accident.
@@ -401,9 +472,11 @@ for spec in $CLIPS; do
     for t in $ENC_THREADS; do
         for mode in '--crf 23' '--qp 26' \"--bitrate \$rate\"; do
             o=$idir/x.264
+            rm -f \"\$o\"
             $b8/cli/yah264 --input-y4m \"\$src\" --frames $FRAMES \$mode \\
                 --threads \$t -o \"\$o\" > /dev/null 2> $idir/err \\
                 || { echo \"ENCODE FAILED \$clip t\$t \$mode: \$(head -1 $idir/err)\"; exit 1; }
+            [ -s \"\$o\" ] || { echo \"EMPTY OUTPUT \$clip t\$t \$mode\"; exit 1; }
             echo \"\$(md5sum < \"\$o\" | cut -d' ' -f1)  \$clip t\$t \$mode\" \\
                 >> $idir/md5.\$Y264_SIMD_FORCE
         done
@@ -412,6 +485,7 @@ done
 # a clip the container cannot see is a harness defect, never a pass
 [ \"\$missing\" = 0 ]"
         mkdir -p "$root/$idir"
+        for tier in $TIERS; do : > "$root/$idir/md5.$tier"; done
         for tier in $TIERS; do
             if dk "Y264_SIMD_FORCE=$tier" -- "$script" > "$out/$BACKEND-$tier-ident.log" 2>&1; then
                 row "$BACKEND" "$tier" "identity encodes" PASS "$BACKEND-$tier-ident.log"
@@ -419,19 +493,10 @@ done
                 row "$BACKEND" "$tier" "identity encodes" FAIL "$BACKEND-$tier-ident.log"
             fi
         done
-        base="$root/$idir/md5.none"
         for tier in $TIERS; do
             [ "$tier" = none ] && continue
-            f="$root/$idir/md5.$tier"
-            if [ ! -s "$base" ] || [ ! -s "$f" ]; then
-                row "$BACKEND" "$tier" "identity vs none" FAIL "an md5 list is missing or empty"
-            elif diff -q "$base" "$f" >/dev/null; then
-                row "$BACKEND" "$tier" "identity vs none" PASS "$(wc -l < "$f" | tr -d ' ') encodes byte-identical"
-            else
-                diff "$base" "$f" > "$out/$BACKEND-$tier-ident.diff"
-                row "$BACKEND" "$tier" "identity vs none" FAIL \
-                    "$(diff "$base" "$f" | grep -c '^<') differ -- a kernel moved a byte"
-            fi
+            compare_lists "$BACKEND" "$tier" "identity vs none" "$idir" \
+                "$BACKEND-$tier-ident.diff" "a kernel moved a byte"
         done
     fi
 
@@ -440,12 +505,9 @@ done
     # 4:4:4, so every chroma path's kernels run), encoded at threads 1 at
     # CRF and CQP, md5 against the `none` tier. The CLI links both libraries
     # and picks the 10-bit one from the input.
-    # The none tier is the reference every other tier is compared with, so the
-    # leg refuses to run without it. FRAMES 0 means the whole clip: ffmpeg is
-    # then given no frame limit, and each cached clip is keyed by the count.
-    if has_leg identity && ! printf ' %s ' "$TIERS" | grep -q ' none '; then
-        row "$BACKEND" - "10-bit identity" FAIL "TIERS has no none tier to compare against"
-    elif has_leg identity; then
+    # FRAMES 0 means the whole clip: ffmpeg is then given no frame limit, and
+    # each cached clip is keyed by the count.
+    if has_leg identity && [ "$capok" = 1 ]; then
         idir="scratch/x86-docker/ident10-$BACKEND"
         fflim=""; [ "$FRAMES" -gt 0 ] && fflim="-frames:v $FRAMES"
         script="set -e
@@ -486,23 +548,14 @@ done"
                 row "$BACKEND" "$tier" "10-bit identity encodes" FAIL "$BACKEND-$tier-ident10.log"
             fi
         done
-        base="$root/$idir/md5.none"
         for tier in $TIERS; do
             [ "$tier" = none ] && continue
-            f="$root/$idir/md5.$tier"
-            if [ ! -s "$base" ] || [ ! -s "$f" ]; then
-                row "$BACKEND" "$tier" "10-bit identity vs none" FAIL "an md5 list is missing or empty"
-            elif diff -q "$base" "$f" >/dev/null; then
-                row "$BACKEND" "$tier" "10-bit identity vs none" PASS "$(wc -l < "$f" | tr -d ' ') encodes byte-identical"
-            else
-                diff "$base" "$f" > "$out/$BACKEND-$tier-ident10.diff"
-                row "$BACKEND" "$tier" "10-bit identity vs none" FAIL \
-                    "$(diff "$base" "$f" | grep -c '^<') differ -- a 10-bit kernel moved a byte"
-            fi
+            compare_lists "$BACKEND" "$tier" "10-bit identity vs none" "$idir" \
+                "$BACKEND-$tier-ident10.diff" "a 10-bit kernel moved a byte"
         done
     fi
 
-    if [ "$BACKEND" = qemu ]; then restore_rosetta; trap - EXIT INT TERM; fi
+    if [ "$BACKEND" = qemu ] && [ "$ROSETTA_OFF" = 1 ]; then restore_rosetta; ROSETTA_OFF=0; fi
 done
 
 # ---------------------------------------------------------------------------
