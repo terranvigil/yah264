@@ -17,7 +17,7 @@
 #
 # THE MATRIX: {rosetta, qemu} x {none, sse4, avx2} x {make test incl. checkasm,
 # conformance --fast, identity cmp against the `none` tier}, plus a 10-bit
-# build (C only -- the x86 tier libraries fold into the 8-bit library alone).
+# build whose unit leg runs checkasm over the 10-bit library's own tiers.
 # The tier axis is Y264_SIMD_FORCE, a RUNTIME cap, so one build serves all
 # three; -Dsimd= is the build-time twin and is what CI exercises instead.
 #
@@ -336,18 +336,18 @@ for BACKEND in $BACKENDS; do
         *) row "$BACKEND" - "cpuid avx2 + fma3" FAIL "the binary does not see avx2: $cpuline" ;;
     esac
 
-    # -- the 10-bit build, C only ------------------------------------------
-    # The tier libraries are folded into the 8-bit library alone, so a 10-bit
-    # build is the pure-C arm of the x86 shape and the place a depth-generic
+    # -- the 10-bit build ---------------------------------------------------
+    # Each depth folds its own tier libraries, so this is where the 10-bit
+    # kernels meet checkasm (inside meson test) and where a depth-generic
     # mistake in the build files shows up.
     if has_leg test; then
         if dk X=1 -- "set -e
             [ -f $b10/build.ninja ] || meson setup $b10 -Ddev_knobs=true -Dbit_depth=10
             ninja -C $b10 -j$JOBS
             meson test -C $b10 --print-errorlogs" > "$out/$BACKEND-build10.log" 2>&1; then
-            row "$BACKEND" 10bit "build + unit (C only)" PASS "$BACKEND-build10.log"
+            row "$BACKEND" 10bit "build + unit" PASS "$BACKEND-build10.log"
         else
-            row "$BACKEND" 10bit "build + unit (C only)" FAIL "$BACKEND-build10.log"
+            row "$BACKEND" 10bit "build + unit" FAIL "$BACKEND-build10.log"
         fi
     fi
 
