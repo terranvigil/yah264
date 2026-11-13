@@ -2222,6 +2222,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
     double *w = calloc((size_t)n_gops, sizeof(double));
     long *rec = calloc((size_t)n_gops, sizeof(long));
     FILE **out = calloc((size_t)n_gops, sizeof(FILE *));
+    char (*first)[256] = calloc((size_t)n_gops, sizeof *first);
     long total_rec = 0;
     double total_w = 0.0;
     int cur = -1, bad = 0;
@@ -2260,6 +2261,8 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
             break;                              /* malformed: stop, as the encoder does */
         fputs(ln, out[cur]);
+        if (!rec[cur])
+            memcpy(first[cur], ln, sizeof ln);
         /* Not on the dispatch table on purpose: this is a pure function of a
          * stats record's (bits, qp) with the same constants in both libraries,
          * so the 8-bit copy is the 10-bit answer. It stays off the table so
@@ -2269,8 +2272,15 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         rec[cur]++; total_rec++;
     }
     fclose(in);
+    /* each section also names the record that follows it, the next GOP's
+     * first, so a pass 2 under a VBV can leave room for that key; the
+     * encoder's reader skips '#' lines it does not use */
+    for (int g = 0; g + 1 < n_gops && !bad; g++)
+        if (out[g] && first[g + 1][0])
+            fprintf(out[g], "#next %s", first[g + 1]);
     for (int g = 0; g < n_gops; g++)
         if (out[g]) fclose(out[g]);
+    free(first);
 
     /* A section that opened but got no records leaves an empty file, which the
  * encoder reads as "no stats" and codes at base QP. Say so rather than let

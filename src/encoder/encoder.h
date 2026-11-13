@@ -1034,6 +1034,10 @@ struct yah264_encoder {
     double  *tp_elo3;           /* [3][n+1] tp_elo per frame type */
     double   tp_lastq[3];       /* per type: last floor-bound qscale decided, 0 = none */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
+    struct tp_stat tp_next;     /* pass 2: the next GOP's first record (#next) */
+    int      tp_have_next;
+    double  *tp_resv;           /* [n+1] under a VBV: occupancy record i needs at QP 51 */
+    double   tp_resv_cur;       /* the reserve the frame being coded leaves */
     double   tp_fps;            /* records (pictures) per second, for the drift band */
     int      tp_nacc;           /* frames accounted so far */
     double   tp_actual;         /* bits coded so far (committed) */

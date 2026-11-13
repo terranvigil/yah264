@@ -828,6 +828,12 @@ static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
         double b = vbv_fill_budget(e, fill);
         if (b < limit) limit = b;
     }
+    if (e->tp_resv_cur > 0.0) {
+        /* pass 2: leave the next frame what it needs at QP 51 */
+        double x = fill + e->vbv.rate - e->tp_resv_cur;
+        if (x < 0.02 * e->vbv.rate) x = 0.02 * e->vbv.rate;
+        if (x < limit) limit = x;
+    }
     if (e->vbv_exit_n > 0) {
         /* The exit corridor (yah264_encoder_vbv_handoff): leave enough in the
  * buffer that the frames still to come, each keeping vbv_exit_k of its
@@ -2028,6 +2034,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     } else if (e->tp_pass >= 2) {
         if (e->tp_idx < e->tp_n) {
             int idx = e->tp_idx++;
+            e->tp_resv_cur = e->tp_resv ? e->tp_resv[idx + 1] : 0.0;
             struct tp_stat *s = &e->tp_stats[idx];
             double scaleterm = (s->bits + 1) * pow(2.0, (s->qp - 12) / 6.0);
             en.cq = pow(scaleterm, e->crf_qcomp);
@@ -2472,6 +2479,38 @@ static void tp_floor_plan(yah264_encoder_t *e, const double *cplx, double seed, 
     }
 }
 
+/* A record's bits at QP 51. Bits fall slower than the 1/qscale law toward
+ * the top of the range (an intra frame pass 1 coded at QP 23 cost three
+ * times the law's price at 51), so this takes 8 QP a halving, with a margin,
+ * as the --nal-hrd reserve does. */
+static double tp_bits51(double bits, int qp)
+{
+    return 1.1 * (bits + 1.0) * pow(2.0, (qp - 51) / 8.0);
+}
+
+/* Under a VBV, the occupancy each record needs when it is removed for it and
+ * every record after it to fit at QP 51, walked back from the next GOP's
+ * first record (the splitter appends it). A frame that takes the buffer under
+ * what the next one needs leaves that one a frame no QP fits: the key that
+ * opens the next GOP, or a noise frame after an intra frame that took the
+ * buffer. */
+static void tp_build_reserve(yah264_encoder_t *e)
+{
+    int n = e->tp_n;
+    if (!e->vbv_on || e->vbv.size <= 0.0)
+        return;
+    e->tp_resv = malloc((size_t)(n + 1) * sizeof(*e->tp_resv));
+    if (!e->tp_resv)
+        return;
+    double r = e->tp_have_next ? tp_bits51(e->tp_next.bits, e->tp_next.qp) : 0.0;
+    e->tp_resv[n] = r < e->vbv.size ? r : e->vbv.size;
+    for (int i = n - 1; i >= 0; i--) {
+        double need = e->tp_resv[i + 1] - e->vbv.rate;
+        r = tp_bits51(e->tp_stats[i].bits, e->tp_stats[i].qp) + (need > 0.0 ? need : 0.0);
+        e->tp_resv[i] = r < e->vbv.size ? r : e->vbv.size;
+    }
+}
+
 /* Build the plan. Called once at open, on the API thread, after the records
  * are read. Deterministic function of (records, target, gates) alone -- no
  * thread count, no clock, no coding state -- which is what keeps the threaded
@@ -2531,6 +2570,7 @@ void tp_build_plan(yah264_encoder_t *e)
     e->tp_ebits[0] = 0;
     for (int i = 0; i < n; i++)
         e->tp_ebits[i + 1] = e->tp_ebits[i] + tp_bits_at(e, i, e->tp_q[i]);
+    tp_build_reserve(e);
 
     free(cplx);
     free(pcost);

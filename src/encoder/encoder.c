@@ -5474,6 +5474,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     int mg, ms, me, mr;
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
                         mframes += me - ms;
+                    if (sscanf(ln, "#next %d %lf %lf %d", &e->tp_next.type, &e->tp_next.cplx,
+                               &e->tp_next.bits, &e->tp_next.qp) == 4)
+                        e->tp_have_next = 1;
                     if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0')
                         continue;
                     /* The 5th field (is_ref) was added for the offline plan's
@@ -16658,6 +16661,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->tp_qrec);
     free(e->tp_q);
     free(e->tp_ebits);
+    free(e->tp_resv);
     free(e->tp_qlo);
     free(e->tp_elo);
     free(e->tp_elo3);
