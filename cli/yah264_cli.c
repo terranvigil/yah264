@@ -2174,7 +2174,7 @@ static int tp_stats_have_markers(const char *path)
     char ln[256];
     int found = 0;
     while (fgets(ln, sizeof ln, f)) {
-        if (ln[0] == '\n' || ln[0] == '\0') continue;
+        if (ln[0] == '\n' || ln[0] == '\0' || !strncmp(ln, "#threads", 8)) continue;
         found = !strncmp(ln, TP_MARKER, strlen(TP_MARKER));
         break;                                  /* first real line decides */
     }
@@ -2185,13 +2185,16 @@ static int tp_stats_have_markers(const char *path)
 /* Concatenate the per-GOP pass-1 files into the user's stats path, in GOP
  * order, each section preceded by its marker. Returns 0 on success. */
 static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
-                          const int *gstart, int n_gops)
+                          const int *gstart, int n_gops, int threads)
 {
     FILE *out = fopen(out_path, "w");
     if (!out) {
         fprintf(stderr, "yah264: cannot write stats file '%s'\n", out_path);
         return -1;
     }
+    /* one thread codes with tools more threads don't, so pass 2 checks
+     * that it runs at the same kind (the encoder's stats reader) */
+    fprintf(out, "#threads %d\n", threads);
     for (int g = 0; g < n_gops; g++) {
         FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
         char ln[256];
@@ -2345,6 +2348,8 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
 
     while (fgets(ln, sizeof ln, in)) {
         if (ln[0] == '\n' || ln[0] == '\0') continue;
+        if (!strncmp(ln, "#threads", 8))         /* the encoder checks it */
+            continue;
         if (!strncmp(ln, TP_MARKER, strlen(TP_MARKER))) {
             int g, s, e, nr;
             if (sscanf(ln + strlen(TP_MARKER), "%d %d %d %d", &g, &s, &e, &nr) != 4) {
@@ -4047,7 +4052,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * worker calls before it publishes the GOP. */
     int tp_rc = 0;
     if (gop_stats && param->rc.pass != 2)
-        tp_rc = tp_merge_pass1(param->rc.stats, gop_stats, job.gop_start, n_gops);
+        tp_rc = tp_merge_pass1(param->rc.stats, gop_stats, job.gop_start, n_gops, param->threads);
     tp_free_paths(gop_stats, n_gops, 1);
     free(gop_target);
 

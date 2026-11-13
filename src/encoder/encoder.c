@@ -5471,6 +5471,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 yah264_encoder_close(e);
                 return NULL;
             }
+            /* one thread codes with tools more threads don't, so a pass 2
+             * at the other kind prices the records wrong: say which */
+            fprintf(e->tp_fp, "#threads %d\n", e->param.threads);
             e->qp = Y264_TP_P1_QP;                  /* fixed reference QP for pass 1 */
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
         } else {
@@ -5493,6 +5496,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     int mg, ms, me, mr;
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
                         mframes += me - ms;
+                    int p1t;
+                    if (sscanf(ln, "#threads %d", &p1t) == 1 && p1t > 0
+                        && (p1t == 1) != (e->param.threads == 1))
+                        fprintf(stderr, "yah264: warning: stats file '%s' comes from a pass 1 at "
+                                "--threads %d and this pass runs at --threads %d; one thread codes "
+                                "with tools more threads don't, so the records misprice this pass "
+                                "and the rate can miss by tens of percent: run both passes at one "
+                                "thread or both at more\n", param->rc.stats, p1t, e->param.threads);
                     /* the splitter writes it first, and hands the encoder its
                      * share of the budget: anywhere else, or in a file a
                      * caller didn't split, it isn't the splitter's, and the
