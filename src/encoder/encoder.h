@@ -1053,6 +1053,7 @@ struct yah264_encoder {
     struct rcp_pend {
         int8_t  type, is_ref, dropped, filled;
         int8_t  held;           /* raised by the --nal-hrd hold: off the plan's model */
+        int8_t  rc_type;        /* the rate-control type: an I frame's second field is coded P, quantised I */
         int8_t  tight;          /* decided in a serial-tight VBV burst: pops at
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */

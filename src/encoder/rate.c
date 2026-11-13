@@ -1039,7 +1039,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->abr_cum_target += e->abr_target_bpf;
     }
     if (e->tp_fp)          /* pass 1 and pass 3 both record */
-        fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->type, p->cplx, p->bits,
+        fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->rc_type, p->cplx, p->bits,
                 p->fqp, p->is_ref ? 1 : 0);
     if (e->tp_pass >= 2) {
         e->tp_rem_target -= p->bits;
@@ -1757,6 +1757,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     memset(&en, 0, sizeof en);
     en.tp_rec = -1;                             /* 0 is a valid record index */
     en.type = (int8_t)type;
+    en.rc_type = (int8_t)(e->fld_pic && e->fld_rc_type >= 0 ? e->fld_rc_type : type);
     en.is_ref = (int8_t)is_ref;
     en.cplx = C;
     en.bits = -1.0;
