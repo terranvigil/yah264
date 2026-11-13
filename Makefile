@@ -149,11 +149,12 @@ build: configure
 # synthetic clip, ~30s; skipped cleanly when ffmpeg is absent since it is the
 # decode oracle). Fixed seed so the per-commit cells are stable; the full
 # 50-cell tier and fresh seeds are a sign-off step, not a commit gate.
-# TEST_WRAP runs each binary the tests start under a command; the x86 Docker
-# kit's QEMU legs pass an explicit qemu-x86_64. Empty runs them directly.
+# TEST_WRAP runs each binary the tests start under a command, the encoder the
+# Python tests start included (YAH264_WRAP); the x86 Docker kit's QEMU legs
+# pass an explicit qemu-x86_64. Empty runs them directly.
 TEST_WRAP ?=
 test: build
-	@meson test -C $(BUILD) $(if $(TEST_WRAP),--wrapper '$(TEST_WRAP)')
+	@YAH264_WRAP='$(TEST_WRAP)' meson test -C $(BUILD) $(if $(TEST_WRAP),--wrapper '$(TEST_WRAP)' --timeout-multiplier 10)
 	@scripts/symbol_check.sh $(BUILD)
 	@python3 scripts/knob_census.py --check
 	@python3 scripts/env_gate_audit.py --self-test
