@@ -16,11 +16,13 @@
  * references `<name>_10`. Nothing here reaches the 8-bit library, the CLI, or
  * an installed header.
  *
- * The list is the union of the two archives' defined symbols minus the public
- * ones, and it is checked rather than trusted: scripts/symbol_check.sh (a leg
- * of `make test`) intersects the two archives and fails on any name they share,
- * so a new non-static symbol that is added here and forgotten fails the gate
- * instead of linking to the wrong depth's code.
+ * The list is the union of the two depths' internal symbols on BOTH
+ * architectures, aarch64 and x86-64, since each has kernel tiers the other
+ * lacks; regenerate it from both (see the script's usage). It is checked
+ * rather than trusted: scripts/symbol_check.sh (a leg of `make test`)
+ * intersects the two archives and fails on any name they share, so a new
+ * non-static symbol that is added here and forgotten fails the gate instead of
+ * linking to the wrong depth's code.
  */
 
 #ifndef YAH264_SYMBOLS10_H
@@ -86,13 +88,27 @@
 #define y264_add8x8_idct8_c             y264_add8x8_idct8_c_10
 #define y264_add8x8_idct8_neon          y264_add8x8_idct8_neon_10
 #define y264_add8x8_idct8_sse4          y264_add8x8_idct8_sse4_10
+#define y264_aq_afloor                  y264_aq_afloor_10
+#define y264_aq_bars                    y264_aq_bars_10
+#define y264_aq_bfloor                  y264_aq_bfloor_10
+#define y264_aq_bright                  y264_aq_bright_10
+#define y264_aq_dark                    y264_aq_dark_10
+#define y264_aq_dark_gate               y264_aq_dark_gate_10
+#define y264_aq_gain                    y264_aq_gain_10
+#define y264_aq_grain                   y264_aq_grain_10
+#define y264_aq_grain_share             y264_aq_grain_share_10
+#define y264_aq_l                       y264_aq_l_10
+#define y264_aq_lf                      y264_aq_lf_10
+#define y264_aq_vscale                  y264_aq_vscale_10
 #define y264_asm_off_                   y264_asm_off__10
 #define y264_aud_write                  y264_aud_write_10
 #define y264_avg_mb420_flat_avx2        y264_avg_mb420_flat_avx2_10
 #define y264_avg_mb420_flat_neon        y264_avg_mb420_flat_neon_10
 #define y264_avg_mb420_flat_sse4        y264_avg_mb420_flat_sse4_10
 #define y264_band_rows                  y264_band_rows_10
+#define y264_bilin4_row_avx2            y264_bilin4_row_avx2_10
 #define y264_bilin4_row_neon            y264_bilin4_row_neon_10
+#define y264_bilin4_row_sse4            y264_bilin4_row_sse4_10
 #define y264_bp2_on                     y264_bp2_on_10
 #define y264_bp2_pre                    y264_bp2_pre_10
 #define y264_bs_flush                   y264_bs_flush_10
@@ -111,13 +127,12 @@
 #define y264_cabac_dec_init             y264_cabac_dec_init_10
 #define y264_cabac_dec_terminate        y264_cabac_dec_terminate_10
 #define y264_cabac_encode_bypass        y264_cabac_encode_bypass_10
-#define y264_cabac_encode_decision      y264_cabac_encode_decision_10
+#define y264_cabac_encode_decision_ext  y264_cabac_encode_decision_ext_10
 #define y264_cabac_encode_terminate     y264_cabac_encode_terminate_10
 #define y264_cabac_encode_ueg_bypass    y264_cabac_encode_ueg_bypass_10
 #define y264_cabac_est_bin              y264_cabac_est_bin_10
-#define y264_cabac_encode_decision_ext  y264_cabac_encode_decision_ext_10
-#define y264_cabac_est_tab_             y264_cabac_est_tab__10
 #define y264_cabac_est_mvd              y264_cabac_est_mvd_10
+#define y264_cabac_est_tab_             y264_cabac_est_tab__10
 #define y264_cabac_init_contexts        y264_cabac_init_contexts_10
 #define y264_cabac_init_engine          y264_cabac_init_engine_10
 #define y264_cabac_pos_bits             y264_cabac_pos_bits_10
@@ -166,11 +181,15 @@
 #define y264_deblock_luma_h16_avx2      y264_deblock_luma_h16_avx2_10
 #define y264_deblock_luma_h16_neon      y264_deblock_luma_h16_neon_10
 #define y264_deblock_luma_h16_sse4      y264_deblock_luma_h16_sse4_10
+#define y264_deblock_luma_h4_avx2       y264_deblock_luma_h4_avx2_10
 #define y264_deblock_luma_h4_neon       y264_deblock_luma_h4_neon_10
+#define y264_deblock_luma_h4_sse4       y264_deblock_luma_h4_sse4_10
 #define y264_deblock_luma_v16_avx2      y264_deblock_luma_v16_avx2_10
 #define y264_deblock_luma_v16_neon      y264_deblock_luma_v16_neon_10
 #define y264_deblock_luma_v16_sse4      y264_deblock_luma_v16_sse4_10
+#define y264_deblock_luma_v4_avx2       y264_deblock_luma_v4_avx2_10
 #define y264_deblock_luma_v4_neon       y264_deblock_luma_v4_neon_10
+#define y264_deblock_luma_v4_sse4       y264_deblock_luma_v4_sse4_10
 #define y264_deblock_rows               y264_deblock_rows_10
 #define y264_deblock_strength_avx2      y264_deblock_strength_avx2_10
 #define y264_deblock_strength_c         y264_deblock_strength_c_10
@@ -251,6 +270,7 @@
 #define y264_idct8x8_neon               y264_idct8x8_neon_10
 #define y264_idct8x8_sse4               y264_idct8x8_sse4_10
 #define y264_intra16_satd_trio_avx2     y264_intra16_satd_trio_avx2_10
+#define y264_intra16_satd_trio_neon     y264_intra16_satd_trio_neon_10
 #define y264_intra16_satd_trio_sse4     y264_intra16_satd_trio_sse4_10
 #define y264_intra16x16                 y264_intra16x16_10
 #define y264_intra16x16_avx2            y264_intra16x16_avx2_10
@@ -258,10 +278,10 @@
 #define y264_intra16x16_neon            y264_intra16x16_neon_10
 #define y264_intra16x16_sse4            y264_intra16x16_sse4_10
 #define y264_intra4_mode_search_avx2    y264_intra4_mode_search_avx2_10
+#define y264_intra4_mode_search_neon    y264_intra4_mode_search_neon_10
 #define y264_intra4_mode_search_sse4    y264_intra4_mode_search_sse4_10
 #define y264_intra4x4                   y264_intra4x4_10
 #define y264_intra4x4_c                 y264_intra4x4_c_10
-#define y264_intra4_mode_search_neon           y264_intra4_mode_search_neon_10
 #define y264_intra8_dvhp                y264_intra8_dvhp_10
 #define y264_intra8_dvhp_avx2           y264_intra8_dvhp_avx2_10
 #define y264_intra8_dvhp_c              y264_intra8_dvhp_c_10
@@ -295,7 +315,6 @@
 #define y264_intra_chroma_avx2          y264_intra_chroma_avx2_10
 #define y264_intra_chroma_c             y264_intra_chroma_c_10
 #define y264_intra_chroma_neon          y264_intra_chroma_neon_10
-#define y264_intra16_satd_trio_neon   y264_intra16_satd_trio_neon_10
 #define y264_intra_chroma_sse4          y264_intra_chroma_sse4_10
 #define y264_ip_beg                     y264_ip_beg_10
 #define y264_ip_end                     y264_ip_end_10
@@ -307,50 +326,29 @@
 #define y264_lr_hp_row_sse4             y264_lr_hp_row_sse4_10
 #define y264_machine_threads            y264_machine_threads_10
 #define y264_mb_dauto_stride            y264_mb_dauto_stride_10
-#define y264_mb_warm_statics            y264_mb_warm_statics_10
-#define y264_aq_gain                    y264_aq_gain_10
-#define y264_aq_bfloor                  y264_aq_bfloor_10
-#define y264_aq_afloor                  y264_aq_afloor_10
-#define y264_aq_vscale                  y264_aq_vscale_10
-#define y264_aq_l                       y264_aq_l_10
-#define y264_aq_lf                      y264_aq_lf_10
-#define y264_aq_dark                    y264_aq_dark_10
-#define y264_mc_chroma_bi8_avx2         y264_mc_chroma_bi8_avx2_10
-#define y264_mc_chroma_bi8_sse4         y264_mc_chroma_bi8_sse4_10
-#define y264_mc_chroma_w4h_avx2         y264_mc_chroma_w4h_avx2_10
-#define y264_mc_chroma_w4h_sse4         y264_mc_chroma_w4h_sse4_10
-#define y264_mc_chroma_w8h_avx2         y264_mc_chroma_w8h_avx2_10
-#define y264_mc_chroma_w8h_sse4         y264_mc_chroma_w8h_sse4_10
-#define y264_mc_luma16_avx2             y264_mc_luma16_avx2_10
-#define y264_mc_luma16_sse4             y264_mc_luma16_sse4_10
-#define y264_mc_luma8_avx2              y264_mc_luma8_avx2_10
-#define y264_mc_luma8_sse4              y264_mc_luma8_sse4_10
-#define y264_pixel_avg_wt_2d_avx2       y264_pixel_avg_wt_2d_avx2_10
-#define y264_pixel_avg_wt_2d_sse4       y264_pixel_avg_wt_2d_sse4_10
-#define y264_pixel_avg_wt_avx2          y264_pixel_avg_wt_avx2_10
-#define y264_pixel_avg_wt_sse4          y264_pixel_avg_wt_sse4_10
-#define y264_pred_avg2_avx2             y264_pred_avg2_avx2_10
-#define y264_pred_avg2_sse4             y264_pred_avg2_sse4_10
-#define y264_pred_copy_avx2             y264_pred_copy_avx2_10
-#define y264_pred_copy_sse4             y264_pred_copy_sse4_10
-#define y264_psy_dark_gain              y264_psy_dark_gain_10
-#define y264_aq_bright                  y264_aq_bright_10
-#define y264_aq_grain                   y264_aq_grain_10
-#define y264_aq_bars                    y264_aq_bars_10
 #define y264_mb_qp                      y264_mb_qp_10
 #define y264_mb_qpd_cabac               y264_mb_qpd_cabac_10
 #define y264_mb_qpd_cavlc               y264_mb_qpd_cavlc_10
-#define y264_aq_grain_share             y264_aq_grain_share_10
-#define y264_aq_dark_gate               y264_aq_dark_gate_10
+#define y264_mb_warm_statics            y264_mb_warm_statics_10
 #define y264_mc_build_hpel              y264_mc_build_hpel_10
 #define y264_mc_build_hpel_rows         y264_mc_build_hpel_rows_10
 #define y264_mc_chroma                  y264_mc_chroma_10
+#define y264_mc_chroma_bi8_avx2         y264_mc_chroma_bi8_avx2_10
 #define y264_mc_chroma_bi8_neon         y264_mc_chroma_bi8_neon_10
+#define y264_mc_chroma_bi8_sse4         y264_mc_chroma_bi8_sse4_10
 #define y264_mc_chroma_c                y264_mc_chroma_c_10
 #define y264_mc_chroma_neon8            y264_mc_chroma_neon8_10
 #define y264_mc_chroma_neon_w4h         y264_mc_chroma_neon_w4h_10
 #define y264_mc_chroma_neon_w8h         y264_mc_chroma_neon_w8h_10
+#define y264_mc_chroma_w4h_avx2         y264_mc_chroma_w4h_avx2_10
+#define y264_mc_chroma_w4h_sse4         y264_mc_chroma_w4h_sse4_10
+#define y264_mc_chroma_w8h_avx2         y264_mc_chroma_w8h_avx2_10
+#define y264_mc_chroma_w8h_sse4         y264_mc_chroma_w8h_sse4_10
 #define y264_mc_luma                    y264_mc_luma_10
+#define y264_mc_luma16_avx2             y264_mc_luma16_avx2_10
+#define y264_mc_luma16_sse4             y264_mc_luma16_sse4_10
+#define y264_mc_luma8_avx2              y264_mc_luma8_avx2_10
+#define y264_mc_luma8_sse4              y264_mc_luma8_sse4_10
 #define y264_mc_luma_b                  y264_mc_luma_b_10
 #define y264_mc_luma_c                  y264_mc_luma_c_10
 #define y264_mc_luma_hp                 y264_mc_luma_hp_10
@@ -394,22 +392,31 @@
 #define y264_nr_offsets                 y264_nr_offsets_10
 #define y264_pixel_avg_wt               y264_pixel_avg_wt_10
 #define y264_pixel_avg_wt_2d            y264_pixel_avg_wt_2d_10
+#define y264_pixel_avg_wt_2d_avx2       y264_pixel_avg_wt_2d_avx2_10
 #define y264_pixel_avg_wt_2d_c          y264_pixel_avg_wt_2d_c_10
 #define y264_pixel_avg_wt_2d_neon       y264_pixel_avg_wt_2d_neon_10
+#define y264_pixel_avg_wt_2d_sse4       y264_pixel_avg_wt_2d_sse4_10
+#define y264_pixel_avg_wt_avx2          y264_pixel_avg_wt_avx2_10
 #define y264_pixel_avg_wt_c             y264_pixel_avg_wt_c_10
 #define y264_pixel_avg_wt_neon          y264_pixel_avg_wt_neon_10
+#define y264_pixel_avg_wt_sse4          y264_pixel_avg_wt_sse4_10
 #define y264_pixel_init                 y264_pixel_init_10
 #define y264_pixel_init_c               y264_pixel_init_c_10
 #define y264_pps_write                  y264_pps_write_10
 #define y264_pred_avg2                  y264_pred_avg2_10
+#define y264_pred_avg2_avx2             y264_pred_avg2_avx2_10
 #define y264_pred_avg2_c                y264_pred_avg2_c_10
 #define y264_pred_avg2_neon             y264_pred_avg2_neon_10
+#define y264_pred_avg2_sse4             y264_pred_avg2_sse4_10
 #define y264_pred_copy                  y264_pred_copy_10
+#define y264_pred_copy_avx2             y264_pred_copy_avx2_10
 #define y264_pred_copy_c                y264_pred_copy_c_10
 #define y264_pred_copy_neon             y264_pred_copy_neon_10
+#define y264_pred_copy_sse4             y264_pred_copy_sse4_10
 #define y264_profile_idc                y264_profile_idc_10
 #define y264_pstat_part                 y264_pstat_part_10
 #define y264_pstat_srch                 y264_pstat_srch_10
+#define y264_psy_dark_gain              y264_psy_dark_gain_10
 #define y264_pu_height                  y264_pu_height_10
 #define y264_pu_name                    y264_pu_name_10
 #define y264_pu_width                   y264_pu_width_10
@@ -445,6 +452,7 @@
 #define y264_rb_trace_on                y264_rb_trace_on_10
 #define y264_recs_cache_ref             y264_recs_cache_ref_10
 #define y264_sa8d_16x16_avx2            y264_sa8d_16x16_avx2_10
+#define y264_sa8d_16x16_avx512          y264_sa8d_16x16_avx512_10
 #define y264_sa8d_16x16_neon            y264_sa8d_16x16_neon_10
 #define y264_sa8d_16x16_sse4            y264_sa8d_16x16_sse4_10
 #define y264_sa8d_8x8_avx2              y264_sa8d_8x8_avx2_10
@@ -465,54 +473,67 @@
 #define y264_sad_8x8_neon               y264_sad_8x8_neon_10
 #define y264_sad_8x8_sse4               y264_sad_8x8_sse4_10
 #define y264_sad_pair_16x16_avx2        y264_sad_pair_16x16_avx2_10
-#define y264_sad_pair_16x16_neon          y264_sad_pair_16x16_neon_10
+#define y264_sad_pair_16x16_avx512      y264_sad_pair_16x16_avx512_10
+#define y264_sad_pair_16x16_neon        y264_sad_pair_16x16_neon_10
 #define y264_sad_pair_16x16_sse4        y264_sad_pair_16x16_sse4_10
 #define y264_sad_pair_16x8_avx2         y264_sad_pair_16x8_avx2_10
-#define y264_sad_pair_16x8_neon           y264_sad_pair_16x8_neon_10
+#define y264_sad_pair_16x8_avx512       y264_sad_pair_16x8_avx512_10
+#define y264_sad_pair_16x8_neon         y264_sad_pair_16x8_neon_10
 #define y264_sad_pair_16x8_sse4         y264_sad_pair_16x8_sse4_10
 #define y264_sad_pair_8x16_avx2         y264_sad_pair_8x16_avx2_10
-#define y264_sad_pair_8x16_neon           y264_sad_pair_8x16_neon_10
+#define y264_sad_pair_8x16_avx512       y264_sad_pair_8x16_avx512_10
+#define y264_sad_pair_8x16_neon         y264_sad_pair_8x16_neon_10
 #define y264_sad_pair_8x16_sse4         y264_sad_pair_8x16_sse4_10
 #define y264_sad_pair_8x4_avx2          y264_sad_pair_8x4_avx2_10
-#define y264_sad_pair_8x4_neon            y264_sad_pair_8x4_neon_10
+#define y264_sad_pair_8x4_neon          y264_sad_pair_8x4_neon_10
 #define y264_sad_pair_8x4_sse4          y264_sad_pair_8x4_sse4_10
 #define y264_sad_pair_8x8_avx2          y264_sad_pair_8x8_avx2_10
-#define y264_sad_pair_8x8_neon            y264_sad_pair_8x8_neon_10
+#define y264_sad_pair_8x8_neon          y264_sad_pair_8x8_neon_10
 #define y264_sad_pair_8x8_sse4          y264_sad_pair_8x8_sse4_10
 #define y264_sad_quad_16x16_avx2        y264_sad_quad_16x16_avx2_10
+#define y264_sad_quad_16x16_avx512      y264_sad_quad_16x16_avx512_10
+#define y264_sad_quad_16x16_neon        y264_sad_quad_16x16_neon_10
 #define y264_sad_quad_16x16_sse4        y264_sad_quad_16x16_sse4_10
 #define y264_sad_quad_16x8_avx2         y264_sad_quad_16x8_avx2_10
+#define y264_sad_quad_16x8_avx512       y264_sad_quad_16x8_avx512_10
+#define y264_sad_quad_16x8_neon         y264_sad_quad_16x8_neon_10
 #define y264_sad_quad_16x8_sse4         y264_sad_quad_16x8_sse4_10
 #define y264_sad_quad_8x16_avx2         y264_sad_quad_8x16_avx2_10
+#define y264_sad_quad_8x16_avx512       y264_sad_quad_8x16_avx512_10
+#define y264_sad_quad_8x16_neon         y264_sad_quad_8x16_neon_10
 #define y264_sad_quad_8x16_sse4         y264_sad_quad_8x16_sse4_10
 #define y264_sad_quad_8x4_avx2          y264_sad_quad_8x4_avx2_10
+#define y264_sad_quad_8x4_neon          y264_sad_quad_8x4_neon_10
 #define y264_sad_quad_8x4_sse4          y264_sad_quad_8x4_sse4_10
 #define y264_sad_quad_8x8_avx2          y264_sad_quad_8x8_avx2_10
+#define y264_sad_quad_8x8_avx512        y264_sad_quad_8x8_avx512_10
+#define y264_sad_quad_8x8_neon          y264_sad_quad_8x8_neon_10
 #define y264_sad_quad_8x8_sse4          y264_sad_quad_8x8_sse4_10
 #define y264_sad_trio_16x16_avx2        y264_sad_trio_16x16_avx2_10
-#define y264_sad_trio_16x16_neon          y264_sad_trio_16x16_neon_10
+#define y264_sad_trio_16x16_avx512      y264_sad_trio_16x16_avx512_10
+#define y264_sad_trio_16x16_neon        y264_sad_trio_16x16_neon_10
 #define y264_sad_trio_16x16_sse4        y264_sad_trio_16x16_sse4_10
 #define y264_sad_trio_16x8_avx2         y264_sad_trio_16x8_avx2_10
-#define y264_sad_trio_16x8_neon           y264_sad_trio_16x8_neon_10
+#define y264_sad_trio_16x8_avx512       y264_sad_trio_16x8_avx512_10
+#define y264_sad_trio_16x8_neon         y264_sad_trio_16x8_neon_10
 #define y264_sad_trio_16x8_sse4         y264_sad_trio_16x8_sse4_10
 #define y264_sad_trio_8x16_avx2         y264_sad_trio_8x16_avx2_10
-#define y264_sad_trio_8x16_neon           y264_sad_trio_8x16_neon_10
+#define y264_sad_trio_8x16_avx512       y264_sad_trio_8x16_avx512_10
+#define y264_sad_trio_8x16_neon         y264_sad_trio_8x16_neon_10
 #define y264_sad_trio_8x16_sse4         y264_sad_trio_8x16_sse4_10
 #define y264_sad_trio_8x4_avx2          y264_sad_trio_8x4_avx2_10
-#define y264_sad_trio_8x4_neon            y264_sad_trio_8x4_neon_10
+#define y264_sad_trio_8x4_neon          y264_sad_trio_8x4_neon_10
 #define y264_sad_trio_8x4_sse4          y264_sad_trio_8x4_sse4_10
 #define y264_sad_trio_8x8_avx2          y264_sad_trio_8x8_avx2_10
-#define y264_sad_trio_8x8_neon            y264_sad_trio_8x8_neon_10
-#define y264_sad_quad_16x16_neon          y264_sad_quad_16x16_neon_10
-#define y264_sad_quad_16x8_neon           y264_sad_quad_16x8_neon_10
-#define y264_sad_quad_8x16_neon           y264_sad_quad_8x16_neon_10
-#define y264_sad_quad_8x4_neon            y264_sad_quad_8x4_neon_10
-#define y264_sad_quad_8x8_neon            y264_sad_quad_8x8_neon_10
+#define y264_sad_trio_8x8_avx512        y264_sad_trio_8x8_avx512_10
+#define y264_sad_trio_8x8_neon          y264_sad_trio_8x8_neon_10
 #define y264_sad_trio_8x8_sse4          y264_sad_trio_8x8_sse4_10
 #define y264_satd_16x16_avx2            y264_satd_16x16_avx2_10
+#define y264_satd_16x16_avx512          y264_satd_16x16_avx512_10
 #define y264_satd_16x16_neon_ded        y264_satd_16x16_neon_ded_10
 #define y264_satd_16x16_sse4            y264_satd_16x16_sse4_10
 #define y264_satd_16x8_avx2             y264_satd_16x8_avx2_10
+#define y264_satd_16x8_avx512           y264_satd_16x8_avx512_10
 #define y264_satd_16x8_neon             y264_satd_16x8_neon_10
 #define y264_satd_16x8_sse4             y264_satd_16x8_sse4_10
 #define y264_satd_4x4_avx2              y264_satd_4x4_avx2_10
@@ -525,9 +546,11 @@
 #define y264_satd_8x8_neon              y264_satd_8x8_neon_10
 #define y264_satd_8x8_sse4              y264_satd_8x8_sse4_10
 #define y264_satd_avg_16x16_avx2        y264_satd_avg_16x16_avx2_10
+#define y264_satd_avg_16x16_avx512      y264_satd_avg_16x16_avx512_10
 #define y264_satd_avg_16x16_neon        y264_satd_avg_16x16_neon_10
 #define y264_satd_avg_16x16_sse4        y264_satd_avg_16x16_sse4_10
 #define y264_satd_avg_16x8_avx2         y264_satd_avg_16x8_avx2_10
+#define y264_satd_avg_16x8_avx512       y264_satd_avg_16x8_avx512_10
 #define y264_satd_avg_16x8_neon         y264_satd_avg_16x8_neon_10
 #define y264_satd_avg_16x8_sse4         y264_satd_avg_16x8_sse4_10
 #define y264_satd_avg_8x16_avx2         y264_satd_avg_8x16_avx2_10
@@ -537,7 +560,8 @@
 #define y264_satd_avg_8x8_neon          y264_satd_avg_8x8_neon_10
 #define y264_satd_avg_8x8_sse4          y264_satd_avg_8x8_sse4_10
 #define y264_satd_quad_8x8_avx2         y264_satd_quad_8x8_avx2_10
-#define y264_satd_quad_8x8_neon           y264_satd_quad_8x8_neon_10
+#define y264_satd_quad_8x8_avx512       y264_satd_quad_8x8_avx512_10
+#define y264_satd_quad_8x8_neon         y264_satd_quad_8x8_neon_10
 #define y264_satd_quad_8x8_sse4         y264_satd_quad_8x8_sse4_10
 #define y264_scan_mask_8x8              y264_scan_mask_8x8_10
 #define y264_scan_mask_8x8_avx2         y264_scan_mask_8x8_avx2_10
@@ -600,6 +624,7 @@
 #define y264_sub_dct8_blocks_sse4       y264_sub_dct8_blocks_sse4_10
 #define y264_tdir_mb                    y264_tdir_mb_10
 #define y264_texture_ac48_16x16_avx2    y264_texture_ac48_16x16_avx2_10
+#define y264_texture_ac48_16x16_avx512  y264_texture_ac48_16x16_avx512_10
 #define y264_texture_ac48_16x16_neon    y264_texture_ac48_16x16_neon_10
 #define y264_texture_ac48_16x16_sse4    y264_texture_ac48_16x16_sse4_10
 #define y264_texture_ac4_16x16_avx2     y264_texture_ac4_16x16_avx2_10
