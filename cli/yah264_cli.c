@@ -1164,6 +1164,8 @@ static void usage(const char *argv0)
 }
 
 static int read_line(FILE *f, char *buf, int cap);
+static void clean_hold(void);
+static void clean_release(void);
 
 /* Collect per-frame reconstructions in display order for --dump-recon. B-frames
  * reorder coding vs display, so one encode emits several frames out of order;
@@ -1739,7 +1741,10 @@ static void *gop_worker(void *arg)
         double tr0 = g_gop_trace ? gop_trace_now() : 0;
         double tc0 = 0, pc0 = 0, pi0 = 0;
         if (g_gop_trace) { tc0 = gop_trace_tcpu(); gop_trace_proc(&pc0, &pi0); }
+        /* a pass 1 or 3 encoder makes its GOP's stats file as it opens */
+        if (j->gop_stats) clean_hold();
         yah264_encoder_t *e = g_api->encoder_open(&p);
+        if (j->gop_stats) clean_release();
         if (e && carry.valid) g_api->rc_import(e, &carry, carry_ahead);
         if (e && j->rc_shared) g_api->rc_share(e, j->rc_shared);
         /* Capped ABR: the GOP after this one starts from the exact occupancy
@@ -2311,33 +2316,100 @@ static int tp_split_vbv(const yah264_param_t *param)
 
 /* --- files a signal must not leave behind ----------------------------------
  *
- * Scratch files this run makes beside the user's (pass 3's copy of the stats
- * file, the per-GOP stats files of a threaded two-pass) are removed on the
- * way out, and a SIGINT, SIGTERM or SIGHUP is a way out too. A handler may
- * only make async-signal-safe calls, so each set of paths is built whole
- * before it is published, and the handler only walks the list and unlinks.
- * Sets are never freed, so a handler running on another thread can't read
- * a freed path; one that is already gone just fails. */
+ * Scratch files a two-pass makes beside the user's (pass 3's working copy,
+ * the per-GOP stats files of a threaded run) are removed on the way out, and
+ * the signals in g_clean_sigs are a way out too. clean_start, before any
+ * thread exists, blocks them in every thread and starts one that waits for
+ * them: it takes g_clean_lock for writing, unlinks every registered path and
+ * re-raises with the default action. A thread that makes a scratch file holds
+ * the lock for reading across the create (clean_hold), so each file is made
+ * before the unlink or not at all. With them blocked, a write to a closed
+ * pipe or past the file-size limit fails with EPIPE or EFBIG instead of
+ * raising SIGPIPE or SIGXFSZ, and the run ends through its write error; the
+ * same signals sent by another process end it here. */
 typedef struct clean_set {
     struct clean_set *next;
     int n;
     char **path;
 } clean_set_t;
 
+static const int g_clean_sigs[] = { SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGPIPE,
+                                    SIGALRM, SIGXCPU, SIGXFSZ };
+static sigset_t g_clean_set;
+static pthread_rwlock_t g_clean_lock = PTHREAD_RWLOCK_INITIALIZER;
+static atomic_int g_clean_dying;
+/* pushed whole, never freed: the waiter may walk it while a set is added */
 static _Atomic(clean_set_t *) g_clean;
 
-static void clean_on_signal(int sig)
+static void *clean_waiter(void *arg)
 {
-    int saved = errno;
+    (void)arg;
+    int sig = 0;
+    if (sigwait(&g_clean_set, &sig) != 0)
+        return NULL;
+    atomic_store(&g_clean_dying, 1);
+    pthread_rwlock_wrlock(&g_clean_lock);       /* creates in flight finish first */
     for (clean_set_t *s = atomic_load(&g_clean); s; s = s->next)
         for (int i = 0; i < s->n; i++)
             if (s->path[i]) unlink(s->path[i]);
-    errno = saved;
-    raise(sig);             /* SA_RESETHAND: the default action now ends the run */
+    signal(sig, SIG_DFL);
+    sigset_t one;
+    sigemptyset(&one);
+    sigaddset(&one, sig);
+    pthread_sigmask(SIG_UNBLOCK, &one, NULL);
+    raise(sig);
+    _exit(128 + sig);       /* not reached: each of these ends the run by default */
 }
 
-/* publish n paths, copied, for the handler; installs it the first time.
- * a signal the parent left ignored (nohup, a background job) stays ignored */
+/* a signal the parent left ignored (nohup, a background job) or blocked
+ * stays that way. without the waiter thread, the signals stay as they were
+ * and the cleanup is the normal exit's only */
+static void clean_start(void)
+{
+    sigset_t cur;
+    sigemptyset(&g_clean_set);
+    pthread_sigmask(SIG_BLOCK, NULL, &cur);
+    for (size_t i = 0; i < sizeof g_clean_sigs / sizeof *g_clean_sigs; i++) {
+        struct sigaction old;
+        if (sigaction(g_clean_sigs[i], NULL, &old) == 0 && old.sa_handler != SIG_IGN
+            && !sigismember(&cur, g_clean_sigs[i]))
+            sigaddset(&g_clean_set, g_clean_sigs[i]);
+    }
+    int any = 0;
+    for (size_t i = 0; i < sizeof g_clean_sigs / sizeof *g_clean_sigs; i++)
+        any |= sigismember(&g_clean_set, g_clean_sigs[i]) == 1;
+    if (!any)
+        return;
+    pthread_sigmask(SIG_BLOCK, &g_clean_set, NULL);
+    pthread_attr_t at;
+    pthread_t t;
+    int ok = pthread_attr_init(&at) == 0;
+    ok = ok && pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED) == 0
+            && pthread_create(&t, &at, clean_waiter, NULL) == 0;
+    pthread_attr_destroy(&at);
+    if (!ok)
+        pthread_sigmask(SIG_UNBLOCK, &g_clean_set, NULL);
+}
+
+/* around a scratch file's create: once the run is dying, wait for the end
+ * instead of making a file the waiter has already passed */
+static void clean_hold(void)
+{
+    pthread_rwlock_rdlock(&g_clean_lock);
+    if (atomic_load(&g_clean_dying)) {
+        pthread_rwlock_unlock(&g_clean_lock);
+        for (;;)
+            pause();
+    }
+}
+
+static void clean_release(void)
+{
+    pthread_rwlock_unlock(&g_clean_lock);
+}
+
+/* publish n paths, copied, for the waiter: before their files exist, or
+ * inside the clean_hold that makes them */
 static void clean_register(char *const *paths, int n)
 {
     clean_set_t *s = malloc(sizeof *s);
@@ -2348,19 +2420,6 @@ static void clean_register(char *const *paths, int n)
     s->next = atomic_load(&g_clean);
     while (!atomic_compare_exchange_weak(&g_clean, &s->next, s))
         ;
-    static int installed;
-    if (installed) return;
-    installed = 1;
-    static const int sigs[] = { SIGINT, SIGTERM, SIGHUP };
-    for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) {
-        struct sigaction old, sa;
-        if (sigaction(sigs[i], NULL, &old) != 0 || old.sa_handler == SIG_IGN) continue;
-        memset(&sa, 0, sizeof sa);
-        sa.sa_handler = clean_on_signal;
-        sa.sa_flags = SA_RESETHAND;
-        sigemptyset(&sa.sa_mask);
-        sigaction(sigs[i], &sa, NULL);
-    }
 }
 
 /* Pass 3 rewrites the stats file it reads, so one cut short would leave a
@@ -2401,16 +2460,12 @@ static int stats_tmp_open(const char *path)
     char *tmp = malloc(n);
     if (!tmp) { if (in) fclose(in); free(final); return -1; }
     snprintf(tmp, n, "%s.p3tmp.XXXXXX", final);
-    /* mkstemp names the copy only as it makes it, so hold the signals that
-     * clean up until the name is registered */
-    sigset_t hold, was;
-    sigemptyset(&hold);
-    sigaddset(&hold, SIGINT); sigaddset(&hold, SIGTERM); sigaddset(&hold, SIGHUP);
-    pthread_sigmask(SIG_BLOCK, &hold, &was);
+    /* mkstemp names the copy only as it makes it: register it inside */
+    clean_hold();
     int fd = mkstemp(tmp);
     int err = errno;
     if (fd >= 0) clean_register(&tmp, 1);
-    pthread_sigmask(SIG_SETMASK, &was, NULL);
+    clean_release();
     if (fd < 0) {
         fprintf(stderr, "yah264: cannot make pass 3's working copy of '%s' beside it (%s)\n",
                 path, strerror(err));
@@ -2477,10 +2532,15 @@ static int same_file(const char *a, const char *b)
 static int stats_tmp_finish(int rc)
 {
     if (!g_stats_tmp) return rc;
-    if (rc == 0 && rename(g_stats_tmp, g_stats_final) != 0) {
-        fprintf(stderr, "yah264: cannot move pass 3's working copy '%s' over '%s' (%s)\n",
-                g_stats_tmp, g_stats_shown, strerror(errno));
-        rc = 1;
+    if (rc == 0) {
+        clean_hold();                   /* a signal from here on ends after it */
+        int moved = rename(g_stats_tmp, g_stats_final) == 0, err = errno;
+        clean_release();
+        if (!moved) {
+            fprintf(stderr, "yah264: cannot move pass 3's working copy '%s' over '%s' (%s)\n",
+                    g_stats_tmp, g_stats_shown, strerror(err));
+            rc = 1;
+        }
     }
     if (rc != 0) {
         unlink(g_stats_tmp);
@@ -2576,7 +2636,9 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
             return -1;
         }
     }
+    clean_hold();                       /* pass 3's is its working copy */
     FILE *out = fopen(out_file, "w");
+    clean_release();
     if (!out) {
         fprintf(stderr, "yah264: cannot write stats file '%s'\n", out_path);
         return -1;
@@ -2833,7 +2895,9 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
             }
             cur = g;
             want[g] = nr;
+            clean_hold();
             out[g] = fopen(gop_stats[g], "w");
+            clean_release();
             if (!out[g]) {
                 fprintf(stderr, "yah264: cannot write '%s'\n", gop_stats[g]);
                 bad = 1; break;
@@ -4385,7 +4449,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * a worker whose encoder_open returns NULL emits no NAL and the run used to
  * finish with status 0 and an empty file. Every worker opens with the same
  * parameters, so if this one is refused they all are. */
+    clean_hold();                       /* it rewrites pass 3's working copy */
     yah264_encoder_t *prime = g_api->encoder_open(param);
+    clean_release();
     if (!prime) {
         fprintf(stderr, "yah264: encoder_open failed -- these parameters were refused\n");
         tp_free_paths(gop_stats, n_gops, 1);
@@ -5165,6 +5231,19 @@ static int refuse_ignored_knobs(void)
 }
 #endif
 
+/* the output's last bytes land at the close: a full disk or a closed pipe
+ * there fails the run like any other write, said once */
+static int close_out(FILE *out, int rc)
+{
+    int bad = ferror(out);
+    bad |= out == stdout ? fflush(out) != 0 : fclose(out) != 0;
+    if (bad && !rc) {
+        fprintf(stderr, "yah264: error writing the output stream\n");
+        rc = 1;
+    }
+    return rc;
+}
+
 static int cli_main(int argc, char **argv)
 {
     const char *in_path = NULL;
@@ -5912,6 +5991,9 @@ static int cli_main(int argc, char **argv)
         fprintf(stderr, "yah264: --zones and --plan both set zones; give one or the other\n");
         return 2;
     }
+    /* before any thread exists, so every one inherits the blocked signals */
+    if (pass > 0)
+        clean_start();
     /* pass 2 and 3 open the stats file more than once (the CLI looks for GOP
      * markers before the encoder reads it), and a FIFO or a device has
      * nothing left for the second open, which blocks for good */
@@ -6809,8 +6891,7 @@ static int cli_main(int argc, char **argv)
                 rc = 1;
             }
             if (in != stdin) fclose(in);
-            if (out != stdout) fclose(out);
-            return rc;
+            return close_out(out, rc);
         }
         if (threads > 1)
             LOGF(LOG_WARN, "yah264: warning: --threads %d cannot be honoured, "
@@ -6819,7 +6900,9 @@ static int cli_main(int argc, char **argv)
                  "input does not carry; encode from a file\n", threads);
     }
 
+    clean_hold();                       /* pass 3 may make its working copy here */
     yah264_encoder_t *enc = g_api->encoder_open_hw(&param, hw);
+    clean_release();
     apply_video_signal(enc);
     if (!enc) {
         fprintf(stderr, "yah264: encoder_open failed\n");
@@ -6964,6 +7047,11 @@ static int cli_main(int argc, char **argv)
         }
         frame++;
         SERIAL_STATS(nal, count);
+        if (ferror(out)) {
+            fprintf(stderr, "yah264: error writing the output stream\n");
+            rc = 1;
+            goto done;
+        }
     }
 
     for (;;) {                                      /* flush (window + B reorder) */
@@ -6980,6 +7068,11 @@ static int cli_main(int argc, char **argv)
             returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
         }
         SERIAL_STATS(nal, count);
+        if (ferror(out)) {
+            fprintf(stderr, "yah264: error writing the output stream\n");
+            rc = 1;
+            break;
+        }
     }
 #undef SERIAL_STATS
     /* The hardware mode counts what came back, not what went in: the session
@@ -7035,7 +7128,7 @@ done:
     free(y); free(u); free(v);
     g_api->encoder_close(enc);
     if (in != stdin) fclose(in);
-    if (out != stdout) fclose(out);
+    rc = close_out(out, rc);
     if (recon) fclose(recon);
     return rc;
 }

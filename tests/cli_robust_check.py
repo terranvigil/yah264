@@ -16,10 +16,11 @@ status and what it says on stderr:
   - pass 2 or 3 refuses a stats file that isn't a regular file (a FIFO hung
     on its second open).
   - pass 3 replaces its stats file only when it succeeds: a failed run or
-    one ended by a signal leaves the file as it was, or absent, and no
-    working copy; through a symlink it replaces the target.
+    one ended by any signal in SIGS leaves the file as it was, or absent,
+    and no working copy; through a symlink it replaces the target.
   - a threaded two-pass leaves none of its per-GOP stats files behind,
-    whether it ends cleanly, fails, or is ended by SIGINT or SIGTERM.
+    whether it ends cleanly, fails, is ended by a signal, or writes its
+    stream into a pipe whose reader stopped.
   - every pass refuses a stats file that is also the output or the recon,
     by name, through a symlink or as the standard output, and leaves it as
     it was.
@@ -55,15 +56,21 @@ def run(enc, args, stdin=None, stdout=subprocess.PIPE):
     return p.returncode, p.stderr.decode(errors="replace")
 
 
-def spawn(enc, args):
+# the signals a two-pass removes its scratch files on
+SIGS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGPIPE,
+        signal.SIGALRM, signal.SIGXCPU, signal.SIGXFSZ)
+
+
+def spawn(enc, args, stdout=subprocess.DEVNULL):
     """the encoder on a pipe, with the signals a test sends at their defaults:
     a shell that starts a job in the background ignores SIGINT, and the
-    encoder keeps a signal it inherits ignored"""
+    encoder keeps a signal it inherits ignored. no core files"""
     def defaults():
-        for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        for s in SIGS:
             signal.signal(s, signal.SIG_DFL)
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     return subprocess.Popen(WRAP + [enc, "--no-progress"] + args, stdin=subprocess.PIPE,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdout=stdout, stderr=subprocess.DEVNULL,
                             preexec_fn=defaults)
 
 
@@ -319,7 +326,7 @@ def pass3_atomic(enc, tmp):
     # while it codes: the file stays, the working copy goes
     before = open(st, "rb").read()
     data = open(clip, "rb").read()
-    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    for sig in SIGS:
         p = spawn(enc, ["--input-y4m", "-", "--threads", "1", "--bitrate", "300",
                         "--keyint", "4", "--pass", "3", "--stats", st, "-o", out])
         try:
@@ -367,7 +374,7 @@ def gop_files(enc, tmp):
     for p in ("1", "2"):
         if p == "2":                # a killed pass 1 may have left no plan
             run(enc, ["--input-y4m", clip, "--pass", "1"] + args)
-        for sig in (signal.SIGINT, signal.SIGTERM):
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT, signal.SIGPIPE):
             # the files exist only while the GOPs code, so wait for one and
             # signal at once; a run that ends first is tried again
             for _ in range(5):
@@ -393,6 +400,28 @@ def gop_files(enc, tmp):
             check(f"pass {p} at 3 threads ended by {sig.name} leaves no per-GOP files",
                   seen and rc == -sig and not leftovers(d, keep),
                   f"rc {rc}, saw {seen[:2]}, left {leftovers(d, keep)}")
+    # the stream into a reader that stops early (`-o - | head -c 1000`): the
+    # write fails or SIGPIPE ends the run, and either way nothing is left
+    piped = [x for x in args if x not in ("-o", out)] + ["-o", "-"]
+    run(enc, ["--input-y4m", clip, "--pass", "1"] + args)
+    plan = open(st, "rb").read()
+    for name, extra in (("pass 3", ["--pass", "3"]), ("pass 1", ["--pass", "1"]),
+                        ("serial pass 1", ["--pass", "1", "--dump-recon", os.devnull])):
+        q = spawn(enc, ["--input-y4m", clip] + piped + extra, stdout=subprocess.PIPE)
+        try:
+            q.stdin.close()
+            q.stdout.read(1000)
+            q.stdout.close()
+            try:
+                rc = q.wait(timeout=LIMIT)
+            except subprocess.TimeoutExpired:
+                rc = "hung"
+        finally:
+            reap(q)
+        check(f"{name} into a pipe whose reader stopped fails and leaves nothing",
+              rc not in (0, "hung") and not leftovers(d, keep)
+              and (name != "pass 3" or open(st, "rb").read() == plan),
+              f"rc {rc}, left {leftovers(d, keep)}")
 
 
 def main():
