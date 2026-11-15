@@ -2272,11 +2272,12 @@ static int tp_split_vbv(const yah264_param_t *param)
 /* --- files a signal must not leave behind ----------------------------------
  *
  * Scratch files this run makes beside the user's (pass 3's copy of the stats
- * file) are removed on the way out, and a SIGINT, SIGTERM or SIGHUP is a way
- * out too. A handler may only make async-signal-safe calls, so each set of
- * paths is built whole before it is published, and the handler only walks
- * the list and unlinks. Sets are never freed, so a handler running on another
- * thread can't read a freed path; one that is already gone just fails. */
+ * file, the per-GOP stats files of a threaded two-pass) are removed on the
+ * way out, and a SIGINT, SIGTERM or SIGHUP is a way out too. A handler may
+ * only make async-signal-safe calls, so each set of paths is built whole
+ * before it is published, and the handler only walks the list and unlinks.
+ * Sets are never freed, so a handler running on another thread can't read
+ * a freed path; one that is already gone just fails. */
 typedef struct clean_set {
     struct clean_set *next;
     int n;
@@ -4048,6 +4049,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             gop_stats[i] = tp_gop_path(param->rc.stats,
                                        param->rc.pass == 2 ? "p2gop" :
                                        param->rc.pass == 3 ? "p3gop" : "p1gop", i);
+        /* before any exists, so a signal can't strand one */
+        clean_register(gop_stats, n_gops);
         /* pass 3 needs BOTH halves: the split, because it reads, and the merge,
  * because it writes. The worker rewrites its own slice file in place, so
  * one path per GOP still serves both directions. */

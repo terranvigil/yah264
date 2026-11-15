@@ -18,6 +18,8 @@ status and what it says on stderr:
   - pass 3 replaces its stats file only when it succeeds: a failed run or
     one ended by a signal leaves the file as it was, or absent, and no
     working copy; through a symlink it replaces the target.
+  - a threaded two-pass leaves none of its per-GOP stats files behind,
+    whether it ends cleanly, fails, or is ended by SIGINT or SIGTERM.
 """
 import os, shlex, signal, subprocess, sys, tempfile, time
 
@@ -263,6 +265,59 @@ def pass3_atomic(enc, tmp):
               f"rc {rc}, working copy {work}, left {leftovers(d, keep_l)}")
 
 
+def gop_files(enc, tmp):
+    d = os.path.join(tmp, "gop")
+    os.makedirs(d)
+    clip, cut, out, st = (os.path.join(d, x) for x in ("n.y4m", "cut.y4m", "o.264", "n.stats"))
+    # noise, big enough that a signal lands while the GOPs code
+    w, h, n = 640, 360, 240
+    with open(clip, "wb") as f:
+        f.write(b"YUV4MPEG2 W%d H%d F25:1 Ip A1:1 C420jpeg\n" % (w, h))
+        for _ in range(n):
+            f.write(b"FRAME\n" + os.urandom(w * h) + bytes([128]) * (w * h // 2))
+    with open(cut, "wb") as f:
+        f.write(open(clip, "rb").read()[:-100])
+    keep = ("n.y4m", "cut.y4m", "o.264", "n.stats")
+    args = ["--threads", "3", "--bitrate", "300", "--keyint", "10", "--stats", st, "-o", out]
+    for p in ("1", "2"):
+        rc, err = run(enc, ["--input-y4m", clip, "--pass", p] + args)
+        check(f"pass {p} at 3 threads leaves no per-GOP files",
+              rc == 0 and not leftovers(d, keep), f"rc {rc}, left {leftovers(d, keep)}")
+    rc, err = run(enc, ["--input-y4m", cut, "--pass", "2"] + args)
+    check("failed pass 2 at 3 threads leaves no per-GOP files",
+          rc != 0 and not leftovers(d, keep), f"rc {rc}, left {leftovers(d, keep)}")
+    tag = {"1": ".p1gop", "2": ".p2gop"}
+    for p in ("1", "2"):
+        if p == "2":                # a killed pass 1 may have left no plan
+            run(enc, ["--input-y4m", clip, "--pass", "1"] + args)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            # the files exist only while the GOPs code, so wait for one and
+            # signal at once; a run that ends first is tried again
+            for _ in range(5):
+                q = spawn(enc, ["--input-y4m", clip, "--pass", p] + args)
+                seen = []
+                try:
+                    q.stdin.close()
+                    t0 = time.time()
+                    while q.poll() is None and time.time() - t0 < LIMIT:
+                        seen = [x for x in os.listdir(d) if tag[p] in x]
+                        if seen:
+                            q.send_signal(sig)
+                            break
+                        time.sleep(0.002)
+                    try:
+                        rc = q.wait(timeout=LIMIT)
+                    except subprocess.TimeoutExpired:
+                        rc = "hung"
+                finally:
+                    reap(q)
+                if seen:
+                    break
+            check(f"pass {p} at 3 threads ended by {sig.name} leaves no per-GOP files",
+                  seen and rc == -sig and not leftovers(d, keep),
+                  f"rc {rc}, saw {seen[:2]}, left {leftovers(d, keep)}")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -273,6 +328,7 @@ def main():
         missing_stats(enc, tmp)
         fifo_stats(enc, tmp)
         pass3_atomic(enc, tmp)
+        gop_files(enc, tmp)
     if failures:
         print(f"cli_robust_check: {len(failures)} failure(s)")
         return 1
