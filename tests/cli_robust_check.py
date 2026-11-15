@@ -240,7 +240,34 @@ def stats_is_output(enc, tmp):
         check("pass 1 refuses --stats and -o differing only in case",
               rc == 2 and "same file" in err and not os.path.exists(os.path.join(d, "cs.264")),
               f"rc {rc}: {err.strip()[-200:]}")
+        # a file that is there is refused by its inode and left as it was
+        keep = os.path.join(d, "Keep.264")
+        with open(keep, "wb") as f:
+            f.write(b"keep me")
+        rc, err = run(enc, base + ["--pass", "1", "--stats", os.path.join(d, "keep.264"),
+                                   "-o", keep])
+        check("pass 1 refuses a case-only clash with an existing output and keeps it",
+              rc == 2 and open(keep, "rb").read() == b"keep me", f"rc {rc}: {err.strip()[-200:]}")
+        os.remove(keep)
+        rc, err = run(enc, base + ["-o", os.path.join(d, "RR.264"),
+                                   "--dump-recon", os.path.join(d, "rr.264")])
+        check("-o and --dump-recon differing only in case are refused",
+              rc == 2 and "same file" in err and not os.path.exists(os.path.join(d, "rr.264")),
+              f"rc {rc}: {err.strip()[-200:]}")
     os.remove(probe)
+    # the stream and the recon as one file
+    same = os.path.join(d, "same.bin")
+    rc, err = run(enc, base + ["-o", same, "--dump-recon", same])
+    check("-o and --dump-recon naming one file are refused",
+          rc == 2 and "same file" in err and not os.path.exists(same),
+          f"rc {rc}: {err.strip()[-200:]}")
+    # -o - sent into the input
+    src = open(clip, "rb").read()
+    with open(clip, "ab") as f:
+        rc, err = run(enc, base + ["-o", "-"], stdout=f)
+    check("-o - redirected into the input is refused",
+          rc == 2 and "the input" in err and open(clip, "rb").read() == src,
+          f"rc {rc}: {err.strip()[-200:]}")
     # the input, as the stats file, the output or the recon: refused, untouched
     src = open(clip, "rb").read()
     for p in ("0", "1", "3"):

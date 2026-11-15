@@ -100,7 +100,7 @@ as something else.
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
 | `--input-y4m` | path or `-` | required | Y4M input. No other input format exists. |
-| `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. |
+| `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. It may not be the input or the `--dump-recon` file, and `-` may not be redirected into the input. |
 | `--input-raw` | path or `-` | | Raw YUV. Needs `--input-res`. |
 | `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
 | `--input-csp` | `i420`\|`i422`\|`i444`, each with an optional `p10` | `i420` | Raw input chroma format **and sample depth**. A raw file has no Y4M `C` tag. That tag carries the depth beside the format, so the depth travels with the format here too: `--input-csp i420p10`. That is why there is no `--input-depth`. |
@@ -114,7 +114,7 @@ as something else.
 | `--log-level` | `error`\|`warning`\|`info`\|`debug` | `info` | The same dial. There is no `none`: an error prints at every level, because a run that fails in silence is worse than a noisy one. |
 | `--no-progress` | | | No progress line. It only appears when stderr is a terminal, so a gate or a redirect never sees one either way. |
 | `--output-depth` | 8 or 10 | the input's | Which of the two encoder libraries codes the stream. 10 on 8-bit input upshifts each sample by 2 and writes High 10. 8 on 10-bit input is refused, not rounded. |
-| `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below). An explicit `--threads` above 1 is warned about rather than dropped. |
+| `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below). An explicit `--threads` above 1 is warned about rather than dropped. It may not be the input or the output. |
 | `--range` | `full` or `limited` | not signaled | VUI color range. The Y4M `XCOLORRANGE` tag sets it on its own. |
 | `--colorprim`, `--transfer`, `--colormatrix` | H.273 code 0..255 or a name, below | not signaled | VUI color description. Signaling only: nothing in the encoder changes with them. |
 | `--chromaloc` | 0..5 | not signaled | VUI chroma sample location. |

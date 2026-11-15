@@ -2535,10 +2535,37 @@ static int stats_tmp_open(const char *path)
     return g_stats_shown ? 0 : -1;
 }
 
+/* Where a path that doesn't exist yet would be made: a dangling symlink,
+ * or a chain of them, is followed to the name it points at. Fills dir with
+ * that name's resolved directory and base with its last component. */
+static int future_name(const char *path, char *dir, char *base)
+{
+    char cur[PATH_MAX], lnk[PATH_MAX];
+    snprintf(cur, sizeof cur, "%s", path);
+    for (int hop = 0; hop < 16; hop++) {
+        ssize_t n = readlink(cur, lnk, sizeof lnk - 1);
+        if (n < 0) break;
+        lnk[n] = '\0';
+        const char *slash = strrchr(cur, '/');
+        if (lnk[0] == '/' || !slash) {
+            snprintf(cur, sizeof cur, "%s", lnk);
+        } else {
+            char tail[PATH_MAX];
+            snprintf(tail, sizeof tail, "%.*s%s", (int)(slash - cur) + 1, cur, lnk);
+            snprintf(cur, sizeof cur, "%s", tail);
+        }
+    }
+    const char *slash = strrchr(cur, '/');
+    char d[PATH_MAX];
+    snprintf(d, sizeof d, "%.*s", slash ? (int)(slash - cur) + 1 : 1, slash ? cur : ".");
+    snprintf(base, PATH_MAX, "%s", slash ? slash + 1 : cur);
+    return realpath(d, dir) != NULL;
+}
+
 /* True when two paths name one file: the same inode when both exist, the
- * same name in the same resolved directory when neither does yet (names
- * that differ only in case are caught again once the output exists). b "-"
- * is the standard output. A character device (/dev/null) is never one. */
+ * same name in the same resolved directory when neither does yet, the case
+ * folded where the volume folds it (APFS does by default). b "-" is the
+ * standard output. A character device (/dev/null) is never one. */
 static int same_file(const char *a, const char *b)
 {
     struct stat sa, sb;
@@ -2547,20 +2574,19 @@ static int same_file(const char *a, const char *b)
     if ((ha && S_ISCHR(sa.st_mode)) || (hb && S_ISCHR(sb.st_mode))) return 0;
     if (ha && hb) return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
     if (ha || hb || !strcmp(b, "-")) return 0;
-    const char *ba = strrchr(a, '/'), *bb = strrchr(b, '/');
-    if (strcmp(ba ? ba + 1 : a, bb ? bb + 1 : b)) return 0;
-    char da[PATH_MAX], db[PATH_MAX];
-    snprintf(da, sizeof da, "%.*s", ba ? (int)(ba - a) + 1 : 1, ba ? a : ".");
-    snprintf(db, sizeof db, "%.*s", bb ? (int)(bb - b) + 1 : 1, bb ? b : ".");
-    char *ra = realpath(da, NULL), *rb = realpath(db, NULL);
-    int same = ra && rb && !strcmp(ra, rb);
-    free(ra); free(rb);
-    return same;
+    char da[PATH_MAX], db[PATH_MAX], na[PATH_MAX], nb[PATH_MAX];
+    if (!future_name(a, da, na) || !future_name(b, db, nb) || strcmp(da, db)) return 0;
+#ifdef _PC_CASE_SENSITIVE
+    if (pathconf(da, _PC_CASE_SENSITIVE) == 0) return !strcasecmp(na, nb);
+#endif
+    return !strcmp(na, nb);
 }
 
 /* The files one run may not share: the stats file with the stream, the
- * recon or the input, and the stream or the recon with the input. Says
- * which and returns 1. in "-" is the standard input and shares nothing. */
+ * recon or the input, the stream with the recon, and the stream or the
+ * recon with the input. Says which and returns 1. in "-" is the standard
+ * input and shares nothing; out "-" is the standard output, which can be
+ * redirected into any of them. */
 static int files_clash(const char *in, const char *out, const char *recon,
                        const char *stats)
 {
@@ -2569,7 +2595,8 @@ static int files_clash(const char *in, const char *out, const char *recon,
     if (stats && same_file(stats, out)) what = "-o", path = stats;
     else if (stats && recon && same_file(stats, recon)) what = "--dump-recon", path = stats;
     else if (stats && has_in && same_file(stats, in)) what = "the input", path = stats;
-    else if (has_in && same_file(out, in)) what = "the input", path = out;
+    else if (has_in && same_file(in, out)) what = "the input", path = out;
+    else if (recon && same_file(recon, out)) what = "-o", path = recon;
     else if (has_in && recon && same_file(recon, in)) what = "the input", path = recon;
     if (!what) return 0;
     fprintf(stderr, "yah264: %s '%s' names the same file as %s; give each its own name\n",
@@ -6099,24 +6126,6 @@ static int cli_main(int argc, char **argv)
             fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
             return 1;
         }
-    }
-    /* again now that the output and the recon exist: on a case-insensitive
-     * volume two new names that differ only in case are one file, which
-     * the names alone can't tell. A clash here is one this run's opens
-     * made, so the empty files they made go */
-    if (files_clash(in_path, out_path, recon_path, stats_user)) {
-        struct stat est;
-        if (out != stdout) {
-            fclose(out);
-            if (stat(out_path, &est) == 0 && S_ISREG(est.st_mode) && est.st_size == 0)
-                unlink(out_path);
-        }
-        if (recon) {
-            fclose(recon);
-            if (stat(recon_path, &est) == 0 && S_ISREG(est.st_mode) && est.st_size == 0)
-                unlink(recon_path);
-        }
-        return 2;
     }
 
     char line[512];
