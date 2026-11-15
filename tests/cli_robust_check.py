@@ -13,6 +13,8 @@ status and what it says on stderr:
   - pass 2 or 3 with no stats file warns that it runs without a plan; an
     unreadable or empty one is refused; pass 1, 3, 2 in turn over one file
     runs clean.
+  - pass 2 or 3 refuses a stats file that isn't a regular file (a FIFO hung
+    on its second open).
 """
 import os, shlex, subprocess, sys, tempfile
 
@@ -121,6 +123,24 @@ def missing_stats(enc, tmp):
                   rc == 0 and "warning" not in err, f"rc {rc}: {err.strip()[-200:]}")
 
 
+def fifo_stats(enc, tmp):
+    clip, out = os.path.join(tmp, "s.y4m"), os.path.join(tmp, "o.264")
+    write_clip(clip)
+    fifo = os.path.join(tmp, "stats.fifo")
+    os.mkfifo(fifo)
+    for p in ("2", "3"):
+        for threads in ("1", "3"):
+            try:
+                rc, err = run(enc, ["--input-y4m", clip, "--threads", threads,
+                                    "--bitrate", "300", "--pass", p, "--stats", fifo,
+                                    "-o", out])
+            except subprocess.TimeoutExpired:
+                rc, err = None, "hung"
+            check(f"pass {p} refuses a FIFO stats file, threads {threads}",
+                  rc not in (0, None) and "regular file" in err, f"rc {rc}: {err.strip()[-200:]}")
+    os.remove(fifo)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -129,6 +149,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="y264robust.") as tmp:
         truncated_header(enc, tmp)
         missing_stats(enc, tmp)
+        fifo_stats(enc, tmp)
     if failures:
         print(f"cli_robust_check: {len(failures)} failure(s)")
         return 1

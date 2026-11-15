@@ -5646,6 +5646,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --zones and --plan both set zones; give one or the other\n");
         return 2;
     }
+    /* pass 2 and 3 open the stats file more than once (the CLI looks for GOP
+     * markers before the encoder reads it), and a FIFO or a device has
+     * nothing left for the second open, which blocks for good */
+    struct stat sst;
+    if (pass >= 2 && stat(stats_path, &sst) == 0 && !S_ISREG(sst.st_mode)) {
+        fprintf(stderr, "yah264: --stats '%s' isn't a regular file, and --pass %d reads "
+                "it more than once\n", stats_path, pass);
+        return 1;
+    }
 
     FILE *in = (!strcmp(in_path, "-")) ? stdin : fopen(in_path, "rb");
     if (!in) {
