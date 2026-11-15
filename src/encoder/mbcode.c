@@ -416,8 +416,54 @@ int y264_aq_bright(double mean)
     return mean >= AQ_BRIGHT * (double)(1 << (Y264_BIT_DEPTH - 8));
 }
 
+/* Rounding a picture that varies across levels to a sample grid adds 1/12
+ * of the grid step squared to its variance: 1/12 of an 8-bit level squared
+ * for 8-bit samples, a sixteenth of that for a 10-bit master. The gate's
+ * lines were fitted on 8-bit pictures, which always carry it, so a master
+ * read flatter than its 8-bit copy and its gate opened later. This adds the
+ * rest to each macroblock of a deeper picture whose samples aren't on the
+ * 8-bit grid, so the gate reads it as its 8-bit copy would. A block on the
+ * grid came from 8-bit samples and already carries it: shifted up (low bits
+ * zero) or bit-replicated (low bits a copy of the top ones). It is judged
+ * per block, so an overlay touches only the blocks under it. */
+#define AQ_ROUND_VAR (1.0 / 12.0)
+void y264_aq_floor_lift(const pixel *p, int stride, int wmb, int hmb, float *vars)
+{
+#if Y264_BIT_DEPTH > 8
+    const int low = (1 << (Y264_BIT_DEPTH - 8)) - 1;
+    const float lift = (float)(AQ_ROUND_VAR * ((low + 1) * (low + 1) - 1));
+    /* the gate compares variance with two lines only, flat and smooth, so
+     * the lift can change a call only for a block just under one of them;
+     * no other block is scanned, or lifted */
+    const double sc2 = (double)(low + 1) * (low + 1);
+    const float flat = (float)(AQ_GRAIN_VMIN * sc2), smooth = (float)(aq_dark_env(2) * sc2);
+    for (int mby = 0; mby < hmb; mby++)
+        for (int mbx = 0; mbx < wmb; mbx++) {
+            float v = vars[mby * wmb + mbx];
+            if (!(v < flat && v + lift >= flat) && !(v < smooth && v + lift >= smooth))
+                continue;
+            const pixel *b = p + (size_t)mby * 16 * stride + mbx * 16;
+            pixel shifted = 0, replicated = 0;
+            int off = 0;
+            for (int y = 0; y < 16 && !off; y++) {
+                const pixel *r = b + (size_t)y * stride;
+                for (int x = 0; x < 16; x++) {
+                    shifted |= r[x];
+                    replicated |= r[x] ^ (r[x] >> 8);
+                }
+                off = (shifted & low) && (replicated & low);
+            }
+            if (off)
+                vars[mby * wmb + mbx] += lift;
+        }
+#else
+    (void)p; (void)stride; (void)wmb; (void)hmb; (void)vars;
+#endif
+}
+
 /* 1 for a macroblock the gate counts as dark grain or gradient: inside the
- * cut's region but not flat, since a flat block has nothing to band */
+ * cut's region but not flat, since a flat block has nothing to band. The
+ * variance is the 8-bit copy's (y264_aq_floor_lift). */
 int y264_aq_grain(double mean, double var)
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
@@ -724,8 +770,10 @@ static void aq_analyze(y264_frame_t *f)
     /* the bar walk matters only with the dark term on and brightness alone not
      * already opening the gate */
     double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
-    if (aq_dark_env(0) > 0 && dg < 1.0)
+    if (aq_dark_env(0) > 0 && dg < 1.0) {
+        y264_aq_floor_lift(f->src[0], f->src_stride[0], f->wmb, f->hmb, vars);
         dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb));
+    }
     if (aq_dark_env(0) > 0) f->dark_dg = (float)dg;
     f->aq_s = strength; f->aq_c = center;
     for (int i = 0; i < n; i++) {
