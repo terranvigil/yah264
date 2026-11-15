@@ -2452,6 +2452,27 @@ static int stats_tmp_open(const char *path)
     return g_stats_shown ? 0 : -1;
 }
 
+/* True when two paths name one file: the same inode when both exist, the
+ * same name in the same resolved directory when neither does yet. b "-" is
+ * the standard output. */
+static int same_file(const char *a, const char *b)
+{
+    struct stat sa, sb;
+    int ha = stat(a, &sa) == 0;
+    int hb = !strcmp(b, "-") ? fstat(STDOUT_FILENO, &sb) == 0 : stat(b, &sb) == 0;
+    if (ha && hb) return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+    if (ha || hb || !strcmp(b, "-")) return 0;
+    const char *ba = strrchr(a, '/'), *bb = strrchr(b, '/');
+    if (strcmp(ba ? ba + 1 : a, bb ? bb + 1 : b)) return 0;
+    char da[PATH_MAX], db[PATH_MAX];
+    snprintf(da, sizeof da, "%.*s", ba ? (int)(ba - a) + 1 : 1, ba ? a : ".");
+    snprintf(db, sizeof db, "%.*s", bb ? (int)(bb - b) + 1 : 1, bb ? b : ".");
+    char *ra = realpath(da, NULL), *rb = realpath(db, NULL);
+    int same = ra && rb && !strcmp(ra, rb);
+    free(ra); free(rb);
+    return same;
+}
+
 /* the run's end: keep pass 3's copy on success, drop it otherwise */
 static int stats_tmp_finish(int rc)
 {
@@ -5877,6 +5898,15 @@ static int cli_main(int argc, char **argv)
         fprintf(stderr, "yah264: --stats '%s' isn't a regular file, and --pass %d reads "
                 "it more than once\n", stats_path, pass);
         return 1;
+    }
+    /* the encoder would write its records over the stream, or the stream
+     * over the plan, in whichever order the run reaches them */
+    if (pass > 0 && (same_file(stats_path, out_path) ||
+                     (recon_path && same_file(stats_path, recon_path)))) {
+        fprintf(stderr, "yah264: --stats '%s' names the same file as %s; give the "
+                "stats file a name of its own\n", stats_path,
+                same_file(stats_path, out_path) ? "-o" : "--dump-recon");
+        return 2;
     }
     /* stat'ed regular above, when it's there */
     if (pass == 3) {

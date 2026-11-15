@@ -20,6 +20,9 @@ status and what it says on stderr:
     working copy; through a symlink it replaces the target.
   - a threaded two-pass leaves none of its per-GOP stats files behind,
     whether it ends cleanly, fails, or is ended by SIGINT or SIGTERM.
+  - every pass refuses a stats file that is also the output or the recon,
+    by name, through a symlink or as the standard output, and leaves it as
+    it was.
 """
 import os, shlex, signal, subprocess, sys, tempfile, time
 
@@ -43,9 +46,9 @@ def write_clip(path, tail=b""):
         f.write(tail)
 
 
-def run(enc, args, stdin=None):
+def run(enc, args, stdin=None, stdout=subprocess.PIPE):
     p = subprocess.run(WRAP + [enc, "--no-progress"] + args, stdin=stdin,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       stdout=stdout, stderr=subprocess.PIPE,
                        timeout=LIMIT)
     return p.returncode, p.stderr.decode(errors="replace")
 
@@ -169,6 +172,38 @@ def fifo_stats(enc, tmp):
             check(f"pass {p} refuses a FIFO stats file, threads {threads}",
                   rc not in (0, None) and "regular file" in err, f"rc {rc}: {err.strip()[-200:]}")
     os.remove(fifo)
+
+
+def stats_is_output(enc, tmp):
+    d = os.path.join(tmp, "same")
+    os.makedirs(d)
+    clip, st, out = (os.path.join(d, x) for x in ("s.y4m", "s.stats", "o.264"))
+    write_clip(clip)
+    base = ["--input-y4m", clip, "--threads", "1", "--bitrate", "300", "--keyint", "4"]
+    run(enc, base + ["--pass", "1", "--stats", st, "-o", out])
+    plan = open(st, "rb").read()
+    os.symlink("s.stats", os.path.join(d, "alias.stats"))
+    for p in ("1", "2", "3"):
+        for name, extra in (("-o", ["-o", st]),
+                            ("-o through ./", ["-o", os.path.join(d, ".", "s.stats")]),
+                            ("-o through a symlink", ["-o", os.path.join(d, "alias.stats")]),
+                            ("--dump-recon", ["-o", out, "--dump-recon", st])):
+            rc, err = run(enc, base + ["--pass", p, "--stats", st] + extra)
+            check(f"pass {p} refuses --stats named by {name}",
+                  rc == 2 and "same file" in err and open(st, "rb").read() == plan,
+                  f"rc {rc}: {err.strip()[-200:]}")
+        # the standard output sent into the stats file
+        with open(st, "ab") as f:
+            rc, err = run(enc, base + ["--pass", p, "--stats", st, "-o", "-"], stdout=f)
+        check(f"pass {p} refuses --stats as the standard output",
+              rc == 2 and "same file" in err and open(st, "rb").read() == plan,
+              f"rc {rc}: {err.strip()[-200:]}")
+    # neither there yet
+    new = os.path.join(d, "new.stats")
+    rc, err = run(enc, base + ["--pass", "1", "--stats", new, "-o", new])
+    check("pass 1 refuses --stats and -o naming one new file",
+          rc == 2 and "same file" in err and not os.path.exists(new),
+          f"rc {rc}: {err.strip()[-200:]}")
 
 
 def leftovers(d, keep):
@@ -327,6 +362,7 @@ def main():
         truncated_header(enc, tmp)
         missing_stats(enc, tmp)
         fifo_stats(enc, tmp)
+        stats_is_output(enc, tmp)
         pass3_atomic(enc, tmp)
         gop_files(enc, tmp)
     if failures:
