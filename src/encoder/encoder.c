@@ -3656,6 +3656,10 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
     if (type != 12)
         e->nal_framing += (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
                         ? (double)Y264_NAL_START_BYTES : (double)n;
+    /* ...but the underflow count reads the wire, so it gets them apart */
+    if ((type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
+        && n > Y264_NAL_START_BYTES + rbsp_size)
+        e->nal_emu += (double)(n - Y264_NAL_START_BYTES - rbsp_size);
     /* Every byte that crosses the wire, start code included, because that is
  * what a receiver's buffer holds. The count runs across encode calls, so it
  * cannot be read off `off`, which restarts at every one of them. */
@@ -4419,6 +4423,44 @@ static int level_fit(yah264_encoder_t *e)
                     "H.264's 16 frames; coding with%s\n", what[0] ? what + 1 : " the settings unchanged");
     }
     return 0;
+}
+
+/* a join level the splitter planned: it clamps them to 0.1 to 0.97 of the
+ * buffer, so anything outside 0.05 to 1 of it is a damaged file, ignored */
+static int tp_level_ok(const yah264_encoder_t *e, double v)
+{
+    return e->vbv_on && isfinite(v) && v >= 0.05 * e->vbv.size && v <= e->vbv.size;
+}
+
+/* a stats record's fields as pass 1 writes them: integers where it writes
+ * integers, nothing trailing. returns the field count, 4 or 5, else 0 */
+static int tp_parse_record(const char *ln, int *type, double *cplx, double *bits,
+                           int *qp, int *is_ref)
+{
+    const char *p = ln;
+    char *end;
+    long v[3];
+    double d[2];
+    int n = 0;
+    for (int f = 0; f < 5; f++) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\n' || *p == '\r' || !*p) break;
+        if (f == 1 || f == 2) {
+            d[f - 1] = strtod(p, &end);
+        } else {
+            v[f == 0 ? 0 : f - 2] = strtol(p, &end, 10);
+        }
+        if (end == p || (*end && *end != ' ' && *end != '\t' && *end != '\n' && *end != '\r'))
+            return 0;
+        p = end;
+        n++;
+    }
+    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+    if (n < 4 || *p != '\n')
+        return 0;
+    *type = (int)v[0]; *cplx = d[0]; *bits = d[1]; *qp = (int)v[1];
+    *is_ref = n == 5 ? (int)v[2] : 0;
+    return n;
 }
 
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
@@ -5271,7 +5313,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (e->qp > 51) e->qp = 51;
     e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 
-    e->abr_on = (param->rc.method == YAH264_RC_ABR && param->rc.bitrate > 0);
+    /* pass 1 of a two-pass under a VBV codes as capped ABR at the target: at
+     * the fixed pass-1 QP the buffer pinned it at QP 51 wherever the cap sits
+     * far under that QP's rate, and frames coded there say little about what
+     * a finer quantiser costs, which is what pass 2 plans from */
+    int p1_abr = param->rc.method == YAH264_RC_2PASS && param->rc.pass == 1
+                 && param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
+    e->abr_on = ((param->rc.method == YAH264_RC_ABR || p1_abr) && param->rc.bitrate > 0);
     e->hrd_qfloor[0] = e->hrd_qfloor[1] = e->hrd_qfloor[2] = -1;
     if (e->abr_on) {
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
@@ -5343,9 +5391,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * one it did not have: chimera 1080p at 988 kbit/s capped VBR underflowed
  * at the joins. A sequential caller replaces the assumption with the exact
  * occupancy through yah264_encoder_rc_import; a parallel one pairs it with
- * yah264_encoder_vbv_handoff on the segment before. 2-pass plans against
- * real pass-1 bits and keeps what it had. */
-        if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS) {
+ * yah264_encoder_vbv_handoff on the segment before. A two-pass pass 2 joins
+ * the same way: its GOPs opening on a full buffer they never had was where
+ * most of its underflows were. Pass 1 only records. */
+        if (param->rc.vbv_seg_join && (param->rc.method != YAH264_RC_2PASS || param->rc.pass >= 2)) {
             e->vbv.fill = e->vbv_seg_h;             /* assume only the handoff */
             e->vbv_joined = 1;
         }
@@ -5442,7 +5491,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         /* pass 3 is pass 2's read plus pass 1's write: the plan is solved from
  * the records that are there, and the coded result is written back over
  * them, so a further pass refines against a real encode instead of the
- * fixed-QP pass 1. Same path, REWRITTEN -- every record is read at open,
+ * pass 1. Same path, REWRITTEN -- every record is read at open,
  * before the file is truncated. */
         e->tp_pass = param->rc.pass == 2 ? 2 : param->rc.pass == 3 ? 3 : 1;
         if (e->tp_pass == 1) {
@@ -5453,8 +5502,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 yah264_encoder_close(e);
                 return NULL;
             }
-            e->qp = 26;                             /* fixed reference QP for pass 1 */
-            e->chroma_qp = y264_chroma_qp(26, e->param.chroma_qp_index_offset);
+            /* one thread codes with tools more threads don't, so a pass 2
+             * at the other kind prices the records wrong: say which */
+            fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n", e->param.threads,
+                    param->keyint, param->interlaced ? 1 : 0);
+            e->qp = Y264_TP_P1_QP;                  /* fixed reference QP for pass 1 */
+            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
         } else {
             FILE *fp = fopen(param->rc.stats, "r");
             if (fp) {
@@ -5469,10 +5522,83 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * needs to know where each GOP's records start. A file with no
  * markers reads exactly as it always did. */
                 long mframes = 0;
+                int ngop = 0;
+                int bad_rec = 0;
+                /* ceilings on a record's costs far past anything codable
+                 * (sixteen times the raw picture, and a fixed allowance for
+                 * headers), the same as the CLI's splitter puts: only there
+                 * to keep the plan's sums finite */
+                double msamp = e->width_in_mbs * e->height_in_mbs
+                             * (256.0 + 2.0 * 256.0 / (e->sub_w * e->sub_h));
+                double mbits = 16.0 * Y264_BIT_DEPTH * msamp + 1.0e6;
+                double mcplx = 64.0 * (double)(1 << Y264_BIT_DEPTH) * msamp + 1.0e6;
+                int split = 0;      /* a file the GOP splitter wrote */
+                int first = 1;
                 while (fgets(ln, sizeof ln, fp)) {
                     int mg, ms, me, mr;
-                    if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4)
+                    if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4) {
+                        /* in order and back to back, as the merge writes them */
+                        if (mg != ngop || ms != mframes || me <= ms) {
+                            fprintf(stderr, "yah264: stats file '%s' has its GOP sections out of "
+                                    "order\n", param->rc.stats);
+                            fclose(fp);
+                            yah264_encoder_close(e);
+                            return NULL;
+                        }
+                        ngop++;
                         mframes += me - ms;
+                    }
+                    int p1t, p1k;
+                    /* the options a pass 2 has to share with its pass 1, which
+                     * every pass-1 writer puts at the top */
+                    if (!strncmp(ln, "#keyint", 7) && sscanf(ln, "#keyint %d", &p1k) != 1) {
+                        fprintf(stderr, "yah264: stats file '%s' has a malformed #keyint line\n",
+                                param->rc.stats);
+                        fclose(fp);
+                        yah264_encoder_close(e);
+                        return NULL;
+                    }
+                    if ((sscanf(ln, "#keyint %d", &p1k) == 1 && p1k != param->keyint)
+                        || (sscanf(ln, "#fields %d", &p1k) == 1
+                            && (p1k != 0) != (param->interlaced != 0))) {
+                        fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 with %s "
+                                "than this pass's; run both passes with the same --keyint and "
+                                "--tff/--bff\n", param->rc.stats,
+                                ln[1] != 'k' ? "another field mode" : "another --keyint");
+                        fclose(fp);
+                        yah264_encoder_close(e);
+                        return NULL;
+                    }
+                    if (sscanf(ln, "#threads %d", &p1t) == 1 && p1t > 0
+                        && (p1t == 1) != (e->param.threads == 1))
+                        fprintf(stderr, "yah264: warning: stats file '%s' comes from a pass 1 at "
+                                "--threads %d and this pass runs at --threads %d; one thread codes "
+                                "with tools more threads don't, so the records misprice this pass "
+                                "and the rate can miss by tens of percent: run both passes at one "
+                                "thread or both at more\n", param->rc.stats, p1t, e->param.threads);
+                    /* the splitter writes it first, and hands the encoder its
+                     * share of the budget: anywhere else, or in a file a
+                     * caller didn't split, it isn't the splitter's, and the
+                     * underflow count stays this encoder's to report */
+                    if (first && !strncmp(ln, "#split", 6) && param->rc.tp_target_bits > 0.0)
+                        split = 1;
+                    first = 0;
+                    struct tp_stat nx = {0};
+                    if (split && e->tp_n_next < 2
+                        && sscanf(ln, "#next %d %lf %lf %d", &nx.type, &nx.cplx, &nx.bits, &nx.qp) == 4
+                        && isfinite(nx.bits) && nx.bits >= 0.0 && nx.bits <= mbits
+                        && nx.qp >= 0 && nx.qp <= 51)
+                        e->tp_next[e->tp_n_next++] = nx;
+                    double jv;
+                    /* only a GOP that joins one before it starts at a level */
+                    if (split && e->vbv_joined && sscanf(ln, "#join %lf", &jv) == 1
+                        && tp_level_ok(e, jv))
+                        e->tp_join = jv;
+                    if (split && sscanf(ln, "#exit %lf", &jv) == 1 && tp_level_ok(e, jv))
+                        e->tp_exit = jv;
+                    /* a key may cost more than the buffer: clamp it there */
+                    if (split && sscanf(ln, "#key %lf", &jv) == 1 && isfinite(jv) && jv > 0.0)
+                        e->tp_key = e->vbv_on && jv > e->vbv.size ? e->vbv.size : jv;
                     if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0')
                         continue;
                     /* The 5th field (is_ref) was added for the offline plan's
@@ -5480,10 +5606,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * 4 fields and default to 0, the flat-B assumption, so an
  * old stats file still plans. */
                     s.is_ref = 0;
-                    int nf = sscanf(ln, "%d %lf %lf %d %d",
-                                    &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
-                    if (nf < 4 || s.type < 0 || s.type > 2)
-                        break;                      /* malformed: stop, as before */
+                    int nf = tp_parse_record(ln, &s.type, &s.cplx, &s.bits, &s.qp, &s.is_ref);
+                    /* a record ends in its newline: one cut short ("51" read
+                     * as "5") would code something else without a word */
+                    if (nf < 4 || !strchr(ln, '\n') || s.type < 0 || s.type > 2
+                        || !isfinite(s.cplx) || s.cplx < 0.0
+                        || s.cplx > mcplx
+                        || !isfinite(s.bits) || s.bits < 0.0 || s.bits > mbits
+                        || s.qp < 0 || s.qp > 51) {
+                        bad_rec = 1;
+                        break;
+                    }
                     if (e->tp_n == cap) {
                         cap *= 2;
                         e->tp_stats = realloc(e->tp_stats, (size_t)cap * sizeof(*e->tp_stats));
@@ -5496,12 +5629,61 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     e->tp_sum_cq += pow(cost, e->crf_qcomp);
                 }
                 fclose(fp);
+                /* a malformed record cuts the file short at it, and the rest
+                 * would code at the last QP: refuse it rather */
+                if (bad_rec) {
+                    fprintf(stderr, "yah264: stats file '%s' has a malformed record after "
+                            "%d: it was damaged, or isn't one this encoder wrote\n", param->rc.stats, e->tp_n);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
+                /* a file that is there but holds nothing (a pass 1 or 3
+                 * killed before its first record) is not a pass to plan from */
+                if (e->tp_n == 0) {
+                    fprintf(stderr, "yah264: stats file '%s' holds no records: run pass 1 "
+                            "into it again\n", param->rc.stats);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
+                /* the splitter's join levels: start at the first unless the
+                 * GOP before hands over its exact occupancy, leave at least
+                 * the second */
+                e->tp_split = split;
+                if (e->vbv_on) {
+                    if (e->vbv_joined && e->tp_join > 0.0)
+                        e->vbv.fill = e->tp_join < e->vbv.size ? e->tp_join : e->vbv.size;
+                    if (e->tp_exit > 0.0) {
+                        e->vbv_seg_h = e->tp_exit < e->vbv.size ? e->tp_exit : e->vbv.size;
+                        /* the last GOP of a split with its cap at or under
+                         * the target is held to the level the splitter walked
+                         * to, by its measured sizes too: what it drains below
+                         * that is spent on top of its budget */
+                        if (e->tp_key <= 0.0 && param->rc.vbv_maxrate <= param->rc.bitrate) {
+                            e->vbv_exit_n = e->tp_n;
+                            e->vbv_exit_k = 1.0;
+                            e->tp_hold_end = 1;
+                        }
+                    } else if (param->nal_hrd == YAH264_NAL_HRD_CBR) {
+                        /* a declared CBR stream delivers its rate: one that
+                         * ends lower than it began spent the opening buffer
+                         * on top, so it leaves at its start. --nal-hrd always
+                         * runs one encoder, so this is the whole stream */
+                        e->vbv_seg_h = e->vbv.fill;
+                        e->vbv_exit_n = e->tp_n;
+                        e->vbv_exit_k = 1.0;
+                        e->tp_hold_end = 1;
+                    }
+                }
                 /* the markers count frames; a pass 1 coded with another
                  * field mode wrote half or twice the records */
-                if (mframes > 0 && e->tp_n != mframes * (param->interlaced ? 2 : 1))
-                    fprintf(stderr, "yah264: stats file '%s' holds %d records for %ld pictures; "
-                            "run pass 1 with the same --tff/--bff as this pass or the rate will miss\n",
-                            param->rc.stats, e->tp_n, mframes * (param->interlaced ? 2 : 1));
+                if (mframes > 0 && (e->tp_n > mframes) != (param->interlaced != 0)) {
+                    fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 %s --tff/--bff, "
+                            "and this pass runs %s; run both passes with the same field order\n",
+                            param->rc.stats, e->tp_n > mframes ? "with" : "without",
+                            param->interlaced ? "with" : "without");
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
             }
             if (e->tp_pass == 3) {
                 /* Every record is in e->tp_stats by now, so truncating the file
@@ -5515,6 +5697,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
+                fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n", e->param.threads,
+                    param->keyint, param->interlaced ? 1 : 0);
             }
             double bitrate = param->rc.bitrate > 0 ? param->rc.bitrate : 1000;
             /* a record per picture: field coding writes two a frame */
@@ -5692,7 +5876,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->abr_rf2 = 0;
         if (e->abr_on) {
             if (!e->mbtree_on) {
-                fprintf(stderr, "yah264: the rate-factor ABR model needs mb-tree (bframes > 0); using the per-frame model\n");
+                if (!e->tp_pass)    /* a VBV pass 1 runs as ABR, not by request */
+                    fprintf(stderr, "yah264: the rate-factor ABR model needs mb-tree (bframes > 0); using the per-frame model\n");
             } else {
                 e->abr_rf2 = 1;          /* the ledger opens at the first decide */
             }
@@ -5909,7 +6094,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * absolute anchor reaches the per-MB AQ field in every rate mode it is armed
  * in, unlike the two base-QP terms beside it, which carry their own
  * `e->crf_on` gate. The -5.17% median is a CRF number; CBR was not measured. */
-    e->aq_abs    = crf_cplx_env() && (e->crf_on || (e->abr_rf2 && !e->vbv_cbr));
+    e->aq_abs    = crf_cplx_env() && (e->crf_on || (e->abr_rf2 && !e->vbv_cbr && !e->tp_pass));
     /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
  * path, with its own strength scale and B-frame floor; y264_aq_gain). */
     e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
@@ -11526,7 +11711,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     int rc_waits = (e->abr_on || e->vbv_on || e->tp_pass)
                  && (!e->rcp_on || rcp_warm(e)
                      || (type != 2 && !(e->rcp_lag > 0 && !e->vbv_on))
-                     || (e->vbv_on && e->rcp_vbv_tight));
+                     || vbv_serial_now(e));
     if (rc_waits) {
         g_ew_site = 0;
         w2_drain(e, off);               /* prev frame's bits feed this frame's RC */
@@ -11619,6 +11804,44 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
 
 
 
+/* how far a built frame runs over what the measured-size bound allows it:
+ * the buffer's limit, and under --nal-hrd the declared buffer too */
+static double bound_over(yah264_encoder_t *e, const struct slice_map *sm, int type,
+                         int is_idr, int is_ref, double limit, double *kovh)
+{
+    double bits = sm_wire_bits(sm);     /* what the buffer is charged */
+    /* a pass 2 also charges what its access unit carries ahead of the
+     * slices, the parameter sets and SEI of a key */
+    if (e->tp_pass >= 2)
+        bits += 8.0 * (e->nal_framing - e->nal_framing_seen);
+    double over = bits / limit;
+    /* --nal-hrd: the declared buffer, which also holds the SEIs and the
+     * emulation bytes the VBV model leaves out, must hold too */
+    if (e->hrd_on) {
+        double room = hrd_room(e, is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE,
+                               e->cur_disp, e->cur_open_key);
+        double sb = hrd_slice_bits(e->rbsp, sm);
+        double ho = room > 0.0 ? sb / room : 64.0;
+        if (ho > over) over = ho;
+        if (*kovh < 0.0) {
+            double hc = 0.0, hk = 0.0;
+            *kovh = 0.0;
+            if (!is_idr
+                && hrd_room_ex(e, YAH264_NAL_SLICE, e->cur_disp, e->cur_open_key, &hc) >= 0.0
+                && hrd_room_ex(e, YAH264_NAL_SLICE_IDR, e->cur_disp, 0, &hk) >= 0.0
+                && hk > hc)
+                *kovh = hk - hc;
+        }
+        double res = hrd_reserve(e, type, hrd_cost51(sb, frame_qp(e, type, is_ref)), *kovh);
+        if (res > 0.0) {
+            double lim = room - res;
+            double hr = lim > 0.0 ? sb / lim : 64.0;
+            if (hr > over) over = hr;
+        }
+    }
+    return over;
+}
+
 static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                       int is_ref, pixel *const src[3])
 {
@@ -11663,6 +11886,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             rcp_reqp(e, type, is_ref);
     }
     int qstart = e->qp;
+    int bound_fail = -1;
     double last_over = 1.0;
     struct slice_map sm;
     size_t rbsp_size = rcr_build_slice(e, type, is_idr, is_ref, src, &sm, 0);
@@ -11716,8 +11940,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * own entry and the virtual fill equals the committed one -- the walk is
  * here so the two paths read the same quantity by construction rather
  * than by coincidence. */
-        double fill = e->rcp_on ? rcp_vbv_vfill(e, 1) : e->vbv.fill;
-        double limit = vbv_limit_at(e, fill);
+        double fill = e->rcp_on ? rcp_vbv_vfill_bound(e, 1) : e->vbv.fill;
+        double limit = vbv_bound_limit(e, fill);
         /* Capped VBR, an intra frame: it also leaves the reserve the burst
  * plan asks of an intra frame it can price, half the plan's target level
  * (or half of what is there, below that). A GOP instance's first frame is
@@ -11746,32 +11970,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
          * percent a step and four tries left it over with no count */
         double kovh = -1.0;     /* what a key's SEIs add over this AU's */
         for (int k = 0; k < (e->hrd_on ? 64 : 4) && limit > 0.0 && forced_qp(e) < 0; k++) {
-            double bits = sm_wire_bits(&sm);   /* what the buffer is charged */
-            double over = bits / limit;
-            /* --nal-hrd: the declared buffer, which also holds the SEIs and
-             * the emulation bytes the VBV model leaves out, must hold too */
-            if (e->hrd_on) {
-                double room = hrd_room(e, is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE,
-                                       e->cur_disp, e->cur_open_key);
-                double sb = hrd_slice_bits(e->rbsp, &sm);
-                double ho = room > 0.0 ? sb / room : 64.0;
-                if (ho > over) over = ho;
-                if (kovh < 0.0) {
-                    double hc = 0.0, hk = 0.0;
-                    kovh = 0.0;
-                    if (!is_idr
-                        && hrd_room_ex(e, YAH264_NAL_SLICE, e->cur_disp, e->cur_open_key, &hc) >= 0.0
-                        && hrd_room_ex(e, YAH264_NAL_SLICE_IDR, e->cur_disp, 0, &hk) >= 0.0
-                        && hk > hc)
-                        kovh = hk - hc;
-                }
-                double res = hrd_reserve(e, type, hrd_cost51(sb, frame_qp(e, type, is_ref)), kovh);
-                if (res > 0.0) {
-                    double lim = room - res;
-                    double hr = lim > 0.0 ? sb / lim : 64.0;
-                    if (hr > over) over = hr;
-                }
-            }
+            double over = bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh);
             last_over = over;
             if (over <= 1.0)
                 break;
@@ -11792,12 +11991,14 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             }
             if (nq == e->qp) {
                 /* at the ceiling the per-macroblock offsets still code some
-                 * blocks under 51: under a declared buffer, drop them once */
-                if (!e->hrd_on || e->hrd_flat || (!e->aq_off && !e->mbtree_on))
+                 * blocks under 51: under a declared buffer or a two-pass
+                 * pass 2, drop them once */
+                if ((!e->hrd_on && e->tp_pass < 2) || e->hrd_flat || (!e->aq_off && !e->mbtree_on))
                     break;
                 e->hrd_flat = 1;
             }
             int good = e->qp;
+            bound_fail = good;
             e->qp = nq;
             e->chroma_qp = y264_chroma_qp(nq, e->param.chroma_qp_index_offset);
             if (e->rcp_on)
@@ -11820,6 +12021,42 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             rbsp_size = sz;
             sm = sm2;
         }
+    }
+    /* a pass 2's raise is read off the 1/qscale law, which near a starved
+     * reference moves bits far faster than that, so one step can land far
+     * under the limit with the buffer full: step back while the frame fits
+     * with half its room to spare */
+    if (vbv_bounded_now(e) && e->tp_pass >= 2 && bound_fail >= 0
+        && e->qp - bound_fail >= 3 && forced_qp(e) < 0 && !e->hrd_flat) {
+        double fill = e->rcp_on ? rcp_vbv_vfill_bound(e, 1) : e->vbv.fill;
+        double limit = vbv_bound_limit(e, fill);
+        double kovh = -1.0;
+        double over = limit > 0.0 ? bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh) : 1.0;
+        int fit = e->qp, fail = bound_fail, built = e->qp;
+        for (int t = 0; t < 3 && fit - fail > 1 && over < 0.5 && limit > 0.0; t++) {
+            int mid = (fit + fail) / 2;
+            e->qp = mid;
+            e->chroma_qp = y264_chroma_qp(mid, e->param.chroma_qp_index_offset);
+            if (e->rcp_on)
+                rcp_reqp(e, type, is_ref);
+            struct slice_map sm2;
+            size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
+            if (sz == 0) { built = -1; fail = mid; break; }
+            built = mid;
+            double o2 = bound_over(e, &sm2, type, is_idr, is_ref, limit, &kovh);
+            if (o2 <= 1.0) { fit = mid; rbsp_size = sz; sm = sm2; over = o2; }
+            else fail = mid;
+        }
+        if (built != fit) {
+            e->qp = fit;
+            e->chroma_qp = y264_chroma_qp(fit, e->param.chroma_qp_index_offset);
+            if (e->rcp_on)
+                rcp_reqp(e, type, is_ref);
+            struct slice_map sm2;
+            size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
+            if (sz) { rbsp_size = sz; sm = sm2; }
+        }
+        last_over = over;               /* the floor below reads the frame kept */
     }
     e->hrd_flat = 0;
     if (floored) {
@@ -12445,7 +12682,7 @@ static int fpipe_ready(yah264_encoder_t *e)
     if (e->fields)
         return 0;
     if ((e->abr_on || e->vbv_on || e->tp_pass) &&
-        (!e->rcp_on || rcp_warm(e) || (e->vbv_on && e->rcp_vbv_tight)))
+        (!e->rcp_on || rcp_warm(e) || vbv_serial_now(e)))
         return 0;
     if (e->fp_state == 0)
         e->fp_state = (e->pool && ntp_pool_nthreads(e->pool) >= Y264_MT_POOL_MIN &&
@@ -13280,7 +13517,7 @@ static int stair_ready(yah264_encoder_t *e)
 {
     if (!stair_clamp_on(e))
         return 0;
-    if (e->rcp_on && (rcp_warm(e) || (e->vbv_on && e->rcp_vbv_tight)))
+    if (e->rcp_on && (rcp_warm(e) || vbv_serial_now(e)))
         return 0;                   /* serial-tight RC feedback while warm
  * or in a tight VBV burst */
     if (!e->pool || ntp_pool_nthreads(e->pool) < Y264_MT_POOL_MIN || !e->wf_warmed)
@@ -16538,6 +16775,21 @@ void yah264_encoder_close(yah264_encoder_t *e)
             fprintf(stderr, "yah264: warning: %ld access unit(s) arrive after their removal "
                     "time on the declared HRD schedule\n", e->hrd_late);
     }
+    /* a GOP the splitter cut leaves the count to the CLI, which walks the
+     * stream the GOPs make together */
+    if (e->tp_unfit && !e->hrd_on && !e->tp_split)
+        fprintf(stderr, "yah264: warning: %ld picture(s) underflowed the VBV buffer\n",
+                e->tp_unfit);
+    /* the picture count isn't known at open on a serial path, a pipe say, so
+     * a stats file short of pictures is only found here */
+    /* ...and one with records to spare, from a longer pass 1 */
+    if (e->tp_pass >= 2 && e->tp_idx > 0 && e->tp_idx < e->tp_n)
+        fprintf(stderr, "yah264: warning: the stats file holds %d records and this pass coded "
+                "%d pictures: it covers more than this input\n", e->tp_n, e->tp_idx);
+    if (e->tp_past && e->tp_n > 0)
+        fprintf(stderr, "yah264: warning: %ld picture(s) coded past the last of the %d records "
+                "in the stats file, at the last QP: the file covers less than this input\n",
+                e->tp_past, e->tp_n);
     if (e->rc_shared) {
         pthread_mutex_lock(&e->rc_shared->mx);
         e->rc_shared->nlive--;
@@ -16656,6 +16908,9 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->tp_qrec);
     free(e->tp_q);
     free(e->tp_ebits);
+    free(e->tp_resv);
+    free(e->tp_nkey);
+    free(e->tp_slack);
     free(e->tp_qlo);
     free(e->tp_elo);
     free(e->tp_elo3);

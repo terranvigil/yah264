@@ -164,7 +164,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--crf-max` | 1..51 | off | Ceiling on the QP the VBV may raise a `--crf` frame to. Needs `--crf` and a VBV. Without either it is refused, because nothing else raises the QP for it to bound. It bounds the raise and not the mapping: a frame the rate factor already put above the ceiling keeps the QP it was given. The buffer is then allowed to under-run. That is the trade, not a defect, and why it is refused with `--nal-hrd`. See below. |
 | `--ratetol` | float, or `inf` | 1.0 | How far single-pass ABR may drift from its target before the correction answers, as a fraction of the target bitrate. Smaller tracks the rate closer and swings the quality more. `inf` takes the correction out and leaves the rate to the allocator. Under a VBV the buffer's own cap on the correction still applies. The default is today's ABR, byte for byte. `Y264_ABR_TOL` still overrides it. |
 | `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type. Reaches the single-pass ABR step clip and the two-pass allocator's. |
-| `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
+| `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of pass 1. Pair with `--bitrate`. Run every pass at one thread, or every pass at more: one thread codes with tools more threads don't, and a pass reading another kind's stats warns. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
 | `--aq-mode` | 1 or 2 | 2 | The AQ form: 1 plain log2-variance, 2 adaptive (a per-frame gain from the spread of block energies, plus a raised variance floor and a frame-level center on frames with no mb-tree field). **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
@@ -1224,7 +1224,13 @@ along GOP boundaries. Pass 2 needs a stats file that a *threaded* pass 1 wrote:
 one from a serial pass 1 has no GOP markers to split on, so pass 2 quietly stays
 serial for it. Pass 2 also refuses outright, with a message, if the stats file
 describes a different GOP split than the current run computed. That happens if
-you change `--frames` or `--keyint` between passes.
+you change `--frames` or `--keyint` between passes; pass 1 records its
+`--keyint`, and pass 2 refuses another. Under a VBV and a `--keyint` under 30,
+each encoder takes whole GOPs, 30 frames or more at a time, keyframes still on
+the `--keyint` grid. Pass 2 splits as pass 1 did, which the stats file also
+records, so a VBV on one pass and not the other is fine. Under a VBV,
+pass 2 codes one frame at a time in each GOP, its threads on the row
+wavefront.
 
 ### Memory: the parallel path streams through a bounded window
 
