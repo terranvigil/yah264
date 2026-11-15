@@ -2555,6 +2555,27 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
                           int split_vbv)
 {
     const char *out_path = stats_shown(out_file);
+    /* a GOP's file holds a record a picture, or its encode failed to write
+     * them all: check every GOP before the stats file is touched */
+    int fields = param->interlaced ? 2 : 1;
+    for (int g = 0; g < n_gops; g++) {
+        FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
+        char ln[256];
+        long nrec = 0, want = (long)(gstart[g + 1] - gstart[g]) * fields;
+        int cut = 0;
+        while (in && fgets(ln, sizeof ln, in)) {
+            if (ln[0] == '#' || ln[0] == '\n' || ln[0] == '\0') continue;
+            if (strchr(ln, '\n')) nrec++;
+            else cut = 1;
+        }
+        if (in) fclose(in);
+        if (!in || cut || nrec != want) {
+            fprintf(stderr, "yah264: GOP %d's stats hold %ld whole record(s) for %ld picture(s)%s, "
+                    "so '%s' isn't written\n", g, nrec, want, cut ? " and one cut short" : "",
+                    out_path);
+            return -1;
+        }
+    }
     FILE *out = fopen(out_file, "w");
     if (!out) {
         fprintf(stderr, "yah264: cannot write stats file '%s'\n", out_path);
@@ -2569,19 +2590,20 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
     for (int g = 0; g < n_gops; g++) {
         FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
         char ln[256];
-        int nrec = 0;
-        if (in) {                               /* count first, to stamp it */
-            while (fgets(ln, sizeof ln, in))
-                if (ln[0] != '#' && ln[0] != '\n' && ln[0] != '\0') nrec++;
-            rewind(in);
+        if (!in) {                              /* read above; gone since */
+            fprintf(stderr, "yah264: cannot read '%s' (%s)\n", gop_stats[g], strerror(errno));
+            fclose(out);
+            return -1;
         }
-        fprintf(out, TP_MARKER " %d %d %d %d\n", g, gstart[g], gstart[g + 1], nrec);
-        if (!in) continue;
+        fprintf(out, TP_MARKER " %d %d %d %d\n", g, gstart[g], gstart[g + 1],
+                (gstart[g + 1] - gstart[g]) * fields);
         while (fgets(ln, sizeof ln, in))
             if (ln[0] != '#' && ln[0] != '\n' && ln[0] != '\0') fputs(ln, out);
         fclose(in);
     }
-    if (fclose(out) != 0) {
+    /* a write that failed early can leave a later flush, and fclose, clean */
+    int werr = fflush(out) != 0 || ferror(out);
+    if (fclose(out) != 0 || werr) {
         fprintf(stderr, "yah264: error writing stats file '%s'\n", out_path);
         return -1;
     }

@@ -16070,6 +16070,18 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
  * thing this design forbids. */
         if (e->rcp_on && off == 0)
             rcp_flush_all(e);
+        /* every record is written by now, and this is the last call with a
+         * return value: a stats file the disk refused (full, or past the
+         * file-size limit) fails the encode here instead of leaving a plan
+         * with records missing */
+        if (off == 0 && e->tp_fp) {
+            int err = fflush(e->tp_fp) != 0 ? errno : 0;
+            if (err || ferror(e->tp_fp)) {
+                fprintf(stderr, "yah264: cannot write stats file '%s' (%s)\n",
+                        e->param.rc.stats, err ? strerror(err) : "a write failed");
+                return -1;
+            }
+        }
         *count = e->nal_count;
         return (int)off;
     }
@@ -16914,8 +16926,14 @@ void yah264_encoder_close(yah264_encoder_t *e)
     ntp_pool_destroy(e->pool);
     if (e->rcp_on)
         rcp_flush_all(e);           /* commit any filled tail (pass-1 stat lines) */
-    if (e->tp_fp)
-        fclose(e->tp_fp);
+    /* close has no return value to fail with; a write that failed before
+     * was said by the flush */
+    if (e->tp_fp) {
+        int said = ferror(e->tp_fp);
+        if (fclose(e->tp_fp) != 0 && !said)
+            fprintf(stderr, "yah264: error closing stats file '%s' (%s)\n",
+                    e->param.rc.stats, strerror(errno));
+    }
     free(e->tp_stats);
     free(e->tp_cost);
     free(e->tp_qrec);

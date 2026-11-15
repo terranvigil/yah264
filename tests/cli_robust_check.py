@@ -23,8 +23,10 @@ status and what it says on stderr:
   - every pass refuses a stats file that is also the output or the recon,
     by name, through a symlink or as the standard output, and leaves it as
     it was.
+  - a two-pass whose stats file can't be written (a file-size limit stands
+    in for a full disk) fails, and pass 3 leaves its file as it was.
 """
-import os, shlex, signal, subprocess, sys, tempfile, time
+import os, resource, shlex, signal, subprocess, sys, tempfile, time
 
 WRAP = shlex.split(os.environ.get("YAH264_WRAP", ""))
 LIMIT = 600 if WRAP else 60
@@ -206,6 +208,46 @@ def stats_is_output(enc, tmp):
           f"rc {rc}: {err.strip()[-200:]}")
 
 
+def run_capped(enc, args, size):
+    """the encoder with no file allowed past size bytes: a write past it
+    fails as a full disk's would (EFBIG, SIGXFSZ ignored)"""
+    def cap():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (size, size))
+    p = subprocess.run(WRAP + [enc, "--no-progress"] + args, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, timeout=LIMIT, preexec_fn=cap)
+    return p.returncode, p.stderr.decode(errors="replace")
+
+
+def stats_unwritable(enc, tmp):
+    d = os.path.join(tmp, "full")
+    os.makedirs(d)
+    clip, st = os.path.join(d, "s.y4m"), os.path.join(d, "s.stats")
+    write_clip(clip)
+    base = ["--input-y4m", clip, "--bitrate", "300", "--keyint", "4", "-o", os.devnull]
+    serial = ["--threads", "1", "--dump-recon", os.devnull]
+    for name, extra in (("threads 1", ["--threads", "1"]), ("threads 3", ["--threads", "3"]),
+                        ("serial", serial)):
+        rc, err = run_capped(enc, base + extra + ["--pass", "1", "--stats", st], 100)
+        check(f"pass 1 whose stats can't be written fails, {name}",
+              rc != 0 and "cannot write stats file" in err, f"rc {rc}: {err.strip()[-300:]}")
+    # pass 3 on a file without its optional header lines: the working copy
+    # fits under the cap, and the rewrite, which writes them, doesn't
+    for name, extra in (("threads 3", ["--threads", "3"]), ("serial", serial)):
+        rc, err = run(enc, base + extra + ["--pass", "1", "--stats", st])
+        lines = open(st, "rb").read().splitlines(keepends=True)
+        with open(st, "wb") as f:
+            f.write(b"".join(l for l in lines
+                             if not l.startswith((b"#threads", b"#vbv", b"#fields"))))
+        before = open(st, "rb").read()
+        rc, err = run_capped(enc, base + ["--threads", "3", "--pass", "3", "--stats", st],
+                             len(before))
+        check(f"pass 3 whose stats can't be written keeps its file, {name}",
+              rc != 0 and open(st, "rb").read() == before and "is unchanged" in err
+              and not leftovers(d, ("s.y4m", "s.stats")),
+              f"rc {rc}, left {leftovers(d, ('s.y4m', 's.stats'))}: {err.strip()[-300:]}")
+
+
 def leftovers(d, keep):
     return sorted(set(os.listdir(d)) - set(keep))
 
@@ -363,6 +405,7 @@ def main():
         missing_stats(enc, tmp)
         fifo_stats(enc, tmp)
         stats_is_output(enc, tmp)
+        stats_unwritable(enc, tmp)
         pass3_atomic(enc, tmp)
         gop_files(enc, tmp)
     if failures:
