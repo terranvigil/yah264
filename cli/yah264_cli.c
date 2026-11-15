@@ -1742,9 +1742,10 @@ static void *gop_worker(void *arg)
         double tc0 = 0, pc0 = 0, pi0 = 0;
         if (g_gop_trace) { tc0 = gop_trace_tcpu(); gop_trace_proc(&pc0, &pi0); }
         /* a pass 1 or 3 encoder makes its GOP's stats file as it opens */
-        if (j->gop_stats) clean_hold();
+        int makes = j->gop_stats && p.rc.pass != 2;
+        if (makes) clean_hold();
         yah264_encoder_t *e = g_api->encoder_open(&p);
-        if (j->gop_stats) clean_release();
+        if (makes) clean_release();
         if (e && carry.valid) g_api->rc_import(e, &carry, carry_ahead);
         if (e && j->rc_shared) g_api->rc_share(e, j->rc_shared);
         /* Capped ABR: the GOP after this one starts from the exact occupancy
@@ -2348,7 +2349,11 @@ static void *clean_waiter(void *arg)
     if (sigwait(&g_clean_set, &sig) != 0)
         return NULL;
     atomic_store(&g_clean_dying, 1);
-    pthread_rwlock_wrlock(&g_clean_lock);       /* creates in flight finish first */
+    /* creates in flight finish first, but one stuck for seconds (a hung
+     * mount) doesn't hold the signal off for good: past that the waiter
+     * unlinks and raises anyway, and that one file may be left */
+    for (int i = 0; i < 300 && pthread_rwlock_trywrlock(&g_clean_lock) != 0; i++)
+        nanosleep(&(struct timespec){ 0, 10 * 1000 * 1000 }, NULL);
     for (clean_set_t *s = atomic_load(&g_clean); s; s = s->next)
         for (int i = 0; i < s->n; i++)
             if (s->path[i]) unlink(s->path[i]);
@@ -2431,6 +2436,12 @@ static void clean_register(char *const *paths, int n)
  * dangling one is replaced by the new file. */
 static char *g_stats_tmp, *g_stats_final, *g_stats_shown;
 static int g_stats_existed;
+
+/* True for pass 3's working copy, the one stats path that is scratch */
+static int stats_is_tmp(const char *path)
+{
+    return g_stats_tmp && path && !strcmp(path, g_stats_tmp);
+}
 
 /* the name to show for a stats path: the user's, for pass 3's working copy */
 static const char *stats_shown(const char *path)
@@ -2636,9 +2647,12 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
             return -1;
         }
     }
-    clean_hold();                       /* pass 3's is its working copy */
+    /* pass 3's is its working copy; pass 1's is the user's own, whose open
+     * may block (a FIFO) and must not hold a signal off */
+    int scratch = stats_is_tmp(out_file);
+    if (scratch) clean_hold();
     FILE *out = fopen(out_file, "w");
-    clean_release();
+    if (scratch) clean_release();
     if (!out) {
         fprintf(stderr, "yah264: cannot write stats file '%s'\n", out_path);
         return -1;
@@ -4460,9 +4474,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * a worker whose encoder_open returns NULL emits no NAL and the run used to
  * finish with status 0 and an empty file. Every worker opens with the same
  * parameters, so if this one is refused they all are. */
-    clean_hold();                       /* it rewrites pass 3's working copy */
+    int scratch = stats_is_tmp(param->rc.stats);    /* pass 3 rewrites its copy */
+    if (scratch) clean_hold();
     yah264_encoder_t *prime = g_api->encoder_open(param);
-    clean_release();
+    if (scratch) clean_release();
     if (!prime) {
         fprintf(stderr, "yah264: encoder_open failed -- these parameters were refused\n");
         tp_free_paths(gop_stats, n_gops, 1);
@@ -6911,9 +6926,10 @@ static int cli_main(int argc, char **argv)
                  "input does not carry; encode from a file\n", threads);
     }
 
-    clean_hold();                       /* pass 3 may make its working copy here */
+    int scratch = stats_is_tmp(param.rc.stats);     /* pass 3 makes or rewrites its copy */
+    if (scratch) clean_hold();
     yah264_encoder_t *enc = g_api->encoder_open_hw(&param, hw);
-    clean_release();
+    if (scratch) clean_release();
     apply_video_signal(enc);
     if (!enc) {
         fprintf(stderr, "yah264: encoder_open failed\n");

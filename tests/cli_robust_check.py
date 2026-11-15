@@ -180,6 +180,23 @@ def fifo_stats(enc, tmp):
                 rc, err = None, "hung"
             check(f"pass {p} refuses a FIFO stats file, threads {threads}",
                   rc not in (0, None) and "regular file" in err, f"rc {rc}: {err.strip()[-200:]}")
+    # pass 1 opening a FIFO nobody reads blocks, and a signal still ends it
+    for threads in ("1", "3"):
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            q = spawn(enc, ["--input-y4m", clip, "--threads", threads, "--bitrate", "300",
+                            "--pass", "1", "--stats", fifo, "-o", out])
+            try:
+                q.stdin.close()
+                time.sleep(0.5)
+                q.send_signal(sig)
+                try:
+                    rc = q.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    rc = "hung"
+            finally:
+                reap(q)
+            check(f"pass 1 blocked on a FIFO stats file ends by {sig.name}, threads {threads}",
+                  rc == -sig, f"rc {rc}")
     os.remove(fifo)
 
 
