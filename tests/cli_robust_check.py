@@ -440,6 +440,30 @@ def gop_files(enc, tmp):
               rc not in (0, "hung") and not leftovers(d, keep)
               and (name != "pass 3" or open(st, "rb").read() == plan),
               f"rc {rc}, left {leftovers(d, keep)}")
+    # with SIGPIPE ignored the write error ends the run: status 1, and no
+    # merge of the GOPs it never finished
+    for name, extra in (("pass 3", ["--pass", "3"]), ("pass 1", ["--pass", "1"])):
+        if name == "pass 3":
+            run(enc, ["--input-y4m", clip, "--pass", "1"] + args)
+        plan = open(st, "rb").read()
+        q = subprocess.Popen(WRAP + [enc, "--no-progress", "--input-y4m", clip] + piped + extra,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE,
+                             preexec_fn=lambda: signal.signal(signal.SIGPIPE, signal.SIG_IGN))
+        try:
+            q.stdout.read(1000)
+            q.stdout.close()
+            try:
+                err = q.stderr.read().decode(errors="replace")
+                rc = q.wait(timeout=LIMIT)
+            except subprocess.TimeoutExpired:
+                rc, err = "hung", ""
+        finally:
+            reap(q)
+        check(f"{name} into a closed pipe with SIGPIPE ignored exits 1",
+              rc == 1 and "stats hold" not in err and not leftovers(d, keep)
+              and (name != "pass 3" or open(st, "rb").read() == plan),
+              f"rc {rc}, left {leftovers(d, keep)}: {err.strip()[-200:]}")
 
 
 def main():
