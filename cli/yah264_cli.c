@@ -2378,9 +2378,11 @@ static void *clean_waiter(void *arg)
     _exit(128 + sig);       /* not reached: each of these ends the run by default */
 }
 
-/* a signal the parent left ignored (nohup, a background job) or blocked
- * stays that way. without the waiter thread, the signals stay as they were
- * and the cleanup is the normal exit's only */
+/* only a signal still at its default is taken: one the parent left ignored
+ * (nohup, a background job) or blocked stays that way, and one with a
+ * handler already (a profiler's SIGPROF, set up before main) keeps it.
+ * without the waiter thread, the signals stay as they were and the cleanup
+ * is the normal exit's only */
 static void clean_start(void)
 {
     sigset_t cur;
@@ -2388,8 +2390,8 @@ static void clean_start(void)
     pthread_sigmask(SIG_BLOCK, NULL, &cur);
     for (size_t i = 0; i < sizeof g_clean_sigs / sizeof *g_clean_sigs; i++) {
         struct sigaction old;
-        if (sigaction(g_clean_sigs[i], NULL, &old) == 0 && old.sa_handler != SIG_IGN
-            && !sigismember(&cur, g_clean_sigs[i]))
+        if (sigaction(g_clean_sigs[i], NULL, &old) == 0 && old.sa_handler == SIG_DFL
+            && !(old.sa_flags & SA_SIGINFO) && !sigismember(&cur, g_clean_sigs[i]))
             sigaddset(&g_clean_set, g_clean_sigs[i]);
     }
     int any = 0;
