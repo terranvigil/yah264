@@ -99,3 +99,11 @@ if rc_python.found()
     args : [files('narrow_check.py'), yah264_cli_exe],
     timeout : 300)
 endif
+
+# --ref 15 and 16 with flat B: P frames keep all 15 references the SPS
+# declares, and a B's list 0 stops at 14 because its future anchor holds a slot
+if rc_python.found()
+  test('refwindow', rc_python,
+    args : [files('refwindow_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif
