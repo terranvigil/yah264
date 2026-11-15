@@ -2499,9 +2499,12 @@ static int stats_tmp_open(const char *path)
     int ok = 1;
     err = 0;
     if (!existed) {
-        /* the encoder finds no file, warns, and writes the copy from scratch */
+        /* the encoder finds no file, warns, and writes the copy from scratch;
+         * its warning names the copy, so say whose it is */
         close(fd);
         unlink(tmp);
+        fprintf(stderr, "yah264: no stats file '%s': pass 3 writes it through the working "
+                "copy '%s' the warning below names\n", path, tmp);
     } else {
         /* the file that replaces the stats file keeps its permissions */
         fchmod(fd, sst.st_mode & 07777);

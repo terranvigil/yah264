@@ -389,7 +389,8 @@ def pass3_atomic(enc, tmp):
                             "--keyint", "4", "--pass", "3", "--stats", none, "-o", out])
         check(f"failed pass 3 with no stats file makes none, threads {threads}",
               rc != 0 and not os.path.exists(none) and not leftovers(d, keep_l)
-              and "no '%s' was made" % none in err,
+              and "no '%s' was made" % none in err
+              and "no stats file '%s': pass 3 writes it" % none in err,
               f"rc {rc}, left {leftovers(d, keep_l)}: {err.strip()[-200:]}")
     rc, err = run(enc, ["--input-y4m", clip, "--threads", "1", "--bitrate", "300",
                         "--keyint", "4", "--pass", "3", "--stats", none, "-o", out])
