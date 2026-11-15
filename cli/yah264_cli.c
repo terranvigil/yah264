@@ -1922,7 +1922,11 @@ static void *y4m_reader(void *arg)
         int len = 0;
         if (!g_raw_input) {
             len = read_line(r->in, line, sizeof(line));
-            if (len < 0) break;                         /* EOF */
+            if (len == -1) break;                       /* EOF */
+            if (len < 0) {                              /* a cut-off header */
+                read_fail_report(RP_SHORT, 0, n);
+                reader_fail(j); return NULL;
+            }
             if (strncmp(line, "FRAME", 5) != 0) {
                 fprintf(stderr, "yah264: expected FRAME header at frame %ld\n",
                         n + g_seek_frames);
@@ -1990,7 +1994,7 @@ static void *y4m_reader(void *arg)
 
     if (r->verify_eof) {
         int more = g_raw_input ? (fgetc(r->in) != EOF)
-                               : (read_line(r->in, line, sizeof(line)) >= 0);
+                               : (read_line(r->in, line, sizeof(line)) != -1);
         if (more) {
             fprintf(stderr, "yah264: input has more frames than its length implied "
                     "(read through frame %ld)\n", n - 1 + g_seek_frames);
@@ -2112,7 +2116,7 @@ static void *y4m_reader_seek(void *arg)
     if (!aborted && r->verify_eof) {
         int more = fseeko(r->in, r->base + (off_t)((uint64_t)r->stop_at * r->rec), SEEK_SET) != 0 ||
                    (g_raw_input ? (fgetc(r->in) != EOF)
-                                : (read_line(r->in, line, sizeof(line)) >= 0));
+                                : (read_line(r->in, line, sizeof(line)) != -1));
         if (more) {
             fprintf(stderr, "yah264: input has more frames than its length implied "
                     "(read through frame %ld)\n", r->stop_at - 1 + g_seek_frames);
@@ -2893,7 +2897,11 @@ static int scan_frame_header(FILE *in, int n, int hdr_len)
     }
     char line[512];
     int len = read_line(in, line, sizeof line);
-    if (len < 0) return 0;
+    if (len == -1) return 0;
+    if (len < 0) {
+        fprintf(stderr, "yah264: short read on frame %ld\n", n + g_seek_frames);
+        return -1;
+    }
     if (strncmp(line, "FRAME", 5) != 0) {
         fprintf(stderr, "yah264: expected FRAME header at frame %ld\n", n + g_seek_frames);
         return -1;
@@ -4332,12 +4340,15 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
 }
 
 /* Read one newline-terminated header line (Y4M stream or frame header) into buf.
- * Returns line length excluding the newline, or -1 on EOF/error. */
+ * Returns line length excluding the newline, -1 on EOF/error before any byte,
+ * or -2 when the input ends partway through a line: a frame header cut short
+ * is a truncated file, not a clean end. */
 static int read_line(FILE *f, char *buf, int cap)
 {
-    int n = 0;
+    int n = 0, any = 0;
     int c;
     while ((c = fgetc(f)) != EOF) {
+        any = 1;
         if (c == '\n') {
             buf[n] = '\0';
             return n;
@@ -4345,7 +4356,8 @@ static int read_line(FILE *f, char *buf, int cap)
         if (n < cap - 1)
             buf[n++] = (char)c;
     }
-    return -1;
+    buf[n] = '\0';
+    return any ? -2 : -1;
 }
 
 /* --- the serial path's reader ---------------------------------------------
@@ -4362,7 +4374,9 @@ static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
         if (c == EOF) return 0;
         ungetc(c, in);
     } else {
-        if (read_line(in, line, cap) < 0) return 0;
+        int len = read_line(in, line, cap);
+        if (len == -1) return 0;
+        if (len < 0) return -2;                 /* a cut-off header is a short read */
         if (strncmp(line, "FRAME", 5) != 0) return -1;
     }
     int rp = read_planes3(in, y, u, v, y_size, c_size, bad);
