@@ -57,8 +57,9 @@ def run(enc, args, stdin=None, stdout=subprocess.PIPE):
 
 
 # the signals a two-pass removes its scratch files on
-SIGS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGPIPE,
-        signal.SIGALRM, signal.SIGXCPU, signal.SIGXFSZ)
+SIGS = tuple(getattr(signal, n) for n in (
+    "SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT", "SIGPIPE", "SIGALRM", "SIGXCPU", "SIGXFSZ",
+    "SIGUSR1", "SIGUSR2", "SIGVTALRM", "SIGPROF", "SIGEMT", "SIGSYS") if hasattr(signal, n))
 
 
 def spawn(enc, args, stdout=subprocess.DEVNULL):

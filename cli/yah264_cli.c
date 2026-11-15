@@ -2324,18 +2324,30 @@ static int tp_split_vbv(const yah264_param_t *param)
  * them: it takes g_clean_lock for writing, unlinks every registered path and
  * re-raises with the default action. A thread that makes a scratch file holds
  * the lock for reading across the create (clean_hold), so each file is made
- * before the unlink or not at all. With them blocked, a write to a closed
- * pipe or past the file-size limit fails with EPIPE or EFBIG instead of
- * raising SIGPIPE or SIGXFSZ, and the run ends through its write error; the
- * same signals sent by another process end it here. */
+ * before the unlink or not at all. A write to a closed pipe or past the
+ * file-size limit raises SIGPIPE or SIGXFSZ: macOS sends it to the process,
+ * so the waiter takes it and the run ends by that signal; a system that
+ * sends it to the writing thread leaves it pending there, the write fails
+ * with EPIPE or EFBIG, and the run ends through its write error. */
 typedef struct clean_set {
     struct clean_set *next;
     int n;
     char **path;
 } clean_set_t;
 
+/* every signal whose default ends the run, but the crashes (SIGABRT,
+ * SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP): a crashed run's state isn't one
+ * to run cleanup code in */
 static const int g_clean_sigs[] = { SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGPIPE,
-                                    SIGALRM, SIGXCPU, SIGXFSZ };
+                                    SIGALRM, SIGXCPU, SIGXFSZ, SIGUSR1, SIGUSR2,
+                                    SIGVTALRM, SIGPROF,
+#ifdef SIGEMT
+                                    SIGEMT,
+#endif
+#ifdef SIGSYS
+                                    SIGSYS,
+#endif
+                                  };
 static sigset_t g_clean_set;
 static pthread_rwlock_t g_clean_lock = PTHREAD_RWLOCK_INITIALIZER;
 static atomic_int g_clean_dying;
