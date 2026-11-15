@@ -1330,6 +1330,9 @@ typedef struct {
  * gop_cons[g] the next one its worker will take. */
     int seek_rd, readahead;
     int *gop_rd, *gop_cons;
+    /* wait_at[w]: the frame worker w is blocked on, -1 when it isn't. Only
+     * the seek reader keeps it, for its stall check (seek_stalled) */
+    int *wait_at;
     /* bumped when the schedule is published: the seek reader starts on
      * display order, and its cursor indexes whichever order is current */
     int order_gen;
@@ -1614,10 +1617,12 @@ static void *gop_worker(void *arg)
  * three GOPs at 0, 5.2 and 19.4 s. */
         while (!j->abort_ && !fs_ready(j, start) && !j->eof) {
             j->waiting++;
+            if (j->wait_at) j->wait_at[a->wid] = start;
             pthread_cond_broadcast(&j->cv_space);
             pthread_cond_wait(&j->cv_ready, &j->lock);
             j->waiting--;
         }
+        if (j->wait_at) j->wait_at[a->wid] = -1;
         if (j->abort_) { pthread_mutex_unlock(&j->lock); break; }
         /* input ended short. not under the seek reader, whose n_read is the
          * highest frame read and not a frontier: an unread GOP there is caught
@@ -1778,10 +1783,12 @@ static void *gop_worker(void *arg)
             pthread_mutex_lock(&j->lock);
             while (!j->abort_ && !fs_ready(j, i) && !j->eof) {
                 j->waiting++;
+                if (j->wait_at) j->wait_at[a->wid] = i;
                 pthread_cond_broadcast(&j->cv_space);   /* the reader may be parked */
                 pthread_cond_wait(&j->cv_ready, &j->lock);
                 j->waiting--;
             }
+            if (j->wait_at) j->wait_at[a->wid] = -1;
             int have = !j->abort_ && fs_ready(j, i) && i < end;
             /* the seek reader ends only once every GOP is read, and a short
              * read is an error there, so this frame was skipped: coding on
@@ -2052,6 +2059,19 @@ static int seek_pick(gop_job_t *j, int *lo, int *gen)
     return best;
 }
 
+/* With nothing the seek reader may read, a worker waiting on a frame that
+ * isn't there waits on a GOP that isn't a candidate (one would lead by 0 and
+ * be picked), so nothing will ever wake it. Exact, not timed: under the lock. */
+static int seek_stalled(const gop_job_t *j, int *frame)
+{
+    if (!j->wait_at) return 0;
+    for (int w = 0; w < j->nworkers; w++) {
+        int i = j->wait_at[w];
+        if (i >= 0 && !fs_ready(j, i)) { *frame = i; return 1; }
+    }
+    return 0;
+}
+
 /* The reader for a file with a known length and GOP table: see seek_rd in
  * gop_job_t. Every frame is a fixed-size record at base + i * rec, so a frame
  * is one seek away and the order frames are read in costs nothing but the
@@ -2064,13 +2084,33 @@ static void *y4m_reader_seek(void *arg)
     gop_job_t *j = r->j;
     char line[512];
     int lo = 0, gen = 0;
+    /* a fault for the stall check's test: treat this GOP as read whole
+     * without reading it, as a reader that skipped it would */
+    const char *skip_env = y264_env("Y264_DBG_SEEK_SKIP");
+    int skip = skip_env ? atoi(skip_env) : -1;
 
     for (;;) {
         pthread_mutex_lock(&j->lock);
-        int g;
-        while (!j->abort_ && (g = seek_pick(j, &lo, &gen)) == -1)
+        int g, stuck = -1;
+        while (!j->abort_ && (g = seek_pick(j, &lo, &gen)) == -1) {
+            if (seek_stalled(j, &stuck)) break;
             pthread_cond_wait(&j->cv_space, &j->lock);
+        }
+        if (stuck >= 0) {
+            pthread_mutex_unlock(&j->lock);
+            fprintf(stderr, "yah264: internal error: input frame %ld is waited on and the "
+                    "reader will never read it; stopping instead of hanging\n",
+                    stuck + g_seek_frames);
+            reader_fail(j);
+            return NULL;
+        }
         if (j->abort_ || g < 0) { pthread_mutex_unlock(&j->lock); break; }
+        if (g == skip) {
+            j->gop_rd[g] = j->gop_start[g + 1];
+            skip = -1;
+            pthread_mutex_unlock(&j->lock);
+            continue;
+        }
         int i = j->gop_rd[g];
         frame_t *slot = fs_slot(j, i);
         pthread_mutex_unlock(&j->lock);
@@ -4363,6 +4403,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
 
     job.nworkers = g;
+    if (job.seek_rd) {
+        int *wt = malloc((size_t)g * sizeof(int));
+        for (int t = 0; wt && t < g; t++) wt[t] = -1;
+        pthread_mutex_lock(&job.lock);
+        job.wait_at = wt;               /* NULL just goes without the check */
+        pthread_mutex_unlock(&job.lock);
+    }
     /* Concurrent ABR GOPs share one rate factor:
  * chained through the carry, the first W GOPs each solve their own rate
  * problem from a cold start and every later one inherits a ledger W GOPs
@@ -4506,6 +4553,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
     free(job.seg); free(tid);
     free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start); free(job.gop_rd); free(job.gop_cons); free(job.idr_run);
+    free(job.wait_at);
     job_rc_free(&job);
     pthread_mutex_destroy(&job.lock);
     pthread_cond_destroy(&job.cv_space);

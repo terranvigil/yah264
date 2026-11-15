@@ -39,6 +39,7 @@ static const char *const y264_knob_names[] = {
     "Y264_DARK_SKIPLIFT",
     "Y264_DARK_SKIPLIFT_P",
     "Y264_DARK_SURV",
+    "Y264_DBG_SEEK_SKIP",
     "Y264_DCTDEC",
     "Y264_DIAG_COLWATCH",
     "Y264_DIAG_DIRECTOK",

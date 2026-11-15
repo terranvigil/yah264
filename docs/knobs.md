@@ -71,7 +71,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_W2` | = pool present | src/encoder/encoder.c:5861 |
 | `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:3769 |
 
-## instrument (56)
+## instrument (57)
 
 | knob | default | reader |
 |---|---|---|
@@ -82,6 +82,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_BPROF` | 0 | src/encoder/mbcode.c:8193 |
 | `Y264_BPROF2` | 0 | src/encoder/mbcode.c:7653 |
 | `Y264_CABAC_TRACE` | ? | src/encoder/cabac.c:51 |
+| `Y264_DBG_SEEK_SKIP` | -1 | cli/yah264_cli.c:2093 |
 | `Y264_DIAG_COLWATCH` | 0 | src/encoder/mbcode.c:38 |
 | `Y264_DIAG_DIRECTOK` | 0 | src/encoder/mbcode.c:39 |
 | `Y264_DIAG_NOHPEL` | 0 | src/encoder/motion.c:345 |
