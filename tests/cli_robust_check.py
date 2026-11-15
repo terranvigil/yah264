@@ -293,7 +293,8 @@ def stats_unwritable(enc, tmp):
         lines = open(st, "rb").read().splitlines(keepends=True)
         with open(st, "wb") as f:
             f.write(b"".join(l for l in lines
-                             if not l.startswith((b"#threads", b"#vbv", b"#fields"))))
+                             if not l.startswith((b"#threads", b"#vbv", b"#fields",
+                                                  b"#has-end", b"#end"))))
         before = open(st, "rb").read()
         rc, err = run_capped(enc, base + ["--threads", "3", "--pass", "3", "--stats", st],
                              len(before))
@@ -301,6 +302,32 @@ def stats_unwritable(enc, tmp):
               rc != 0 and open(st, "rb").read() == before and "is unchanged" in err
               and not leftovers(d, ("s.y4m", "s.stats")),
               f"rc {rc}, left {leftovers(d, ('s.y4m', 's.stats'))}: {err.strip()[-300:]}")
+
+
+def stats_cut(enc, tmp):
+    d = os.path.join(tmp, "cut")
+    os.makedirs(d)
+    clip, st, out = (os.path.join(d, x) for x in ("s.y4m", "s.stats", "o.264"))
+    write_clip(clip)
+    base = ["--input-y4m", clip, "--threads", "1", "--bitrate", "300", "--keyint", "4",
+            "-o", out]
+    run(enc, base + ["--dump-recon", os.devnull, "--pass", "1", "--stats", st])
+    lines = open(st, "rb").read().splitlines(keepends=True)
+    # a serial plan cut at any record boundary, the end line included
+    nrec = sum(1 for l in lines if not l.startswith(b"#"))
+    bad = []
+    for n in range(len(lines) - nrec, len(lines)):
+        with open(st, "wb") as f:
+            f.write(b"".join(lines[:n]))
+        rc, err = run(enc, base + ["--pass", "2", "--stats", st])
+        if rc == 0:
+            bad.append(n)
+    check("pass 2 refuses a serial plan cut at a record boundary", not bad, f"accepted {bad}")
+    # a plan written before the end line existed still reads
+    with open(st, "wb") as f:
+        f.write(b"".join(l for l in lines if not l.startswith((b"#has-end", b"#end"))))
+    rc, err = run(enc, base + ["--pass", "2", "--stats", st])
+    check("pass 2 reads a plan with no end line", rc == 0, f"rc {rc}: {err.strip()[-200:]}")
 
 
 def leftovers(d, keep):
@@ -507,6 +534,7 @@ def main():
         fifo_stats(enc, tmp)
         stats_is_output(enc, tmp)
         stats_unwritable(enc, tmp)
+        stats_cut(enc, tmp)
         pass3_atomic(enc, tmp)
         gop_files(enc, tmp)
     if failures:

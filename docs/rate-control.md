@@ -189,8 +189,9 @@ cost as they land. `--pass 3` reads the records and writes them back from a
 real encode, so a further pass refines against it. Pass 2 needs the same
 `--frames`, `--keyint` and `--tff`/`--bff` as pass 1. It refuses a file from
 the other field mode, from another `--keyint`, with a malformed record, or
-whose sections don't hold the records their markers count, and warns of any
-pictures it codes past the file's last record. A VBV on one pass and not the
+whose sections don't hold the records their markers count, or that was cut
+short (a file pass 1 wrote ends in a line that counts its records), and
+warns of any pictures it codes past the file's last record. A VBV on one pass and not the
 other is fine: pass 2 splits as pass 1 recorded. A missing stats file isn't
 an error, but pass 2 or 3 warns that it runs without a plan and codes every
 frame at the base QP. One that is there but can't be read is refused.
