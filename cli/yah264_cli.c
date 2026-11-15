@@ -15,6 +15,10 @@
 #include <limits.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
@@ -2265,6 +2269,172 @@ static int tp_split_vbv(const yah264_param_t *param)
     return v;
 }
 
+/* --- files a signal must not leave behind ----------------------------------
+ *
+ * Scratch files this run makes beside the user's (pass 3's copy of the stats
+ * file) are removed on the way out, and a SIGINT, SIGTERM or SIGHUP is a way
+ * out too. A handler may only make async-signal-safe calls, so each set of
+ * paths is built whole before it is published, and the handler only walks
+ * the list and unlinks. Sets are never freed, so a handler running on another
+ * thread can't read a freed path; one that is already gone just fails. */
+typedef struct clean_set {
+    struct clean_set *next;
+    int n;
+    char **path;
+} clean_set_t;
+
+static _Atomic(clean_set_t *) g_clean;
+
+static void clean_on_signal(int sig)
+{
+    int saved = errno;
+    for (clean_set_t *s = atomic_load(&g_clean); s; s = s->next)
+        for (int i = 0; i < s->n; i++)
+            if (s->path[i]) unlink(s->path[i]);
+    errno = saved;
+    raise(sig);             /* SA_RESETHAND: the default action now ends the run */
+}
+
+/* publish n paths, copied, for the handler; installs it the first time.
+ * a signal the parent left ignored (nohup, a background job) stays ignored */
+static void clean_register(char *const *paths, int n)
+{
+    clean_set_t *s = malloc(sizeof *s);
+    char **p = calloc((size_t)(n > 0 ? n : 1), sizeof *p);
+    if (!s || !p) { free(s); free(p); return; }
+    for (int i = 0; i < n; i++) p[i] = paths[i] ? strdup(paths[i]) : NULL;
+    s->n = n; s->path = p;
+    s->next = atomic_load(&g_clean);
+    while (!atomic_compare_exchange_weak(&g_clean, &s->next, s))
+        ;
+    static int installed;
+    if (installed) return;
+    installed = 1;
+    static const int sigs[] = { SIGINT, SIGTERM, SIGHUP };
+    for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) {
+        struct sigaction old, sa;
+        if (sigaction(sigs[i], NULL, &old) != 0 || old.sa_handler == SIG_IGN) continue;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = clean_on_signal;
+        sa.sa_flags = SA_RESETHAND;
+        sigemptyset(&sa.sa_mask);
+        sigaction(sigs[i], &sa, NULL);
+    }
+}
+
+/* Pass 3 rewrites the stats file it reads, so one cut short would leave a
+ * plan cut short behind it. It reads and rewrites a working copy beside the
+ * file instead, and the copy replaces the file only when the run ends with 0;
+ * any other end removes it and leaves the file as it was, or absent. When
+ * --stats is a symlink to a file, the copy sits beside the target, so the
+ * rename lands on it and the link keeps pointing at the new records; a
+ * dangling one is replaced by the new file. */
+static char *g_stats_tmp, *g_stats_final, *g_stats_shown;
+static int g_stats_existed;
+
+/* the name to show for a stats path: the user's, for pass 3's working copy */
+static const char *stats_shown(const char *path)
+{
+    return g_stats_tmp && path && !strcmp(path, g_stats_tmp) ? g_stats_shown : path;
+}
+
+static int stats_tmp_open(const char *path)
+{
+    /* a missing file is fine: pass 3 then runs without a plan and writes one */
+    char *final = realpath(path, NULL);
+    int existed = final != NULL;
+    if (!final && errno != ENOENT) {
+        fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n", path, strerror(errno));
+        return -1;
+    }
+    if (!final && !(final = strdup(path))) return -1;
+    FILE *in = NULL;
+    struct stat sst;
+    if (existed && (!(in = fopen(final, "rb")) || fstat(fileno(in), &sst) != 0)) {
+        fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n", path, strerror(errno));
+        if (in) fclose(in);
+        free(final);
+        return -1;
+    }
+    size_t n = strlen(final) + 16;
+    char *tmp = malloc(n);
+    if (!tmp) { if (in) fclose(in); free(final); return -1; }
+    snprintf(tmp, n, "%s.p3tmp.XXXXXX", final);
+    /* mkstemp names the copy only as it makes it, so hold the signals that
+     * clean up until the name is registered */
+    sigset_t hold, was;
+    sigemptyset(&hold);
+    sigaddset(&hold, SIGINT); sigaddset(&hold, SIGTERM); sigaddset(&hold, SIGHUP);
+    pthread_sigmask(SIG_BLOCK, &hold, &was);
+    int fd = mkstemp(tmp);
+    int err = errno;
+    if (fd >= 0) clean_register(&tmp, 1);
+    pthread_sigmask(SIG_SETMASK, &was, NULL);
+    if (fd < 0) {
+        fprintf(stderr, "yah264: cannot make pass 3's working copy of '%s' beside it (%s)\n",
+                path, strerror(err));
+        if (in) fclose(in);
+        free(final); free(tmp);
+        return -1;
+    }
+    int ok = 1;
+    err = 0;
+    if (!existed) {
+        /* the encoder finds no file, warns, and writes the copy from scratch */
+        close(fd);
+        unlink(tmp);
+    } else {
+        /* the file that replaces the stats file keeps its permissions */
+        fchmod(fd, sst.st_mode & 07777);
+        FILE *out = fdopen(fd, "wb");
+        char buf[65536];
+        size_t got;
+        ok = out != NULL;
+        while (ok && (got = fread(buf, 1, sizeof buf, in)) > 0)
+            if (fwrite(buf, 1, got, out) != got) { ok = 0; err = errno; }
+        if (ok && ferror(in)) { ok = 0; err = errno; }
+        if (!out) { err = errno; close(fd); }
+        else if (fclose(out) != 0 && ok) { ok = 0; err = errno; }
+        fclose(in);
+    }
+    if (!ok) {
+        fprintf(stderr, "yah264: cannot copy '%s' to pass 3's working copy '%s' (%s)\n",
+                path, tmp, strerror(err));
+        unlink(tmp);
+        free(final); free(tmp);
+        return -1;
+    }
+    g_stats_tmp = tmp;
+    g_stats_final = final;
+    g_stats_shown = strdup(path);
+    g_stats_existed = existed;
+    return g_stats_shown ? 0 : -1;
+}
+
+/* the run's end: keep pass 3's copy on success, drop it otherwise */
+static int stats_tmp_finish(int rc)
+{
+    if (!g_stats_tmp) return rc;
+    if (rc == 0 && rename(g_stats_tmp, g_stats_final) != 0) {
+        fprintf(stderr, "yah264: cannot move pass 3's working copy '%s' over '%s' (%s)\n",
+                g_stats_tmp, g_stats_shown, strerror(errno));
+        rc = 1;
+    }
+    if (rc != 0) {
+        unlink(g_stats_tmp);
+        /* the messages above may name the copy, which is gone now */
+        if (g_stats_existed)
+            fprintf(stderr, "yah264: pass 3 worked on a copy of '%s' ('%s'); '%s' is "
+                    "unchanged\n", g_stats_shown, g_stats_tmp, g_stats_shown);
+        else
+            fprintf(stderr, "yah264: pass 3 worked on '%s' for '%s'; no '%s' was made\n",
+                    g_stats_tmp, g_stats_shown, g_stats_shown);
+    }
+    free(g_stats_tmp); free(g_stats_final); free(g_stats_shown);
+    g_stats_tmp = g_stats_final = g_stats_shown = NULL;
+    return rc;
+}
+
 static char *tp_gop_path(const char *base, const char *tag, int g)
 {
     size_t n = strlen(base) + 64;
@@ -2318,11 +2488,12 @@ static int tp_stats_have_markers(const char *path)
 
 /* Concatenate the per-GOP pass-1 files into the user's stats path, in GOP
  * order, each section preceded by its marker. Returns 0 on success. */
-static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
+static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
                           const int *gstart, int n_gops, const yah264_param_t *param,
                           int split_vbv)
 {
-    FILE *out = fopen(out_path, "w");
+    const char *out_path = stats_shown(out_file);
+    FILE *out = fopen(out_file, "w");
     if (!out) {
         fprintf(stderr, "yah264: cannot write stats file '%s'\n", out_path);
         return -1;
@@ -2496,11 +2667,12 @@ static void tp_split_joins(const yah264_param_t *param, FILE **out, char (*first
  * --frames, --keyint or cut-split between the passes), which is unrecoverable
  * and must not be papered over -- positional stats applied to the wrong frames
  * is precisely the silent-garbage case this format change exists to stop. */
-static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_target,
+static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_target,
                           const int *gstart, int n_gops, int bitrate, double rps,
                           const yah264_param_t *param)
 {
-    FILE *in = fopen(in_path, "r");
+    const char *in_path = stats_shown(in_file);
+    FILE *in = fopen(in_file, "r");
     if (!in) {
         fprintf(stderr, "yah264: cannot read stats file '%s'\n", in_path);
         return -1;
@@ -3890,7 +4062,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 if (sr == -1)       /* -2 is out of memory, already said */
                     fprintf(stderr, "yah264: pass %d cannot use '%s' (the line above says "
                             "why): it was damaged, or a pass 1 with other options wrote it\n",
-                            param->rc.pass, param->rc.stats);
+                            param->rc.pass, stats_shown(param->rc.stats));
                 tp_free_paths(gop_stats, n_gops, 1);
                 free(gop_target);
                 pthread_mutex_lock(&job.lock);
@@ -4899,7 +5071,7 @@ static int refuse_ignored_knobs(void)
 }
 #endif
 
-int main(int argc, char **argv)
+static int cli_main(int argc, char **argv)
 {
     const char *in_path = NULL;
     const char *out_path = "-";
@@ -5654,6 +5826,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --stats '%s' isn't a regular file, and --pass %d reads "
                 "it more than once\n", stats_path, pass);
         return 1;
+    }
+    /* stat'ed regular above, when it's there */
+    if (pass == 3) {
+        if (stats_tmp_open(stats_path) != 0) return 1;
+        stats_path = g_stats_tmp;
     }
 
     FILE *in = (!strcmp(in_path, "-")) ? stdin : fopen(in_path, "rb");
@@ -6746,6 +6923,7 @@ done:
         g_api->encoder_close(enc);
         if (out != stdout) fclose(out); else fflush(out);
         if (recon) fclose(recon);
+        stats_tmp_finish(rc ? rc : 1);
         fflush(stderr);
         _exit(rc ? rc : 1);
     }
@@ -6757,4 +6935,9 @@ done:
     if (out != stdout) fclose(out);
     if (recon) fclose(recon);
     return rc;
+}
+
+int main(int argc, char **argv)
+{
+    return stats_tmp_finish(cli_main(argc, argv));
 }
