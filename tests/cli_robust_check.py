@@ -350,6 +350,19 @@ def stats_cut(enc, tmp):
         if rc == 0:
             bad.append(n)
     check("pass 2 refuses a serial plan cut at a record boundary", not bad, f"accepted {bad}")
+    # a threaded plan (GOP markers) read on one encoder, cut at each line
+    tst = os.path.join(d, "t.stats")
+    run(enc, ["--input-y4m", clip, "--threads", "1", "--bitrate", "300", "--keyint", "4",
+              "-o", out, "--pass", "1", "--stats", tst])
+    tlines = open(tst, "rb").read().splitlines(keepends=True)
+    bad = []
+    for n in range(1, len(tlines)):
+        with open(st, "wb") as f:
+            f.write(b"".join(tlines[:n]))
+        rc, err = run(enc, base + ["--dump-recon", os.devnull, "--pass", "2", "--stats", st])
+        if rc == 0:
+            bad.append(n)
+    check("one encoder refuses a marked plan cut at any line", not bad, f"accepted {bad}")
     # a plan written before the end line existed still reads
     with open(st, "wb") as f:
         f.write(b"".join(l for l in lines if not l.startswith((b"#has-end", b"#end"))))

@@ -2728,6 +2728,10 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
     /* and what the split was cut by, which pass 2 splits by in turn */
     fprintf(out, "#keyint %d\n#vbv %d\n#fields %d\n", param->keyint, split_vbv,
             param->interlaced ? 1 : 0);
+    /* and that it ends in a count of its records: a reader on one encoder
+     * has no GOP schedule to miss a dropped tail section against */
+    fputs("#has-end 1\n", out);
+    long total = 0;
     for (int g = 0; g < n_gops; g++) {
         FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
         char ln[256];
@@ -2738,10 +2742,12 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
         }
         fprintf(out, TP_MARKER " %d %d %d %d\n", g, gstart[g], gstart[g + 1],
                 (gstart[g + 1] - gstart[g]) * fields);
+        total += (long)(gstart[g + 1] - gstart[g]) * fields;
         while (fgets(ln, sizeof ln, in))
             if (ln[0] != '#' && ln[0] != '\n' && ln[0] != '\0') fputs(ln, out);
         fclose(in);
     }
+    fprintf(out, "#end %ld\n", total);
     /* a write that failed early can leave a later flush, and fclose, clean */
     int werr = fflush(out) != 0 || ferror(out);
     if (fclose(out) != 0 || werr) {

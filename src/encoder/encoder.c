@@ -5535,11 +5535,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 double mcplx = 64.0 * (double)(1 << Y264_BIT_DEPTH) * msamp + 1.0e6;
                 int split = 0;      /* a file the GOP splitter wrote */
                 int first = 1;
-                /* a file this encoder wrote whole ends in "#end <records>",
-                 * and says so up top; one without the promise (an older
-                 * one, or the GOP merge's) is read as before */
+                /* a file this encoder or the CLI's GOP merge wrote whole
+                 * ends in "#end <records>" and says so up top; one without
+                 * the promise (an older one, or a merge from before the
+                 * line) is read as before */
                 int has_end = 0, end_at = -1;
                 long end_n = -1;
+                /* the GOP section being read: where its records start and
+                 * how many its marker counts, as the CLI's splitter checks */
+                int sec_at = -1, sec_want = 0, sec_bad = 0;
                 while (fgets(ln, sizeof ln, fp)) {
                     int mg, ms, me, mr;
                     if (!strncmp(ln, "#has-end", 8))
@@ -5555,6 +5559,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                             yah264_encoder_close(e);
                             return NULL;
                         }
+                        if (sec_at >= 0 && e->tp_n - sec_at != sec_want) {
+                            sec_bad = 1;
+                            break;
+                        }
+                        sec_at = e->tp_n;
+                        sec_want = mr;
                         ngop++;
                         mframes += me - ms;
                     }
@@ -5644,6 +5654,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 if (bad_rec) {
                     fprintf(stderr, "yah264: stats file '%s' has a malformed record after "
                             "%d: it was damaged, or isn't one this encoder wrote\n", param->rc.stats, e->tp_n);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
+                /* a section short of the records its marker counts (a merged
+                 * plan cut at a record boundary), the last one included */
+                if (sec_bad || (sec_at >= 0 && e->tp_n - sec_at != sec_want)) {
+                    fprintf(stderr, "yah264: stats file '%s' holds %d records for GOP %d, its "
+                            "marker says %d: it was cut short or damaged\n", param->rc.stats,
+                            e->tp_n - sec_at, ngop - 1, sec_want);
                     yah264_encoder_close(e);
                     return NULL;
                 }
