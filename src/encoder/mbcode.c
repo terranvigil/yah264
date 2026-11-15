@@ -763,6 +763,49 @@ static inline int mb_slice_top_row(const y264_frame_t *f, int mby)
     return mby == (f->slice_y0 ? f->slice_y0[mby] : 0);
 }
 
+/* where a row snapshots est_ctx for the row below: MB 1, or MB 0 on a picture
+ * one macroblock wide, where column 1 doesn't exist and the row below would
+ * seed from a snapshot nobody wrote */
+static inline int wpp_snap_col(const y264_frame_t *f)
+{
+    return f->wmb > 1 ? 1 : 0;
+}
+
+/* dev builds check the snapshot's meaning, not only wavefront == serial: one
+ * macroblock wide, a row's seed must be the state the row above ended in, so
+ * each row's end state is kept apart from the snapshot (the wavefront's wpp
+ * slot carries it as a second hmb rows) and compared at the next row's seed */
+#if Y264_DEV_KNOBS
+#define WPP_ROWS 2
+#define WPP_END(wpp, hmb, r) ((wpp)[(hmb) + (r)])
+#else
+#define WPP_ROWS 1
+#define WPP_END(wpp, hmb, r) ((uint8_t *)NULL)
+#endif
+static inline void wpp_end_save(const y264_frame_t *f, uint8_t *end, const uint8_t *est)
+{
+#if Y264_DEV_KNOBS
+    if (f->wmb == 1)
+        memcpy(end, est, Y264_CABAC_CTX);
+#else
+    (void)f; (void)end; (void)est;
+#endif
+}
+static inline void wpp_seed_check(const y264_frame_t *f, int r, const uint8_t *seed,
+                                  const uint8_t *end)
+{
+#if Y264_DEV_KNOBS
+    if (f->wmb == 1 && r > 0 && !mb_slice_top_row(f, r) &&
+        memcmp(seed, end, Y264_CABAC_CTX)) {
+        fprintf(stderr, "yah264: row %d's rate estimate isn't seeded from the "
+                "state the row above ended in\n", r);
+        abort();
+    }
+#else
+    (void)f; (void)r; (void)seed; (void)end;
+#endif
+}
+
 static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby);
 static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
 {
@@ -9301,7 +9344,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
  * pass 2 emits owning the engine ctx. QP chain advanced in pass 1 (for the
  * RD trials), rewound, re-driven in pass 2. est_commit_b clobbers bc->ctx, so
  * restore slice-init before pass 2. The WPP estimator is BD-gated. */
-        uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
+        uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX], wpp_end[Y264_CABAC_CTX];
         struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(bc->est_ctx, bc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
@@ -9314,6 +9357,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                 memcpy(bc->est_ctx,
                                           mb_slice_top_row(f, mby) ? slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
+                wpp_seed_check(f, mby, bc->est_ctx, wpp_end);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
@@ -9339,7 +9383,8 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     }
                     long eb = est_commit_b(f, mbx, mby, r);
                     if (f->rb) f->rb[mby] += eb;
-                    if (mbx == 1) memcpy(wpp_ctx, bc->est_ctx, Y264_CABAC_CTX);
+                    if (mbx == wpp_snap_col(f)) memcpy(wpp_ctx, bc->est_ctx, Y264_CABAC_CTX);
+                    wpp_end_save(f, wpp_end, bc->est_ctx);
                 }
             }
         /* serial QPY-chain resolve */
@@ -12313,7 +12358,7 @@ static int b_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam, int
 
 /* W1: P-CABAC pass-1a on the wavefront. Adds to the P pattern the WPP row-private
  * RD estimator: each worker has a private cabac (ctx/est_ctx), each row seeds its
- * est_ctx from the row above's MB-1 snapshot (wpp[r-1], captured at that MB under
+ * est_ctx from the row above's snapshot column (wpp_snap_col; wpp[r-1], captured under
  * the wavefront lag) and advances it left-to-right via est_commit_p -- exactly the
  * serial WPP estimator, so bit-exact to it. */
 struct pcb_wf {
@@ -12323,7 +12368,7 @@ struct pcb_wf {
     struct p_mb  *recs;
     int           wmb, mlam;
     long          lam;
-    uint8_t     (*wpp)[Y264_CABAC_CTX];     /* [hmb] per-row MB-1 est_ctx snapshot */
+    uint8_t     (*wpp)[Y264_CABAC_CTX];     /* [hmb] per-row est_ctx at the snapshot column (wpp_snap_col) */
     const uint8_t *slice_ctx;
     pixel       (*snap_skip)[P_WF_SNAP];
     pixel       (*snap_inter)[P_WF_SNAP];
@@ -12360,10 +12405,13 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     }
     if (f->row_gate && c == 0)      /* staircase v3: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0)                             /* WPP: seed est_ctx from row above MB-1,
-                                             * or from slice-init at a slice start */
+    if (c == 0) {                           /* WPP: seed est_ctx from the row above's
+                                             * snapshot column (wpp_snap_col), or from
+                                             * slice-init at a slice start */
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
+        wpp_seed_check(f, r, cb->est_ctx, WPP_END(w->wpp, f->hmb, r - 1));
+    }
     f->prev_qp = predict_prev_qp(f, c, r);
     est_mb_begin(cb, c, r, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
     analyze_p_mb(f, c, r, w->mlam, w->lam, w->snap_skip[idx], w->snap_inter[idx],
@@ -12380,7 +12428,8 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     }
     long eb = est_commit_p(f, c, r, rec);   /* advance this row's est_ctx */
     if (f->rb) f->rb[r] += eb;
-    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
+    if (c == wpp_snap_col(f)) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
+    wpp_end_save(f, WPP_END(w->wpp, f->hmb, r), cb->est_ctx);
     if (f->row_done && c == w->wmb - 1) {   /* staircase: row r fully analyzed */
         wf_row_qpy_resolve(f, r, w->wmb, r == 0 ? &w->qc0 : &w->rowqc[r - 1],
                            &w->rowqc[r], REC_AT(f, w->recs, r * w->wmb));
@@ -12391,7 +12440,7 @@ static int pcb_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
+    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * WPP_ROWS * sizeof *wpp);
     struct pcb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
                         ntp_pool_slot(pool, 5, (size_t)wt * sizeof(y264_cabac_t)), recs, f->wmb,
                         mlam, lam, wpp, slice_ctx,
@@ -12443,9 +12492,11 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
     struct b_rec *rec = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0)
+    if (c == 0) {
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
+        wpp_seed_check(f, r, cb->est_ctx, WPP_END(w->wpp, f->hmb, r - 1));
+    }
     f->prev_qp = predict_prev_qp(f, c, r);
     est_mb_begin(cb, c, r, f->cf_idc);
     analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], rec);
@@ -12467,13 +12518,14 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
     }
     long eb = est_commit_b(f, c, r, rec);
     if (f->rb) f->rb[r] += eb;
-    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
+    if (c == wpp_snap_col(f)) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
+    wpp_end_save(f, WPP_END(w->wpp, f->hmb, r), cb->est_ctx);
 }
 static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
+    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * WPP_ROWS * sizeof *wpp);
     struct bcb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
                         ntp_pool_slot(pool, 5, (size_t)wt * sizeof(y264_cabac_t)), recs, f->wmb,
                         mlam, lam, wpp, slice_ctx,
@@ -12492,7 +12544,7 @@ static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
  * analyze_intra's RDOQ reads est_ctx and the I loop advances est_ctx MB by MB
  * from the live engine -- the same chain the row-private WPP estimator breaks
  * for P and B, and the same fix applies: est_ctx seeds per row from the row
- * above's MB-1 snapshot and advances left to right, so it is bit-exact to the
+ * above's snapshot column (wpp_snap_col) and advances left to right, so it is bit-exact to the
  * serial WPP form below and thread-count invariant.
  *
  * What it is worth is a scheduling number, not a work one: a 720p I frame is
@@ -12506,7 +12558,7 @@ struct icb_wf {
     y264_cabac_t    *cb;                    /* [nthreads] private cabac */
     struct intra_mb *recs;
     int              wmb;
-    uint8_t        (*wpp)[Y264_CABAC_CTX];  /* [hmb] per-row MB-1 est_ctx snapshot */
+    uint8_t        (*wpp)[Y264_CABAC_CTX];  /* [hmb] per-row est_ctx at the snapshot column (wpp_snap_col) */
     const uint8_t   *slice_ctx;
 };
 static void icb_wf_init(void *ctx, int idx)
@@ -12525,10 +12577,13 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     struct intra_mb *o = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)              /* staircase: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
-    if (c == 0)                             /* WPP: seed est_ctx from row above MB-1,
-                                             * or from slice-init at a slice start */
+    if (c == 0) {                           /* WPP: seed est_ctx from the row above's
+                                             * snapshot column (wpp_snap_col), or from
+                                             * slice-init at a slice start */
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
+        wpp_seed_check(f, r, cb->est_ctx, WPP_END(w->wpp, f->hmb, r - 1));
+    }
     mb_qp_pre(f, c, r);
     f->prev_qp = predict_prev_qp(f, c, r);
     est_mb_begin(cb, c, r, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
@@ -12536,13 +12591,14 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     author_intra_cabac(f, c, r, o);
     long eb = est_commit_i(f, c, r, o);     /* advance this row's est_ctx */
     if (f->rb) f->rb[r] += eb;
-    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
+    if (c == wpp_snap_col(f)) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
+    wpp_end_save(f, WPP_END(w->wpp, f->hmb, r), cb->est_ctx);
 }
 static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
                       const uint8_t *slice_ctx)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
+    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * WPP_ROWS * sizeof *wpp);
     struct icb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
                         ntp_pool_slot(pool, 5, (size_t)wt * sizeof(y264_cabac_t)),
                         recs, f->wmb, wpp, slice_ctx };
@@ -12776,7 +12832,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         for (int i = 0; i < f->wmb * f->hmb; i++) f->mbcbp[i] = -1;
         struct intra_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
-        uint8_t wpp_ctx[Y264_CABAC_CTX];
+        uint8_t wpp_ctx[Y264_CABAC_CTX], wpp_end[Y264_CABAC_CTX];
         memcpy(c->est_ctx, c->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
         memcpy(j->slice_ctx, c->ctx, Y264_CABAC_CTX);
         memcpy(wpp_ctx, c->ctx, Y264_CABAC_CTX);
@@ -12787,6 +12843,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                 memcpy(c->est_ctx,
                                           mb_slice_top_row(f, mby) ? j->slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
+                wpp_seed_check(f, mby, c->est_ctx, wpp_end);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     struct intra_mb *o = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
@@ -12798,7 +12855,8 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     author_intra_cabac(f, mbx, mby, o);
                     long eb = est_commit_i(f, mbx, mby, o);  /* advance est_ctx for the next MB */
                     if (f->rb) f->rb[mby] += eb;
-                    if (mbx == 1) memcpy(wpp_ctx, c->est_ctx, Y264_CABAC_CTX);
+                    if (mbx == wpp_snap_col(f)) memcpy(wpp_ctx, c->est_ctx, Y264_CABAC_CTX);
+                    wpp_end_save(f, wpp_end, c->est_ctx);
                 }
             }
         /* serial QPY-chain resolve */
@@ -12877,7 +12935,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * matching what the pass-2 emit codes. Since est_commit_p writes pc->ctx, it
  * is restored to slice-init before pass 2. The WPP estimator was BD-gated,
  * not byte-identical, against tracking the live ctx. */
-        uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
+        uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX], wpp_end[Y264_CABAC_CTX];
         struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(pc->est_ctx, pc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
@@ -12890,6 +12948,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                 memcpy(pc->est_ctx,
                                           mb_slice_top_row(f, mby) ? slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
+                wpp_seed_check(f, mby, pc->est_ctx, wpp_end);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
@@ -12909,7 +12968,8 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     }
                     long eb = est_commit_p(f, mbx, mby, r);
                     if (f->rb) f->rb[mby] += eb;
-                    if (mbx == 1) memcpy(wpp_ctx, pc->est_ctx, Y264_CABAC_CTX);
+                    if (mbx == wpp_snap_col(f)) memcpy(wpp_ctx, pc->est_ctx, Y264_CABAC_CTX);
+                    wpp_end_save(f, wpp_end, pc->est_ctx);
                 }
             }
         if (!(done_1a && f->row_done)) {      /* serial QPY-chain resolve

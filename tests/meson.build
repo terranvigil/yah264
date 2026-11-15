@@ -90,3 +90,20 @@ if rc_python.found()
             meson.project_source_root() / 'tests' / 'corpus'],
     timeout : 300)
 endif
+
+# narrow and short pictures (one or two macroblocks wide, one row tall): the
+# row wavefront's rate estimate has the fewest columns to snapshot from there,
+# and a sanitizer build turns this into the out-of-range context check
+if rc_python.found()
+  test('narrow', rc_python,
+    args : [files('narrow_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif
+
+# --ref 15 and 16 with flat B: P frames keep all 15 references the SPS
+# declares, and a B's list 0 stops at 14 because its future anchor holds a slot
+if rc_python.found()
+  test('refwindow', rc_python,
+    args : [files('refwindow_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif
