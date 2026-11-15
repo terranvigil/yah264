@@ -32,11 +32,16 @@ run() { # label, args...
 }
 # synthetic odd inputs
 mk() { $FF -v error -y -f lavfi -i "testsrc2=size=$1:rate=25" -frames:v $2 -pix_fmt $3 $4; }
-mk 33x17 12 yuv420p $S/a6wd/odd33.y4m; mk 16x16 3 yuv420p $S/a6wd/t16.y4m; mk 8x8 2 yuv420p $S/a6wd/t8.y4m; mk 352x288 1 yuv420p $S/a6wd/one.y4m; mk 352x288 2 yuv420p $S/a6wd/two.y4m; mk 200x120 20 yuv422p $S/a6wd/o422.y4m; mk 200x120 20 yuv444p $S/a6wd/o444.y4m; $FF -v error -y -f lavfi -i "testsrc2=size=96x64:rate=25" -frames:v 20 -pix_fmt yuv420p10le -strict -1 $S/a6wd/o10.y4m
+mk 33x17 12 yuv420p $S/a6wd/odd33.y4m; mk 16x16 3 yuv420p $S/a6wd/t16.y4m; mk 8x8 2 yuv420p $S/a6wd/t8.y4m; mk 16x48 8 yuv420p $S/a6wd/n16x48.y4m; mk 352x288 1 yuv420p $S/a6wd/one.y4m; mk 352x288 2 yuv420p $S/a6wd/two.y4m; mk 200x120 20 yuv422p $S/a6wd/o422.y4m; mk 200x120 20 yuv444p $S/a6wd/o444.y4m; $FF -v error -y -f lavfi -i "testsrc2=size=96x64:rate=25" -frames:v 20 -pix_fmt yuv420p10le -strict -1 $S/a6wd/o10.y4m
 run "odd33 t1"        $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --threads 1 -o /dev/null
 run "odd33 t8"        $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --threads 8 -o /dev/null
 run "16x16 t4"        $Y --input-y4m $S/a6wd/t16.y4m --crf 26 --threads 4 -o /dev/null
 run "8x8 t1"          $Y --input-y4m $S/a6wd/t8.y4m --crf 26 --threads 1 -o /dev/null
+# one macroblock wide: the row wavefront's rate-estimator snapshot has only
+# column 0 to come from, and a missed one seeded the row below from unwritten
+# memory (a CABAC state past the table)
+run "16x48 t3"        $Y --input-y4m $S/a6wd/n16x48.y4m --crf 23 --threads 3 -o /dev/null
+run "16x48 10bit t3"  $Y --input-y4m $S/a6wd/n16x48.y4m --crf 23 --output-depth 10 --bframes 2 --threads 3 -o /dev/null
 run "one frame b3"    $Y --input-y4m $S/a6wd/one.y4m --crf 26 --threads 4 -o /dev/null
 run "two frames b3"   $Y --input-y4m $S/a6wd/two.y4m --crf 26 --threads 4 -o /dev/null
 run "two frames abr"  $Y --input-y4m $S/a6wd/two.y4m --bitrate 300 --threads 4 -o /dev/null

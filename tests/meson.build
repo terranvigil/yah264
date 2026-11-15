@@ -90,3 +90,12 @@ if rc_python.found()
             meson.project_source_root() / 'tests' / 'corpus'],
     timeout : 300)
 endif
+
+# narrow and short pictures (one or two macroblocks wide, one row tall): the
+# row wavefront's rate estimate has the fewest columns to snapshot from there,
+# and a sanitizer build turns this into the out-of-range context check
+if rc_python.found()
+  test('narrow', rc_python,
+    args : [files('narrow_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif
