@@ -231,6 +231,36 @@ def stats_is_output(enc, tmp):
     check("pass 1 refuses --stats and -o naming one new file",
           rc == 2 and "same file" in err and not os.path.exists(new),
           f"rc {rc}: {err.strip()[-200:]}")
+    # two new names that differ only in case, where the volume folds case
+    probe = os.path.join(d, "fold")
+    open(probe, "w").close()
+    if os.path.exists(os.path.join(d, "FOLD")):
+        rc, err = run(enc, base + ["--pass", "1", "--stats", os.path.join(d, "CS.264"),
+                                   "-o", os.path.join(d, "cs.264")])
+        check("pass 1 refuses --stats and -o differing only in case",
+              rc == 2 and "same file" in err and not os.path.exists(os.path.join(d, "cs.264")),
+              f"rc {rc}: {err.strip()[-200:]}")
+    os.remove(probe)
+    # the input, as the stats file, the output or the recon: refused, untouched
+    src = open(clip, "rb").read()
+    for p in ("0", "1", "3"):
+        for name, extra in (("--stats", ["-o", out, "--stats", clip]),
+                            ("-o", ["-o", clip, "--stats", st]),
+                            ("--dump-recon", ["-o", out, "--stats", st, "--dump-recon", clip])):
+            if p == "0" and name == "--stats":
+                continue
+            args = base + extra + (["--pass", p] if p != "0" else [])
+            if p == "0":
+                args = [a for a in args if a not in ("--stats", st)]
+            rc, err = run(enc, args)
+            check(f"{'no pass' if p == '0' else 'pass ' + p} refuses {name} naming the input",
+                  rc == 2 and "the input" in err and open(clip, "rb").read() == src,
+                  f"rc {rc}: {err.strip()[-200:]}")
+    # character devices are never one file: /dev/null as both
+    rc, err = run(enc, base + ["--pass", "1", "--stats", os.devnull, "-o", os.devnull,
+                               "--dump-recon", os.devnull])
+    check("pass 1 takes /dev/null as the stats file and the output", rc == 0,
+          f"rc {rc}: {err.strip()[-200:]}")
 
 
 def run_capped(enc, args, size):
