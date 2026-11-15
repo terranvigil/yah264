@@ -3816,6 +3816,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int hdr_len = -1;
     long nknown = y264_exact_frames(in, payload, &hdr_len);
     if (nknown > 0 && max_frames > 0 && nknown > max_frames) nknown = max_frames;
+    /* frame indices are ints from here on, and a count past one (a sparse
+     * or hand-made file) would wrap in them */
+    if (nknown > INT_MAX) {
+        if (max_frames > 0)
+            fprintf(stderr, "yah264: --frames %ld is more than the %d frames one encode "
+                    "takes\n", (long)max_frames, INT_MAX);
+        else
+            fprintf(stderr, "yah264: the input's length implies %ld frames, more than the %d "
+                    "one encode takes; give --frames\n", nknown, INT_MAX);
+        return 1;
+    }
 
     /* --open-gop is one instance for the whole encode, so the GOP table is
  * {0, n} and nothing here works without n. Without a length (a pipe) the
