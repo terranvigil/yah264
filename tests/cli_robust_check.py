@@ -10,6 +10,9 @@ status and what it says on stderr:
 
   - a Y4M that ends partway through a FRAME header is a truncated file and
     fails the way a short frame body does, on every reader path.
+  - pass 2 or 3 with no stats file warns that it runs without a plan; an
+    unreadable or empty one is refused; pass 1, 3, 2 in turn over one file
+    runs clean.
 """
 import os, shlex, subprocess, sys, tempfile
 
@@ -76,6 +79,48 @@ def truncated_header(enc, tmp):
     check("y4m whole clip", rc == 0, f"rc {rc}: {err.strip()[-200:]}")
 
 
+def missing_stats(enc, tmp):
+    clip, out = os.path.join(tmp, "s.y4m"), os.path.join(tmp, "o.264")
+    write_clip(clip)
+    st = os.path.join(tmp, "absent.stats")
+    for p in ("2", "3"):
+        for threads in ("1", "3"):
+            if os.path.exists(st):
+                os.remove(st)
+            rc, err = run(enc, ["--input-y4m", clip, "--threads", threads, "--bitrate", "300",
+                                "--pass", p, "--stats", st, "-o", out])
+            check(f"pass {p} with no stats file warns, threads {threads}",
+                  rc == 0 and "runs without a plan" in err, f"rc {rc}: {err.strip()[-200:]}")
+    # one that is there but can't be read is an error, not a missing plan
+    st = os.path.join(tmp, "locked.stats")
+    run(enc, ["--input-y4m", clip, "--threads", "1", "--bitrate", "300",
+              "--pass", "1", "--stats", st, "-o", out])
+    os.chmod(st, 0)
+    if os.access(st, os.R_OK):              # root reads it anyway
+        print("  skip unreadable stats file (running as root)")
+    else:
+        for p in ("2", "3"):
+            rc, err = run(enc, ["--input-y4m", clip, "--threads", "1", "--bitrate", "300",
+                                "--pass", p, "--stats", st, "-o", out])
+            check(f"pass {p} refuses an unreadable stats file",
+                  rc != 0 and "Permission denied" in err and "without a plan" not in err,
+                  f"rc {rc}: {err.strip()[-200:]}")
+    os.chmod(st, 0o600)
+    st = os.path.join(tmp, "empty.stats")
+    open(st, "w").close()
+    rc, err = run(enc, ["--input-y4m", clip, "--threads", "1", "--bitrate", "300",
+                        "--pass", "2", "--stats", st, "-o", out])
+    check("pass 2 with an empty stats file is refused", rc != 0 and "no records" in err,
+          f"rc {rc}: {err.strip()[-200:]}")
+    st = os.path.join(tmp, "flow.stats")
+    for threads in ("1", "3"):
+        for p in ("1", "3", "2"):
+            rc, err = run(enc, ["--input-y4m", clip, "--threads", threads, "--bitrate", "300",
+                                "--keyint", "4", "--pass", p, "--stats", st, "-o", out])
+            check(f"pass {p} in the 1-3-2 flow, threads {threads}",
+                  rc == 0 and "warning" not in err, f"rc {rc}: {err.strip()[-200:]}")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -83,6 +128,7 @@ def main():
     enc = sys.argv[1]
     with tempfile.TemporaryDirectory(prefix="y264robust.") as tmp:
         truncated_header(enc, tmp)
+        missing_stats(enc, tmp)
     if failures:
         print(f"cli_robust_check: {len(failures)} failure(s)")
         return 1

@@ -8,6 +8,7 @@
  * path and decodes bit-exact in any conformant decoder. Real intra coding
  * replaces this in Phase 1.
  */
+#include <errno.h>
 #include <limits.h>
 #include "../common/env.h"
 #include "../common/iprof.h"
@@ -5684,6 +5685,18 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
+            } else if (errno == ENOENT) {
+                /* a missing file still encodes, but with no plan the rate
+                 * goes nowhere near the target: say so */
+                fprintf(stderr, "yah264: warning: no stats file '%s': pass %d runs without "
+                        "a plan, every frame at the base QP; run pass 1 into it first\n",
+                        param->rc.stats, e->tp_pass);
+            } else {
+                /* one that is there but can't be read is not a missing plan */
+                fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n",
+                        param->rc.stats, strerror(errno));
+                yah264_encoder_close(e);
+                return NULL;
             }
             if (e->tp_pass == 3) {
                 /* Every record is in e->tp_stats by now, so truncating the file
