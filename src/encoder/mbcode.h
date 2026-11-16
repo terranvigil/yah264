@@ -242,6 +242,7 @@ typedef struct {
  * the frame's gate on the cut, set by aq_analyze. See dark_skip_lift. */
     int dark_lift;
     float dark_dg;
+    int fade;                       /* the lookahead's fade test held: no grain ramp */
     float aq_s, aq_c;               /* aq_analyze's strength and centre, for the lift's cap */
     int dl_mbx, dl_mby, dl_l;       /* dark_skip_lift's last answer */
     int clift_720;                  /* the 720p class, where the chroma probe lift applies */
@@ -521,7 +522,11 @@ void             y264_aq_floor_lift(const pixel *p, int stride, int wmb, int hmb
 int              y264_aq_grain(double mean, double var);
 void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4]);
 double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
-double           y264_aq_dark_gate(double bright_share, double grain_share);
+double           y264_aq_dark_gate(double bright_share, double grain_share, int fade);
+/* the fade test's state, one per encoder instance (so per GOP when GOPs are
+ * coded apart), fed every frame in display order with its 8-bit-scale mean */
+typedef struct { double prev; int have, dir, run; } y264_fade_t;
+int              y264_aq_fade_note(y264_fade_t *t, double mean8);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
 /* l = log2(variance + floor) on the 8-bit scale, and the factor a coded

@@ -106,6 +106,8 @@ DEFAULT_OVERRIDES = {
     "Y264_AQ_DARK_B1": "0.20",
     "Y264_AQ_DARK_S0": "0.35",
     "Y264_AQ_DARK_S1": "0.50",
+    "Y264_AQ_FADE": "0.2 (0 = off)",
+    "Y264_AQ_FADE_N": "6",
     # overrides of a public param or CLI flag: unset follows the param
     "Y264_MBT_DEPFLOOR": "= param", "Y264_ABR_TOL": "= param",
     "Y264_DARK_SKIPLIFT_P": "= Y264_DARK_SKIPLIFT / 2",
@@ -118,6 +120,7 @@ OVERRIDES = {
     # names that match the instrument pattern or the instruments catalog but
     # carry a shipped value: the env is their escape
     "Y264_B_SKIP_EXIT": "default", "Y264_PART_EARLYTERM": "default",
+    "Y264_AQ_FADE": "default",
     "Y264_MBT_BREF": "default", "Y264_MBT_PAIR_SCALE": "default",
     "Y264_MBT_BLEG_REUSE": "default", "Y264_GPQ_CONSUME": "default",
     "Y264_BSKIP_SCREEN": "default",

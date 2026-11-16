@@ -199,6 +199,7 @@ struct la_thread {
     double          ms[2];          /* chain-side TP_LOWRES/TP_LOOKME time */
 };
 static void la_th_main(void *arg);
+static int la_fade_at(const yah264_encoder_t *e, long push);
 
 /* Everything compute_mbtree needs that is NOT config, filled at the anchor's
  * own pop on the GOP driver (head = la_head, anchor already popped). Passing
@@ -2739,6 +2740,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.dark_surv = e->dark_surv;
     f.dark_lift = type == 1 ? e->dark_lift_p : e->dark_lift;
     f.dark_dg = 0.f;
+    /* push indices are 1-based display indices */
+    f.fade = la_fade_at(e, (long)e->cur_disp + 1);
     f.qp = fqp;
     f.chroma_qp = fcqp;
     f.cur_qp = fqp;
@@ -2915,9 +2918,9 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         }
         int calm = 0;                  /* the calm-gate column: that gate is removed */
         if (psy_flat_log())
-            fprintf(stderr, "psyflat: poc=%d type=%d share=%d tex=%d tdiff=%d calm=%d on=%d\n",
+            fprintf(stderr, "psyflat: poc=%d type=%d share=%d tex=%d tdiff=%d calm=%d on=%d fade=%d\n",
                     e->poc, type, share, texshare, e->cur_lr_tdiff, calm,
-                    share >= PSY_FLAT_SHARE);
+                    share >= PSY_FLAT_SHARE, f.fade);
         f.mbvar = keep;
         f.mbvar_src = &e->mbvar_src;
         if (keep) e->mbvar_src = src[0];
@@ -7138,7 +7141,7 @@ static void splat_prop(double *grid, int wmb, int hmb, int tx, int ty, double am
  * When aq_off is non-NULL the raw AQ offset (unclamped, float) is returned
  * there for folding into the combined offset. */
 static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
-                             int stride, int wmb, int hmb,
+                             int stride, int wmb, int hmb, int fade,
                              float strength, double *invq, float *aq_off)
 {
     IP_SCOPE_B(IP_MBT_INVQ);
@@ -7168,10 +7171,10 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             sum += l; sum2 += l * l;
         }
     /* the bar walk only when brightness alone doesn't already open the gate */
-    double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
-    if (means && dg < 1.0) {
+    double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0, fade);
+    if (means && dg < 1.0 && !fade) {
         y264_aq_floor_lift(pl[0], stride, wmb, hmb, vars);
-        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, wmb, hmb));
+        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, wmb, hmb), 0);
     }
     /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
  * constant instead of the frame mean, so its DC is a frame-level complexity
@@ -7200,15 +7203,18 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
  * function of the frame's pixels and the encoder's AQ constants, and every
  * buffer one frame lives in (its ring slot, a buffered-B plane, the anchor's
  * stable copy) holds the same pixels, so the frame's lookahead push index is
- * a sufficient key. key <= 0 (unknown) or a strength other than the
- * encoder's computes directly. */
+ * a sufficient key. The field also follows the frame's fade flag, which is
+ * itself a function of the push index (la_fade_at), so the key still covers
+ * it. key <= 0 (unknown) or a strength other than the encoder's computes
+ * directly. */
 
 static void mbtree_invqscale_k(yah264_encoder_t *e, long key, pixel *const *pl,
                                int stride, int wmb, int hmb, float strength,
                                double *invq, float *aq_off)
 {
+    int fade = la_fade_at(e, key);
     if (key <= 0 || strength != e->aq_strength || !e->invq_cache_init) {
-        mbtree_invqscale(e, pl, stride, wmb, hmb, strength, invq, aq_off);
+        mbtree_invqscale(e, pl, stride, wmb, hmb, fade, strength, invq, aq_off);
         return;
     }
     size_t n = (size_t)wmb * hmb;
@@ -7219,10 +7225,10 @@ static void mbtree_invqscale_k(yah264_encoder_t *e, long key, pixel *const *pl,
         if (!sl->aqoff) sl->aqoff = malloc(n * sizeof(float));
         if (!sl->invq || !sl->aqoff) {
             pthread_mutex_unlock(&sl->mx);
-            mbtree_invqscale(e, pl, stride, wmb, hmb, strength, invq, aq_off);
+            mbtree_invqscale(e, pl, stride, wmb, hmb, fade, strength, invq, aq_off);
             return;
         }
-        mbtree_invqscale(e, pl, stride, wmb, hmb, strength, sl->invq, sl->aqoff);
+        mbtree_invqscale(e, pl, stride, wmb, hmb, fade, strength, sl->invq, sl->aqoff);
         sl->key = key; sl->psw_ok = 0;
     }
     memcpy(invq, sl->invq, n * sizeof(double));
@@ -11435,6 +11441,34 @@ static void la_lr_row_task(void *ctx, int tid, int my)
     la_lr_row(c, my, &c->ic[my], &c->pc[my]);
 }
 
+/* the fade test on this push, from its lowres mean over the visible area (the
+ * lowres plane is on the 8-bit scale at every depth). The chain runs in push
+ * order, and every reader waits for a later step. */
+_Static_assert(Y264_LA_CAP_MAX + 8 + 3 * 8 <= 256,
+               "a push's fade slot must outlive the window, a B run with its anchor "
+               "and three staircase bursts");
+static void la_fade_note(yah264_encoder_t *e, const struct la_entry *en)
+{
+    int w = e->width / 2, h = e->height / 2;
+    uint64_t sum = 0;
+    for (int y = 0; y < h; y++) {
+        const pixel *r = en->lowres + (size_t)y * e->lr_w;
+        uint32_t rs = 0;
+        for (int x = 0; x < w; x++) rs += r[x];
+        sum += rs;
+    }
+    int on = w > 0 && h > 0 && y264_aq_fade_note(&e->la_fade_st, (double)sum / ((double)w * h));
+    e->la_fade[en->push_idx % 256].key = en->push_idx;
+    e->la_fade[en->push_idx % 256].on = on;
+}
+
+/* 1 when the fade test held for lookahead push `push`; 0 for an unknown push
+ * (no window) */
+static int la_fade_at(const yah264_encoder_t *e, long push)
+{
+    return push > 0 && e->la_fade[push % 256].key == push && e->la_fade[push % 256].on;
+}
+
 /* One step of the lookahead chain for a just-claimed entry: downscale, the
  * per-MB lowres analysis (own intra + inter vs the previous frame), and the
  * previous entry's deferred finalize. Runs on the API thread, or -- engaged
@@ -11498,6 +11532,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
 
     memcpy(e->la_lr_prev, en->lowres, lrsz * sizeof(pixel));
     e->la_have_prev = 1;
+    la_fade_note(e, en);
 
     /* gpq: submit this push's SEARCHQ legs against the previous reach pushes
  * (all resident by chain seriality). Fire-and-forget -- the walk collects

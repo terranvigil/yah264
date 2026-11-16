@@ -95,7 +95,14 @@ more, none at 8% and full at 20%. In frames where much of the picture is dark
 grain or gradient, it is scaled by the share of dark, smooth macroblocks that
 aren't flat, counted over the picture leaving out any letterbox or pillarbox
 bars, none at 35% and full at 50%. A dark frame with neither is left to the
-variance offset.
+variance offset. A frame inside a fade gets the bright-area scaling only. The
+lookahead counts a frame as fading when the picture's mean luma has moved the
+same way, by at least 0.2 levels, on each of its last six frames. It looks back
+only over frames the same encoder has seen, so a GOP coded on its own starts
+fresh. A step of more than 16 levels is a cut and breaks the run. A
+fade from black runs through dark, smooth frames that count as grain, and the
+cut there spends bits without keeping visible banding out. Without a lookahead
+window (superfast and ultrafast) no frame counts as fading.
 
 The grain count and the bar test read a block's variance as the picture's 8-bit
 copy would, 8-bit rounding included. A 10-bit master carries only a sixteenth of
@@ -165,6 +172,7 @@ All BD figures are BD-VMAF-NEG at matched achieved bitrate; negative is better.
 | `--psy-rd 2.0` | Basin from 2.0 to 3.0. 2.0 is the most uniform: median -0.17%, 7 of 12 better, worst +0.74%. |
 | psy-RD 5x on dark, smooth blocks | Five dark windows from three titles, at the reference's size: the share of dark smooth blocks coded flat falls from 66% to 23% on a mostly dark frame (the reference: 32%). HD band median +0.03%, worst +0.46%. 3x keeps less grain; 8x keeps no more. |
 | a gated 6-point dark cut | It keeps dark grain and gradients from coding flat, within the banding check's margins of the reference on every window. Applied to every dark frame it spends bits where nothing can band, so the gate limits it to frames with bright areas or with much dark grain or gradient. |
+| no grain scaling inside a fade | A fade from black opened the grain gate on a third of sintel's frames for no visible gain, and cost it about 4% BD-VMAF v1 (not NEG) against the reference. Without it sintel moves from behind the reference to ahead of it, every banding window keeps its verdict, and the rest of the corpus codes byte-identically or within noise. |
 | flat-content psy-trellis gate | sintel -5.6% (high band) and -9.0% (low band) for +0.8% wall on sintel. Every other corpus clip is byte-identical. The class that gains is flat and dark content, not grain. |
 | scene-cut floor 0.90 | Real cuts read 0.93 or more. False cuts on continuous content read 0.62 to 0.89. Sunflower -3.66%, parkrun -1.42%. |
 | scene-cut jump 0.10 | Removes false cuts where the falling threshold walks onto a high, steady ratio (fog, water, a tilt): coastguard -2.66%, perseverance 720p -3.01%. Every real shot boundary is kept. |
@@ -216,8 +224,8 @@ comparison reads the absolute anchor as a large loss (samsung +9.3%), because
 most of what it does is move the CRF scale, and that's ladder placement, not
 quality. The 12-clip CRF band can't see the across-shot term at all, so run
 the multi-shot gate too. mb-tree's constants were fitted together, so don't
-re-sweep one alone. `Y264_PSY_FLAT_LOG=1` prints each frame's flat share and
-whether the psy gate fired.
+re-sweep one alone. `Y264_PSY_FLAT_LOG=1` prints each frame's flat share,
+whether the psy gate fired and whether the fade test held.
 `Y264_TYPE_ORACLE=<file>` replays a frame-type sequence through the encoder,
 which prices a placement policy apart from everything downstream of it.
 

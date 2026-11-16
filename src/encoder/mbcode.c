@@ -380,7 +380,8 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
  * dark, smooth macroblocks, where banding shows first. A frame gate decides
  * where it applies (docs/lookahead-and-aq.md). Knobs: Y264_AQ_DARK strength
  * (0 off), _M / _V the mean and variance limits, _B0 / _B1 the bright ramp,
- * _S0 / _S1 the grain ramp (S1 0 drops it; B1 0 drops the whole gate). */
+ * _S0 / _S1 the grain ramp (S1 0 drops it; B1 0 drops the whole gate),
+ * Y264_AQ_FADE / _FADE_N the fade test (y264_aq_fade_note; FADE 0 drops it). */
 #define AQ_DARK_STR 6.0
 #define AQ_DARK_M  64.0
 #define AQ_DARK_V  16.0
@@ -390,20 +391,27 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
 #define AQ_GRAIN_VMIN 0.25
 #define AQ_DARK_S0  0.35
 #define AQ_DARK_S1  0.50
+#define AQ_FADE_STEP 0.2
+#define AQ_FADE_N    6
+#define AQ_FADE_CUT  16.0
 static double aq_dark_env(int which)
 {
-    static double v[7] = { -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0 };
+    static double v[9] = { -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0 };
     if (v[0] < 0) {
         const char *s = y264_env("Y264_AQ_DARK"), *m = y264_env("Y264_AQ_DARK_M"),
                    *q = y264_env("Y264_AQ_DARK_V"), *b0 = y264_env("Y264_AQ_DARK_B0"),
                    *b1 = y264_env("Y264_AQ_DARK_B1"), *s0 = y264_env("Y264_AQ_DARK_S0"),
-                   *s1 = y264_env("Y264_AQ_DARK_S1");
+                   *s1 = y264_env("Y264_AQ_DARK_S1"), *fs = y264_env("Y264_AQ_FADE"),
+                   *fn = y264_env("Y264_AQ_FADE_N");
         v[1] = m ? atof(m) : AQ_DARK_M;
         v[2] = q ? atof(q) : AQ_DARK_V;
         v[3] = b0 ? atof(b0) : AQ_DARK_B0;
         v[4] = b1 ? atof(b1) : AQ_DARK_B1;
         v[5] = s0 ? atof(s0) : AQ_DARK_S0;
         v[6] = s1 ? atof(s1) : AQ_DARK_S1;
+        v[7] = fs ? atof(fs) : AQ_FADE_STEP;
+        v[8] = fn ? atof(fn) : AQ_FADE_N;
+        if (v[8] < 1.0) v[8] = 1.0;
         double d = s ? atof(s) : AQ_DARK_STR;
         v[0] = d > 0 ? d : 0.0;
     }
@@ -644,17 +652,40 @@ static double ramp(double x, double a, double b)
 }
 
 /* the frame gate on the dark cut: the larger of a ramp on the share of bright
- * macroblocks and one on the share of dark grain and gradient */
-double y264_aq_dark_gate(double bright_share, double grain_share)
+ * macroblocks and one on the share of dark grain and gradient. A fading frame
+ * gets only the bright ramp: a fade from black runs through dark, smooth
+ * frames that count as grain, and the cut there spends bits without keeping
+ * visible banding out. */
+double y264_aq_dark_gate(double bright_share, double grain_share, int fade)
 {
     double b0 = aq_dark_env(3), b1 = aq_dark_env(4), s0 = aq_dark_env(5), s1 = aq_dark_env(6);
     if (b1 <= 0.0) return 1.0;
     double g = ramp(bright_share, b0, b1);
-    if (s1 > 0.0) {
+    if (s1 > 0.0 && !fade) {
         double gs = ramp(grain_share, s0, s1);
         if (gs > g) g = gs;
     }
     return g;
+}
+
+/* the fade test: 1 when the picture's mean luma, on the 8-bit scale at every
+ * depth, has moved the same way by at least AQ_FADE_STEP levels on each of
+ * the last AQ_FADE_N frames; motion seldom pushes the mean one way that long.
+ * A step over AQ_FADE_CUT is a cut, not a fade, and breaks the run. */
+int y264_aq_fade_note(y264_fade_t *t, double mean8)
+{
+    double step = aq_dark_env(7), m = mean8;
+    int dir = 0;
+    if (t->have) {
+        double d = m - t->prev;
+        if (fabs(d) <= AQ_FADE_CUT)
+            dir = d >= step ? 1 : (d <= -step ? -1 : 0);
+    }
+    t->run = dir && dir == t->dir ? t->run + 1 : (dir ? 1 : 0);
+    t->dir = dir;
+    t->prev = m;
+    t->have = 1;
+    return step > 0.0 && t->run >= (int)aq_dark_env(8);
 }
 
 /* Y264_PSY_DARK: a multiplier on the psy-rd weight for the same dark, smooth
@@ -769,10 +800,10 @@ static void aq_analyze(y264_frame_t *f)
     float center = (float)(avg - f->aq_pull * (avg - f->aq_anchor));
     /* the bar walk matters only with the dark term on and brightness alone not
      * already opening the gate */
-    double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
-    if (aq_dark_env(0) > 0 && dg < 1.0) {
+    double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0, f->fade);
+    if (aq_dark_env(0) > 0 && dg < 1.0 && !f->fade) {
         y264_aq_floor_lift(f->src[0], f->src_stride[0], f->wmb, f->hmb, vars);
-        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb));
+        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb), 0);
     }
     if (aq_dark_env(0) > 0) f->dark_dg = (float)dg;
     f->aq_s = strength; f->aq_c = center;
