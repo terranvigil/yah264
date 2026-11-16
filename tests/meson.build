@@ -1,47 +1,47 @@
 test_bitstream = executable('test_bitstream',
   'test_bitstream.c',
   dependencies : yah264_dep)
-test('bitstream', test_bitstream)
+test('bitstream', test_bitstream, timeout : test_timeout_floor)
 
 test_nal = executable('test_nal',
   'test_nal.c',
   dependencies : yah264_dep)
-test('nal', test_nal)
+test('nal', test_nal, timeout : test_timeout_floor)
 
 test_transform = executable('test_transform',
   'test_transform.c',
   dependencies : yah264_dep)
-test('transform', test_transform)
+test('transform', test_transform, timeout : test_timeout_floor)
 
 test_cavlc = executable('test_cavlc',
   'test_cavlc.c',
   dependencies : yah264_dep)
-test('cavlc', test_cavlc)
+test('cavlc', test_cavlc, timeout : test_timeout_floor)
 
 test_mc = executable('test_mc',
   'test_mc.c',
   dependencies : yah264_dep)
-test('mc', test_mc)
+test('mc', test_mc, timeout : test_timeout_floor)
 
 test_cabac = executable('test_cabac',
   'test_cabac.c',
   dependencies : yah264_dep)
-test('cabac', test_cabac)
+test('cabac', test_cabac, timeout : test_timeout_floor)
 
 test_trellis = executable('test_trellis',
   'test_trellis.c',
   dependencies : yah264_dep)
-test('trellis', test_trellis)
+test('trellis', test_trellis, timeout : test_timeout_floor)
 
 test_threadpool = executable('test_threadpool',
   'test_threadpool.c',
   dependencies : yah264_dep)
-test('threadpool', test_threadpool)
+test('threadpool', test_threadpool, timeout : test_timeout_floor)
 
 test_api = executable('test_api',
   'test_api.c',
   dependencies : yah264_dep)
-test('api', test_api)
+test('api', test_api, timeout : test_timeout_floor)
 
 # these two drive the encoder through Y264_* knobs, which only a dev_knobs
 # build reads
@@ -49,28 +49,28 @@ if get_option('dev_knobs')
   test_aqdc = executable('test_aqdc',
     'test_aqdc.c',
     dependencies : yah264_dep)
-  test('aqdc', test_aqdc)
+  test('aqdc', test_aqdc, timeout : test_timeout_floor)
 endif
 
 test_deblockqp = executable('test_deblockqp',
   'test_deblockqp.c',
   dependencies : yah264_dep)
-test('deblockqp', test_deblockqp)
+test('deblockqp', test_deblockqp, timeout : test_timeout_floor)
 
 test_denoise = executable('test_denoise',
   'test_denoise.c',
   dependencies : yah264_dep)
-test('denoise', test_denoise)
+test('denoise', test_denoise, timeout : test_timeout_floor)
 
 test_darkaq = executable('test_darkaq',
   'test_darkaq.c',
   dependencies : yah264_dep)
-test('darkaq', test_darkaq)
+test('darkaq', test_darkaq, timeout : test_timeout_floor)
 
 test_cutscan = executable('test_cutscan',
   'test_cutscan.c',
   dependencies : yah264_dep)
-test('cutscan', test_cutscan)
+test('cutscan', test_cutscan, timeout : test_timeout_floor)
 
 # The rate controller, every mode, through record/replay on a synthetic clip
 # (no corpus): each replay must reproduce its recording's slice QPs.

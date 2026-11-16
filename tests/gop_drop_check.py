@@ -21,12 +21,15 @@ The input is spliced on the fly from CIF corpus clips (mobile, foreman,
 bus) when they are present, else from synthetic QCIF segments, which have the
 same GOP shape.
 """
-import os, shlex, subprocess, sys, tempfile
+import os, shlex, subprocess, sys, tempfile, time
 
 # YAH264_WRAP: a command the encoder runs under (the x86 kit's explicit QEMU),
 # which is slower, so a hang takes longer to call there
 WRAP = shlex.split(os.environ.get("YAH264_WRAP", ""))
 LIMIT = 600 if WRAP else 60
+# macos can hold a fresh binary's first start for up to 60 s while it checks
+# it; a --version warm-up takes that wait so it isn't timed as a hang
+WARM_LIMIT = 600 if WRAP else 180
 
 RUNS = 3
 
@@ -102,7 +105,29 @@ def main():
         sys.exit(run_cases(cli, corpus, work, env))
 
 
+def warm_up(cli, env):
+    """start the CLI once so the encodes after it aren't charged the OS's
+    first-launch check; a failure here is reported, not timed as a hang"""
+    t0 = time.monotonic()
+    try:
+        p = subprocess.run(WRAP + [cli, "--version"], env=env, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           text=True, timeout=WARM_LIMIT)
+    except subprocess.TimeoutExpired:
+        print(f"FAIL {cli} --version did not finish in {WARM_LIMIT} s")
+        return 1
+    took = time.monotonic() - t0
+    if p.returncode != 0:
+        print(f"FAIL {cli} --version: exit {p.returncode} {p.stderr.strip()[:200]}")
+        return 1
+    if took > 5:
+        print(f"note: the first start of the CLI took {took:.1f} s")
+    return 0
+
+
 def run_cases(cli, corpus, work, env):
+    if warm_up(cli, env):
+        return 1
     qp = os.path.join(work, "qp.txt")
     plan = os.path.join(work, "plan.txt")
     with open(qp, "w") as f:
@@ -137,7 +162,7 @@ def run_cases(cli, corpus, work, env):
             try:
                 p = subprocess.run(WRAP + [cli, "--input-y4m", clip, "--threads", t,
                                            "-o", out, "--quiet", "--no-progress"] + args,
-                                   env=env, stdout=subprocess.DEVNULL,
+                                   env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.PIPE, text=True, timeout=LIMIT)
                 rc, err = p.returncode, p.stderr.strip()[:200]
             except subprocess.TimeoutExpired:

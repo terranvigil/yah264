@@ -516,6 +516,10 @@ yah264_cli_dep = declare_dependency(
   compile_args : ['-UY264_BIT_DEPTH', '-DY264_BIT_DEPTH=8'],
   include_directories : inc)
 
+# macos can hold a freshly linked binary's first start for up to 60 s while it
+# checks it, so no test's timeout may be shorter than that plus its run
+test_timeout_floor = 120
+
 subdir('cli')
 subdir('tools/checkasm')
 subdir('tools/cabacbench')
