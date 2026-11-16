@@ -2599,10 +2599,17 @@ static int name_fd(const char *path, int std_fd)
             return -1;
         for (int i = 0; i < 3; i++)
             if (!strcmp(cur, std_names[i])) return i;
-        if (!strncmp(cur, "/dev/fd/", 8) && cur[8]) {
+        /* /dev/fd/N, and where Linux resolves /dev/fd to: /proc/<pid>/fd/N
+         * (checked before following, since that link leads to the file) */
+        char proc[64];
+        snprintf(proc, sizeof proc, "/proc/%ld/fd/", (long)getpid());
+        const char *pre[] = { "/dev/fd/", "/proc/self/fd/", proc };
+        for (int i = 0; i < 3; i++) {
+            size_t k = strlen(pre[i]);
+            if (strncmp(cur, pre[i], k) || cur[k] < '0' || cur[k] > '9') continue;
             char *e;
-            long n = strtol(cur + 8, &e, 10);
-            if (*e == '\0' && cur[8] >= '0' && cur[8] <= '9' && n <= INT_MAX) return (int)n;
+            long n = strtol(cur + k, &e, 10);
+            if (*e == '\0' && n <= INT_MAX) return (int)n;
         }
         if (!follow_link(cur, sizeof cur)) break;
     }
@@ -2656,7 +2663,15 @@ static int out_open(out_file_t *f, const char *path)
     /* a descriptor's file (/dev/stdout however spelled) isn't ours to
      * truncate; any other file is, as main truncates it, whoever else
      * holds it open */
-    if (name_fd(path, -1) >= 0 || on_devfs(path)) {
+    /* a descriptor's name is that descriptor, duplicated: opening the path
+     * would on Linux start a new description at offset 0 without O_APPEND,
+     * and write over what the shell put there */
+    int dfd = name_fd(path, -1);
+    if (dfd >= 0) {
+        f->fd = dup(dfd);
+        return f->fd;
+    }
+    if (on_devfs(path)) {
         f->fd = open(path, O_WRONLY);
         return f->fd;
     }
@@ -6270,7 +6285,12 @@ static int cli_main(int argc, char **argv)
                 "it more than once\n", stats_path, pass);
         return 1;
     }
-    FILE *in = (!strcmp(in_path, "-")) ? stdin : fopen(in_path, "rb");
+    /* /dev/stdin and its kin read the descriptor itself, from where it is,
+     * as on macOS: a reopen on Linux would start the file over */
+    int in_fd = strcmp(in_path, "-") ? name_fd(in_path, -1) : -1;
+    int in_dup = in_fd > 0 ? dup(in_fd) : -1;
+    FILE *in = !strcmp(in_path, "-") || in_fd == 0 ? stdin
+             : in_dup >= 0 ? fdopen(in_dup, "rb") : in_fd > 0 ? NULL : fopen(in_path, "rb");
     if (!in) {
         fprintf(stderr, "yah264: cannot open input '%s'\n", in_path);
         return 1;

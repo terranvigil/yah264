@@ -397,6 +397,18 @@ def stats_is_output(enc, tmp):
         os.remove(link)
         if os.path.exists(made):
             os.remove(made)
+    # /dev/stdin reads the descriptor from where it stands, as - does: a
+    # file whose first bytes the caller already consumed
+    pre = os.path.join(d, "pre.y4m")
+    with open(pre, "wb") as f:
+        f.write(b"PREFIX\n" + src)
+    for name in ("-", "/dev/stdin", "/dev/fd/0"):
+        with open(pre, "rb", buffering=0) as f:
+            os.lseek(f.fileno(), 7, os.SEEK_SET)
+            rc, err = run(enc, [a if a != clip else name for a in base] + ["-o", out], stdin=f)
+        check(f"--input-y4m {name} reads on from where the descriptor stands", rc == 0,
+              f"rc {rc}: {err.strip()[-200:]}")
+    os.remove(pre)
     # the standard input and output on one socket (inetd, socat)
     import socket, threading
     a, b = socket.socketpair()
