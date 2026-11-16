@@ -1107,9 +1107,11 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->abr_cum_actual += p->bits;
         e->abr_cum_target += e->abr_target_bpf;
     }
-    if (e->tp_fp)          /* pass 1 and pass 3 both record */
+    if (e->tp_fp) {        /* pass 1 and pass 3 both record */
         fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->rc_type, p->cplx, p->bits,
                 p->fqp, p->is_ref ? 1 : 0);
+        e->tp_nrec++;
+    }
     if (e->tp_pass >= 2) {
         e->tp_rem_target -= p->bits;
         e->tp_rem_cq -= p->cq;
@@ -1268,6 +1270,8 @@ void rcp_reqp(yah264_encoder_t *e, int type, int is_ref)
 /* CAVLC-overflow drop: remove without accounting (mirrors the serial skip). */
 void rcp_drop(yah264_encoder_t *e)
 {
+    if (e->tp_fp)
+        e->tp_drop = 1;                     /* its record is never written */
     for (int i = 0; i < e->rcp_n; i++) {
         struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
         if (!p->filled) { p->filled = 1; p->dropped = 1; p->bits = 0; break; }

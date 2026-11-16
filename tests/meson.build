@@ -107,3 +107,11 @@ if rc_python.found()
     args : [files('refwindow_check.py'), yah264_cli_exe],
     timeout : 300)
 endif
+
+# The CLI on damaged or awkward input files: a truncated Y4M, a missing
+# or empty stats file, a FIFO given as one.
+if rc_python.found()
+  test('cli_robust', rc_python,
+    args : [files('cli_robust_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif

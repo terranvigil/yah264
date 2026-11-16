@@ -8,6 +8,7 @@
  * path and decodes bit-exact in any conformant decoder. Real intra coding
  * replaces this in Phase 1.
  */
+#include <errno.h>
 #include <limits.h>
 #include "../common/env.h"
 #include "../common/iprof.h"
@@ -5504,7 +5505,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             }
             /* one thread codes with tools more threads don't, so a pass 2
              * at the other kind prices the records wrong: say which */
-            fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n", e->param.threads,
+            fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n#has-end 1\n", e->param.threads,
                     param->keyint, param->interlaced ? 1 : 0);
             e->qp = Y264_TP_P1_QP;                  /* fixed reference QP for pass 1 */
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
@@ -5534,8 +5535,21 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 double mcplx = 64.0 * (double)(1 << Y264_BIT_DEPTH) * msamp + 1.0e6;
                 int split = 0;      /* a file the GOP splitter wrote */
                 int first = 1;
+                /* a file this encoder or the CLI's GOP merge wrote whole
+                 * ends in "#end <records>" and says so up top; one without
+                 * the promise (an older one, or a merge from before the
+                 * line) is read as before */
+                int has_end = 0, end_at = -1;
+                long end_n = -1;
+                /* the GOP section being read: where its records start and
+                 * how many its marker counts, as the CLI's splitter checks */
+                int sec_at = -1, sec_want = 0, sec_bad = 0;
                 while (fgets(ln, sizeof ln, fp)) {
                     int mg, ms, me, mr;
+                    if (!strncmp(ln, "#has-end", 8))
+                        has_end = 1;
+                    if (end_at < 0 && sscanf(ln, "#end %ld", &end_n) == 1)
+                        end_at = e->tp_n;
                     if (sscanf(ln, "#gop %d %d %d %d", &mg, &ms, &me, &mr) == 4) {
                         /* in order and back to back, as the merge writes them */
                         if (mg != ngop || ms != mframes || me <= ms) {
@@ -5545,6 +5559,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                             yah264_encoder_close(e);
                             return NULL;
                         }
+                        if (sec_at >= 0 && e->tp_n - sec_at != sec_want) {
+                            sec_bad = 1;
+                            break;
+                        }
+                        sec_at = e->tp_n;
+                        sec_want = mr;
                         ngop++;
                         mframes += me - ms;
                     }
@@ -5637,6 +5657,26 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
+                /* a section short of the records its marker counts (a merged
+                 * plan cut at a record boundary), the last one included */
+                if (sec_bad || (sec_at >= 0 && e->tp_n - sec_at != sec_want)) {
+                    fprintf(stderr, "yah264: stats file '%s' holds %d records for GOP %d, its "
+                            "marker says %d: it was cut short or damaged\n", param->rc.stats,
+                            e->tp_n - sec_at, ngop - 1, sec_want);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
+                /* cut at a record boundary, which the newline check can't
+                 * see: the end line is missing, or counts other than what
+                 * was read */
+                if (has_end && (end_at != e->tp_n || end_n != e->tp_n)) {
+                    fprintf(stderr, "yah264: stats file '%s' was cut short: it holds %d "
+                            "records and %s; run pass 1 into it again\n", param->rc.stats,
+                            e->tp_n, end_at < 0 ? "not the line that ends it"
+                                                : "an end line that disagrees");
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
                 /* a file that is there but holds nothing (a pass 1 or 3
                  * killed before its first record) is not a pass to plan from */
                 if (e->tp_n == 0) {
@@ -5684,6 +5724,18 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
+            } else if (errno == ENOENT) {
+                /* a missing file still encodes, but with no plan the rate
+                 * goes nowhere near the target: say so */
+                fprintf(stderr, "yah264: warning: no stats file '%s': pass %d runs without "
+                        "a plan, every frame at the base QP; run pass 1 into it first\n",
+                        param->rc.stats, e->tp_pass);
+            } else {
+                /* one that is there but can't be read is not a missing plan */
+                fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n",
+                        param->rc.stats, strerror(errno));
+                yah264_encoder_close(e);
+                return NULL;
             }
             if (e->tp_pass == 3) {
                 /* Every record is in e->tp_stats by now, so truncating the file
@@ -5697,7 +5749,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
-                fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n", e->param.threads,
+                fprintf(e->tp_fp, "#threads %d\n#keyint %d\n#fields %d\n#has-end 1\n", e->param.threads,
                     param->keyint, param->interlaced ? 1 : 0);
             }
             double bitrate = param->rc.bitrate > 0 ? param->rc.bitrate : 1000;
@@ -16059,6 +16111,29 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
  * thing this design forbids. */
         if (e->rcp_on && off == 0)
             rcp_flush_all(e);
+        /* every record is written by now, and this is the last call with a
+         * return value: a stats file the disk refused (full, or past the
+         * file-size limit) fails the encode here instead of leaving a plan
+         * with records missing */
+        if (off == 0 && e->tp_fp) {
+            /* a picture dropped as a slice too big for its buffer has no
+             * record, so the plan is a picture short */
+            if (e->tp_drop) {
+                fprintf(stderr, "yah264: a picture was dropped, so stats file '%s' lacks its "
+                        "record\n", e->param.rc.stats);
+                return -1;
+            }
+            if (!e->tp_ended) {             /* what a reader checks it was cut at */
+                fprintf(e->tp_fp, "#end %ld\n", e->tp_nrec);
+                e->tp_ended = 1;
+            }
+            int err = fflush(e->tp_fp) != 0 ? errno : 0;
+            if (err || ferror(e->tp_fp)) {
+                fprintf(stderr, "yah264: cannot write stats file '%s' (%s)\n",
+                        e->param.rc.stats, err ? strerror(err) : "a write failed");
+                return -1;
+            }
+        }
         *count = e->nal_count;
         return (int)off;
     }
@@ -16903,8 +16978,14 @@ void yah264_encoder_close(yah264_encoder_t *e)
     ntp_pool_destroy(e->pool);
     if (e->rcp_on)
         rcp_flush_all(e);           /* commit any filled tail (pass-1 stat lines) */
-    if (e->tp_fp)
-        fclose(e->tp_fp);
+    /* close has no return value to fail with; a write that failed before
+     * was said by the flush */
+    if (e->tp_fp) {
+        int said = ferror(e->tp_fp);
+        if (fclose(e->tp_fp) != 0 && !said)
+            fprintf(stderr, "yah264: error closing stats file '%s' (%s)\n",
+                    e->param.rc.stats, strerror(errno));
+    }
     free(e->tp_stats);
     free(e->tp_cost);
     free(e->tp_qrec);

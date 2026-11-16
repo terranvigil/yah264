@@ -1011,6 +1011,9 @@ struct yah264_encoder {
  * frame's coded QP directly (frame_qp returns it unchanged in pass 2). */
     int      tp_pass;           /* 0 off, 1 analysis, 2 final */
     FILE    *tp_fp;             /* pass 1: stats output */
+    long     tp_nrec;           /* records written to tp_fp */
+    int      tp_ended;          /* its "#end" line is written */
+    int      tp_drop;           /* a picture with no record was dropped */
     struct tp_stat { int type; double cplx; double bits; int qp; int is_ref; } *tp_stats;
     int      tp_n, tp_idx;      /* pass 2: record count and cursor */
     double   tp_target;         /* pass 2: target total bits */

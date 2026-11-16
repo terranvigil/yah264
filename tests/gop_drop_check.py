@@ -13,7 +13,9 @@ unread. Each case counts the coded frames in the output and wants every input
 frame and a clean exit, at two and three threads, a few runs each, since how
 far the reader gets before the publish is a matter of timing. Under capped
 VBR a skipped GOP stalls the GOPs that wait on its rate state, so each encode
-gets a timeout and a hang fails the case.
+gets a timeout and a hang fails the case. A last case makes the reader skip
+a GOP on purpose (Y264_DBG_SEEK_SKIP, dev_knobs builds only) and wants the
+encode to stop with the reader's stall message rather than hang.
 
 The input is spliced on the fly from CIF corpus clips (mobile, foreman,
 bus) when they are present, else from synthetic QCIF segments, which have the
@@ -148,7 +150,41 @@ def run_cases(cli, corpus, work, env):
         fail |= bad
         if not bad:
             print(f"ok   {name}: {want} frames at threads 2 and 3, {RUNS} runs each")
-    return fail
+    return fail | stall_case(cli, work, env)
+
+
+def stall_case(cli, work, env):
+    """a GOP the reader skips, under capped VBR at two and three threads:
+    the GOPs after it wait on its rate state, so only the reader's stall
+    check stops the encode"""
+    clip = os.path.join(work, "stall.y4m")
+    hdr = b"YUV4MPEG2 W176 H144 F25:1 Ip A1:1 C420jpeg\n"
+    with open(clip, "wb") as f:
+        f.write(hdr)
+        for fr in synth(4, 120):
+            f.write(b"FRAME\n" + fr)
+    out = os.path.join(work, "stall.264")
+    args = ["--bitrate", "800", "--vbv-maxrate", "1000", "--vbv-bufsize", "1000",
+            "--keyint", "20", "--no-scenecut"]
+    for t in ("2", "3"):
+        try:
+            p = subprocess.run(WRAP + [cli, "--input-y4m", clip, "--threads", t, "-o", out,
+                                       "--quiet", "--no-progress"] + args,
+                               env=dict(env, Y264_DBG_SEEK_SKIP="0"),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               text=True, timeout=LIMIT)
+            rc, err = p.returncode, p.stderr.strip()
+        except subprocess.TimeoutExpired:
+            rc, err = "timeout", f"hung for {LIMIT} s"
+        if "this build ignores it" in err:
+            print("skip skipped GOP: not a dev_knobs build")
+            return 0
+        if rc in (0, "timeout") or "will never read it" not in err:
+            print(f"FAIL skipped GOP, threads {t}: exit {rc} {err[:200]}")
+            return 1
+    print("ok   skipped GOP stops with the stall message at threads 2 and 3")
+    return 0
+
 
 if __name__ == "__main__":
     main()
