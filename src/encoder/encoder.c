@@ -1325,16 +1325,100 @@ static uint64_t plane_sum(const pixel *p, int W, int H, int stride)
  * anchor (lr_wp_vote). A fade is global, so the answer applies to every
  * list-0 reference of the slice; no measurement, no weight. */
 #define WP_GATE_PCT 8
+#define WP_BLACK_SHARE 0.02
+
+/* a coarse weight/offset pair misses a fade's per-frame step by about a
+ * code, an even step every 4x4 deadzone drops; the fine estimate (denom 6,
+ * a quarter-code gate) gets within a fraction of it. 0 restores the coarse one */
+static int wp_fine_on(void)          /* warmed in warm_lr_statics */
+{
+    static int v = -1;
+    if (v < 0) { const char *s = y264_env("Y264_WP_FINE"); v = s ? atoi(s) != 0 : 1; }
+    return v;
+}
+
+/* luma variance and the share of samples within a code of black, on a 4x4
+ * grid: the slope estimate needs both, and the grid keeps them cheap */
+struct wp_stat { double var, black; int have; };
+static void plane_stat_sub(const pixel *p, int W, int H, int stride, int blk, struct wp_stat *st)
+{
+    double s1 = 0, s2 = 0;
+    long n = 0, nb = 0;
+    for (int y = 0; y < H; y += 4)
+        for (int x = 0; x < W; x += 4) {
+            int v = p[(size_t)y * stride + x];
+            s1 += v; s2 += (double)v * v; n++; nb += v <= blk;
+        }
+    double m = n ? s1 / (double)n : 0.0, var = n ? s2 / (double)n - m * m : 0.0;
+    st->var = var > 0.0 ? var : 0.0;
+    st->black = n ? (double)nb / (double)n : 0.0;
+    st->have = 1;
+}
+
+/* 0 when no shift is worth a weight; a slope past about 130/64 isn't sent,
+ * which measured better on steep fades than dropping the slice to denom 5 */
+static int wp_fine_pair(const yah264_encoder_t *e, uint64_t sumsrc, uint64_t sumref, int64_t N,
+                        struct wp_stat *ss, const pixel *src, const pixel *ref, int readable,
+                        int W, int H, int stride, int denom, int *w, int *o)
+{
+    double u = (double)(1 << (Y264_BIT_DEPTH - 8)), scale = (double)(1 << denom);
+    double black = e->sps.vs_full_range ? 0.0 : 16.0 * u;
+    double ms = (double)sumsrc / (double)N, mr = (double)sumref / (double)N;
+    if (!sumref || 4.0 * fabs(ms - mr) < u)
+        return 0;
+    if (!ss->have)
+        plane_stat_sub(src, W, H, stride, (int)(black + u), ss);
+    double var = ss->var, vref = -1.0;
+    if (readable) {
+        struct wp_stat rs;
+        plane_stat_sub(ref, W, H, stride, (int)(black + u), &rs);
+        vref = rs.var;
+    }
+    /* textured: a fade scales contrast, so the deviations' ratio is the
+     * slope. flat: the deviations are noise, so the means set it, pivoting on
+     * black where the picture has black in it (a fade from or to black) */
+    double r, cv;
+    if (vref > 4.0 * u * u && var > 4.0 * u * u) {
+        r = sqrt(var / vref); cv = vref;
+    } else {
+        if (ss->black >= WP_BLACK_SHARE && mr - black > 2.0 * u && ms - black > 0.0)
+            r = (ms - black) / (mr - black);
+        else
+            r = ms / mr;
+        cv = r > 0.0 ? var / (r * r) : var;
+    }
+    if (r < 0.0) r = 0.0; else if (r > 4.0) r = 4.0;   /* a near-black reference */
+    int w0 = (int)lround(r * scale), bw = 1 << denom, bo = 0;
+    double best = -1.0;
+    for (int ww = w0 - 3; ww <= w0 + 3; ww++) {
+        if (ww < 1 || ww > 127) continue;
+        double oe = ((double)sumsrc - (double)sumref * ww / scale) / (double)N;
+        long o8 = lround(oe / u);
+        if (o8 < -128) o8 = -128; else if (o8 > 127) o8 = 127;
+        double err = oe - (double)o8 * u, dw = (double)ww / scale - r;
+        double c = err * err + cv * dw * dw;
+        if (best < 0.0 || c < best) { best = c; bw = ww; bo = (int)o8; }
+    }
+    if (best < 0.0 || (bw == (1 << denom) && bo == 0))
+        return 0;
+    *w = bw; *o = bo;
+    return 1;
+}
 
 /* `sumsrc` is the coded picture's plane_sum, taken once for every reference. */
 static int estimate_wp_luma(yah264_encoder_t *e, uint64_t sumsrc,
                             const pixel *ref, int denom, int64_t sumref_ovr,
-                            int H, int stride, int *w, int *o)
+                            int H, int stride, const pixel *src, struct wp_stat *ss,
+                            double *shift, int *w, int *o)
 {
     int W = e->width;
     uint64_t sumref = sumref_ovr >= 0 ? (uint64_t)sumref_ovr
                                       : plane_sum(ref, W, H, stride);
     int64_t N = (int64_t)W * H;
+    *shift = ((double)sumsrc - (double)sumref) / (double)N;
+    if (wp_fine_on())
+        return wp_fine_pair(e, sumsrc, sumref, N, ss, src, ref, sumref_ovr < 0,
+                            W, H, stride, denom, w, o);
     int scale = 1 << denom;
     int msrc = (int)(sumsrc / N), mref = (int)(sumref / N);
     if (sumref == 0 || abs(msrc - mref) < 2)
@@ -2210,15 +2294,16 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     while (ns < Y264_STAIR_HOPS) clamp_set[ns++] = -1;
     /* pred_weight_table for explicit P-slice weighted prediction: one luma
  * weight/offset per active list-0 reference (chroma stays identity). */
-    int *wp_luma = h.wp_luma, *wp_w = h.wp_w, *wp_o = h.wp_o, wp_denom = 5;
-    h.wp_denom = wp_denom;
+    int *wp_luma = h.wp_luma, *wp_w = h.wp_w, *wp_o = h.wp_o, wp_denom = wp_fine_on() ? 6 : 5;
     h.wp_on = (type == 1 && e->pps.weighted_pred_flag);
     /* The picture the estimate walks: this field, or the whole frame. */
     const pixel *wp_src = src[0] + (size_t)(e->fld_pic ? e->fld_parity : 0) * e->pstride[0];
     int wp_h = e->fld_pic ? e->height / 2 : e->height;
     int wp_stride = e->pstride[0] * (e->fld_pic ? 2 : 1);
+    double wp_shift0 = 0.0;
     if (h.wp_on) {
         uint64_t wp_sumsrc = plane_sum(wp_src, e->width, wp_h, wp_stride);
+        struct wp_stat wp_ss = { 0.0, 0.0, 0 };
         for (int i = 0; i < active_ref; i++) {
             /* Clamped ref: estimate against that anchor's SOURCE DC (cached at
  * its arrival) -- its recon is not fully readable yet. Generalizes
@@ -2231,12 +2316,16 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * and braces rather than a live case.) */
             int64_t sro = (!e->fld_pic && clamp_set_has(clamp_set, l0poc[i]))
                         ? anchor_srcsum_get(e, l0poc[i]) : -1;
+            double shift;
             wp_luma[i] = estimate_wp_luma(e, wp_sumsrc, l0p[i][0], wp_denom, sro,
-                                          wp_h, wp_stride, &wp_w[i], &wp_o[i]);
+                                          wp_h, wp_stride, wp_src, &wp_ss, &shift,
+                                          &wp_w[i], &wp_o[i]);
+            if (i == 0) wp_shift0 = shift;
             if (wp_luma[i] && e->cur_wp_vote < WP_GATE_PCT)
                 wp_luma[i] = 0;
         }
     }
+    h.wp_denom = wp_denom;
     /* --weightp 2: score each readable reference's weight against the picture
  * tile by tile, and where it wins on MOST of the picture but not all of it,
  * carry that reference TWICE -- once weighted, once plain -- so the mode
@@ -2665,6 +2754,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         f.wp_o[i] = wp_o[i];
     }
     f.wp_denom = wp_denom;
+    f.wp_shift = (float)wp_shift0;
     f.wp_dup = wp_dup;
     f.wp_dup_of = wp_dup_of;
     /* The map 8.7.2.1 reads: the duplicate and its twin are ONE picture, and
@@ -10286,6 +10376,7 @@ static void warm_lr_statics(void)
     (void)gpq_consume_on();
     (void)lr_me_stage(); (void)adme_log();
     (void)psy_flat_log();
+    (void)wp_fine_on();
     
     /* Read by Phase A on pool workers, so they must resolve here. The wide
      * config changes WHICH thread first-touches several of these; each one
@@ -10978,10 +11069,19 @@ static int lr_wp_vote(const yah264_encoder_t *e, const struct la_entry *en, cons
 {
     int lw = e->lr_w, lh = e->lr_h, wmb = e->width_in_mbs, hmb = e->height_in_mbs;
     const pixel *cur = en->lowres;
-    uint64_t sc = 0, sr = 0;
-    for (int i = 0; i < lw * lh; i++) { sc += cur[i]; sr += ref[i]; }
+    uint64_t sc = 0, sr = 0, sc2 = 0;
+    for (int i = 0; i < lw * lh; i++) { sc += cur[i]; sr += ref[i]; sc2 += (uint64_t)cur[i] * cur[i]; }
     int64_t N = (int64_t)lw * lh;
-    if (!sr || llabs((int64_t)(sc / N) - (int64_t)(sr / N)) < 2) return -1;
+    if (!sr) return -1;
+    if (wp_fine_on() ? llabs((int64_t)sc - (int64_t)sr) * 4 < N   /* lowres is 8-bit scale */
+                     : llabs((int64_t)(sc / N) - (int64_t)(sr / N)) < 2)
+        return -1;
+    /* on a textured picture a weight for a shift under two codes buys
+     * little and its contrast error drifts along the skips: not measured */
+    if (wp_fine_on() && llabs((int64_t)sc - (int64_t)sr) < 2 * N) {
+        double m = (double)sc / (double)N, v = (double)sc2 / (double)N - m * m;
+        if (v > 4.0) return -1;
+    }
     const int D = 5, scale = 1 << D;
     int w = (int)((sc * scale + sr / 2) / sr);
     if (w < 1) w = 1; else if (w > 127) w = 127;

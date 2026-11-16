@@ -58,6 +58,7 @@ static const char *const y264_knob_names[] = {
     "Y264_EST_SCRTRACE",
     "Y264_EST_TWICE",
     "Y264_FAST_PSKIP",
+    "Y264_FLAT_SKIP_DC",
     "Y264_GOP_FORCE_G",
     "Y264_GOP_FORCE_K",
     "Y264_GOP_TRACE",
@@ -137,4 +138,5 @@ static const char *const y264_knob_names[] = {
     "Y264_W2",
     "Y264_WEIGHTP_STAT",
     "Y264_WF_CAPK",
+    "Y264_WP_FINE",
 };
