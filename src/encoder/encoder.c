@@ -11996,6 +11996,13 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * than by coincidence. */
         double fill = e->rcp_on ? rcp_vbv_vfill_bound(e, 1) : e->vbv.fill;
         double limit = vbv_bound_limit(e, fill);
+        /* capped CRF: a burst the gate's second walk sent serial answers to
+         * the fit test, as it would have pipelined (rate.c, rcp_vbv_gate) */
+        if (e->crf_on && !e->abr_on && !e->tp_pass && e->rcp_on) {
+            rcp_note_first_build(e, sm_wire_bits(&sm));
+            if (e->rcp_vbv_bstight)
+                limit = vbv_fit_limit(e, fill);
+        }
         /* Capped VBR, an intra frame: it also leaves the reserve the burst
  * plan asks of an intra frame it can price, half the plan's target level
  * (or half of what is there, below that). A GOP instance's first frame is
@@ -12023,12 +12030,18 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         /* under --nal-hrd until it fits or the ceiling: noise moves a few
          * percent a step and four tries left it over with no count */
         double kovh = -1.0;     /* what a key's SEIs add over this AU's */
-        for (int k = 0; k < (e->hrd_on ? 64 : 4) && limit > 0.0 && forced_qp(e) < 0; k++) {
+        /* a burst only the gate's second walk sent serial raises in half
+         * steps, twice as many: it answers to the fit test alone, and a full
+         * 1/qscale step past it overshot to QP 51 and starved the burst */
+        int tries = e->hrd_on ? 64 : e->rcp_vbv_bstight ? 8 : 4;
+        for (int k = 0; k < tries && limit > 0.0 && forced_qp(e) < 0; k++) {
             double over = bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh);
             last_over = over;
             if (over <= 1.0)
                 break;
             int bump = (int)ceil(6.0 * log2(over));
+            if (e->rcp_vbv_bstight)
+                bump = (bump + 1) / 2;
             if (bump < 1) bump = 1;
             int nq = e->qp + bump;
             int cap = fqp0 < qp0 ? 51 + qp0 - fqp0 : 51;   /* intra codes under its base */
