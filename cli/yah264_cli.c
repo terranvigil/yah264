@@ -2665,6 +2665,29 @@ static void out_drop(out_file_t *f)
     f->fd = -1;
 }
 
+/* the input, the stream and the recon as the clash check saw them, so the
+ * stats file can be checked again once the encoder has made it */
+static file_id_t g_run_files[3];
+
+/* True when the stats path, made by now, is one of the run's other files:
+ * a name created between the clash check and the encoder's own open (by
+ * another process) slips past the first check. There is still a window
+ * between this stat and the open, which only the library could close */
+static int stats_now_clash(const char *stats)
+{
+    if (!stats) return 0;
+    int sfd = name_fd(stats, -1);
+    file_id_t st = file_id(sfd, sfd >= 0 ? NULL : stats);
+    for (int i = 0; i < 3; i++)
+        if (id_same(st, g_run_files[i])) {
+            fprintf(stderr, "yah264: --stats '%s' became the same file as %s; stopping before "
+                    "a frame is written\n", stats_shown(stats),
+                    i == 0 ? "the input" : i == 1 ? "the output" : "the recon");
+            return 1;
+        }
+    return 0;
+}
+
 /* the clash between the run's files, or NULL: the stats file against the
  * stream, the recon and the input, and the stream, the recon and the input
  * against one another */
@@ -2672,6 +2695,7 @@ static const char *files_clash(int in_fd, int out_fd, int recon_fd, const char *
 {
     file_id_t in = file_id(in_fd, NULL), out = file_id(out_fd, NULL);
     file_id_t recon = recon_fd >= 0 ? file_id(recon_fd, NULL) : (file_id_t){ 0, 0, 0 };
+    g_run_files[0] = in; g_run_files[1] = out; g_run_files[2] = recon;
     file_id_t st = { 0, 0, 0 };
     if (stats) {
         int sfd = name_fd(stats, -1);
@@ -2795,6 +2819,8 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
     }
     /* pass 3's is its working copy; pass 1's is the user's own, whose open
      * may block (a FIFO) and must not hold a signal off */
+    if (stats_now_clash(out_file))
+        return -1;
     int scratch = stats_is_tmp(out_file);
     if (scratch) clean_hold();
     FILE *out = fopen(out_file, "w");
@@ -4630,8 +4656,15 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     if (scratch) clean_hold();
     yah264_encoder_t *prime = g_api->encoder_open(param);
     if (scratch) clean_release();
+    int stats_clash = prime && param->rc.method == YAH264_RC_2PASS && param->rc.pass != 2
+                      && stats_now_clash(param->rc.stats);
+    if (stats_clash) {
+        g_api->encoder_close(prime);
+        prime = NULL;
+    }
     if (!prime) {
-        fprintf(stderr, "yah264: encoder_open failed -- these parameters were refused\n");
+        if (!stats_clash)
+            fprintf(stderr, "yah264: encoder_open failed -- these parameters were refused\n");
         tp_free_paths(gop_stats, n_gops, 1);
         free(gop_target);
         pthread_mutex_lock(&job.lock);
@@ -7100,6 +7133,11 @@ static int cli_main(int argc, char **argv)
     if (scratch) clean_hold();
     yah264_encoder_t *enc = g_api->encoder_open_hw(&param, hw);
     if (scratch) clean_release();
+    if (enc && param.rc.method == YAH264_RC_2PASS && param.rc.pass != 2
+        && stats_now_clash(param.rc.stats)) {
+        g_api->encoder_close(enc);
+        return 2;
+    }
     apply_video_signal(enc);
     if (!enc) {
         fprintf(stderr, "yah264: encoder_open failed\n");
