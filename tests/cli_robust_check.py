@@ -328,6 +328,31 @@ def stats_is_output(enc, tmp):
         rc, err = run(enc, base + ["-o", out, "--dump-recon", "/dev/stdout"], stdout=f)
     check("--dump-recon /dev/stdout appended to a file keeps what was there",
           rc == 0 and open(keep, "rb").read().startswith(b"keep\nYUV4MPEG2"), f"rc {rc}")
+    # the same, spelled other ways: a doubled slash, a dot, a leading //,
+    # a relative link to /dev/stdout, and links to /dev/fd and /dev
+    sp = os.path.join(d, "spell")
+    os.makedirs(sp)
+    os.symlink(os.path.relpath("/dev/stdout", os.path.realpath(sp)), os.path.join(sp, "rel"))
+    os.symlink("/dev/fd", os.path.join(sp, "myfd"))
+    os.symlink("/dev", os.path.join(sp, "devl"))
+    spellings = ("/dev//stdout", "/dev/./fd/1", "//dev/fd/1", os.path.join(sp, "rel"),
+                 os.path.join(sp, "myfd", "1"), os.path.join(sp, "devl", "stdout"))
+    for name in spellings:
+        for what, extra in (("-o", ["-o", name]), ("--dump-recon", ["-o", out, "--dump-recon", name])):
+            with open(keep, "wb") as f:
+                f.write(b"KEEP\n")
+            with open(keep, "ab") as f:
+                rc, err = run(enc, base + extra, stdout=f)
+            data = open(keep, "rb").read()
+            check(f"{what} {name} appended to a file keeps KEEP",
+                  rc == 0 and data.startswith(b"KEEP\n") and len(data) > 5,
+                  f"rc {rc}, {len(data)} bytes")
+        with open(keep, "wb") as f:
+            f.write(b"HEADER\n")
+            f.flush()
+            rc, err = run(enc, base + ["-o", name], stdout=f)
+        check(f"-o {name} after a header in a shared file keeps the header",
+              rc == 0 and open(keep, "rb").read().startswith(b"HEADER\n\x00\x00"), f"rc {rc}")
     # a dangling symlink as the output or the recon makes its target
     for name, extra, tgt in (("-o", ["-o", os.path.join(d, "dl.264")], "dt.264"),
                              ("--dump-recon", ["-o", out, "--dump-recon",

@@ -2578,6 +2578,18 @@ static int name_fd(const char *path, int std_fd)
     char cur[PATH_MAX];
     snprintf(cur, sizeof cur, "%s", path);
     for (int hop = 0; hop < 40; hop++) {
+        /* the directory part resolved, so /dev//stdout, //dev/fd/1 and a
+         * link to /dev spell the names below */
+        const char *slash = strrchr(cur, '/');
+        char dir[PATH_MAX], rdir[PATH_MAX];
+        snprintf(dir, sizeof dir, "%.*s", slash ? (int)(slash - cur) + (slash == cur) : 1,
+                 slash ? cur : ".");
+        if (realpath(dir, rdir)) {
+            char tmp[PATH_MAX];
+            snprintf(tmp, sizeof tmp, "%s/%s", strcmp(rdir, "/") ? rdir : "",
+                     slash ? slash + 1 : cur);
+            snprintf(cur, sizeof cur, "%s", tmp);
+        }
         for (int i = 0; i < 3; i++)
             if (!strcmp(cur, std_names[i])) return i;
         if (!strncmp(cur, "/dev/fd/", 8) && cur[8]) {
@@ -2623,10 +2635,28 @@ static int id_same(file_id_t a, file_id_t b)
 /* a file this run writes, opened but not yet truncated */
 typedef struct { int fd, made, trunc; const char *path; } out_file_t;
 
+/* True when the file is open on a descriptor already, one the process
+ * inherited (the shell's redirect behind /dev/stdout, however spelled) or
+ * the input this run opened: not a file of ours to truncate or delete */
+static int held_by_fd(const struct stat *st)
+{
+    int n = getdtablesize();
+    for (int fd = 0; fd < n; fd++) {
+        struct stat fs;
+        if (fcntl(fd, F_GETFD) != -1 && fstat(fd, &fs) == 0
+            && fs.st_dev == st->st_dev && fs.st_ino == st->st_ino)
+            return 1;
+    }
+    return 0;
+}
+
 static int out_open(out_file_t *f, const char *path)
 {
     f->path = path; f->made = 0; f->trunc = 0;
-    if (name_fd(path, -1) >= 0) {       /* a descriptor's file isn't ours to truncate */
+    /* decided on the file, not the name: stat follows every spelling and
+     * link to it */
+    struct stat pre;
+    if (name_fd(path, -1) >= 0 || (stat(path, &pre) == 0 && held_by_fd(&pre))) {
         f->fd = open(path, O_WRONLY);
         return f->fd;
     }
@@ -2643,12 +2673,18 @@ static int out_open(out_file_t *f, const char *path)
             ;
         f->fd = open(cur, O_WRONLY | O_CREAT | O_EXCL, 0666);
         f->made = f->fd >= 0;
-        return f->fd;
+        if (f->fd >= 0 || errno != EEXIST)
+            return f->fd;
+        /* another process made it just now: open it as an existing file */
+        f->fd = open(cur, O_WRONLY);
     }
     struct stat st;
     f->trunc = f->fd >= 0 && fstat(f->fd, &st) == 0 && S_ISREG(st.st_mode) && !on_devfs(path);
     return f->fd;
 }
+
+/* the run's output and recon, so a later stop can take back files it made */
+static out_file_t g_of = { -1, 0, 0, NULL }, g_rf = { -1, 0, 0, NULL };
 
 /* undo an out_open: close, and remove the file only if this run made it
  * and the name (through any symlink) still leads to that very file */
@@ -4661,6 +4697,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     if (stats_clash) {
         g_api->encoder_close(prime);
         prime = NULL;
+        out_drop(&g_of); out_drop(&g_rf);   /* only files this run made go */
     }
     if (!prime) {
         if (!stats_clash)
@@ -4676,7 +4713,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
         job_rc_free(&job); free(job.seg); free(job.gop_start);
         free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_rd); free(job.gop_cons);
-        return 1;
+        return stats_clash ? 2 : 1;
     }
     g_api->encoder_close(prime);
 
@@ -6227,40 +6264,39 @@ static int cli_main(int argc, char **argv)
     /* the encoder would write its records over the stream, or either over
      * the input, in whichever order the run reaches them: open, compare,
      * and only then truncate (see files_clash) */
-    out_file_t of = { -1, 0, 0, NULL }, rf = { -1, 0, 0, NULL };
     int to_stdout = !strcmp(out_path, "-");
-    if (!to_stdout && out_open(&of, out_path) < 0) {
+    if (!to_stdout && out_open(&g_of, out_path) < 0) {
         fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);
         return 1;
     }
-    if (recon_path && out_open(&rf, recon_path) < 0) {
+    if (recon_path && out_open(&g_rf, recon_path) < 0) {
         fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
-        out_drop(&of);
+        out_drop(&g_of);
         return 1;
     }
-    const char *clash = files_clash(fileno(in), to_stdout ? STDOUT_FILENO : of.fd, rf.fd,
+    const char *clash = files_clash(fileno(in), to_stdout ? STDOUT_FILENO : g_of.fd, g_rf.fd,
                                     pass > 0 ? stats_path : NULL);
     if (clash) {
         fprintf(stderr, "yah264: %s are the same file; give each its own name\n", clash);
-        out_drop(&of); out_drop(&rf);
+        out_drop(&g_of); out_drop(&g_rf);
         return 2;
     }
     /* stat'ed regular above, when it's there */
     if (pass == 3 && stats_tmp_open(stats_path) != 0) {
-        out_drop(&of); out_drop(&rf);
+        out_drop(&g_of); out_drop(&g_rf);
         return 1;
     }
     if (pass == 3)
         stats_path = g_stats_tmp;
-    const char *tfail = of.trunc && ftruncate(of.fd, 0) != 0 ? "the output"
-                      : rf.trunc && ftruncate(rf.fd, 0) != 0 ? "the recon" : NULL;
+    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
+                      : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
     if (tfail) {
         fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
-        out_drop(&of); out_drop(&rf);
+        out_drop(&g_of); out_drop(&g_rf);
         return 1;
     }
-    FILE *out = to_stdout ? stdout : fdopen(of.fd, "wb");
-    FILE *recon = recon_path ? fdopen(rf.fd, "wb") : NULL;
+    FILE *out = to_stdout ? stdout : fdopen(g_of.fd, "wb");
+    FILE *recon = recon_path ? fdopen(g_rf.fd, "wb") : NULL;
     if (!out || (recon_path && !recon)) {
         fprintf(stderr, "yah264: cannot open %s\n", !out ? "the output" : "the recon");
         return 1;
@@ -7136,6 +7172,7 @@ static int cli_main(int argc, char **argv)
     if (enc && param.rc.method == YAH264_RC_2PASS && param.rc.pass != 2
         && stats_now_clash(param.rc.stats)) {
         g_api->encoder_close(enc);
+        out_drop(&g_of); out_drop(&g_rf);   /* only files this run made go */
         return 2;
     }
     apply_video_signal(enc);
