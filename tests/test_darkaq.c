@@ -74,6 +74,35 @@ int main(void)
     CHECK(y264_aq_grain(M(30.0), V(0.1)) == 0);     /* a flat fill can't band */
     CHECK(y264_aq_grain(M(120.0), V(2.0)) == 0);    /* not dark */
     CHECK(y264_aq_grain(M(30.0), V(100.0)) == 0);   /* textured */
+    /* the lift onto the 8-bit copy's variance, per macroblock: a 10-bit
+     * master carries a sixteenth of 8-bit rounding and gets the rest; blocks
+     * of 8-bit samples, shifted up or bit-replicated, already carry it all */
+    {
+        enum { S = 64 };                        /* four macroblocks in a row */
+        pixel pl[16 * S];
+        float v0 = (float)V(0.22), v[4] = { v0, v0, v0, v0 };   /* just flat */
+        float lift = (float)((SC * SC - 1.0) / 12.0);
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < S; x++) {
+                int v8 = 30 + (x + y) % 3, mb = x / 16;
+                if (mb == 2) v8 += 150;         /* bright enough for top bits */
+                pl[y * S + x] = (pixel)(v8 * SC);
+                if (SC > 1.0 && mb == 1 && x == 21 && y == 7)
+                    pl[y * S + x] += 1;         /* one sample off the grid */
+                if (SC > 1.0 && mb == 2)        /* full-range replication */
+                    pl[y * S + x] |= (pixel)(v8 >> 6);
+                if (SC > 1.0 && mb == 3)        /* a master's own levels */
+                    pl[y * S + x] += (pixel)((x * 7 + y * 3) % 4);
+            }
+        y264_aq_floor_lift(pl, S, 4, 1, v);
+        CHECK(v[0] == v0);                    /* shifted */
+        CHECK(v[1] == v0 + lift);             /* one stray sample is enough */
+        CHECK(v[2] == v0);                    /* replicated */
+        CHECK(v[3] == v0 + lift);             /* native */
+        v[3] = (float)V(2.0);                   /* well inside the grain band: */
+        y264_aq_floor_lift(pl, S, 4, 1, v);     /* no call changes, no lift */
+        CHECK(v[3] == (float)V(2.0));
+    }
 
     /* bars: a 16x18 frame (W x H macroblocks), then 80x45 (1280x720) */
     {

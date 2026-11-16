@@ -7117,8 +7117,10 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
         }
     /* the bar walk only when brightness alone doesn't already open the gate */
     double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0);
-    if (means && dg < 1.0)
+    if (means && dg < 1.0) {
+        y264_aq_floor_lift(pl[0], stride, wmb, hmb, vars);
         dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, wmb, hmb));
+    }
     /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
  * constant instead of the frame mean, so its DC is a frame-level complexity
  * term. The propagation weights are renormalised to mean 1 below, so a DC

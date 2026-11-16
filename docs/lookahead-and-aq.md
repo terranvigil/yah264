@@ -97,6 +97,12 @@ aren't flat, counted over the picture leaving out any letterbox or pillarbox
 bars, none at 35% and full at 50%. A dark frame with neither is left to the
 variance offset.
 
+The grain count and the bar test read a block's variance as the picture's 8-bit
+copy would, 8-bit rounding included. A 10-bit master carries only a sixteenth of
+that rounding, so its blocks get the rest added; blocks of 8-bit samples shifted
+or bit-replicated up to 10 bits already carry it. A master and its 8-bit copy
+then count nearly the same blocks.
+
 **Letterbox and pillarbox bars.** The grain share leaves out bars of any matte
 color: matched pairs of flat edge rows (or columns) of one color, of about the
 same depth, that don't drift line to line, up to three eighths of the height or

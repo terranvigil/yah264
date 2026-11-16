@@ -517,6 +517,7 @@ double           y264_aq_gain(double mean, double sd, int bpath, int abr);
 double           y264_aq_dark(double mean, double var);
 double           y264_psy_dark_gain(double mean, double var);
 int              y264_aq_bright(double mean);
+void             y264_aq_floor_lift(const pixel *p, int stride, int wmb, int hmb, float *vars);
 int              y264_aq_grain(double mean, double var);
 void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4]);
 double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
