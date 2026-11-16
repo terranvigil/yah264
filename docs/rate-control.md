@@ -351,7 +351,12 @@ fallback gate. At each anchor's arrival, `rcp_vbv_gate` drains everything in
 flight, then walks the coming burst through the buffer at 2 times
 the predictions, or a decaying shock multiplier of recent overshoot when that's
 larger. If any prefix underflows, the burst takes the serial schedule, where each
-frame is coded, measured and re-coded at a higher QP if it doesn't fit. These
+frame is coded, measured and re-coded at a higher QP if it doesn't fit. Under
+capped CRF on a frame pool a burst that passes is walked again at how far
+bounded frames' first builds recently came out over their predictions (by a
+tenth of the buffer or more), which the accounted shock never sees because the
+re-encode re-prices them. A burst only that walk sends serial answers to the
+fit test alone, as it would have pipelined, and not to the fill budget. These
 also go serial:
 
 - IDR bursts and the warm phase, always.
@@ -360,6 +365,8 @@ also go serial:
 - Under capped VBR, the anchor after an intra frame or after one the buffer
   raised 3+ QP (`Y264_VBV_POSTI`), and any burst starting under a quarter full
   (`Y264_VBV_LOW`).
+- Under capped CRF, the next two anchors after an intra frame the buffer
+  raised 3+ QP over the rate factor.
 - Under CBR and under `--nal-hrd` (pass 1 of a two-pass aside), every burst
   coded on a frame pool.
 - Every frame of a two-pass pass 2, which still decides as one thread does.

@@ -886,6 +886,11 @@ static double vbv_limit(const yah264_encoder_t *e, double fill, int budget)
     return limit;
 }
 
+double vbv_fit_limit(const yah264_encoder_t *e, double fill)
+{
+    return vbv_limit(e, fill, 0);
+}
+
 double vbv_limit_at(const yah264_encoder_t *e, double fill)
 {
     return vbv_limit(e, fill, 1);
@@ -1461,7 +1466,13 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * takes the serial emit and its measured-size retry, so the floor there
  * only holds back an anchor the retry already covers (samsung CRF+VBV at
  * one thread read +3.6% BD-VMAF-NEG with the floor, -3.2% without). */
-    if (type != 2 && !vbv_serial_now(e) && e->pool && e->bm_rvbv.have[type]) {
+    /* ...and in a burst only the gate's second walk sent serial, which
+     * would otherwise have been one: held to the fit test alone, an anchor
+     * that dove to QP 25 kept 42% of the buffer and the B frames after it
+     * went to 51 (tears of steel 1080p, 740 kbit cap and buffer, three
+     * threads) */
+    if (type != 2 && (!vbv_serial_now(e) || e->rcp_vbv_bstight) && e->pool
+        && e->bm_rvbv.have[type]) {
         int lo = rcbm_qp_floor(&e->bm_rvbv, type, VBV_QPD);
         if (e->qp < lo) e->qp = lo > 51 ? 51 : lo;
     }
@@ -1526,6 +1537,52 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     e->tp_fill_gap = 0.0;
 }
 
+/* the burst gate's walk: the coming anchor and its B frames through the
+ * buffer at r_hi times their predictions; 1 if any prefix underflows */
+static int rcp_vbv_walk(const yah264_encoder_t *e, double rhi)
+{
+    double fill = e->vbv.fill;
+    double vs1 = rcp_vbv_scale_eff(e, 1);
+    int tight = 0;
+    /* The anchor at the current base QP (type-1 frame_qp offset is 0)... */
+    /* under CRF+VBV and CBR, after a raised anchor the next decide may
+ * drop to the extrapolation guard (QPD under the regime): price the anchor
+ * there, with the model's error off its regime (about 2x per 6 QP). */
+    double gq = e->qp, ext = 1.0;
+    double rfq = e->crf_on && !e->abr_on ? e->crf_pre_qp
+               : e->vbv_cbr && e->abr_rf2 && e->abr_qp > 0 ? e->abr_qp + e->crf_dc : 0.0;
+    if (rfq > 0 && rfq < gq && e->bm_rvbv.have[1]) {
+        double reg = e->bm_rvbv.qp[1], lo = reg - VBV_QPD;
+        gq = rfq > lo ? rfq : lo;
+        if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
+    }
+    double q = pow(2.0, (gq - 12) / 6.0);
+    /* r_hi and ext are independent errors, so they compound where a pool
+ * codes on predictions; one thread re-codes against the measured size */
+    double mg = ext > rhi ? ext : rhi;
+    if (e->pool && ext > 1.0)
+        mg = ext * rhi;
+    fill -= mg * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
+    if (fill < 0) tight = 1;
+    fill = rcbuf_refill(&e->vbv, fill);
+    /* ...then the B's at the smallest cascade offset (+1) over the QPD
+ * floor the pipelined decide will enforce: the most-bits bound over
+ * every pyramid depth, in the regime the model can speak to. */
+    double vs2 = rcp_vbv_scale_eff(e, 2);
+    double bqp = e->qp + 1;
+    if (e->bm_rvbv.have[2]) {
+        int lo = rcbm_qp_floor(&e->bm_rvbv, 2, VBV_QPD);
+        if (bqp < lo) bqp = lo;
+    }
+    double qb = pow(2.0, (bqp - 12) / 6.0);
+    for (int i = 0; i < e->nbuf && !tight; i++) {
+        fill -= rhi * vs2 * e->rcp_bcvi[i] / qb;
+        if (fill < 0) tight = 1;
+        fill = rcbuf_refill(&e->vbv, fill);
+    }
+    return tight;
+}
+
 /* Per-burst VBV fallback trigger, at anchor ARRIVAL on the API thread with
  * every in-flight frame already retired (the caller drains first). First
  * commits filled tail -- the same position in decide order the anchor's
@@ -1560,7 +1617,6 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         if (e->rcp_vbv_shock > rhi)
             rhi = e->rcp_vbv_shock;     /* recent overshoot widens the margin */
         double cj = VBV_CJUMP;
-        double fill = e->vbv.fill;
         tight = 0;
         /* Content-jump guard: the scale is calibrated on the regime it has
  * SEEN; a coming frame whose complexity jumps far past it (missed
@@ -1580,42 +1636,8 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * measured-size bound catches what the prediction cannot. */
         if (e->bm_rvbv.cplx[1] > 0 && e->rcp_arr_cvi * cj < e->bm_rvbv.cplx[1])
             tight = 1;
-        /* The anchor at the current base QP (type-1 frame_qp offset is 0)... */
-        /* under CRF+VBV and CBR, after a raised anchor the next decide may
- * drop to the extrapolation guard (QPD under the regime): price the anchor
- * there, with the model's error off its regime (about 2x per 6 QP). */
-        double gq = e->qp, ext = 1.0;
-        double rfq = e->crf_on && !e->abr_on ? e->crf_pre_qp
-                   : e->vbv_cbr && e->abr_rf2 && e->abr_qp > 0 ? e->abr_qp + e->crf_dc : 0.0;
-        if (rfq > 0 && rfq < gq && e->bm_rvbv.have[1]) {
-            double reg = e->bm_rvbv.qp[1], lo = reg - VBV_QPD;
-            gq = rfq > lo ? rfq : lo;
-            if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
-        }
-        double q = pow(2.0, (gq - 12) / 6.0);
-        /* r_hi and ext are independent errors, so they compound where a pool
- * codes on predictions; one thread re-codes against the measured size */
-        double mg = ext > rhi ? ext : rhi;
-        if (e->pool && ext > 1.0)
-            mg = ext * rhi;
-        fill -= mg * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
-        if (fill < 0) tight = 1;
-        fill = rcbuf_refill(&e->vbv, fill);
-        /* ...then the B's at the smallest cascade offset (+1) over the QPD
- * floor the pipelined decide will enforce: the most-bits bound over
- * every pyramid depth, in the regime the model can speak to. */
-        double vs2 = rcp_vbv_scale_eff(e, 2);
-        double bqp = e->qp + 1;
-        if (e->bm_rvbv.have[2]) {
-            int lo = rcbm_qp_floor(&e->bm_rvbv, 2, VBV_QPD);
-            if (bqp < lo) bqp = lo;
-        }
-        double qb = pow(2.0, (bqp - 12) / 6.0);
-        for (int i = 0; i < e->nbuf && !tight; i++) {
-            fill -= rhi * vs2 * e->rcp_bcvi[i] / qb;
-            if (fill < 0) tight = 1;
-            fill = rcbuf_refill(&e->vbv, fill);
-        }
+        if (rcp_vbv_walk(e, rhi))
+            tight = 1;
     }
     /* Y264_VBV_POSTI (default 1; 0 = the output before 2026-10-12): under
  * capped VBR the anchor that follows an intra frame takes the serial
@@ -1679,7 +1701,45 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * (not pass 1 of a two-pass, which nothing holds to the buffer) */
     if ((e->vbv_cbr || (e->hrd_on && e->tp_pass != 1)) && e->pool)
         tight = 1;
+    /* capped CRF on a pool: walk the burst again at the margin the
+ * measured-size bound has been catching. a bounded frame's raise re-prices
+ * its prediction, so the accounted shock above never sees the miss, and an
+ * anchor dropping back toward the rate factor after a raised run is priced
+ * off its regime, where an anchor can code several times its prediction.
+ * a burst only this walk sends serial would otherwise have coded on its
+ * predictions, held to nothing, so its frames answer to the fit test alone
+ * and not to the fill budget, which starved such bursts. one thread re-codes
+ * every frame against its measured size already, so it is left alone */
+    e->rcp_vbv_bstight = 0;
+    if (!tight && e->pool && e->crf_on && !e->abr_on && !is_idr && !rcp_warm(e)
+        && rcp_vbv_scale_eff(e, 1) > 0.0) {
+        double rhi = e->rcp_vbv_shock > VBV_RHI ? e->rcp_vbv_shock : VBV_RHI;
+        if (e->rcp_vbv_bshock > rhi && rcp_vbv_walk(e, e->rcp_vbv_bshock)) {
+            tight = 1;
+            e->rcp_vbv_bstight = 1;
+        }
+    }
+    /* decays 0.7 over four frames, however the bursts fall */
+    double dk = e->rcp_vbv_bshock * pow(0.7, (e->nbuf + 1) / 4.0);
+    e->rcp_vbv_bshock = dk > 1.0 ? dk : 1.0;
     e->rcp_vbv_tight = tight;
+}
+
+/* a capped-CRF frame's first build, measured before the bound raises it:
+ * how far it came out over its decide's prediction feeds the gate's second
+ * walk, where the miss is a tenth of the buffer or more (small frames miss
+ * by large ratios that no buffer feels) */
+void rcp_note_first_build(yah264_encoder_t *e, double bits)
+{
+    if (e->rcp_n <= 0 || !e->pool)
+        return;
+    const struct rcp_pend *p = &e->rcp[(e->rcp_head + e->rcp_n - 1) % RCP_MAX];
+    if (p->filled || p->vpred <= 0.0 || bits - p->vpred < 0.1 * e->vbv.size)
+        return;
+    double r = bits / p->vpred;
+    if (r > 16.0) r = 16.0;
+    if (r > e->rcp_vbv_bshock)
+        e->rcp_vbv_bshock = r;
 }
 
 /* The lagged QP decision + entry push. Complexity C: type 0 = the source-only
@@ -2177,7 +2237,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         e->qp = Y264_TP_P1_QP;
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
     }
-    if (e->vbv_on && type == 2 && !e->rcp_vbv_tight && e->bm_rvbv.have[2]) {
+    if (e->vbv_on && type == 2 && (!e->rcp_vbv_tight || e->rcp_vbv_bstight)
+        && e->bm_rvbv.have[2]) {
         /* Extrapolation guard: a pipelined B decides before any of its
  * burst's actuals land, and the bits model under-predicts savagely
  * below its calibrated QP regime (static content: skip-all frames

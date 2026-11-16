@@ -67,6 +67,7 @@
 #define rcp_fill                        rcp_fill_10
 #define rcp_flush_all                   rcp_flush_all_10
 #define rcp_head                        rcp_head_10
+#define rcp_note_first_build            rcp_note_first_build_10
 #define rcp_reqp                        rcp_reqp_10
 #define rcp_vbv_gate                    rcp_vbv_gate_10
 #define rcp_vbv_vfill                   rcp_vbv_vfill_10
@@ -79,6 +80,7 @@
 #define tp_qscale2qp                    tp_qscale2qp_10
 #define vbv_bound_limit                 vbv_bound_limit_10
 #define vbv_bounded_now                 vbv_bounded_now_10
+#define vbv_fit_limit                   vbv_fit_limit_10
 #define vbv_limit_at                    vbv_limit_at_10
 #define vbv_serial_now                  vbv_serial_now_10
 #define y264_add4x4_idct                y264_add4x4_idct_10

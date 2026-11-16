@@ -85,19 +85,10 @@ def _delivered(ai, af, bits, t):
 _TFI = {0: 2, 1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 6}
 
 
-def cadence(aus, sps, recs, tr, tc):
-    """E.2.1: under fixed_frame_rate_flag, consecutive pictures in output
-    order (POC order within each IDR period) are output DeltaTfiDivisor clock
-    ticks apart, the divisor coming from pic_struct when the stream carries it
-    (Table E-6) and otherwise from whether the picture is a field. Removal
-    times are not constrained this way, so they are not checked. POC is
-    rebuilt per IDR period from pic_order_cnt_lsb; an MMCO 5 reset is not
-    modelled."""
-    timing = sps["vui"]["timing"]
-    if not timing.get("fixed_frame_rate") or sps["pic_order_cnt_type"] != 0:
-        return []
-    if any(r["pt"] is None for r in recs):
-        return []                         # NOPT is simulate()'s to report
+def _periods(aus, recs, tc):
+    """Each picture's output period in seconds: DeltaTfiDivisor clock ticks,
+    from pic_struct when the stream carries it (Table E-6), otherwise from
+    whether the picture is a field."""
     per = []
     for n, au in enumerate(aus):
         ps = recs[n]["pt"].get("pic_struct")
@@ -106,6 +97,69 @@ def cadence(aus, sps, recs, tr, tc):
         else:
             fld = (au.get("first_slice") or {}).get("field_pic_flag")
             per.append(tc * (1 if fld else 2))
+    return per
+
+
+def removal_cadence(aus, sps, recs, tr, tc):
+    """Removal times in decoding order. Returns (violations, warnings).
+
+    Annex A spaces each removal after the one before it (by at least the
+    picture's minimum period), so a removal at or before the previous one is
+    an ordering violation in any stream.
+
+    Under fixed_frame_rate_flag, where every picture has the same period and
+    none repeats a field or a frame, consecutive access units must also be
+    removed exactly one period apart. That is this checker's rule, not the
+    standard's: Annex C allows other schedules, so a stream that fails only
+    this check isn't necessarily non-conforming. It is here because a stream
+    that holds its output cadence while its removal times jump has its timing
+    wrong somewhere: a GOP join that restarted the removal count and moved the
+    output delays to cover it does exactly that, and nothing else sees it.
+    Under pulldown or frame doubling (pic_struct 5..8) the gaps follow the
+    display durations through the reorder, so a gap past two of the longest
+    periods is only a warning there."""
+    viols, warns = [], []
+    for n in range(1, len(aus)):
+        gap = tr[n] - tr[n - 1]
+        if gap <= EPS:
+            viols.append(("REMOVAL", n, "removed %.6fs after the access unit before it in "
+                          "decoding order (%.0f ticks): out of order, where Annex A wants "
+                          "each removal after the previous one" % (gap, gap / tc)))
+    timing = sps["vui"]["timing"]
+    if not timing.get("fixed_frame_rate") or len(aus) < 2:
+        return viols, warns
+    if any(r["pt"] is None for r in recs):
+        return viols, warns               # NOPT is simulate()'s to report
+    per = _periods(aus, recs, tc)
+    hi = max(per)
+    exact = min(per) == hi and not any(
+        (r["pt"].get("pic_struct") or 0) >= 5 for r in recs)
+    for n in range(1, len(aus)):
+        gap = tr[n] - tr[n - 1]
+        if gap <= EPS:
+            continue
+        if exact and abs(gap - per[n - 1]) > EPS:
+            viols.append(("REMOVAL", n, "removed %.6fs after the access unit before it in "
+                          "decoding order (%.0f ticks), not one picture period (%.6fs)"
+                          % (gap, gap / tc, per[n - 1])))
+        elif not exact and gap > 2 * hi + EPS:
+            warns.append(("REMOVAL", n, "removed %.6fs after the access unit before it in "
+                          "decoding order (%.0f ticks), more than two of the longest periods "
+                          "(%.6fs)" % (gap, gap / tc, 2 * hi)))
+    return viols, warns
+
+
+def cadence(aus, sps, recs, tr, tc):
+    """E.2.1: under fixed_frame_rate_flag, consecutive pictures in output
+    order (POC order within each IDR period) are output DeltaTfiDivisor clock
+    ticks apart. POC is rebuilt per IDR period from pic_order_cnt_lsb; an
+    MMCO 5 reset is not modelled."""
+    timing = sps["vui"]["timing"]
+    if not timing.get("fixed_frame_rate") or sps["pic_order_cnt_type"] != 0:
+        return []
+    if any(r["pt"] is None for r in recs):
+        return []                         # NOPT is simulate()'s to report
+    per = _periods(aus, recs, tc)
     out, key = [], []
     period, msb, plsb = -1, 0, 0
     M = 1 << sps["log2_max_poc_lsb"]
@@ -189,6 +243,8 @@ def simulate(aus, sps, kind, idx, verbose=False):
     tai = [0.0] * len(recs)
     taf = [0.0] * len(recs)
     tr_nb = 0.0
+    dmod = 1 << hrd["cpb_removal_delay_length"]
+    wraps, dprev = 0, 0
     init_nb = None                        # the delay pair in force for tai,earliest
     for n, r in enumerate(recs):
         bp = r["bp"]
@@ -199,10 +255,18 @@ def simulate(aus, sps, kind, idx, verbose=False):
             init_nb = d
             tai[0] = 0.0
         else:
-            tr[n] = tr_nb + tc * r["pt"]["cpb_removal_delay"]
+            # cpb_removal_delay is a counter modulo 2^length since the last
+            # buffering period: a drop of more than half the range is a wrap
+            dl = r["pt"]["cpb_removal_delay"] + wraps * dmod
+            if dl < dprev and dprev - dl > dmod // 2:
+                wraps += 1
+                dl += dmod
+            dprev = dl
+            tr[n] = tr_nb + tc * dl
             if bp is not None and bp[kind]:
                 d = bp[kind][idx]
                 tr_nb = tr[n]
+                wraps, dprev = 0, 0
                 init_nb = d
                 earliest = tr[n] - d["initial"] / 90000.0
             else:
@@ -276,6 +340,10 @@ def simulate(aus, sps, kind, idx, verbose=False):
                          % (n, recs[n]["bits"], tai[n], taf[n], tr[n], fill))
 
     viols.extend(cadence(aus, sps, recs, tr, tc))
+    rv, rw = removal_cadence(aus, sps, recs, tr, tc)
+    viols.extend(rv)
+    for what, n, msg in rw:
+        lines.append("  WARN %s %s sched %d au %d: %s" % (what, kind, idx, n, msg))
     lines.append("  %s hrd sched %d: BitRate %.0f bit/s  CpbSize %.0f bit  cbr=%d  tc=%.6fs"
                  % (kind.upper(), idx, bitrate, cpbsize, cbr, tc))
     lines.append("  peak fullness %.0f bit (%.1f%% of CpbSize) at au %d; "
@@ -477,6 +545,19 @@ def self_test(enc):
         with open(badout, "wb") as f:
             f.write(_edit_sei(kdata, lateout))
 
+        # One picture removed two ticks late with its output delay two ticks
+        # shorter, so its output time holds: what a GOP join that restarts the
+        # removal count looks like, and only the removal cadence sees it.
+        dw = ihrd["dpb_output_delay_length"]
+
+        def lateremove(kind, n, rb, off):
+            if kind == 1 and n == 30:
+                _bits_add(rb, 8 * off, cw, 2)
+                _bits_add(rb, 8 * off + cw, dw, -2)
+        badrem = os.path.join(tmp, "badrem.264")
+        with open(badrem, "wb") as f:
+            f.write(_edit_sei(kdata, lateremove))
+
         # 3:2 pulldown: pic_struct sets each picture's output period, so the
         # output cadence is uneven in frames and even in fields.
         pull = x264("pull", "--nal-hrd", "vbr", "--vbv-maxrate", "1000",
@@ -518,8 +599,10 @@ def self_test(enc):
             ("NEGATIVE: cbr with an access unit bloated", bloat, (), 1),
             ("NEGATIVE: cbr, a later delay two ticks long", badinit, (), 1),
             ("NEGATIVE: one dpb_output_delay two ticks late", badout, (), 1),
+            ("NEGATIVE: one removal two ticks late, output held", badrem, (), 1),
         ]
-        named_as = {nobp: "NOBPIDR", badinit: "INITDELAY", badout: "OUTPUT"}
+        named_as = {nobp: "NOBPIDR", badinit: "INITDELAY", badout: "OUTPUT",
+                    badrem: "REMOVAL"}
         bad = 0
         for name, path, extra, want in cases:
             got = _check(path, extra)

@@ -1180,6 +1180,11 @@ struct yah264_encoder {
  * regime shock the model is only trusted as
  * far as it has recently earned. ~1 in steady
  * state (no effect); decays 0.7/account. */
+    double   rcp_vbv_bshock;    /* capped CRF on a pool: decaying max of how
+ * far bounded frames' first builds came out over
+ * their decide's prediction, before the raise
+ * re-priced it; the gate's second walk */
+    int      rcp_vbv_bstight;   /* the burst is serial on that walk alone */
 
     /* PAFF (--tff / --bff). `fields` is 0 for frame coding, 1 top-field-first,
  * 2 bottom-field-first. Each input frame is then coded as TWO pictures, and
