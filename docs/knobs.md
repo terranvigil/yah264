@@ -6,7 +6,7 @@ These are read only in a build configured with `-Ddev_knobs=true`; a default bui
 
 Tier meanings: **default** = shipped behavior, the env is its escape; **instrument** = measurement machinery (cataloged in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (60)
+## default (62)
 
 | knob | default | reader |
 |---|---|---|
@@ -22,6 +22,8 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_AQ_DARK_S0` | 0.35 | src/encoder/mbcode.c:389 |
 | `Y264_AQ_DARK_S1` | 0.50 | src/encoder/mbcode.c:390 |
 | `Y264_AQ_DARK_V` | 16 | src/encoder/mbcode.c:388 |
+| `Y264_AQ_FADE` | 0.2 (0 = off) | src/encoder/mbcode.c:404 |
+| `Y264_AQ_FADE_N` | 6 | src/encoder/mbcode.c:405 |
 | `Y264_AQ_DC` | = rate mode: 1.3 uncapped CRF, 1.04 capped CRF or bitrate target | src/encoder/encoder.c:5723 |
 | `Y264_AQ_MODE` | 2 | src/encoder/mbcode.c:279 |
 | `Y264_B8_DIRECT` | 1 | src/encoder/mbcode.c:7280 |
@@ -114,7 +116,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_MEREUSE_TRACE` | 0 | src/encoder/mbcode.c:6140 |
 | `Y264_ME_ETSTAT` | 0 | src/encoder/motion.c:301 |
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:61 |
-| `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:6614 |
+| `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:7084 |
 | `Y264_QP_TRACE` | 0 | src/encoder/encoder.c:3056 |
 | `Y264_RC_PLAY` | ? | src/encoder/rcreplay.h:157 |
 | `Y264_RC_PLAY_K` | 1.0 | src/encoder/rcreplay.h:177 |

@@ -42,6 +42,8 @@ int main(void)
     unsetenv("Y264_AQ_DARK_B1");
     unsetenv("Y264_AQ_DARK_S0");
     unsetenv("Y264_AQ_DARK_S1");
+    unsetenv("Y264_AQ_FADE");
+    unsetenv("Y264_AQ_FADE_N");
     unsetenv("Y264_AQ_D8");
 
     /* a dark gradient with faint grain: luma mean 30, standard deviation 1.4 */
@@ -62,13 +64,40 @@ int main(void)
 
     /* the frame gate: closed with neither bright areas nor much dark grain,
      * open on either ramp, the larger of the two */
-    CHECK(y264_aq_dark_gate(0.0, 0.0) == 0.0);
-    CHECK(y264_aq_dark_gate(0.20, 0.0) == 1.0);
-    CHECK(y264_aq_dark_gate(0.0, 0.50) == 1.0);
-    CHECK(y264_aq_dark_gate(0.0, 0.35) == 0.0);
-    CHECK(y264_aq_dark_gate(0.14, 0.0) > 0.4 && y264_aq_dark_gate(0.14, 0.0) < 0.6);
-    CHECK(y264_aq_dark_gate(0.14, 0.50) == 1.0);
-    CHECK(fabs(y264_aq_dark_gate(0.14, 0.425) - 0.5) < 1e-9);    /* the larger, not the sum */
+    CHECK(y264_aq_dark_gate(0.0, 0.0, 0) == 0.0);
+    CHECK(y264_aq_dark_gate(0.20, 0.0, 0) == 1.0);
+    CHECK(y264_aq_dark_gate(0.0, 0.50, 0) == 1.0);
+    CHECK(y264_aq_dark_gate(0.0, 0.35, 0) == 0.0);
+    CHECK(y264_aq_dark_gate(0.14, 0.0, 0) > 0.4 && y264_aq_dark_gate(0.14, 0.0, 0) < 0.6);
+    CHECK(y264_aq_dark_gate(0.14, 0.50, 0) == 1.0);
+    CHECK(fabs(y264_aq_dark_gate(0.14, 0.425, 0) - 0.5) < 1e-9);    /* the larger, not the sum */
+    /* a fading frame keeps the bright ramp and loses the grain one */
+    CHECK(y264_aq_dark_gate(0.0, 0.50, 1) == 0.0);
+    CHECK(y264_aq_dark_gate(0.20, 0.50, 1) == 1.0);
+    CHECK(y264_aq_dark_gate(0.14, 0.50, 1) > 0.4 && y264_aq_dark_gate(0.14, 0.50, 1) < 0.6);
+    /* the fade test, on 8-bit-scale means at every depth (the lowres plane's
+     * scale): six steps the same way, each 0.2 levels or more */
+    {
+        y264_fade_t t = { 0 };
+        int on = 0;
+        for (int i = 0; i <= 6; i++) on = y264_aq_fade_note(&t, 10.0 + 0.25 * i);
+        CHECK(on == 1);
+        CHECK(y264_aq_fade_note(&t, 11.0) == 0);            /* turned back */
+        y264_fade_t u = { 0 };
+        for (int i = 0; i <= 5; i++) on = y264_aq_fade_note(&u, 80.0 - 2.0 * i);
+        CHECK(on == 0);                                     /* five steps only */
+        CHECK(y264_aq_fade_note(&u, 68.0) == 1);            /* the sixth */
+        CHECK(y264_aq_fade_note(&u, 67.9) == 0);            /* too small a step */
+        /* a cut that jumps the fade's way breaks the run */
+        y264_fade_t c = { 0 };
+        for (int i = 0; i <= 3; i++) on = y264_aq_fade_note(&c, 20.0 + i);
+        for (int i = 0; i < 3; i++) on = y264_aq_fade_note(&c, 43.0 + i);
+        CHECK(on == 0);
+        /* a fast fade, 8.5 levels a frame, is still a fade */
+        y264_fade_t q = { 0 };
+        for (int i = 0; i <= 6; i++) on = y264_aq_fade_note(&q, 16.0 + 8.5 * i);
+        CHECK(on == 1);
+    }
     /* grain counts dark, smooth blocks that aren't flat */
     CHECK(y264_aq_grain(M(30.0), V(2.0)) == 1);
     CHECK(y264_aq_grain(M(30.0), V(0.1)) == 0);     /* a flat fill can't band */

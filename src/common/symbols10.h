@@ -99,6 +99,7 @@
 #define y264_aq_bright                  y264_aq_bright_10
 #define y264_aq_dark                    y264_aq_dark_10
 #define y264_aq_dark_gate               y264_aq_dark_gate_10
+#define y264_aq_fade_note               y264_aq_fade_note_10
 #define y264_aq_floor_lift              y264_aq_floor_lift_10
 #define y264_aq_gain                    y264_aq_gain_10
 #define y264_aq_grain                   y264_aq_grain_10

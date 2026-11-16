@@ -711,6 +711,10 @@ struct yah264_encoder {
     long     la_push_seq;       /* pushes so far (assigns la_entry.push_idx) */
     int      la_since_idr;      /* finalize-side replica of since_idr */
     pixel   *la_lr_prev;        /* lowres of the previously pushed frame */
+    /* the fade test's state, and its answer per push index for the dark-cut
+ * gates; a slot holding another push reads as not fading */
+    y264_fade_t la_fade_st;
+    struct { long key; int on; } la_fade[256];
     int      la_have_prev;
     pixel   *la_fin_prev_lr;    /* lowres of the previously *finalized* frame (the
  * pre-flash reference for the 1-frame flash test) */

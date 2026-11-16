@@ -79,6 +79,10 @@ if rc_python.found() and get_option('dev_knobs')
   test('rc_replay', rc_python,
     args : [files('rc_selftest.py'), yah264_cli_exe],
     timeout : 120)
+  # The dark-cut gate's fade test marks the same frames at 8 and 10 bits.
+  test('fade', rc_python,
+    args : [files('fade_check.py'), yah264_cli_exe],
+    timeout : 120)
 endif
 
 # A GOP-parallel encode from a file must code every input frame when the

@@ -16,6 +16,8 @@ static const char *const y264_knob_names[] = {
     "Y264_AQ_DARK_S1",
     "Y264_AQ_DARK_V",
     "Y264_AQ_DC",
+    "Y264_AQ_FADE",
+    "Y264_AQ_FADE_N",
     "Y264_AQ_MODE",
     "Y264_ASM_OFF",
     "Y264_B8_DIRECT",
