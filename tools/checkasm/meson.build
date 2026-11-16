@@ -16,4 +16,4 @@ checkasm = executable('checkasm',
   dependencies : yah264_dep,
   install : false)
 
-test('checkasm', checkasm, timeout : 60)
+test('checkasm', checkasm, timeout : test_timeout_floor)
