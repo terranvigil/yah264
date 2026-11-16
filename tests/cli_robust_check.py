@@ -261,13 +261,62 @@ def stats_is_output(enc, tmp):
     check("-o and --dump-recon naming one file are refused",
           rc == 2 and "same file" in err and not os.path.exists(same),
           f"rc {rc}: {err.strip()[-200:]}")
-    # -o - sent into the input
+    # the standard output, by any name, sent into the input or the stats file
     src = open(clip, "rb").read()
-    with open(clip, "ab") as f:
-        rc, err = run(enc, base + ["-o", "-"], stdout=f)
-    check("-o - redirected into the input is refused",
-          rc == 2 and "the input" in err and open(clip, "rb").read() == src,
-          f"rc {rc}: {err.strip()[-200:]}")
+    for name in ("-", "/dev/stdout", "/dev/fd/1"):
+        with open(clip, "ab") as f:
+            rc, err = run(enc, base + ["-o", name], stdout=f)
+        check(f"-o {name} redirected into the input is refused",
+              rc == 2 and "the input" in err and open(clip, "rb").read() == src,
+              f"rc {rc}: {err.strip()[-200:]}")
+        with open(st, "ab") as f:
+            rc, err = run(enc, base + ["--pass", "1", "--stats", st, "-o", name], stdout=f)
+        check(f"-o {name} redirected into the stats file is refused",
+              rc == 2 and "same file" in err and open(st, "rb").read() == plan,
+              f"rc {rc}: {err.strip()[-200:]}")
+    # the standard input read from the stats file, the output or the recon
+    piped = list(base)
+    piped[piped.index(clip)] = "-"
+    keep = os.path.join(d, "keep.264")
+    for name, extra in (("--stats", ["--pass", "1", "--stats", clip, "-o", out]),
+                        ("-o", ["-o", clip]),
+                        ("--dump-recon", ["-o", out, "--dump-recon", clip])):
+        with open(clip, "rb") as f:
+            rc, err = run(enc, piped + extra, stdin=f)
+        check(f"the standard input read from the {name} file is refused",
+              rc == 2 and "same file" in err and "the input" in err and open(clip, "rb").read() == src,
+              f"rc {rc}: {err.strip()[-200:]}")
+    # names the volume's own rules make one: Unicode normalization and
+    # non-ASCII case
+    nfc, nfd = "caf\u00e9.x", "cafe\u0301.x"
+    open(os.path.join(d, nfc), "w").close()
+    folds_nf = os.path.exists(os.path.join(d, nfd))
+    os.remove(os.path.join(d, nfc))
+    if folds_nf:
+        for a, b, what in ((nfc, nfd, "NFC and NFD"), ("\u00c9t\u00e9.x", "\u00e9t\u00e9.x", "É and é")):
+            if what == "É and é":
+                open(os.path.join(d, a), "w").close()
+                folds = os.path.exists(os.path.join(d, b))
+                os.remove(os.path.join(d, a))
+                if not folds:
+                    continue
+            rc, err = run(enc, base + ["--pass", "1", "--stats", os.path.join(d, a),
+                                       "-o", os.path.join(d, b)])
+            check(f"pass 1 refuses --stats and -o differing by {what}",
+                  rc == 2 and "same file" in err
+                  and not os.path.exists(os.path.join(d, b)), f"rc {rc}: {err.strip()[-200:]}")
+    # an output that is there stays as it was on every refusal
+    for name, extra in (("--stats", ["--pass", "1", "--stats", keep]),
+                        ("--dump-recon", ["--dump-recon", keep]),
+                        ("--stats as the input", ["--pass", "1", "--stats", clip]),
+                        ("--dump-recon as the input", ["--dump-recon", clip])):
+        with open(keep, "wb") as f:
+            f.write(b"keep me")
+        rc, err = run(enc, base + ["-o", keep] + extra)
+        check(f"an existing -o is kept when {name} is refused",
+              rc == 2 and open(keep, "rb").read() == b"keep me" and open(clip, "rb").read() == src,
+              f"rc {rc}: {err.strip()[-200:]}")
+    os.remove(keep)
     # the input, as the stats file, the output or the recon: refused, untouched
     src = open(clip, "rb").read()
     for p in ("0", "1", "3"):

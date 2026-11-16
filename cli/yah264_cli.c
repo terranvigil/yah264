@@ -2535,73 +2535,103 @@ static int stats_tmp_open(const char *path)
     return g_stats_shown ? 0 : -1;
 }
 
-/* Where a path that doesn't exist yet would be made: a dangling symlink,
- * or a chain of them, is followed to the name it points at. Fills dir with
- * that name's resolved directory and base with its last component. */
-static int future_name(const char *path, char *dir, char *base)
+/* --- the files one run reads and writes are distinct ----------------------
+ *
+ * Which names are one file is the filesystem's call (case, Unicode
+ * normalization, symlinks, firmlinks), so the check compares open
+ * descriptors and stat, never names. The output and the recon are opened
+ * without truncation, created only if absent (O_EXCL), and compared with the
+ * input's descriptor (standard input included) and the stats path, which
+ * by then resolves to them if it names them. Only then are they truncated;
+ * on a clash only a file this run created goes. A name that stands for a
+ * descriptor ("-", /dev/stdout, /dev/fd/N) is that descriptor. A character
+ * device (/dev/null, a terminal) is never the same file as another. */
+typedef struct { int have; dev_t dev; ino_t ino; } file_id_t;
+
+/* the descriptor a name stands for, or -1 for an ordinary path: "-" is
+ * std_fd (-1 where "-" is a plain name), and a name that resolves under
+ * /dev/fd is the descriptor it names */
+static int name_fd(const char *path, int std_fd)
 {
-    char cur[PATH_MAX], lnk[PATH_MAX];
-    snprintf(cur, sizeof cur, "%s", path);
-    for (int hop = 0; hop < 16; hop++) {
-        ssize_t n = readlink(cur, lnk, sizeof lnk - 1);
-        if (n < 0) break;
-        lnk[n] = '\0';
-        const char *slash = strrchr(cur, '/');
-        if (lnk[0] == '/' || !slash) {
-            snprintf(cur, sizeof cur, "%s", lnk);
-        } else {
-            char tail[PATH_MAX];
-            snprintf(tail, sizeof tail, "%.*s%s", (int)(slash - cur) + 1, cur, lnk);
-            snprintf(cur, sizeof cur, "%s", tail);
-        }
+    if (!strcmp(path, "-")) return std_fd;
+    char *r = realpath(path, NULL);
+    int fd = -1;
+    if (r && !strncmp(r, "/dev/fd/", 8)) {
+        char *e;
+        long n = strtol(r + 8, &e, 10);
+        if (e != r + 8 && *e == '\0' && n >= 0 && n <= INT_MAX) fd = (int)n;
     }
-    const char *slash = strrchr(cur, '/');
-    char d[PATH_MAX];
-    snprintf(d, sizeof d, "%.*s", slash ? (int)(slash - cur) + 1 : 1, slash ? cur : ".");
-    snprintf(base, PATH_MAX, "%s", slash ? slash + 1 : cur);
-    return realpath(d, dir) != NULL;
+    free(r);
+    return fd;
 }
 
-/* True when two paths name one file: the same inode when both exist, the
- * same name in the same resolved directory when neither does yet, the case
- * folded where the volume folds it (APFS does by default). b "-" is the
- * standard output. A character device (/dev/null) is never one. */
-static int same_file(const char *a, const char *b)
+static file_id_t file_id(int fd, const char *path)
 {
-    struct stat sa, sb;
-    int ha = stat(a, &sa) == 0;
-    int hb = !strcmp(b, "-") ? fstat(STDOUT_FILENO, &sb) == 0 : stat(b, &sb) == 0;
-    if ((ha && S_ISCHR(sa.st_mode)) || (hb && S_ISCHR(sb.st_mode))) return 0;
-    if (ha && hb) return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
-    if (ha || hb || !strcmp(b, "-")) return 0;
-    char da[PATH_MAX], db[PATH_MAX], na[PATH_MAX], nb[PATH_MAX];
-    if (!future_name(a, da, na) || !future_name(b, db, nb) || strcmp(da, db)) return 0;
-#ifdef _PC_CASE_SENSITIVE
-    if (pathconf(da, _PC_CASE_SENSITIVE) == 0) return !strcasecmp(na, nb);
-#endif
-    return !strcmp(na, nb);
+    file_id_t id = { 0, 0, 0 };
+    struct stat st;
+    int ok = fd >= 0 ? fstat(fd, &st) == 0 : (path && stat(path, &st) == 0);
+    if (ok && !S_ISCHR(st.st_mode)) { id.have = 1; id.dev = st.st_dev; id.ino = st.st_ino; }
+    return id;
 }
 
-/* The files one run may not share: the stats file with the stream, the
- * recon or the input, the stream with the recon, and the stream or the
- * recon with the input. Says which and returns 1. in "-" is the standard
- * input and shares nothing; out "-" is the standard output, which can be
- * redirected into any of them. */
-static int files_clash(const char *in, const char *out, const char *recon,
-                       const char *stats)
+static int id_same(file_id_t a, file_id_t b)
 {
-    const char *what = NULL, *path = NULL;
-    int has_in = strcmp(in, "-") != 0;
-    if (stats && same_file(stats, out)) what = "-o", path = stats;
-    else if (stats && recon && same_file(stats, recon)) what = "--dump-recon", path = stats;
-    else if (stats && has_in && same_file(stats, in)) what = "the input", path = stats;
-    else if (has_in && same_file(in, out)) what = "the input", path = out;
-    else if (recon && same_file(recon, out)) what = "-o", path = recon;
-    else if (has_in && recon && same_file(recon, in)) what = "the input", path = recon;
-    if (!what) return 0;
-    fprintf(stderr, "yah264: %s '%s' names the same file as %s; give each its own name\n",
-            path == stats ? "--stats" : path == out ? "-o" : "--dump-recon", path, what);
-    return 1;
+    return a.have && b.have && a.dev == b.dev && a.ino == b.ino;
+}
+
+/* a file this run writes, opened but not yet truncated */
+typedef struct { int fd, made, trunc; const char *path; } out_file_t;
+
+static int out_open(out_file_t *f, const char *path)
+{
+    f->path = path; f->made = 0; f->trunc = 0;
+    int dfd = name_fd(path, -1);
+    if (dfd >= 0) {                     /* a descriptor's file isn't ours to truncate */
+        f->fd = open(path, O_WRONLY);
+        return f->fd;
+    }
+    f->fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    if (f->fd >= 0) { f->made = 1; return f->fd; }
+    if (errno != EEXIST) return -1;
+    f->fd = open(path, O_WRONLY);
+    struct stat st;
+    f->trunc = f->fd >= 0 && fstat(f->fd, &st) == 0 && S_ISREG(st.st_mode);
+    return f->fd;
+}
+
+/* undo an out_open: close, and remove the file only if this run made it
+ * and the name (through any symlink) still leads to that very file */
+static void out_drop(out_file_t *f)
+{
+    if (f->fd < 0) return;
+    struct stat a, b;
+    char *real = f->made ? realpath(f->path, NULL) : NULL;
+    if (real && fstat(f->fd, &a) == 0 && stat(real, &b) == 0
+        && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
+        unlink(real);
+    free(real);
+    close(f->fd);
+    f->fd = -1;
+}
+
+/* the clash between the run's files, or NULL: the stats file against the
+ * stream, the recon and the input, and the stream, the recon and the input
+ * against one another */
+static const char *files_clash(int in_fd, int out_fd, int recon_fd, const char *stats)
+{
+    file_id_t in = file_id(in_fd, NULL), out = file_id(out_fd, NULL);
+    file_id_t recon = recon_fd >= 0 ? file_id(recon_fd, NULL) : (file_id_t){ 0, 0, 0 };
+    file_id_t st = { 0, 0, 0 };
+    if (stats) {
+        int sfd = name_fd(stats, -1);
+        st = file_id(sfd, sfd >= 0 ? NULL : stats);
+    }
+    return id_same(st, out)   ? "--stats and -o"
+         : id_same(st, recon) ? "--stats and --dump-recon"
+         : id_same(st, in)    ? "--stats and the input"
+         : id_same(out, in)   ? "-o and the input"
+         : id_same(recon, out) ? "--dump-recon and -o"
+         : id_same(recon, in) ? "--dump-recon and the input" : NULL;
 }
 
 /* the run's end: keep pass 3's copy on success, drop it otherwise */
@@ -6105,34 +6135,49 @@ static int cli_main(int argc, char **argv)
                 "it more than once\n", stats_path, pass);
         return 1;
     }
-    /* the encoder would write its records over the stream, or either over
-     * the input, in whichever order the run reaches them */
-    const char *stats_user = pass > 0 ? stats_path : NULL;
-    if (files_clash(in_path, out_path, recon_path, stats_user))
-        return 2;
-    /* stat'ed regular above, when it's there */
-    if (pass == 3) {
-        if (stats_tmp_open(stats_path) != 0) return 1;
-        stats_path = g_stats_tmp;
-    }
-
     FILE *in = (!strcmp(in_path, "-")) ? stdin : fopen(in_path, "rb");
     if (!in) {
         fprintf(stderr, "yah264: cannot open input '%s'\n", in_path);
         return 1;
     }
-    FILE *out = (!strcmp(out_path, "-")) ? stdout : fopen(out_path, "wb");
-    if (!out) {
+    /* the encoder would write its records over the stream, or either over
+     * the input, in whichever order the run reaches them: open, compare,
+     * and only then truncate (see files_clash) */
+    out_file_t of = { -1, 0, 0, NULL }, rf = { -1, 0, 0, NULL };
+    int to_stdout = !strcmp(out_path, "-");
+    if (!to_stdout && out_open(&of, out_path) < 0) {
         fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);
         return 1;
     }
-    FILE *recon = NULL;
-    if (recon_path) {
-        recon = fopen(recon_path, "wb");
-        if (!recon) {
-            fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
-            return 1;
-        }
+    if (recon_path && out_open(&rf, recon_path) < 0) {
+        fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
+        out_drop(&of);
+        return 1;
+    }
+    const char *clash = files_clash(fileno(in), to_stdout ? STDOUT_FILENO : of.fd, rf.fd,
+                                    pass > 0 ? stats_path : NULL);
+    if (clash) {
+        fprintf(stderr, "yah264: %s are the same file; give each its own name\n", clash);
+        out_drop(&of); out_drop(&rf);
+        return 2;
+    }
+    /* stat'ed regular above, when it's there */
+    if (pass == 3 && stats_tmp_open(stats_path) != 0) {
+        out_drop(&of); out_drop(&rf);
+        return 1;
+    }
+    if (pass == 3)
+        stats_path = g_stats_tmp;
+    if ((of.trunc && ftruncate(of.fd, 0) != 0) || (rf.trunc && ftruncate(rf.fd, 0) != 0)) {
+        fprintf(stderr, "yah264: cannot truncate %s (%s)\n",
+                of.trunc ? "the output" : "the recon", strerror(errno));
+        return 1;
+    }
+    FILE *out = to_stdout ? stdout : fdopen(of.fd, "wb");
+    FILE *recon = recon_path ? fdopen(rf.fd, "wb") : NULL;
+    if (!out || (recon_path && !recon)) {
+        fprintf(stderr, "yah264: cannot open %s\n", !out ? "the output" : "the recon");
+        return 1;
     }
 
     char line[512];
