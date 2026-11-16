@@ -2885,13 +2885,15 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     }
     if (e->hrd_flat)
         f.aq_off = NULL, f.mbtree_off = NULL;
-    /* P-frame lowres ME seed (ref0). Gated to the medium tier so the subme-10
- * default stays byte-identical; only for P (the anchor leg is P-vs-anchor). */
+    /* P-frame lowres ME seed (ref0), for the hex search: the medium tier and
+ * any tier run with --me hex. Hex has no wide grid, so without this field it
+ * can't follow a fast pan; that holds at any subme. Only for P (the anchor
+ * leg is P-vs-anchor). */
     /* type FIRST: only the anchor's serial prep may touch e->lr_seed_valid --
  * a v3 driver-side B prep runs concurrent with the API thread's pops,
  * which rewrite it (stash_lr_seed). */
     if (type == 1 && !e->fld_pic && e->lr_seed_valid &&
-        (e->param.subme <= 0 || e->param.subme <= 8)) {
+        (e->param.subme <= 8 || y264_me_hex_features())) {
         f.lr_seed_mvx = (int16_t *)fw->lr_seed_mvx;
         f.lr_seed_mvy = (int16_t *)fw->lr_seed_mvy;
         f.lr_seed_cost = (int32_t *)fw->lr_seed_cost;
@@ -2902,13 +2904,13 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     }
     /* B-frame lowres pair seeds, POC-scaled from the stored anchor-pair legs to
  * this B's actual list-0/list-1 refs (b-pyramid legs sit between anchors).
- * Same medium-tier gate as the P seed; the search-side gate (b_seeds_on)
- * keeps the default UMH path byte-identical. */
+ * Same gate as the P seed; the search-side gate (b_seeds_on) keeps the UMH
+ * path byte-identical. */
     f.lr_bseed_mvx0 = f.lr_bseed_mvy0 = NULL;
     f.lr_bseed_mvx1 = f.lr_bseed_mvy1 = NULL;
     if (type == 2 && e->cur_bseed >= 0 && e->cur_bseed < 8 &&
         fw->bseed_valid[e->cur_bseed] && fw->bseed_cur[0] &&
-        (e->param.subme <= 0 || e->param.subme <= 8)) {
+        (e->param.subme <= 8 || y264_me_hex_features())) {
         int b = e->cur_bseed;
         int nmb = e->width_in_mbs * e->height_in_mbs;
         int den0 = e->poc - fw->bseed_poc0[b], num0 = e->poc - e->ref0_poc;

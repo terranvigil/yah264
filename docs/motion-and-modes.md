@@ -18,8 +18,9 @@ mode, B_8x8, the B skip decision) are in [b-frames.md](b-frames.md).
 ### Integer search
 
 Each search starts from a batch of candidates: zero, the median predictor,
-the spatial neighbors' vectors and, at medium, the lowres motion field from
-the lookahead. They're scored together and the best one seeds the pattern.
+the spatial neighbors' vectors and, whenever hex is the search (medium and
+faster, or `--me hex` at any preset), the lowres motion field from the
+lookahead. They're scored together and the best one seeds the pattern.
 
 Below `--subme 8`, the pattern is a hexagon iterated to convergence, then a
 terminal 8-point square. The square catches minima that sit diagonally off a
