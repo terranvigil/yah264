@@ -4739,7 +4739,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int tp_rc = 0;
     /* a run that already failed has GOPs short of records, and its own error
      * said why: merging would only add a misleading count */
-    int failed = wr_err || job.rerr || job.lost || job.abort_ || g_gop_encode_err;
+    int failed = wr_err || job.rerr || job.lost || job.abort_ || g_gop_encode_err
+                 || g_force_reject;
     if (gop_stats && param->rc.pass != 2 && !failed)
         tp_rc = tp_merge_pass1(param->rc.stats, gop_stats, job.gop_start, n_gops, param, job.tp_vbv)
                 ? 1 : 0;
