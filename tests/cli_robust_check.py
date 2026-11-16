@@ -353,6 +353,36 @@ def stats_is_output(enc, tmp):
             rc, err = run(enc, base + ["-o", name], stdout=f)
         check(f"-o {name} after a header in a shared file keeps the header",
               rc == 0 and open(keep, "rb").read().startswith(b"HEADER\n\x00\x00"), f"rc {rc}")
+    # an output another descriptor of the process holds (read-only, or the
+    # standard output pointing at it) is still truncated: what the stream
+    # doesn't overwrite of the old file mustn't survive past it
+    ref, rref = os.path.join(d, "ref.264"), os.path.join(d, "ref.y4m")
+    run(enc, base + ["-o", ref])
+    run(enc, base + ["-o", os.devnull, "--dump-recon", rref])
+    big = os.urandom(400000)
+    for name in ("held open read-only on another descriptor", "the standard output, appending",
+                 "the standard output", "the standard input", "a recon held on another descriptor"):
+        target = os.path.join(d, "held.y4m" if "recon" in name else "held.264")
+        with open(target, "wb") as f:
+            f.write(big)
+        args = base + (["-o", out, "--dump-recon", target] if "recon" in name else ["-o", target])
+        kw = {}
+        h = open(target, "ab" if "appending" in name else "r+b" if name == "the standard output"
+                 else "rb")
+        if "another descriptor" in name:     # any extra descriptor the run inherits
+            kw["pass_fds"] = (h.fileno(),)
+        elif "output" in name:
+            kw["stdout"] = h
+        else:
+            kw["stdin"] = h
+        p = subprocess.run(WRAP + [enc, "--no-progress"] + args, stderr=subprocess.PIPE,
+                           timeout=LIMIT, **({"stdout": subprocess.PIPE} | kw))
+        h.close()
+        want = os.path.getsize(rref if "recon" in name else ref)
+        got = os.path.getsize(target)
+        check(f"an output {name} ends at the stream's size",
+              p.returncode == 0 and got == want, f"rc {p.returncode}, {got} bytes, want {want}")
+        os.remove(target)
     # a dangling symlink as the output or the recon makes its target
     for name, extra, tgt in (("-o", ["-o", os.path.join(d, "dl.264")], "dt.264"),
                              ("--dump-recon", ["-o", out, "--dump-recon",

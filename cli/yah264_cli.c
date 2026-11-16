@@ -2566,6 +2566,23 @@ static int follow_link(char *path, size_t cap)
     return 1;
 }
 
+/* resolve the directory part of cur in place, so /dev//stdout, //dev/fd/1
+ * and a link to /dev spell the plain names; 0 when it can't be resolved or
+ * the result wouldn't fit */
+static int canon_dir(char *cur, size_t cap)
+{
+    const char *slash = strrchr(cur, '/');
+    char dir[PATH_MAX], rdir[PATH_MAX], tmp[PATH_MAX];
+    snprintf(dir, sizeof dir, "%.*s", slash ? (int)(slash - cur) + (slash == cur) : 1,
+             slash ? cur : ".");
+    if (!realpath(dir, rdir)) return 0;
+    int n = snprintf(tmp, sizeof tmp, "%s/%s", strcmp(rdir, "/") ? rdir : "",
+                     slash ? slash + 1 : cur);
+    if (n < 0 || (size_t)n >= sizeof tmp || (size_t)n >= cap) return 0;
+    memcpy(cur, tmp, (size_t)n + 1);
+    return 1;
+}
+
 /* the descriptor a name stands for, or -1 for an ordinary path: "-" is
  * std_fd (-1 where "-" is a plain name), and /dev/stdin, /dev/stdout,
  * /dev/stderr and /dev/fd/N, as written or reached through symlinks, are
@@ -2578,18 +2595,8 @@ static int name_fd(const char *path, int std_fd)
     char cur[PATH_MAX];
     snprintf(cur, sizeof cur, "%s", path);
     for (int hop = 0; hop < 40; hop++) {
-        /* the directory part resolved, so /dev//stdout, //dev/fd/1 and a
-         * link to /dev spell the names below */
-        const char *slash = strrchr(cur, '/');
-        char dir[PATH_MAX], rdir[PATH_MAX];
-        snprintf(dir, sizeof dir, "%.*s", slash ? (int)(slash - cur) + (slash == cur) : 1,
-                 slash ? cur : ".");
-        if (realpath(dir, rdir)) {
-            char tmp[PATH_MAX];
-            snprintf(tmp, sizeof tmp, "%s/%s", strcmp(rdir, "/") ? rdir : "",
-                     slash ? slash + 1 : cur);
-            snprintf(cur, sizeof cur, "%s", tmp);
-        }
+        if (!canon_dir(cur, sizeof cur))
+            return -1;
         for (int i = 0; i < 3; i++)
             if (!strcmp(cur, std_names[i])) return i;
         if (!strncmp(cur, "/dev/fd/", 8) && cur[8]) {
@@ -2602,15 +2609,23 @@ static int name_fd(const char *path, int std_fd)
     return -1;
 }
 
-/* True when the path leads into the device filesystem (/dev): whatever it
- * names there isn't a file of the user's to truncate */
+/* True when the name leads into the device filesystem (/dev, /dev/fd):
+ * whatever it names there isn't a file of the user's to truncate or delete.
+ * The last component's links are followed and only the directory part is
+ * resolved: realpath of the whole of /dev/fd/1 open on a file answers with
+ * the file's own name */
 static int on_devfs(const char *path)
 {
-    struct stat dev, st;
-    char *r = realpath(path, NULL);
-    int on = r && stat("/dev", &dev) == 0 && lstat(r, &st) == 0 && st.st_dev == dev.st_dev;
-    free(r);
-    return on;
+    char cur[PATH_MAX];
+    snprintf(cur, sizeof cur, "%s", path);
+    for (int hop = 0; hop < 40; hop++)
+        if (!canon_dir(cur, sizeof cur) || !follow_link(cur, sizeof cur))
+            break;
+    if (!canon_dir(cur, sizeof cur)) return 0;
+    char *slash = strrchr(cur, '/');
+    if (slash == cur) slash[1] = '\0'; else *slash = '\0';
+    struct stat dev, dir;
+    return stat("/dev", &dev) == 0 && stat(cur, &dir) == 0 && dir.st_dev == dev.st_dev;
 }
 
 /* sockets and FIFOs (a socket shared by stdin and stdout under inetd) and
@@ -2635,28 +2650,13 @@ static int id_same(file_id_t a, file_id_t b)
 /* a file this run writes, opened but not yet truncated */
 typedef struct { int fd, made, trunc; const char *path; } out_file_t;
 
-/* True when the file is open on a descriptor already, one the process
- * inherited (the shell's redirect behind /dev/stdout, however spelled) or
- * the input this run opened: not a file of ours to truncate or delete */
-static int held_by_fd(const struct stat *st)
-{
-    int n = getdtablesize();
-    for (int fd = 0; fd < n; fd++) {
-        struct stat fs;
-        if (fcntl(fd, F_GETFD) != -1 && fstat(fd, &fs) == 0
-            && fs.st_dev == st->st_dev && fs.st_ino == st->st_ino)
-            return 1;
-    }
-    return 0;
-}
-
 static int out_open(out_file_t *f, const char *path)
 {
     f->path = path; f->made = 0; f->trunc = 0;
-    /* decided on the file, not the name: stat follows every spelling and
-     * link to it */
-    struct stat pre;
-    if (name_fd(path, -1) >= 0 || (stat(path, &pre) == 0 && held_by_fd(&pre))) {
+    /* a descriptor's file (/dev/stdout however spelled) isn't ours to
+     * truncate; any other file is, as main truncates it, whoever else
+     * holds it open */
+    if (name_fd(path, -1) >= 0 || on_devfs(path)) {
         f->fd = open(path, O_WRONLY);
         return f->fd;
     }
@@ -2698,6 +2698,21 @@ static void out_drop(out_file_t *f)
         unlink(real);
     free(real);
     close(f->fd);
+    f->fd = -1;
+}
+
+/* out_drop for a file already handed to a FILE: the check runs on the
+ * open descriptor, then the FILE closes it (or the descriptor, with none) */
+static void out_forget(out_file_t *f, FILE *fp)
+{
+    if (f->fd < 0) { if (fp) fclose(fp); return; }
+    struct stat a, b;
+    char *real = f->made ? realpath(f->path, NULL) : NULL;
+    if (real && fstat(f->fd, &a) == 0 && stat(real, &b) == 0
+        && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
+        unlink(real);
+    free(real);
+    if (fp) fclose(fp); else close(f->fd);
     f->fd = -1;
 }
 
@@ -4696,8 +4711,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                       && stats_now_clash(param->rc.stats);
     if (stats_clash) {
         g_api->encoder_close(prime);
-        prime = NULL;
-        out_drop(&g_of); out_drop(&g_rf);   /* only files this run made go */
+        prime = NULL;               /* the caller takes back the output */
     }
     if (!prime) {
         if (!stats_clash)
@@ -6945,7 +6959,7 @@ static int cli_main(int argc, char **argv)
                     "what the buffer may need, and the stream would fail its own declaration\n",
                     crf_max > 0.0 ? "--crf-max" : qcap ? "--qpmax under 51"
                     : forced ? "a forced qpfile QP" : "a --zones q= zone");
-            if (out != stdout) { fclose(out); remove(out_path); }
+            if (out != stdout) out_forget(&g_of, out);
             return 2;
         }
         double fps = param.timebase.fps_num > 0 && param.timebase.fps_den > 0
@@ -6958,7 +6972,7 @@ static int cli_main(int argc, char **argv)
             fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture period "
                     "of arrival (%.0f bits, a field's under --tff/--bff); --vbv-bufsize gives %.0f\n",
                     pic, cpb);
-            if (out != stdout) { fclose(out); remove(out_path); }
+            if (out != stdout) out_forget(&g_of, out);
             return 2;
         }
     }
@@ -6972,7 +6986,7 @@ static int cli_main(int argc, char **argv)
                 nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV",
                 g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table"
                 : g_cut_split ? "--cut-split" : "--segment-out");
-        if (out != stdout) { fclose(out); remove(out_path); }
+        if (out != stdout) out_forget(&g_of, out);
         return 2;
     }
     /* --intra-refresh. Everything it cannot run with is named here, because
@@ -7156,6 +7170,10 @@ static int cli_main(int argc, char **argv)
                 rc = 1;
             }
             if (in != stdin) fclose(in);
+            if (rc == 2 && out != stdout) {         /* the stats recheck stopped it */
+                out_forget(&g_of, out);
+                return rc;
+            }
             return close_out(out, rc);
         }
         if (threads > 1)
@@ -7172,7 +7190,8 @@ static int cli_main(int argc, char **argv)
     if (enc && param.rc.method == YAH264_RC_2PASS && param.rc.pass != 2
         && stats_now_clash(param.rc.stats)) {
         g_api->encoder_close(enc);
-        out_drop(&g_of); out_drop(&g_rf);   /* only files this run made go */
+        out_forget(&g_of, out != stdout ? out : NULL);  /* only files this run made go */
+        out_forget(&g_rf, recon);
         return 2;
     }
     apply_video_signal(enc);
