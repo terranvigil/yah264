@@ -305,6 +305,72 @@ def stats_is_output(enc, tmp):
             check(f"pass 1 refuses --stats and -o differing by {what}",
                   rc == 2 and "same file" in err
                   and not os.path.exists(os.path.join(d, b)), f"rc {rc}: {err.strip()[-200:]}")
+    # the standard output by name into a file the shell shares: appended
+    # to, and what was there kept
+    for name in ("/dev/stdout", "/dev/fd/1"):
+        with open(keep, "wb") as f:
+            f.write(b"keep\n")
+        with open(keep, "ab") as f:
+            rc, err = run(enc, base + ["-o", name], stdout=f)
+        data = open(keep, "rb").read()
+        check(f"-o {name} appended to a file keeps what was there",
+              rc == 0 and data.startswith(b"keep\n") and len(data) > 5, f"rc {rc}, {len(data)} bytes")
+    # { echo HEADER; yah264 -o /dev/stdout; } > file: written after it
+    with open(keep, "wb") as f:
+        f.write(b"HEADER\n")
+        f.flush()
+        rc, err = run(enc, base + ["-o", "/dev/stdout"], stdout=f)
+    check("-o /dev/stdout after a header in a shared file keeps the header",
+          rc == 0 and open(keep, "rb").read().startswith(b"HEADER\n\x00\x00"), f"rc {rc}")
+    with open(keep, "wb") as f:
+        f.write(b"keep\n")
+    with open(keep, "ab") as f:
+        rc, err = run(enc, base + ["-o", out, "--dump-recon", "/dev/stdout"], stdout=f)
+    check("--dump-recon /dev/stdout appended to a file keeps what was there",
+          rc == 0 and open(keep, "rb").read().startswith(b"keep\nYUV4MPEG2"), f"rc {rc}")
+    # a dangling symlink as the output or the recon makes its target
+    for name, extra, tgt in (("-o", ["-o", os.path.join(d, "dl.264")], "dt.264"),
+                             ("--dump-recon", ["-o", out, "--dump-recon",
+                                               os.path.join(d, "dl.y4m")], "dt.y4m")):
+        link = extra[-1]
+        os.symlink(tgt, link)
+        rc, err = run(enc, base + extra)
+        made = os.path.join(d, tgt)
+        check(f"a dangling symlink as {name} makes its target",
+              rc == 0 and os.path.islink(link) and os.path.exists(made)
+              and os.path.getsize(made) > 0, f"rc {rc}: {err.strip()[-200:]}")
+        os.remove(link)
+        if os.path.exists(made):
+            os.remove(made)
+    # the standard input and output on one socket (inetd, socat)
+    import socket, threading
+    a, b = socket.socketpair()
+    q = subprocess.Popen(WRAP + [enc, "--no-progress"] + piped + ["-o", "-"],
+                         stdin=b.fileno(), stdout=b.fileno(), stderr=subprocess.PIPE)
+    b.close()
+    def feed():
+        try:
+            a.sendall(src)
+            a.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+    threading.Thread(target=feed, daemon=True).start()
+    got = bytearray()
+    while True:
+        chunk = a.recv(65536)
+        if not chunk:
+            break
+        got += chunk
+    rc = q.wait(timeout=LIMIT)
+    q.stderr.close()
+    a.close()
+    check("the standard input and output on one socket encode", rc == 0 and len(got) > 0,
+          f"rc {rc}, {len(got)} bytes")
+    # a recon cut short by a full disk is an error
+    rc, err = run_capped(enc, base + ["-o", os.devnull, "--dump-recon",
+                                      os.path.join(d, "full.y4m")], 1000)
+    check("a recon that can't be written fails", rc != 0 and "recon" in err,
+          f"rc {rc}: {err.strip()[-200:]}")
     # an output that is there stays as it was on every refusal
     for name, extra in (("--stats", ["--pass", "1", "--stats", keep]),
                         ("--dump-recon", ["--dump-recon", keep]),

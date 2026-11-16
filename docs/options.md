@@ -100,7 +100,7 @@ as something else.
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
 | `--input-y4m` | path or `-` | required | Y4M input. No other input format exists. |
-| `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. It may not be the input, the `--dump-recon` file or the stats file, whatever names reach them (a symlink, another case, `/dev/stdout`, a redirected standard input or output): the check compares the open files. An existing output is truncated only once that passes. |
+| `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. It may not be the input, the `--dump-recon` file or the stats file, whatever names reach them (a symlink, another case, `/dev/stdout`, a redirected standard input or output): the check compares the open files. A terminal, socket or FIFO never counts as one of them, so the standard input and output may share a socket. An existing output is truncated only once that passes, and a descriptor's file (`-`, `/dev/stdout`, `/dev/fd/N`) never is. |
 | `--input-raw` | path or `-` | | Raw YUV. Needs `--input-res`. |
 | `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
 | `--input-csp` | `i420`\|`i422`\|`i444`, each with an optional `p10` | `i420` | Raw input chroma format **and sample depth**. A raw file has no Y4M `C` tag. That tag carries the depth beside the format, so the depth travels with the format here too: `--input-csp i420p10`. That is why there is no `--input-depth`. |

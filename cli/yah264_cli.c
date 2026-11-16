@@ -2544,33 +2544,74 @@ static int stats_tmp_open(const char *path)
  * input's descriptor (standard input included) and the stats path, which
  * by then resolves to them if it names them. Only then are they truncated;
  * on a clash only a file this run created goes. A name that stands for a
- * descriptor ("-", /dev/stdout, /dev/fd/N) is that descriptor. A character
- * device (/dev/null, a terminal) is never the same file as another. */
+ * descriptor ("-", /dev/stdout, /dev/fd/N) is that descriptor, never
+ * truncated. A character device (/dev/null, a terminal), a socket or a FIFO
+ * is never the same file as another. */
 typedef struct { int have; dev_t dev; ino_t ino; } file_id_t;
 
+/* follow one symlink: the name it points at, relative to the link's own
+ * directory; 0 when path isn't a link */
+static int follow_link(char *path, size_t cap)
+{
+    char lnk[PATH_MAX], next[PATH_MAX];
+    ssize_t n = readlink(path, lnk, sizeof lnk - 1);
+    if (n < 0) return 0;
+    lnk[n] = '\0';
+    const char *slash = strrchr(path, '/');
+    if (lnk[0] == '/' || !slash)
+        snprintf(next, sizeof next, "%s", lnk);
+    else
+        snprintf(next, sizeof next, "%.*s%s", (int)(slash - path) + 1, path, lnk);
+    snprintf(path, cap, "%s", next);
+    return 1;
+}
+
 /* the descriptor a name stands for, or -1 for an ordinary path: "-" is
- * std_fd (-1 where "-" is a plain name), and a name that resolves under
- * /dev/fd is the descriptor it names */
+ * std_fd (-1 where "-" is a plain name), and /dev/stdin, /dev/stdout,
+ * /dev/stderr and /dev/fd/N, as written or reached through symlinks, are
+ * those descriptors. Read off the names, not realpath, which for a
+ * descriptor open on a file returns a name of its own */
 static int name_fd(const char *path, int std_fd)
 {
     if (!strcmp(path, "-")) return std_fd;
-    char *r = realpath(path, NULL);
-    int fd = -1;
-    if (r && !strncmp(r, "/dev/fd/", 8)) {
-        char *e;
-        long n = strtol(r + 8, &e, 10);
-        if (e != r + 8 && *e == '\0' && n >= 0 && n <= INT_MAX) fd = (int)n;
+    static const char *const std_names[] = { "/dev/stdin", "/dev/stdout", "/dev/stderr" };
+    char cur[PATH_MAX];
+    snprintf(cur, sizeof cur, "%s", path);
+    for (int hop = 0; hop < 40; hop++) {
+        for (int i = 0; i < 3; i++)
+            if (!strcmp(cur, std_names[i])) return i;
+        if (!strncmp(cur, "/dev/fd/", 8) && cur[8]) {
+            char *e;
+            long n = strtol(cur + 8, &e, 10);
+            if (*e == '\0' && cur[8] >= '0' && cur[8] <= '9' && n <= INT_MAX) return (int)n;
+        }
+        if (!follow_link(cur, sizeof cur)) break;
     }
-    free(r);
-    return fd;
+    return -1;
 }
 
+/* True when the path leads into the device filesystem (/dev): whatever it
+ * names there isn't a file of the user's to truncate */
+static int on_devfs(const char *path)
+{
+    struct stat dev, st;
+    char *r = realpath(path, NULL);
+    int on = r && stat("/dev", &dev) == 0 && lstat(r, &st) == 0 && st.st_dev == dev.st_dev;
+    free(r);
+    return on;
+}
+
+/* sockets and FIFOs (a socket shared by stdin and stdout under inetd) and
+ * character devices are never one file with another: nothing in them can
+ * be truncated or read back */
 static file_id_t file_id(int fd, const char *path)
 {
     file_id_t id = { 0, 0, 0 };
     struct stat st;
     int ok = fd >= 0 ? fstat(fd, &st) == 0 : (path && stat(path, &st) == 0);
-    if (ok && !S_ISCHR(st.st_mode)) { id.have = 1; id.dev = st.st_dev; id.ino = st.st_ino; }
+    if (ok && !S_ISCHR(st.st_mode) && !S_ISSOCK(st.st_mode) && !S_ISFIFO(st.st_mode)) {
+        id.have = 1; id.dev = st.st_dev; id.ino = st.st_ino;
+    }
     return id;
 }
 
@@ -2585,8 +2626,7 @@ typedef struct { int fd, made, trunc; const char *path; } out_file_t;
 static int out_open(out_file_t *f, const char *path)
 {
     f->path = path; f->made = 0; f->trunc = 0;
-    int dfd = name_fd(path, -1);
-    if (dfd >= 0) {                     /* a descriptor's file isn't ours to truncate */
+    if (name_fd(path, -1) >= 0) {       /* a descriptor's file isn't ours to truncate */
         f->fd = open(path, O_WRONLY);
         return f->fd;
     }
@@ -2594,8 +2634,19 @@ static int out_open(out_file_t *f, const char *path)
     if (f->fd >= 0) { f->made = 1; return f->fd; }
     if (errno != EEXIST) return -1;
     f->fd = open(path, O_WRONLY);
+    if (f->fd < 0 && errno == ENOENT) {
+        /* a dangling symlink: O_EXCL won't follow it, so make the name it
+         * leads to */
+        char cur[PATH_MAX];
+        snprintf(cur, sizeof cur, "%s", path);
+        for (int hop = 0; hop < 40 && follow_link(cur, sizeof cur); hop++)
+            ;
+        f->fd = open(cur, O_WRONLY | O_CREAT | O_EXCL, 0666);
+        f->made = f->fd >= 0;
+        return f->fd;
+    }
     struct stat st;
-    f->trunc = f->fd >= 0 && fstat(f->fd, &st) == 0 && S_ISREG(st.st_mode);
+    f->trunc = f->fd >= 0 && fstat(f->fd, &st) == 0 && S_ISREG(st.st_mode) && !on_devfs(path);
     return f->fd;
 }
 
@@ -6168,9 +6219,11 @@ static int cli_main(int argc, char **argv)
     }
     if (pass == 3)
         stats_path = g_stats_tmp;
-    if ((of.trunc && ftruncate(of.fd, 0) != 0) || (rf.trunc && ftruncate(rf.fd, 0) != 0)) {
-        fprintf(stderr, "yah264: cannot truncate %s (%s)\n",
-                of.trunc ? "the output" : "the recon", strerror(errno));
+    const char *tfail = of.trunc && ftruncate(of.fd, 0) != 0 ? "the output"
+                      : rf.trunc && ftruncate(rf.fd, 0) != 0 ? "the recon" : NULL;
+    if (tfail) {
+        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
+        out_drop(&of); out_drop(&rf);
         return 1;
     }
     FILE *out = to_stdout ? stdout : fdopen(of.fd, "wb");
@@ -7273,7 +7326,14 @@ done:
     g_api->encoder_close(enc);
     if (in != stdin) fclose(in);
     rc = close_out(out, rc);
-    if (recon) fclose(recon);
+    if (recon) {                        /* a full disk cuts the recon short too */
+        int bad = ferror(recon);
+        bad |= fclose(recon) != 0;
+        if (bad && !rc) {
+            fprintf(stderr, "yah264: error writing the recon\n");
+            rc = 1;
+        }
+    }
     return rc;
 }
 
