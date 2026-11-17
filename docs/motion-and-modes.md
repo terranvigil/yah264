@@ -69,7 +69,17 @@ In order, at `--subme 8` and below:
 
 1. **Fast P-skip probe.** If the skip prediction's residual quantizes to
    nothing under the seed quantizer, commit skip before any search.
-   `--no-fast-pskip` turns it off.
+   `--no-fast-pskip` turns it off. With `--weightp 1` or `2`, in a
+   picture whose mean moved against reference 0 by a quarter code or more,
+   the probe also refuses a skip on a flat macroblock (variance under the AQ
+   field's floor) whose residual would keep a level in the Intra16x16 DC
+   transform. That transform sums the whole macroblock, so it codes a small
+   even step, such as one frame of a fade, that every 4x4 deadzone drops. It
+   leaves the skip alone when the step goes against the picture's shift, is
+   smaller than the block's own noise, or buys less distortion than 8 bits
+   cost at the mode lambda, and on dark blocks that aren't black, where
+   intra plateaus over a smooth gradient band worse than the skip.
+   `Y264_FLAT_SKIP_DC=0` turns the check off.
 2. **16x16 search** over the active references.
 3. **Ref-0 exit** (pictures of at least 1200
    macroblocks). If the ref-0 16x16 vector lands within one quarter-pel of

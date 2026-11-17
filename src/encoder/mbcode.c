@@ -11353,6 +11353,75 @@ static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol)
 }
 
 
+/* an even step over a flat block, as a fade brings, falls under every 4x4
+ * deadzone, but the Intra16x16 DC resolves one about four times finer, so a
+ * flat block in a fading picture may want the full analysis */
+#define FLAT_SKIP_BLACK 20.0
+#define FLAT_SKIP_DARK  40.0
+#define FLAT_SKIP_MINBITS 8.0
+static int flat_skip_dc_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = y264_env("Y264_FLAT_SKIP_DC"); v = e ? atoi(e) != 0 : 1; }
+    return v;
+}
+
+static int flat_skip_dc_lost(y264_frame_t *f, int mbx, int mby, const struct skip_stats *st)
+{
+    /* only in a picture whose mean moved against ref 0: a step in a static
+     * picture is grain or the reference's own error */
+    double u = (double)(1 << (Y264_BIT_DEPTH - 8));
+    if (fabs(f->wp_shift) < 0.25 * u)
+        return 0;
+    int ss = f->src_stride[0], rs = f->rec_stride[0];
+    const pixel *src = f->src[0] + (mby * 16) * ss + mbx * 16;
+    const pixel *pred = f->rec[0] + (mby * 16) * rs + mbx * 16;
+    uint32_t v2[2];
+    int i = mby * f->wmb + mbx;
+    if (f->mbvar && *f->mbvar_src == f->src[0]) {
+        v2[0] = f->mbvar[2 * i]; v2[1] = f->mbvar[2 * i + 1];
+    } else
+        y264_dsp.var16x16(src, ss, v2);
+    double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+    if (var < 0) var = 0;
+    if (var * y264_aq_vscale() >= y264_aq_afloor())
+        return 0;
+    /* dark but not black: intra plateaus over a smooth dark gradient band
+     * worse than the skip, and the weights carry those fades */
+    double m8 = mean / u;
+    if (m8 > FLAT_SKIP_BLACK && m8 < FLAT_SKIP_DARK)
+        return 0;
+    dctcoef dc[16], had[16], lev[16];
+    long sum_all = 0;
+    for (int k = 0; k < 16; k++) {
+        int32_t sum = 0;
+        if (st)
+            sum = st->s4[k];
+        else {
+            const pixel *a = src + (k >> 2) * 4 * ss + (k & 3) * 4;
+            const pixel *b = pred + (k >> 2) * 4 * rs + (k & 3) * 4;
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++)
+                    sum += a[y * ss + x] - b[y * rs + x];
+        }
+        dc[k] = (dctcoef)sum;
+        sum_all += sum;
+    }
+    /* skip a step that goes against the picture's (grain, not the fade), one
+     * smaller than the block's own noise, and one whose distortion can't pay
+     * for an intra macroblock's fewest bits at this lambda */
+    double step = (double)sum_all / 256.0;
+    if ((step * f->wp_shift <= 0.0) || step * step < var ||
+        256.0 * step * step < FLAT_SKIP_MINBITS * lambda_mode(f->cur_qp))
+        return 0;
+    y264_hadamard4x4(dc, had);
+    /* at the block's own QP: the caller undid the probe's lifts */
+    y264_quant_dc_luma(had, lev, f->cur_qp_scaled, 1, cqm_dc4(f, 1), f->lev_max);
+    for (int k = 0; k < 16; k++)
+        if (lev[k]) return 1;
+    return 0;
+}
+
 static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
                        const struct skip_stats *st)
 {
@@ -11373,6 +11442,8 @@ static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
     int r = probe_skip_gs(f, mbx, mby, 0, 0, NULL, lskip, cskip,
                           probe_first_block(e4, lskip));
     skip_clift_off(f, &sv);
+    if (r && flat_skip_dc_on() && flat_skip_dc_lost(f, mbx, mby, st))
+        r = 0;
     return r;
 }
 
@@ -13185,6 +13256,7 @@ void y264_mb_warm_statics(void)
     (void)unsafe_no_emit();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)fast_pskip_on();
+    (void)flat_skip_dc_on();
     (void)b_skip_exit_env();
     (void)bprof_env(); (void)bprof2_env();
     (void)est_scrtrace_on();

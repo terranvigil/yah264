@@ -127,6 +127,7 @@ typedef struct {
     int wp_luma[16];            /* P slice: explicit luma weight active, per ref */
     int wp_w[16], wp_o[16];     /* per-ref luma weight and offset */
     int wp_denom;               /* shared luma log2 weight denom */
+    float wp_shift;             /* picture mean minus ref 0's, in samples (0: not measured) */
     /* --weightp 2: the duplicate list-0 slot and the slot it duplicates, or -1
  * and -1 where this slice carries none. The two name the SAME picture, so
  * the motion search cannot tell them apart -- it would score both the same
