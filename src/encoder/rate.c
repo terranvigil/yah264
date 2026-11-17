@@ -413,6 +413,9 @@ static double abr_scale_for(yah264_encoder_t *e, int type)
  * is carried by the extrapolation guards + the shock multiplier + the
  * content-jump gate (see below), which the compliance battery validates. */
 #define VBV_RHI 2.0
+/* a buffer under this many frames of maxrate, or under two bursts, is too
+ * short for capped VBR bursts to ride predictions (rcp_vbv_gate) */
+#define VBV_SHORT 8.0
 
 /* Extrapolation guards. QPD: how far below the model's
  * calibrated QP regime a PIPELINED B decide may go (the serial schedule has
@@ -1700,6 +1703,12 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * into: on a pool their bursts take the serial schedule and the re-encode
  * (not pass 1 of a two-pass, which nothing holds to the buffer) */
     if ((e->vbv_cbr || (e->hrd_on && e->tp_pass != 1)) && e->pool)
+        tight = 1;
+    /* capped VBR with a buffer of a few pictures, or under two B runs plus
+     * anchors, has CBR's headroom: one missed anchor fills it, so a pooled
+     * burst goes serial */
+    if (!tight && e->pool && e->abr_on && !e->vbv_cbr && !e->tp_pass && e->vbv.rate > 0.0
+        && e->vbv.size < fmax(VBV_SHORT, 2.0 * (e->bframes + 1)) * e->vbv.rate)
         tight = 1;
     /* capped CRF on a pool: walk the burst again at the margin the
  * measured-size bound has been catching. a bounded frame's raise re-prices

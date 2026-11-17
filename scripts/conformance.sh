@@ -1166,6 +1166,28 @@ print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/de
     echo "SUMMARY $n $f"
 }
 
+# vbv_check at one thread and at three: a pooled burst is coded on its
+# predictions, so a short buffer underflows threaded where one thread can't
+check_vbv_mt() {   # check_vbv_mt <name> <src> <spec>
+    local name="$1" src="$2" spec="$3" t f=0 n=0 p mr bs
+    mr=$(printf '%s\n' "$spec" | sed -n 's/.*--vbv-maxrate \([0-9]*\).*/\1/p')
+    bs=$(printf '%s\n' "$spec" | sed -n 's/.*--vbv-bufsize \([0-9]*\).*/\1/p')
+    for t in 1 3; do
+        p="$work/vbvmt.$name.t$t"
+        n=$((n + 1))
+        rm -f "$p.264"
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads $t -o "$p.264" 2>/dev/null || true
+        if [ -s "$p.264" ] && python3 "$root/scripts/vbv_check.py" "$p.264" --maxrate "$mr" \
+                --bufsize "$bs" --y4m "$src" --quiet >/dev/null 2>&1; then
+            echo "  ok   no VBV underflow at $t thread(s) ($spec)"
+        else
+            echo "  FAIL VBV underflow at $t thread(s) ($spec)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $n $f"
+}
+
 # --intra-refresh two-pass at four threads: one IDR in the whole stream. The
 # two-pass path choice used to put it back on the per-GOP path, where every
 # GOP opens with its own IDR.
@@ -1473,6 +1495,10 @@ done
 # seen to hold, and an ABR tolerance only orders once the correction has had
 # frames to act on.
 genlavfi syn_rc "testsrc2=size=320x240:rate=30" 48
+# Capped VBR with a buffer 2.5 frames long, threaded: every anchor of this
+# clip is a large share of the buffer, so one coded on its prediction
+# underflows. The fractal's detail grows with the zoom.
+genlavfi syn_mandel "mandelbrot=size=320x240:rate=25" 120
 # The frame file the --qpfile cells read. The forced frames are chosen to be
 # placeable at the cell's own keyint AND at the --keyint 6 the determinism leg
 # adds, which is a real constraint and not a formality. A forced B has to have
@@ -1834,6 +1860,8 @@ add "CRF rate control" check_rc crf2 "$S/syn_motion.y4m" "--cabac --crf 22 --bfr
 
 add "VBV constrained rate" check_rc vbv "$S/syn_motion.y4m" \
     "--cabac --crf 16 --vbv-maxrate 600 --vbv-bufsize 600 --bframes 2"
+add "VBV constrained rate" check_vbv_mt vbr_short "$S/syn_mandel.y4m" \
+    "--bitrate 300 --vbv-maxrate 450 --vbv-bufsize 45"
 
 # --- nal-hrd: the buffer model written INTO the stream ---------------------
 # Each of these carries its own verification: check_rc sees --nal-hrd in the
