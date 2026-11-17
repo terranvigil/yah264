@@ -39,6 +39,10 @@
 #include <math.h>
 #include <time.h>
 #include <pthread.h>
+
+/* the 720p class's default chroma qp offset; the skip probe lift was
+ * measured at this value, so re-measure it if this moves */
+#define CQP_720 (-2)
 #include <sched.h>
 #include <stdatomic.h>
 
@@ -2733,7 +2737,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.deblock_a = e->param.deblock_alpha;
     f.deblock_b = e->param.deblock_beta;
     f.chroma_qp_off = e->param.chroma_qp_index_offset;
-    f.clift_720 = y264_size_class(e->param.width, e->param.height) == 1;
+    f.clift_720 = y264_size_class(e->param.width, e->param.height) == 1
+               && e->param.chroma_qp_index_offset == CQP_720;
     f.cqm = e->cqm_on ? &e->cqm : NULL;
     f.no_mixed_refs = e->param.no_mixed_refs ? 1 : 0;
     f.transform8x8 = e->pps.transform_8x8_mode_flag;
@@ -4373,7 +4378,7 @@ static void deblock_auto_resolve(yah264_param_t *p)
     if (p->deblock_alpha == YAH264_DEBLOCK_AUTO) p->deblock_alpha = off;
     if (p->deblock_beta == YAH264_DEBLOCK_AUTO) p->deblock_beta = off;
     if (p->chroma_qp_index_offset == YAH264_CQP_AUTO)
-        p->chroma_qp_index_offset = !psy ? 0 : sc == 0 ? -4 : sc == 1 ? -2 : 0;
+        p->chroma_qp_index_offset = !psy ? 0 : sc == 0 ? -4 : sc == 1 ? CQP_720 : 0;
 }
 
 static int lr_intra_penalty(const yah264_param_t *p);
