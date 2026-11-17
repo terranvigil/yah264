@@ -365,6 +365,10 @@ also go serial:
 - Under capped VBR, the anchor after an intra frame or after one the buffer
   raised 3+ QP (`Y264_VBV_POSTI`), and any burst starting under a quarter full
   (`Y264_VBV_LOW`).
+- Under capped VBR with a buffer shorter than 8 coded pictures at the
+  maxrate, or than two B runs plus their anchors (a run is at most 7 B
+  frames), every burst coded on a frame pool: one anchor a few times its
+  prediction is the whole buffer there. Under PAFF both counts are fields.
 - Under capped CRF, the next two anchors after an intra frame the buffer
   raised 3+ QP over the rate factor.
 - Under CBR and under `--nal-hrd` (pass 1 of a two-pass aside), every burst
