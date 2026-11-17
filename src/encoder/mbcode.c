@@ -6619,6 +6619,14 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 if (only < 0 && tl_rect_refs && (part == 1 || part == 2)) {
                     int ra = part == 1 ? tl_rect_refs[2 * p]     : tl_rect_refs[p];
                     int rb = part == 1 ? tl_rect_refs[2 * p + 1] : tl_rect_refs[p + 2];
+                    /* an escaped --weightp 2 half names a slot the search skips,
+ * so map it to its weighted twin; otherwise a rect with two
+ * escaped halves is never searched and codes a vector the
+ * recon did not use */
+                    if (f->wp_dup >= 0) {
+                        if (ra == f->wp_dup_of) ra = f->wp_dup;
+                        if (rb == f->wp_dup_of) rb = f->wp_dup;
+                    }
                     if (r != ra && r != rb) continue;
                 }
                 pred_from_nb(&pn, part, p, r, &px, &py);

@@ -31,7 +31,8 @@
 #
 # The checks are independent, so they run in parallel (xargs -P). Recon-match
 # encodes are pinned to --threads 1 (the encoder defaults to all cores) so the
-# job pool, not the encoder, owns the parallelism. Synthetic inputs are
+# job pool, not the encoder, owns the parallelism; the few check_clip_mt cells
+# name a small thread count of their own. Synthetic inputs are
 # generated once into a cached fixtures dir and reused across runs.
 #
 # BYTE IDENTITY WITH MORE THAN ONE THREAD IS INFORMATIONAL (owner, 2026-09-25).
@@ -236,7 +237,7 @@ check_clip() {  # check_clip <name> <src> [extra-flags] [qp-list override]
     for qp in $qps; do
         out="$work/$name.$qp.264"; rec="$work/$name.$qp.rec.y4m"
         # shellcheck disable=SC2086
-        "$enc" --input-y4m "$src" --qp "$qp" --threads 1 $extra \
+        "$enc" --input-y4m "$src" --qp "$qp" --threads "${CLIP_THREADS:-1}" $extra \
             -o "$out" --dump-recon "$rec" 2>/dev/null || true
         if [ "$DO_PROBE" = 1 ]; then
             codec="$(ffprobe -v error -select_streams v:0 \
@@ -252,6 +253,14 @@ check_clip() {  # check_clip <name> <src> [extra-flags] [qp-list override]
     done
     [ "$ok_qps" -gt 0 ] && echo "  ok   $name (recon-match over $ok_qps QPs)"
     echo "SUMMARY $t $f"
+}
+
+# check_clip with the encoder's own threads on: a threaded encode takes a
+# different partition order from --threads 1, which check_clip never reaches
+check_clip_mt() {   # check_clip_mt <threads> <name> <src> [extra-flags] [qp-list override]
+    local CLIP_THREADS="$1"
+    shift
+    check_clip "$@"
 }
 
 check_same_stream() {   # check_same_stream <label> <src> <flags> <flags-that-must-not-move-it>
@@ -1679,6 +1688,14 @@ add "explicit P weighted prediction" check_clip wp2_cabac   "$S/syn_xfade.y4m" "
 add "explicit P weighted prediction" check_clip wp2_b2      "$S/syn_xfade.y4m" "--cabac --ref 4 --bframes 2 --weightp 2"
 add "explicit P weighted prediction" check_clip wp2_8x8     "$S/syn_xfade.y4m" "--cabac --ref 3 --bframes 2 --transform-8x8 --weightp 2"
 add "explicit P weighted prediction" check_clip wp2_fade    "$S/syn_fade.y4m"  "--cabac --ref 3 --weightp 2"
+# threaded --weightp 2 without B frames: the threaded order searches a
+# rectangle only on its 8x8 halves' references, and a half on the duplicate's
+# plain twin names a slot the search skips. wp2_fade_t3 is the regression
+# guard: at --ref 5 and up, qp 37 on this fade lands on a rectangle whose two
+# halves both escaped. the other two cells are coverage
+add "explicit P weighted prediction" check_clip_mt 3 wp2_fade_t3  "$S/syn_fade.y4m"  "--cabac --ref 6 --bframes 0 --weightp 2" "26 37"
+add "explicit P weighted prediction" check_clip_mt 2 wp2_fade_t2  "$S/syn_fade.y4m"  "--ref 2 --bframes 0 --weightp 2" "26 37"
+add "explicit P weighted prediction" check_clip_mt 3 wp2_xfade_t3 "$S/syn_xfade.y4m" "--cabac --ref 3 --bframes 0 --weightp 2" "26 37"
 add "explicit P weighted prediction" check_determinism wp2_determ "$S/syn_xfade.y4m" "--cabac --ref 3 --weightp 2 --qp 26"
 
 add "multiple references + B frames" check_clip mref3_b1        "$S/syn_motion.y4m"  "--ref 3 --bframes 1"
