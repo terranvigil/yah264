@@ -11200,9 +11200,8 @@ static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
 }
 
 /* The early skip probes read chroma at the QP a chroma offset of 0 would
- * give, where the coded offset is negative by Y264_SKIP_CLIFT or less (2 by
- * default, so the 720p class's -2). That offset is there for the chroma VMAF
- * v1 reads in coded macroblocks, but in the probes it fails faint chroma
+ * give, in the 720p class at an offset of -2, its size default. That offset
+ * is there for the chroma VMAF v1 reads in coded macroblocks, but in the probes it fails faint chroma
  * residual on dark content: on a dark 720p title 10-15% more macroblocks ran
  * the whole tournament and nearly all still ended as a skip. Coded
  * macroblocks keep the offset. On ten 720p clips (six live action, four dark)
@@ -11210,14 +11209,14 @@ static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
  * spread, and the dark-block flat share and CAMBI hold, for 4.9% fewer
  * instructions on the dark title and 0.2-1.1% on the others. Below 720p
  * (offset -4) the CIF clips read up to +0.5% with the probes lifted, so that
- * class keeps them. Y264_SKIP_CLIFT=0 turns it off (the previous output). */
+ * class keeps them, and so does an offset chosen at 720p other than -2.
+ * Y264_SKIP_CLIFT=0 turns it off (probes at the coded offset). */
 static int skip_clift_env(void)
 {
     static int v = -1;
     if (v < 0) {
         const char *e = y264_env("Y264_SKIP_CLIFT");
-        int x = e ? atoi(e) : 2;
-        v = x > 0 ? x : 0;
+        v = e ? atoi(e) != 0 : 1;
     }
     return v;
 }
@@ -11271,8 +11270,7 @@ static void skip_clift_on(y264_frame_t *f, int mbx, int mby, struct cqp_save *sv
         f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, f->chroma_qp_off);
         f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
     }
-    int off = f->chroma_qp_off;
-    if (!f->clift_720 || off >= 0 || -off > skip_clift_env()) return;
+    if (!f->clift_720 || skip_clift_env() == 0) return;
     f->cur_chroma_qp = y264_chroma_qp(f->cur_qp, 0);
     f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
 }

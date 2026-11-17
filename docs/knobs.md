@@ -58,7 +58,7 @@ Tier meanings: **default** = shipped behavior, the env is its escape; **instrume
 | `Y264_QPEL_SKIPQ` | 96 | src/encoder/motion.c:252 |
 | `Y264_RCP_LAG` | 1 | src/encoder/encoder.c:471 |
 | `Y264_RC_CARRY` | 1 | cli/yah264_cli.c:1495 |
-| `Y264_SKIP_CLIFT` | 2 | src/encoder/mbcode.c:11210 |
+| `Y264_SKIP_CLIFT` | 1 | src/encoder/mbcode.c:11218 |
 | `Y264_STAIR_BDEPTH` | 1 | src/encoder/encoder.c:367 |
 | `Y264_STAIR_TDIR` | 1 | src/encoder/encoder.c:603 |
 | `Y264_STAIR_WIDE` | 1 | src/encoder/encoder.c:404 |
