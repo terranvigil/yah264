@@ -352,7 +352,7 @@ struct yah264_encoder {
     double   aq_anchor;
     double   aq_dcstr;                      /* the AQ frame-level (DC) strength on the CRF base QP (Y264_AQ_DC) */
     int      aq_rabr;                       /* AQ takes its bitrate-target constants (1 = ABR, 3 = two-pass) */
-    double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric */
+    double   aq_dcfloor;                    /* crf_frame_dc's variance floor under one-pass ABR */
     double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref */
     double   aq_bref;                       /* the level aq_analyze's centre is pulled to */
     double   crf_dc;                        /* this anchor's DC delta on the CRF base QP (crf_frame_dc) */

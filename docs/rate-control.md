@@ -254,8 +254,9 @@ instead, with strength 1.3 around a level of 6.0.
 | two-pass | none; non-reference B frames get the pull directly, at 1.3 | |
 | CQP | none, AQ off | |
 
-Under a bitrate target the DC reads a much lower variance floor
-of 1/256, so a black frame reads as black.
+Under one-pass ABR the DC reads a much lower variance floor of 1/256, so a
+black frame reads as black. Capped VBR keeps the field's floor, as CRF does,
+since its cap already bounds a black frame's overshoot.
 
 ### Rate tracking
 
