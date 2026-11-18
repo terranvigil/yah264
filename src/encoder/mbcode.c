@@ -10878,6 +10878,8 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
         return 0;
     }
     if (f->cf_idc == 3) {                       /* 4:4:4: chroma coded like luma */
+        /* luma's transform but the coder's chroma qp, which carries the
+         * chroma offset and the qpc table */
         for (int c = 1; c <= 2; c++) {
             int css = f->src_stride[c], crs = f->rec_stride[c];
             const pixel *csrc = f->src[c] + (mby*16)*css + mbx*16;
@@ -10887,7 +10889,7 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                 dctcoef coef[16];
                 y264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
                                 cpred + (by * 4) * crs + bx * 4, crs);
-                if (coef_signif(coef, f->cur_qp_scaled, strict, cqm_w4p(f, 0, c), 0)) return 0;
+                if (coef_signif(coef, f->cur_chroma_qp_scaled, strict, cqm_w4p(f, 0, c), 0)) return 0;
             }
         }
         return 1;
@@ -10948,8 +10950,9 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
  *    so Cauchy-Schwarz gives |c_k| <= sqrt(n_u*n_v*E), and n_k*E < T_k^2 for
  *    every k proves the block zero. The tables hold the largest E passing that
  *    (luma k = 0..15; chroma AC k = 1..15 at the chroma qp; 4:4:4 chroma takes
- *    the luma form, as the probe does). A luma block is tested on its own 4x4
- *    energy; a chroma plane on its whole SSD, which bounds each block's.
+ *    the luma form at the chroma qp, as the probe does). A luma block is
+ *    tested on its own 4x4 energy; a chroma plane on its whole SSD, which
+ *    bounds each block's.
  *  - Chroma DC. Each output of the 2x2 (4:2:0) or 2x4 (4:2:2) Hadamard is a
  *    +-1 sum of all Nc residual samples of the plane (Nc = 64 or 128), so
  *    |h| <= sqrt(Nc*S) for plane SSD S. The quantizer is monotone in |h|, so
@@ -11081,7 +11084,7 @@ static int probe_strict_rest(y264_frame_t *f, int mbx, int mby, unsigned lskip, 
                 if (nd) ++*nd;
                 y264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
                                 cpred + (by * 4) * crs + bx * 4, crs);
-                if (coef_signif(coef, f->cur_qp_scaled, 1, cqm_w4p(f, 0, c), 0)) return 0;
+                if (coef_signif(coef, f->cur_chroma_qp_scaled, 1, cqm_w4p(f, 0, c), 0)) return 0;
             }
         }
         return 1;
@@ -11155,9 +11158,11 @@ static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
                 int32_t dk = 16 * (int32_t)e4[k] - sk * sk;
                 lskip |= (unsigned)((ak * mf0 < thr) & (dk <= lac)) << k;
             }
-        if (f->cf_idc == 3)
-            cskip = pl[1] <= ly && pl[2] <= ly;
-        else if (cqp >= 0 && cqp < BSS_QPS) {
+        if (f->cf_idc == 3) {
+            /* luma's proof at the chroma qp, as the probe tests it */
+            long lc = cqp >= 0 && cqp < BSS_QPS ? bss_ly[cqp] : -1;
+            cskip = pl[1] <= lc && pl[2] <= lc;
+        } else if (cqp >= 0 && cqp < BSS_QPS) {
             long lc = bss_lc[cqp];
             long ld = f->cf_idc == 2 ? bss_ldc422[cqp] : bss_ldc420[cqp];
             if (ld < lc) lc = ld;
