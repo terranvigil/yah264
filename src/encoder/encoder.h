@@ -473,9 +473,10 @@ struct yah264_encoder {
  * test, which is exactly the nrefb == 1 shapes). */
     int      refb_hist[Y264_STAIR_K];
     /* Y264_WEIGHTP_STAT: P slices prepped, P slices that carried any weight at
- * all, and P slices that spent a duplicate slot on one (--weightp 2). The
+ * all, P slices that spent a duplicate slot on one (--weightp 2), and P
+ * slices that carried ref 0 plain for letterbox bars (stat_wp_bar). The
  * census the mode's default rests on. */
-    int      stat_wp_p, stat_wp_frame, stat_wp_dup;
+    int      stat_wp_p, stat_wp_frame, stat_wp_dup, stat_wp_bar;
     /* Staircase depth: a streaming anchor's SOURCE-luma interior sum, the
  * wp-estimate substitute for its not-yet-readable recon. Computed at every
  * pyramid anchor arrival when the depth gate is on.

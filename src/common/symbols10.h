@@ -590,6 +590,7 @@
 #define y264_skor_side_b                y264_skor_side_b_10
 #define y264_skor_side_p                y264_skor_side_p_10
 #define y264_sps_write                  y264_sps_write_10
+#define y264_src_bars                   y264_src_bars_10
 #define y264_ssd4x4_map16_avx2          y264_ssd4x4_map16_avx2_10
 #define y264_ssd4x4_map16_neon          y264_ssd4x4_map16_neon_10
 #define y264_ssd4x4_map16_neon_dotprod  y264_ssd4x4_map16_neon_dotprod_10

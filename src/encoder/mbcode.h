@@ -135,6 +135,11 @@ typedef struct {
  * time. The search skips the duplicate outright and the choice is made once
  * the motion is settled, on the two predictions themselves (wp_pick). */
     int wp_dup, wp_dup_of;
+    /* the bars a slot-0 duplicate was made for, as the sample lines at the
+ * top and bottom and columns at the left and right they cover; all zero
+ * otherwise. Their skip would predict through the weighted copy and move
+ * them (wp_bar_plain in mbcode.c) */
+    int wp_bar_px[4];
     int8_t wp_refmap[16];       /* refIdx -> reference picture, for 8.7.2.1 */
     int padded_w, padded_h;     /* reference picture bounds for MV clamping */
 
@@ -523,6 +528,7 @@ void             y264_aq_floor_lift(const pixel *p, int stride, int wmb, int hmb
 int              y264_aq_grain(double mean, double var);
 void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4]);
 double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
+double           y264_src_bars(const pixel *src, int stride, int wmb, int hmb, int px[4]);
 double           y264_aq_dark_gate(double bright_share, double grain_share, int fade);
 /* the fade test's state, one per encoder instance (so per GOP when GOPs are
  * coded apart), fed every frame in display order with its 8-bit-scale mean */
