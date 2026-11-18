@@ -204,6 +204,7 @@ struct la_thread {
 };
 static void la_th_main(void *arg);
 static int la_fade_at(const yah264_encoder_t *e, long push);
+static int la_matte_at(const yah264_encoder_t *e, long push, int bars[4]);
 
 /* Everything compute_mbtree needs that is NOT config, filled at the anchor's
  * own pop on the GOP driver (head = la_head, anchor already popped). Passing
@@ -2870,6 +2871,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.dark_dg = 0.f;
     /* push indices are 1-based display indices */
     f.fade = la_fade_at(e, (long)e->cur_disp + 1);
+    f.gbars_ok = la_matte_at(e, (long)e->cur_disp + 1, f.gbars);
     f.qp = fqp;
     f.chroma_qp = fcqp;
     f.cur_qp = fqp;
@@ -7271,7 +7273,7 @@ static void splat_prop(double *grid, int wmb, int hmb, int tx, int ty, double am
  * When aq_off is non-NULL the raw AQ offset (unclamped, float) is returned
  * there for folding into the combined offset. */
 static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
-                             int stride, int wmb, int hmb, int fade,
+                             int stride, int wmb, int hmb, int fade, const int *gbars,
                              float strength, double *invq, float *aq_off)
 {
     IP_SCOPE_B(IP_MBT_INVQ);
@@ -7304,7 +7306,9 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
     double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0, fade);
     if (means && dg < 1.0 && !fade) {
         y264_aq_floor_lift(pl[0], stride, wmb, hmb, vars);
-        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, wmb, hmb), 0);
+        double gs = gbars ? y264_aq_grain_share_in(means, vars, wmb, hmb, gbars)
+                          : y264_aq_grain_share(means, vars, wmb, hmb);
+        dg = y264_aq_dark_gate(bs, gs, 0);
     }
     /* Under the absolute anchor (Y264_CRF_CPLX) the field is centred on a
  * constant instead of the frame mean, so its DC is a frame-level complexity
@@ -7335,16 +7339,18 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
  * stable copy) holds the same pixels, so the frame's lookahead push index is
  * a sufficient key. The field also follows the frame's fade flag, which is
  * itself a function of the push index (la_fade_at), so the key still covers
- * it. key <= 0 (unknown) or a strength other than the encoder's computes
+ * it, and so are its grain-share bars, final before the frame is typed.
+ * key <= 0 (unknown) or a strength other than the encoder's computes
  * directly. */
 
 static void mbtree_invqscale_k(yah264_encoder_t *e, long key, pixel *const *pl,
                                int stride, int wmb, int hmb, float strength,
                                double *invq, float *aq_off)
 {
-    int fade = la_fade_at(e, key);
+    int fade = la_fade_at(e, key), gb[4];
+    const int *gbars = la_matte_at(e, key, gb) ? gb : NULL;
     if (key <= 0 || strength != e->aq_strength || !e->invq_cache_init) {
-        mbtree_invqscale(e, pl, stride, wmb, hmb, fade, strength, invq, aq_off);
+        mbtree_invqscale(e, pl, stride, wmb, hmb, fade, gbars, strength, invq, aq_off);
         return;
     }
     size_t n = (size_t)wmb * hmb;
@@ -7355,10 +7361,10 @@ static void mbtree_invqscale_k(yah264_encoder_t *e, long key, pixel *const *pl,
         if (!sl->aqoff) sl->aqoff = malloc(n * sizeof(float));
         if (!sl->invq || !sl->aqoff) {
             pthread_mutex_unlock(&sl->mx);
-            mbtree_invqscale(e, pl, stride, wmb, hmb, fade, strength, invq, aq_off);
+            mbtree_invqscale(e, pl, stride, wmb, hmb, fade, gbars, strength, invq, aq_off);
             return;
         }
-        mbtree_invqscale(e, pl, stride, wmb, hmb, fade, strength, sl->invq, sl->aqoff);
+        mbtree_invqscale(e, pl, stride, wmb, hmb, fade, gbars, strength, sl->invq, sl->aqoff);
         sl->key = key; sl->psw_ok = 0;
     }
     memcpy(invq, sl->invq, n * sizeof(double));
@@ -11609,6 +11615,68 @@ static int la_fade_at(const yah264_encoder_t *e, long push)
     return push > 0 && e->la_fade[push % 256].key == push && e->la_fade[push % 256].on;
 }
 
+/* a matte holds still where dark grain in the picture may not, so push p
+ * takes noisy bars only when p-1, p and p+1 agree, settled one chain step late
+ * (p is typed and read after p+1 arrives); a one-frame window uses p-2..p */
+static void la_matte_settle(yah264_encoder_t *e, long p, long lo, long hi)
+{
+    struct la_matte *m = &e->la_matte[p % 256];
+    memcpy(m->bars, m->cand, sizeof m->bars);
+    for (int k = 0; k < 2; k++) {
+        if (!(m->noisy & (1 << k))) continue;
+        int ok = lo > 0 && hi > lo;
+        for (long q = lo; q <= hi && ok; q++) {
+            const struct la_matte *o = &e->la_matte[q % 256];
+            ok = o->key == q && (o->noisy & (1 << k)) &&
+                 y264_aq_matte_same(m->cand, m->lvl, o->cand, o->lvl, k);
+        }
+        if (!ok) m->bars[2 * k] = m->bars[2 * k + 1] = 0;
+    }
+}
+static void la_matte_note(yah264_encoder_t *e, const struct la_entry *en)
+{
+    long p = en->push_idx;
+    struct la_matte *m = &e->la_matte[p % 256];
+    m->key = -1;
+    if (y264_aq_dark(0.0, 0.0) >= 0.0 || e->aq_strength <= 0.f) return;
+    int wmb = e->width_in_mbs, hmb = e->height_in_mbs, n = wmb * hmb;
+    float *means = malloc(2 * (size_t)n * sizeof *means);
+    if (!means) return;
+    float *vars = means + n;
+    const pixel *src = en->plane[0];
+    int stride = e->pstride[0];
+    for (int my = 0; my < hmb; my++)
+        for (int mx = 0; mx < wmb; mx++) {
+            uint32_t v2[2];
+            y264_dsp.var16x16(src + (size_t)(my * 16) * stride + mx * 16, stride, v2);
+            double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+            means[my * wmb + mx] = (float)mean;
+            vars[my * wmb + mx] = (float)(var > 0 ? var : 0);
+        }
+    y264_aq_floor_lift(src, stride, wmb, hmb, vars);
+    double black = e->sps.vs_full_range ? 0.0 : 16.0 * (1 << (Y264_BIT_DEPTH - 8));
+    m->noisy = y264_aq_matte_cand(means, vars, wmb, hmb, black, m->cand, m->lvl);
+    free(means);
+    m->key = p;
+    /* this push, as the last of a stream would see it; then the one before,
+     * now that its successor is here. A one-frame window may code a push
+     * before its successor arrives, depending on --sync-lookahead, so there
+     * it stays on p-2..p and the stream doesn't move with the lead */
+    la_matte_settle(e, p, p - 2, p);
+    if (e->la_depth >= 2 && p > 1 && e->la_matte[(p - 1) % 256].key == p - 1) {
+        int first = p < 3 || e->la_matte[(p - 2) % 256].key != p - 2;
+        la_matte_settle(e, p - 1, first ? p - 1 : p - 2, p);
+    }
+}
+
+/* 1 and the grain share's bars for push `push` when the lookahead noted it */
+static int la_matte_at(const yah264_encoder_t *e, long push, int bars[4])
+{
+    if (push <= 0 || e->la_matte[push % 256].key != push) return 0;
+    memcpy(bars, e->la_matte[push % 256].bars, 4 * sizeof *bars);
+    return 1;
+}
+
 /* One step of the lookahead chain for a just-claimed entry: downscale, the
  * per-MB lowres analysis (own intra + inter vs the previous frame), and the
  * previous entry's deferred finalize. Runs on the API thread, or -- engaged
@@ -11673,6 +11741,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     memcpy(e->la_lr_prev, en->lowres, lrsz * sizeof(pixel));
     e->la_have_prev = 1;
     la_fade_note(e, en);
+    la_matte_note(e, en);
 
     /* gpq: submit this push's SEARCHQ legs against the previous reach pushes
  * (all resident by chain seriality). Fire-and-forget -- the walk collects

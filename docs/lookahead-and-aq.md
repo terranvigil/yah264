@@ -113,9 +113,24 @@ then count nearly the same blocks.
 **Letterbox and pillarbox bars.** The grain share leaves out bars of any matte
 color: matched pairs of flat edge rows (or columns) of one color, of about the
 same depth, that don't drift line to line, up to three eighths of the height or
-width a side. Only flat blocks count, so a grainy sky is never a bar; grainy
-film-scan bars count as picture. Without this, the bars of a letterboxed night
-scene would dilute its share and keep the gate shut.
+width a side. Without this, the bars of a letterboxed night scene would dilute
+its share and keep the gate shut. Film-scan or analog noise over a matte makes
+its blocks non-flat, and counted as grain they would open the gate on their
+own. One frame can't tell such a matte from a grainy dark wall or night sky,
+so each frame in the lookahead walks an axis with no flat bars again, with
+blocks up to twice the grain ceiling allowed in, every line nearly all matte,
+and the same pair rule: one color, matched depths, no drift. The bars must sit
+within four levels of the coded black (16, or 0 when the stream signals full
+range) and frame a picture that isn't a quarter or more of their own level, as
+grain behind credits is. A frame leaves them out only when the frame before
+and the frame after it found the same depths at the same level. With a
+one-frame window (`--rc-lookahead 1`) a frame can be coded before its successor
+arrives, so there it compares the two frames before it instead, whatever
+`--sync-lookahead` is. An axis that found flat bars keeps them, so grain beside
+a clean matte still counts. Without a lookahead window only flat bars are left
+out. A grainy band of near-black picture at both edges, at one level and
+holding still, still reads as a matte, and so do the dark bands of full-range
+input that isn't tagged as full range.
 
 **Psy-trellis and the flat-content lattice.** `--psy-trellis` defaults to 0.
 When on, the trellis rewards keeping the AC energy of the reconstructed
