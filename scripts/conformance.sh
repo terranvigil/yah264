@@ -277,6 +277,35 @@ check_same_stream() {   # check_same_stream <label> <src> <flags> <flags-that-mu
     fi
 }
 
+check_same_lead() {     # check_same_lead <label> <src> <threads> <flags> [leads, default "1 3"]
+    # the lead only buffers frames past the lookahead window, so no lead may
+    # move the stream. Hard at one thread; with more, identity is
+    # informational (owner, 2026-09-25) and only the decode is hard.
+    local label="$1" src="$2" th="$3" base="$4" leads="${5:-1 3}" p="$work/lead_$1" f=0 t=0 n last=0
+    for n in 0 $leads; do
+        last="$n"
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $base --threads "$th" --sync-lookahead "$n" \
+            -o "$p.$n.264" 2>/dev/null || true
+    done
+    for n in $leads; do
+        if [ "$th" != 1 ]; then
+            ident_info "--sync-lookahead 0 vs $n at threads $th ($label)" "$p.0.264" "$p.$n.264"
+        elif [ -s "$p.0.264" ] && cmp -s "$p.0.264" "$p.$n.264"; then
+            echo "  ok   --sync-lookahead $n codes what 0 codes ($label)"; t=$((t + 1))
+        else
+            echo "  FAIL --sync-lookahead $n changed the stream ($label)"; t=$((t + 1)); f=$((f + 1))
+        fi
+    done
+    for n in 0 "$last"; do
+        t=$((t + 1))
+        if [ -z "$(md5frames "$p.$n.264")" ]; then
+            echo "  FAIL does not decode ($label, --sync-lookahead $n)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $t $f"
+}
+
 check_cqm_flat() {      # check_cqm_flat <src>
     # a custom set that is 16 in every list is no matrix at all: the stream
     # must equal the one with no --cqm* option, byte for byte, whether the
@@ -1769,6 +1798,17 @@ add "lookahead window" check_clip dtemp_b1    "$S/syn_motion.y4m" "--direct temp
 add "lookahead window" check_clip dtemp_b3    "$S/syn_motion.y4m" "--cabac --direct temporal --bframes 3"
 add "lookahead window" check_clip dtemp_mref  "$S/syn_motion.y4m" "--cabac --direct temporal --bframes 2 --ref 3"
 add "lookahead window" check_clip dtemp_keyint "$S/syn_motion.y4m" "--cabac --direct temporal --bframes 3 --keyint 5"
+# A window shorter than the B run, or a lead that turns the lookahead thread on:
+# the lead may only buffer frames, never change what the window decides.
+add "lookahead lead" check_same_lead la1_b3    "$S/syn_motion.y4m" 1 "--crf 23 --rc-lookahead 1 --bframes 3"
+add "lookahead lead" check_same_lead la2_b3    "$S/syn_motion.y4m" 1 "--crf 23 --rc-lookahead 2 --bframes 3"
+add "lookahead lead" check_same_lead la5_b3    "$S/syn_motion.y4m" 1 "--crf 23 --rc-lookahead 5 --bframes 3"
+add "lookahead lead" check_same_lead la3_b0_t4 "$S/syn_motion.y4m" 4 "--crf 23 --rc-lookahead 3 --bframes 0"
+# the default window too: a long lead let the walk reuse legs a lead of 0 never had
+if [ -f "$root/tests/corpus/foreman_cif.y4m" ]; then
+    add "lookahead lead" check_same_lead ladef_b3 "$root/tests/corpus/foreman_cif.y4m" 1 \
+        "--crf 23 --bframes 3 --frames 60" "3 9"
+fi
 
 add "adaptive quantization (per-MB QP)" check_clip aq_p       "$S/syn_motion.y4m"  "--aq-strength 1.0"
 add "adaptive quantization (per-MB QP)" check_clip aq_p_cabac "$S/syn_motion.y4m"  "--cabac --aq-strength 1.0"

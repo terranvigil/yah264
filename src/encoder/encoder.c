@@ -168,7 +168,7 @@ static _Thread_local int s_la_chain_tls;    /* set for the la thread only */
  * of a chain output blocks on the producing step first:
  * - slot reuse at pad: step s-la_cap (the recycled slot's own analysis
  * is the only chain read of en->plane; la_cap is the ring's rotation
- * period, la_depth + Y264_LA_BUF's extra capacity);
+ * period, la_ring + Y264_LA_BUF's extra capacity);
  * - pop (flags, stash_lr_seed, the lr-reuse copy): step pop+bframes+2,
  * the popped entry's last chain writer (its future anchor's finalize
  * fills the B pair legs at most bframes+1 pushes after it, +1 margin);
@@ -205,6 +205,29 @@ struct la_thread {
 static void la_th_main(void *arg);
 static int la_fade_at(const yah264_encoder_t *e, long push);
 static int la_matte_at(const yah264_encoder_t *e, long push, int bars[4]);
+
+/* entries past a popped frame that a ring of just the window has typed (its
+ * newest push is not); reading no further keeps every lead's output equal */
+static inline int la_horizon(const yah264_encoder_t *e)
+{
+    return e->la_depth > 1 ? e->la_depth - 2 : 0;
+}
+
+/* 1 when the B before offset `from` has its next anchor below offset `lim`:
+ * that anchor's finalize wrote its legs, and a lead of 0 would have them too.
+ * reads only offsets below `lim`, which the caller has waited for */
+static int la_legs_in_window(const yah264_encoder_t *e, int head, int navail,
+                             int from, int lim)
+{
+    for (int i = from; i < navail && i < lim; i++) {
+        const struct la_entry *en = &e->la[(head + i) % e->la_cap];
+        if (!en->typed)
+            return 0;
+        if (en->is_anchor || en->is_idr)
+            return 1;
+    }
+    return 0;
+}
 
 /* Everything compute_mbtree needs that is NOT config, filled at the anchor's
  * own pop on the GOP driver (head = la_head, anchor already popped). Passing
@@ -3680,7 +3703,7 @@ static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, dou
     long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
     /* the lookahead head is display frame_count + 1, and the first typed
      * entry flagged a cut or an IDR is the next key */
-    for (int i = 0; i < e->la_n; i++) {
+    for (int i = 0; i < e->la_n && i < la_horizon(e); i++) {
         const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
         if (!h->typed)
             break;
@@ -4244,6 +4267,19 @@ static int la_lead_for(const yah264_param_t *param, int la_depth)
     return bf + 1;                              /* one mini-GOP plus one */
 }
 
+/* the ring at a lead of 0: the window, or a whole B run, its anchor and one
+ * more when that is longer, so every B's legs exist before it is popped and
+ * no lead decides whether it gets them */
+static int la_ring_for(const yah264_param_t *param, int la_depth)
+{
+    if (la_depth <= 0)
+        return 0;
+    int bf = param->bframes;                    /* as open will clamp it */
+    if (bf < 0) bf = 0;
+    if (bf > 7) bf = 7;
+    return bf > 0 && la_depth < bf + 2 ? bf + 2 : la_depth;
+}
+
 /* Public: the frames of input latency these parameters add, i.e. the resolved
  * lookahead lead. Clamped exactly as open clamps it. This is the ONLY cost of
  * the lead -- the bitstream is identical at any value -- so it is the number to
@@ -4253,9 +4289,9 @@ int yah264_lookahead_delay(const yah264_param_t *param)
 {
     if (!param) return 0;
     int d = la_depth_for(param);
-    int buf = la_lead_for(param, d);
+    int buf = la_lead_for(param, d), ring = la_ring_for(param, d);
     if (buf < 0) buf = 0;
-    if (buf > Y264_LA_CAP_MAX - d) buf = Y264_LA_CAP_MAX - d;
+    if (buf > Y264_LA_CAP_MAX - ring) buf = Y264_LA_CAP_MAX - ring;
     return buf > 0 ? buf : 0;
 }
 
@@ -6049,16 +6085,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->la_depth = la_depth_for(param);       /* the rule, shared with the
  * public delay query */
         /* The decoupled lookahead's lead: extra
- * ring capacity ahead of the la_depth window, clamped to fit
- * Y264_LA_CAP_MAX. Off (0 buf, la_cap == la_depth) when the window
+ * ring capacity ahead of the la_ring window, clamped to fit
+ * Y264_LA_CAP_MAX. Off (0 buf, la_cap == la_ring) when the window
  * itself is off, when the caller asked for low latency, or when there
  * is no pool to run a chain against -- see la_lead_for. Costs exactly
  * la_buf frames of latency and no bits. */
         e->la_buf = la_lead_for(param, e->la_depth);
+        e->la_ring = la_ring_for(param, e->la_depth);
         if (e->la_buf < 0) e->la_buf = 0;
-        if (e->la_buf > Y264_LA_CAP_MAX - e->la_depth)
-            e->la_buf = Y264_LA_CAP_MAX - e->la_depth;
-        e->la_cap = e->la_depth + e->la_buf;
+        if (e->la_buf > Y264_LA_CAP_MAX - e->la_ring)
+            e->la_buf = Y264_LA_CAP_MAX - e->la_ring;
+        e->la_cap = e->la_ring + e->la_buf;
         e->mbtree_on = (e->param.bframes > 0) || e->la_depth > 0;
         e->abr_rf2 = 0;
         if (e->abr_on) {
@@ -7843,13 +7880,10 @@ struct mbt_pa_ctx {
     int   *const *pp_pmv;
     double *const *pp_psw;
     const unsigned char *need;          /* 1 = memo miss: compute this source */
-    /* Highest ring OFFSET whose B pair legs are settled, i.e. that no in-flight
- * la_finalize can still be writing. Each caller derives it from the chain
- * step IT waited for. INT_MAX when there is no lookahead THREAD: the chain
- * then steps inline on this very thread, so nothing is in flight and the
- * serial path stays byte-identical. Two readers respect it -- mbt_pair_seed
- * and the bleg reuse test in mbt_pa_source. */
-    int settled_off;
+    /* per source, 1 when its stored legs are final and inside the walk's
+ * window at any lead (la_legs_in_window); read by mbt_pair_seed and the
+ * bleg reuse test */
+    const unsigned char *settled;
 };
 
 /* --- the shared anchor subpel cache ---------------------------------------
@@ -8159,24 +8193,10 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
     int p0, p1;
     *have0 = *have1 = 0;
     if (c->src[s].laidx >= 0) {
-        /* Only entries whose B pair legs are FINAL may be read, and the bound
- * has to be a function of the configuration rather than of a progress
- * counter. `la_th_wait_mbtree` waits for chain step pop_seq+la_depth-1,
- * which types ring offsets up to la_depth-3; an entry's legs, though,
- * are written later still -- by the finalize of the next anchor AFTER
- * it, which reaches back bframes+1 entries (lowres_bleg_me, called from
- * la_finalize after that anchor's own `typed = 1`). So an entry is
- * settled only up to la_depth-4-bframes, and a source past that has its
- * bleg_have flipping under the walk.
- *
- * Reading past that bound emits 3-5 distinct bitstreams in 12 runs of one
- * config (foreman --ref 1 t18), and this reader is where it bites: it
- * accepts ANY stored pair and scales it, where the exact-key reuse path
- * fails closed on a pair that does not match. The alternative fix --
- * widening the driver's wait to cover the reach-back -- also works and
- * costs 10.8% of samsung's wall, so this declines instead and lets the
- * frontier sources search. */
-        if (c->src[s].laoff > c->settled_off) {
+        /* only final legs: past the walk's waited range bleg_have can flip
+ * under it, and this reader scales any stored pair (3-5 bitstreams in
+ * 12 runs of foreman --ref 1 t18 when it read past) */
+        if (!c->settled[s]) {
             if (mbt_split_env())
                 atomic_fetch_add_explicit(&g_mbt_split.pa_unsettled, 1, memory_order_relaxed);
             return 0;
@@ -8194,7 +8214,7 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
                 if (mbt_misswhy_env() > 1)
                     fprintf(stderr, "[mbt_misswhy] poc %d laoff %d settled %d anchor %d"
                             " typed %d have %d legs %d/%d bpoc %d/%d want %d/%d push %ld\n",
-                            c->src[s].poc, c->src[s].laoff, c->settled_off,
+                            c->src[s].poc, c->src[s].laoff, c->settled[s],
                             ce->is_anchor, ce->typed, ce->bleg_have,
                             ce->leg[LR_LEG_ANCHOR] != NULL, ce->leg[LR_LEG_NEXT] != NULL,
                             ce->bleg_poc0, ce->bleg_poc1,
@@ -8436,7 +8456,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
  * pair that DOES match the walk's brackets makes it decide differently
  * depending on when the flag lands. */
     if (bleg_reuse_on() && c->src[s].laidx >= 0 && !c->src[s].is_anchor &&
-        c->src[s].laoff <= c->settled_off) {
+        c->settled[s]) {
         struct la_entry *ce = &e->la[c->src[s].laidx];
         if (ce->bleg_have && ce->bleg_poc0 == c->s_pastpoc[s] &&
             ce->bleg_poc1 == c->s_futpoc[s] && ce->leg[LR_LEG_ANCHOR] &&
@@ -8451,7 +8471,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
  * 65 full searches per encode, 118 ms of the 590 ms single-thread Phase A. */
     if (!bleg0 && bleg_reuse_on() && c->src[s].laidx >= 0 &&
         c->src[s].is_anchor &&
-        c->src[s].laoff <= c->settled_off) {
+        c->settled[s]) {
         struct la_entry *ce = &e->la[c->src[s].laidx];
         if (ce->aleg_have && ce->aleg_poc0 == c->s_pastpoc[s] && ce->leg[LR_LEG_ANCHOR])
             bleg0 = ce->leg[LR_LEG_ANCHOR];
@@ -8735,7 +8755,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * only la_depth-2 entries are ever used; Y264_LA_BUF makes that position
  * typed by then, so it must be excluded explicitly to keep this walk's
  * value independent of la_buf. Ring indices wrap at la_cap. */
-    int wcap = e->la_depth > 1 ? e->la_depth - 2 : 0;
+    int wcap = la_horizon(e);
     for (int i = 0; i < rq->navail && i < wcap && na < MAXA; i++) {
         struct la_entry *en = &e->la[(rq->head + i) % e->la_cap];
         if (!en->typed || en->is_idr) break;         /* never cross the IDR */
@@ -8957,36 +8977,16 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         free(prop); free(Fw); return 0;
     }
 
-    /* Wait for the lookahead chain through
- * the step that finalizes the whole window before Phase A, so the settled
- * bound can drop the wide pipeline's fail-closed reach. The wait is to a
- * fixed step (pop_seq + la_depth - 1, clamped to what was pushed), so which
- * sources reuse their pair legs stays a function of the launch sequence and
- * never of chain timing. At 12 threads on sunflower_1080p the reach
- * declined 150 of 306 sources into full searches whose legs already existed;
- * the chain is normally far ahead, so the wait itself is cheap. */
-    /* The settle lead (on above one thread): wait further, into
- * the lookahead's lead (the la_buf entries pushed beyond the window), so the
- * last la_buf window entries' legs are written too and the walk reuses them
- * instead of searching them fresh -- at 12 threads that was 86 full searches
- * per 240 frames of 1080p that the single-thread walk reuses. The extension
- * is clamped to what the API thread has pushed, which the launch sequence
- * fixes, so which sources reuse stays independent of chain timing. ON at
- * --threads != 1 from 2026-10-04: in the quiet window at default threads the
- * wall read meridian 2160p 35.8 -> 35.5 s, chimera 2160p 24.3 -> 24.3 s,
- * meridian 1080p 9.4 -> 9.0 s, CPU -1.5..-4%; the CRF band at --threads 8
- * read median -0.14% when it was added. */
-    int settle_ext = 0;
-    int settle_lead = e->param.threads != 1;
-    if (e->la_th) {
-        long need = e->la_th->pop_seq + e->la_depth - 1;
-        if (settle_lead) {
-            long more = e->la_th->pushed - need;
-            if (more > e->la_buf) more = e->la_buf;
-            if (more > 0) { settle_ext = (int)more; need += more; }
-        }
-        TPROF(TP_LAWAIT, la_th_wait(e, need));
-    }
+    /* wait for the step that finalizes every anchor inside the window, so the
+ * reuse decision below can come from the window alone, never from how far
+ * the chain or the lead has run */
+    if (e->la_th)
+        TPROF(TP_LAWAIT, la_th_wait(e, e->la_th->pop_seq + e->la_depth - 1));
+    unsigned char settled[MAXS];
+    for (int s = 0; s < ns; s++)
+        settled[s] = src[s].laidx >= 0 &&
+                     (src[s].is_anchor ||
+                      la_legs_in_window(e, rq->head, rq->navail, src[s].laoff + 1, wcap));
     /* Phase A: the per-source lowres ME (the expensive part) -- parallel over the
  * pool when available (each source is independent, writes its own pa_* slice),
  * else serial. Byte-identical either way: no prop reads/writes here. */
@@ -8994,15 +8994,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         .e = e, .src = src, .nmb = nmb, .wmb = wmb, .hmb = hmb, .lw = lw, .lh = lh,
         .mvlambda = mvlambda, .cost_inf = COST_INF,
         .s_past = s_past, .s_fut = s_fut, .s_pastlr = s_pastlr, .s_futlr = s_futlr,
-        /* Under WIDE chains the walk can run further behind the chain's
- * head than the serial pop cadence assumed, so the settled bound
- * tightens by the wide pipeline's reach -- fail-closed: a declined
- * source searches fresh instead of reusing a pair that may still be
- * mid-write (the TSan pair: mbt_pa_source's bleg reads against
- * la_finalize's leg writes). */
-        .settled_off = e->la_th
-            ? e->la_depth - 4 - e->bframes + settle_ext
-            : INT_MAX,
+        .settled = settled,
         .s_pastpoc = s_pastpoc, .s_futpoc = s_futpoc,
         .s_pastpush = e->gpq ? s_pastpush : NULL,
         .s_futpush  = e->gpq ? s_futpush  : NULL,
@@ -9501,11 +9493,9 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq)
     if (e->la_depth > 0) {
         int cur_poc = e->poc, next_apoc = -1;
         int fb[64], nfb = 0;
-        /* Self-limiting (stops at the first future anchor, reached well
- * inside la_depth-1 by the engage gate's la_depth>=bframes+3), so no
- * explicit depth cap is needed here -- only the ring-index base
- * changes for Y264_LA_BUF's extra capacity. */
-        for (int i = 0; i < e->la_n && nfb < 64; i++) {
+        /* capped at the window: a window shorter than the B run would
+ * otherwise reach into frames only the lead buffered */
+        for (int i = 0; i < e->la_n && i < la_horizon(e) && nfb < 64; i++) {
             int s = (e->la_head + i) % e->la_cap;
             struct la_entry *en = &e->la[s];
             if (!en->typed || en->is_idr) break;
@@ -9767,10 +9757,13 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
         return;
     }
     int nneed = 0;
-    const int settled = e->la_th
-        ? lim - 2 - e->bframes
-          - (stair_wide_engaged_cfg(e) ? Y264_STAIR_K * (e->bframes + 1) : 0)
-        : INT_MAX;
+    /* the highest offset this warm computes, with the finalize's reach back
+     * and the wide pipeline's reach as margin */
+    const int safe = lim - 2 - e->bframes
+                   - (stair_wide_engaged_cfg(e) ? Y264_STAIR_K * (e->bframes + 1) : 0);
+    /* the consuming walk's horizon, exclusive, and how much of it is typed */
+    const int wend = d + 1 + wcap, known = wend < lim ? wend : lim;
+    unsigned char settled[MAXS];
     for (int s = 0; s < ns; s++) {
         int past = -1, fut = -1, bp = -(1 << 30), bf = (1 << 30);
         for (int a = 0; a < na; a++) {
@@ -9807,33 +9800,13 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
                     ce->mbt_pa_fut_poc  == s_futpoc[s]);
         if (!pp_pi[s] || !pp_pin[s] || !pp_plu[s] || !pp_pmv[s] || !pp_psw[s])
             need[s] = 0;                        /* OOM: leave it to the walk */
-        /* WARM ONLY WHAT THE WALK WOULD COMPUTE THE SAME WAY.
- *
- * Two of Phase A's inputs are settled-bounded -- the bleg pair reuse
- * and the A1 pair seed -- and the bound is an OFFSET test. The warm's
- * offsets are measured from the launch-time ring head; the walk's from
- * its anchor, which sits `d` entries further in. So the same source is
- * `laoff` here and `laoff - d` there, tested against two different
- * bounds, and the two paths can disagree about whether its stored pair
- * is usable. A source the warm declines the reuse for and the walk
- * accepts it for gets DIFFERENT Phase-A output depending on which path
- * happened to run it -- which is scheduling. That is why the warm's
- * output was not the walk's, and why the default emitted several
- * distinct bitstreams per twelve runs of one config on a loaded box.
- *
- * The two bounds cannot simply be equalised: the walk's is the more
- * permissive of the two BECAUSE it runs later, and lending it to the
- * warm would read entries the finalize is still filling. So the warm
- * keeps its own (safe) bound and additionally declines any source the
- * walk would judge differently. What it gives up is coverage on the
- * frontier sources; those cost the walk what they always did. */
-        if (need[s]) {
-            long wk = (long)d + (long)e->la_depth - 4 - e->bframes
-                    - (stair_wide_engaged_cfg(e) ? Y264_STAIR_K * (e->bframes + 1) : 0);
-            long lim_off = (long)settled < wk ? (long)settled : wk;
-            if ((long)src[s].laoff > lim_off)
-                need[s] = 0;
-        }
+        /* reuse and a fresh search differ under one memo key, so warm only
+ * what the walk would decide the same way; a source the warm can't
+ * judge yet is left to the walk, which costs coverage, never bits */
+        settled[s] = src[s].is_anchor ||
+                     la_legs_in_window(e, head, navail, src[s].laoff + 1, known);
+        if ((!settled[s] && known < wend) || src[s].laoff > safe)
+            need[s] = 0;
         nneed += need[s];
     }
     if (mbt_split_env()) {          /* probe accounting: several GOP workers
@@ -9848,7 +9821,7 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
             .hmb = e->height_in_mbs, .lw = e->lr_w, .lh = e->lr_h,
             .mvlambda = MBTREE_MVLAMBDA, .cost_inf = 1L << 40,
             .s_past = s_past, .s_fut = s_fut, .s_pastlr = s_pastlr,
-            .settled_off = settled,
+            .settled = settled,
             .s_futlr = s_futlr, .s_pastpoc = s_pastpoc, .s_futpoc = s_futpoc,
             .s_pastpush = e->gpq ? s_pastpush : NULL,
             .s_futpush  = e->gpq ? s_futpush  : NULL,
@@ -11737,6 +11710,8 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     en->is_anchor = 0;                   /* provisional until typed */
     en->typed = 0;
     en->bleg_have = 0;                   /* B pair legs not filled yet */
+    en->aleg_have = 0;                   /* set by the finalize, for anchors only: */
+    en->wp_vote = -1;                    /* a B must not read the slot's last anchor */
 
     memcpy(e->la_lr_prev, en->lowres, lrsz * sizeof(pixel));
     e->la_have_prev = 1;
@@ -16116,7 +16091,8 @@ static void stash_lr_seed(yah264_encoder_t *e, const struct la_entry *en)
         e->lr_seed_valid = 1;
     } else if (!en->is_anchor && en->typed && en->bleg_have && e->bseed_pend[0]) {
         /* B entry: stash both lowres pair fields (full-res qpel) for the
- * reorder buffer; encode_frame_core moves them into the B's slot. */
+ * reorder buffer; encode_frame_core moves them into the B's slot. The
+ * ring holds the whole B run (la_ring_for), so the legs are here at any lead. */
         const y264_lr_blk *l0 = en->leg[LR_LEG_ANCHOR];
         const y264_lr_blk *l1 = en->leg[LR_LEG_NEXT];
         for (int i = 0; i < nmb; i++) {
