@@ -105,6 +105,16 @@ In order, at `--subme 8` and below:
    no transform. Intra gets a full encode and an RD trial only when that cost
    is under 1.5x the inter winner's SATD (0.75x on B macroblocks).
 
+At every `--subme`, in a slice that carries reference 0 a second time,
+plain, for letterbox bars (`--weightp` in [options.md](options.md)), a
+macroblock that reaches into the bars and whose bar samples the plain copy
+predicts better than the weighted one doesn't take skip, since skip would
+predict through the weighted copy. It searches reference 0 alone, and each
+partition with at least half its rows or columns in the bars takes the
+plain copy; one that only clips a bar's edge keeps whichever copy predicts
+it better. A bar that fades with the picture keeps the weighted copy and
+its skip.
+
 At every `--subme`, the intra trial of a CABAC P macroblock is priced with the
 CABAC rate estimate, as its inter candidates are.
 

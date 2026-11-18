@@ -643,6 +643,78 @@ double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb
     return n ? (double)g / n : 0.0;
 }
 
+/* lines (or columns) of a picture's matte, counted inward from line i0 of
+ * up to n, each nearly all within a level of the matte: the part of a bar
+ * that ends inside a macroblock row */
+static int bar_lines(const pixel *src, int stride, int i0, int dir, int n, int len,
+                     int col, double level, double sc)
+{
+    int k = 0;
+    for (; k < n; k++) {
+        int line = i0 + dir * k, near = 0;
+        for (int t = 0; t < len; t++) {
+            int v = col ? src[(size_t)t * stride + line] : src[(size_t)line * stride + t];
+            near += fabs(v - level) < sc;
+        }
+        if (10 * near < 9 * len) break;
+    }
+    return k;
+}
+
+/* a source picture's bars (y264_aq_bars), as the samples each side covers,
+ * the part row or column at a bar's inner edge included, and the matte's
+ * level from its flat blocks alone, so subtitles don't lift it; -1 with no
+ * bars. Explicit weights keep a fade's pair off them (build_slice_prep) */
+double y264_src_bars(const pixel *src, int stride, int wmb, int hmb, int px[4])
+{
+    int n = wmb * hmb, bars[4];
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    float *means = malloc(2 * (size_t)n * sizeof *means);
+    px[0] = px[1] = px[2] = px[3] = 0;
+    if (!means) return -1.0;
+    float *vars = means + n;
+    for (int mby = 0; mby < hmb; mby++)
+        for (int mbx = 0; mbx < wmb; mbx++) {
+            uint32_t v2[2];
+            y264_dsp.var16x16(src + (size_t)(mby * 16) * stride + mbx * 16, stride, v2);
+            double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+            means[mby * wmb + mbx] = (float)mean;
+            vars[mby * wmb + mbx] = (float)(var > 0 ? var : 0);
+        }
+    y264_aq_floor_lift(src, stride, wmb, hmb, vars);
+    y264_aq_bars(means, vars, wmb, hmb, bars);
+    /* the matte is flat: the commonest flat level among the bar blocks,
+     * then the mean of the flat blocks near it */
+    double vmax = AQ_BAR_VAR * sc * sc, sum = 0;
+    int h[257] = { 0 }, best = 0, cnt = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int y = 0; y < hmb; y++)
+            for (int x = 0; x < wmb; x++) {
+                int i = y * wmb + x;
+                if (!(y < bars[0] || y >= hmb - bars[1] || x < bars[2] || x >= wmb - bars[3]) ||
+                    vars[i] >= vmax)
+                    continue;
+                int b8 = (int)(means[i] / sc);
+                b8 = b8 < 0 ? 0 : b8 > 255 ? 255 : b8;
+                if (!pass) h[b8]++;
+                else if (abs(b8 - best) <= 1) { sum += means[i]; cnt++; }
+            }
+        if (!pass)
+            for (int k = 1; k < 256; k++) if (h[k] > h[best]) best = k;
+    }
+    free(means);
+    if (!cnt) return -1.0;
+    double lvl = sum / cnt;
+    int W = wmb * 16, H = hmb * 16;
+    if (bars[0]) px[0] = bars[0] * 16 + bar_lines(src, stride, bars[0] * 16, 1, 15, W, 0, lvl, sc);
+    if (bars[1]) px[1] = bars[1] * 16 + bar_lines(src, stride, H - 1 - bars[1] * 16, -1, 15, W, 0, lvl, sc);
+    int r0 = bars[0] * 16, rows = H - (bars[0] + bars[1]) * 16;
+    const pixel *mid = src + (size_t)r0 * stride;
+    if (bars[2]) px[2] = bars[2] * 16 + bar_lines(mid, stride, bars[2] * 16, 1, 15, rows, 1, lvl, sc);
+    if (bars[3]) px[3] = bars[3] * 16 + bar_lines(mid, stride, W - 1 - bars[3] * 16, -1, 15, rows, 1, lvl, sc);
+    return lvl;
+}
+
 /* a ramp from 0 at a to 1 at b; a step at a when the two coincide */
 static double ramp(double x, double a, double b)
 {
@@ -6426,6 +6498,49 @@ static int p8_maxref(y264_frame_t *f, int mbx, int mby)
  * same way it derived the search's. Returns the reference this partition
  * should carry, and lowers *cost to match when that is the escape. */
 static int mvd_bits(int d);
+/* a block that reaches into the bars of a slice carrying ref 0 plain behind
+ * its weighted copy for them (build_slice_prep), in samples */
+static inline int wp_bar_hit(const y264_frame_t *f, int bx, int by, int bw, int bh)
+{
+    const int *b = f->wp_bar_px;
+    return f->wp_dup == 0 && (by < b[0] || by + bh > f->hmb * 16 - b[1] ||
+                              bx < b[2] || bx + bw > f->wmb * 16 - b[3]);
+}
+/* at least half a block's rows, or half its columns, lie in those bars */
+static int wp_bar_most(const y264_frame_t *f, int bx, int by, int bw, int bh)
+{
+    const int *b = f->wp_bar_px;
+    int W = f->wmb * 16, H = f->hmb * 16, r = 0, c = 0;
+    for (int y = by; y < by + bh; y++) r += y < b[0] || y >= H - b[1];
+    for (int x = bx; x < bx + bw; x++) c += x < b[2] || x >= W - b[3];
+    return f->wp_dup == 0 && (2 * r >= bh || 2 * c >= bw);
+}
+/* this macroblock's bar samples are better predicted by ref 0's plain copy
+ * than by its weighted one: then skip, which predicts through the weighted
+ * copy, would move them, and so would any other weighted reference. A bar
+ * that really fades with the picture, or a subtitle that does, keeps the
+ * weighted copy and its skip. a shallow bar edge loses skip too, even
+ * where no partition is mostly bar: forcing fewer cost a real fade */
+static _Thread_local int tl_bar_plain;
+static int wp_bar_plain(const y264_frame_t *f, int mbx, int mby)
+{
+    if (!wp_bar_hit(f, mbx * 16, mby * 16, 16, 16)) return 0;
+    const int *b = f->wp_bar_px;
+    int ss = f->src_stride[0], rs = f->ref_stride[0], W = f->wmb * 16, H = f->hmb * 16;
+    int w = f->wp_w[0], o = f->wp_o[0] * (1 << (Y264_BIT_DEPTH - 8)), D = f->wp_denom;
+    int rnd = D ? 1 << (D - 1) : 0;
+    long sp = 0, sw = 0;
+    for (int y = mby * 16; y < mby * 16 + 16; y++)
+        for (int x = mbx * 16; x < mbx * 16 + 16; x++) {
+            if (!(y < b[0] || y >= H - b[1] || x < b[2] || x >= W - b[3])) continue;
+            int sv = f->src[0][(size_t)y * ss + x], rv = f->ref[0][(size_t)y * rs + x];
+            int wv = clip8(((rv * w + rnd) >> D) + o);
+            sp += (long)(sv - rv) * (sv - rv);
+            sw += (long)(sv - wv) * (sv - wv);
+        }
+    return sp < sw;
+}
+
 /* Y264_WEIGHTP_STAT's escape counter. RELAXED atomic, not a plain long: this
  * increments inside the macroblock loop, which is the wavefront, and a plain
  * ++ there is a data race TSan catches on the first rep. It counts and nothing
@@ -6450,7 +6565,10 @@ static int wp_pick(y264_frame_t *f, int r, int bx, int by, int bw, int bh,
     long cw = satd_block(src, ss, pred, 16, bw, bh)
             + (long)mlam * (ref_bits(r, f->nref)
                             + mvd_bits(mvx - px) + mvd_bits(mvy - py));
-    if (ca >= cw)
+    /* a block that is mostly bar takes the plain copy whole; one that only
+     * clips the bar's edge keeps the SATD choice, or its picture rows would
+     * lag the fade */
+    if (ca >= cw && !(tl_bar_plain && wp_bar_most(f, bx, by, bw, bh)))
         return r;
     atomic_fetch_add_explicit(&y264_wp_esc, 1, memory_order_relaxed);
     *cost -= cw - ca;
@@ -6483,7 +6601,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             long best8 = -1; int r8 = 0;
             int m8x = 0, m8y = 0, p8x = 0, p8y = 0;
             int maxref = p8_maxref(f, mbx, mby);
-            const int only = tl_mixref_only;
+            const int only = tl_bar_plain ? 0 : tl_mixref_only;
             if (only >= 0) maxref = only;
             for (int r = only >= 0 ? only : 0; r <= maxref; r++) {
                 int px, py, tx, ty;
@@ -6611,7 +6729,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             /* Mixed refs (--mixed-refs, on at medium): each partition picks
  * its own list-0 reference; the predictors are refIdx-aware, so they
  * stay correct when partitions land on different refs. */
-            const int only = part ? tl_mixref_only : -1;
+            const int only = tl_bar_plain ? 0 : part ? tl_mixref_only : -1;
             for (int r = only >= 0 ? only : 0; r < (only >= 0 ? only + 1 : f->nref); r++) {
                 int px, py, tx, ty;
                 if (r == f->wp_dup_of) continue;  /* --weightp 2: the escape (wp_pick) */
@@ -12031,6 +12149,9 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * one only a skip whose vector stays inside the refreshed area. */
     const int irz = ir_zone(f, mbx);
     if (irz == 2 || (irz == 1 && !ir_blk_ok(f, mbx, 0, mbx * 16, 16, smvx)))
+        skip_ok = 0;
+    tl_bar_plain = wp_bar_plain(f, mbx, mby);
+    if (tl_bar_plain)
         skip_ok = 0;
     long j_skip = LONG_MAX / 2;
     struct skip_stats pstat;        /* the skip candidate's statistics: the

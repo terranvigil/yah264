@@ -1500,6 +1500,19 @@ static void refine_wp_luma(const pixel *src, const pixel *ref, int denom,
     *w = bw; *o = bo; *nwin = nw; *ntile = nt; *gain = g; *plain = pl;
 }
 
+/* carry list-0 entry i twice: its copy goes in front and keeps the pair,
+ * the entry itself moves down a slot and goes plain, and the rest follow */
+static void l0_dup(const pixel *l0p[16][3], int *l0poc, int *l0fn, int *l0par,
+                   int *wp_luma, int *wp_w, int *wp_o, int n, int i)
+{
+    for (int k = n; k > i; k--) {
+        for (int c = 0; c < 3; c++) l0p[k][c] = l0p[k - 1][c];
+        l0poc[k] = l0poc[k - 1]; l0fn[k] = l0fn[k - 1]; l0par[k] = l0par[k - 1];
+        wp_luma[k] = wp_luma[k - 1]; wp_w[k] = wp_w[k - 1]; wp_o[k] = wp_o[k - 1];
+    }
+    wp_luma[i + 1] = 0;
+}
+
 /* Interior luma sum of a padded source plane (estimate_wp_luma's sumref
  * region), cached per anchor for the v3 depth wp substitute. */
 static uint64_t src_luma_sum(const yah264_encoder_t *e, const pixel *src)
@@ -2405,22 +2418,41 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * predicts from, loses index 0 to a distant one -- and that cost
  * 13% of the rate on the CIF fade clip at a fixed CRF. In front of
  * its own twin is the placement that moves nothing else. */
-            for (int k = active_ref; k > i; k--) {
-                for (int c = 0; c < 3; c++) l0p[k][c] = l0p[k - 1][c];
-                l0poc[k] = l0poc[k - 1]; l0fn[k] = l0fn[k - 1]; l0par[k] = l0par[k - 1];
-                wp_luma[k] = wp_luma[k - 1]; wp_w[k] = wp_w[k - 1]; wp_o[k] = wp_o[k - 1];
-            }
+            l0_dup(l0p, l0poc, l0fn, l0par, wp_luma, wp_w, wp_o, active_ref, i);
             wp_luma[i] = 1; wp_w[i] = w; wp_o[i] = o;
-            wp_luma[i + 1] = 0;                 /* the plain half of the pair */
             active_ref++;
             wp_dup = i; wp_dup_of = i + 1;
         }
     }
-    if (wp_stat_on() && type == 1) {            /* Y264_WEIGHTP_STAT: how often 2 fires */
+    /* letterbox bars sit at black while a fade moves the picture, so ref 0's
+     * pair can move them by a step too small for the residual, and every
+     * later P inherits it. When it would, the bars get ref 0's plain copy in
+     * the slot behind the weighted one, as --weightp 2 lays it out. Found by
+     * the AQ's bar walk, which a dark picture doesn't fool */
+    int wp_bars[4] = { 0, 0, 0, 0 }, bar_dup = 0;
+    if (h.wp_on && wp_luma[0] && !e->fld_pic && !e->param.interlaced &&
+        (wp_dup < 0 ? active_ref < 16 : wp_dup == 0)) {
+        double lvl = y264_src_bars(wp_src, wp_stride, e->width_in_mbs, e->height_in_mbs,
+                                   wp_bars);
+        /* a level off the source's by up to one 8-bit code counts too: the
+         * reference can hold its bars that far off, and a steep pair that
+         * pins the source's level still walks the reference's away from it */
+        int u = 1 << (Y264_BIT_DEPTH - 8), c = (int)lround(lvl), moved = 0;
+        for (int v = c - u; lvl >= 0.0 && v <= c + u && !moved; v++)
+            moved = v >= 0 && wp_sample(v, wp_w[0], wp_o[0], wp_denom) != v;
+        if (moved && wp_dup < 0) {          /* --weightp 2 may have made it already */
+            l0_dup(l0p, l0poc, l0fn, l0par, wp_luma, wp_w, wp_o, active_ref, 0);
+            active_ref++;
+            wp_dup = 0; wp_dup_of = 1; bar_dup = 1;
+        } else if (!moved)
+            memset(wp_bars, 0, sizeof wp_bars);
+    }
+    if (wp_stat_on() && type == 1) {            /* Y264_WEIGHTP_STAT: duplicate and bar slots */
         e->stat_wp_p++;
-        if (wp_dup >= 0) e->stat_wp_dup++;
+        if (bar_dup) e->stat_wp_bar++;
+        else if (wp_dup >= 0) e->stat_wp_dup++;
         for (int i = 0; i < active_ref; i++)
-            if (i != wp_dup && wp_luma[i]) { e->stat_wp_frame++; break; }
+            if ((bar_dup || i != wp_dup) && wp_luma[i]) { e->stat_wp_frame++; break; }
     }
     /* Capture this frame's list POCs: when its recon later serves as the
  * co-located picture, colpoc resolves each block's refIdx to a POC. */
@@ -2762,6 +2794,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.wp_shift = (float)wp_shift0;
     f.wp_dup = wp_dup;
     f.wp_dup_of = wp_dup_of;
+    for (int i = 0; i < 4; i++) f.wp_bar_px[i] = wp_bars[i];
     /* The map 8.7.2.1 reads: the duplicate and its twin are ONE picture, and
  * the deblocking filter is the one derivation that asks about pictures
  * rather than indices. Identity everywhere else. */
@@ -17032,8 +17065,9 @@ void yah264_encoder_close(yah264_encoder_t *e)
     y264_me_stats_dump();           /* prints only when Y264_ME_ETSTAT is set */
     if (wp_stat_on())
         fprintf(stderr, "weightp-stat: %d P slices, %d carried a weight, "
-                "%d spent a duplicate slot, %ld partitions took the escape\n",
-                e->stat_wp_p, e->stat_wp_frame, e->stat_wp_dup,
+                "%d spent a duplicate slot, %d carried ref 0 plain for letterbox bars, "
+                "%ld partitions took the escape\n",
+                e->stat_wp_p, e->stat_wp_frame, e->stat_wp_dup, e->stat_wp_bar,
                 atomic_load_explicit(&y264_wp_esc, memory_order_relaxed));
     if (e->mbtp) {                  /* join before the pool: Phase A rides it */
         struct mbt_pre *mp = e->mbtp;
