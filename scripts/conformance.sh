@@ -1387,6 +1387,15 @@ genlavfi syn_pan      "testsrc2=size=480x240:rate=25,crop=w=320:h=240:x='t*85':y
 genlavfi syn_pan_crop "testsrc2=size=340x100:rate=25,crop=w=178:h=100:x='t*85':y=0" 40
 genlavfi sc_a       "smptebars=size=176x144:rate=25" 12
 genlavfi sc_b       "testsrc2=size=176x144:rate=25" 12
+# Noisy black pillars beside a picture: the grain share leaves them out only
+# when neighbouring lookahead frames agree, which must not move with the lead.
+if [ ! -f "$fixdir/syn_npillar.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "color=black:size=320x240:rate=25" \
+        -f lavfi -i "testsrc2=size=128x240:rate=25" -filter_complex \
+        "[0:v]format=yuv420p,noise=alls=5:allf=t[bg];[bg][1:v]overlay=96:0:shortest=1" \
+        -frames:v 16 -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_npillar.y4m.tmp.$$"
+    mv "$fixdir/syn_npillar.y4m.tmp.$$" "$fixdir/syn_npillar.y4m"
+fi
 # 4:2:2 clip (genlavfi hardcodes yuv420p, so build this one inline). Chroma is
 # full-height here, exercising the 4:2:2 B-frame reconstruction path.
 if [ ! -f "$fixdir/syn_422.y4m" ]; then
@@ -2047,6 +2056,9 @@ add "motion search modes" check_clip nomix_cabac    "$S/syn_motion.y4m"  "--caba
 add "motion search modes" check_clip nomix_cavlc    "$S/syn_noise.y4m"   "--cavlc --ref 3 --no-mixed-refs --subme 9 --partitions all"
 add "motion search modes" check_clip nomix_wp2      "$S/syn_fade.y4m"    "--cabac --ref 3 --weightp 2 --no-mixed-refs"
 add "motion search modes" check_same_stream chroma_me "$S/syn_motion.y4m" "--qp 26 --cabac --bframes 2" "--no-chroma-me"
+add "lookahead lead" check_same_stream npillar_la1 "$S/syn_npillar.y4m" "--crf 23 --rc-lookahead 1 --bframes 0" "--sync-lookahead 3"
+add "lookahead lead" check_same_stream npillar_la40 "$S/syn_npillar.y4m" "--crf 23" "--sync-lookahead 3"
+add "lookahead lead" check_rc npillar "$S/syn_npillar.y4m" "--crf 23 --cabac --bframes 2"
 add "motion search modes" check_determinism me_esa  "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 3 --me esa"
 add "motion search modes" check_determinism me_tesa "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 3 --me tesa"
 add "motion search modes" check_determinism nomix   "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 4 --no-mixed-refs"

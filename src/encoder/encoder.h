@@ -716,6 +716,10 @@ struct yah264_encoder {
  * gates; a slot holding another push reads as not fading */
     y264_fade_t la_fade_st;
     struct { long key; int on; } la_fade[256];
+    /* per push, the grain share's bars (y264_aq_matte_cand): the frame's
+     * candidates, which axes were noisy, their levels, and the bars taken;
+     * sized like la_fade, which the fade-slot _Static_assert bounds */
+    struct la_matte { long key; int cand[4], noisy, bars[4]; float lvl[2]; } la_matte[256];
     int      la_have_prev;
     pixel   *la_fin_prev_lr;    /* lowres of the previously *finalized* frame (the
  * pre-flash reference for the 1-frame flash test) */

@@ -480,8 +480,10 @@ int y264_aq_grain(double mean, double var)
 }
 
 /* Letterbox and pillarbox bars: flat, non-drifting edge lines of one matte
- * color, in matched pairs (docs/lookahead-and-aq.md). Only flat blocks count,
- * so a grainy sky is never a bar, and a flat block taken for one can't band. */
+ * color, in matched pairs (docs/lookahead-and-aq.md). Here only flat blocks
+ * count, so a grainy sky is never a bar, and a flat block taken for one can't
+ * band. The grain share also leaves out noisy mattes, but only ones that hold
+ * still across frames (y264_aq_matte_cand). */
 #define AQ_BAR_VAR       AQ_GRAIN_VMIN
 #define AQ_BAR_TOL       1.0
 #define AQ_BAR_DRIFT     0.5
@@ -517,7 +519,8 @@ static double bar_color(const float *mean, const float *var, int i0, int step,
  * counts every quiet block as picture. */
 static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                      int step, int n, int maxl, double color, double vmax,
-                     double vbusy, double tol, double drift, int text, int solid[2])
+                     double vbusy, double tol, double drift, int text, int straight,
+                     int solid[2])
 {
     int lines = 0;
     solid[0] = solid[1] = -1;
@@ -544,8 +547,9 @@ static int bar_depth(const float *mean, const float *var, int i0, int lstep,
                     quiet++;
             }
         }
-        /* subtitles: the outermost line must be nearly all matte, inner ones half */
-        if (lines ? 2 * matte < n : 10 * matte < 9 * n) break;
+        /* subtitles: the outermost line must be nearly all matte, inner ones half,
+         * unless every line must be */
+        if (lines && !straight ? 2 * matte < n : 10 * matte < 9 * n) break;
         if (fabs(sum / matte - color) >= drift) break;
         if (10 * matte < 9 * n) {
             if (solid[0] < 0 && quiet) solid[0] = lines;
@@ -590,50 +594,152 @@ static void pair_sides(int *a, int *b, int sa, int sb, double ca, double cb,
     if (sa && fb > maxl && sb >= sa) *a = *b = sa;
     else if (sb && fa > maxl && sa >= sb) *a = *b = sb;
 }
-void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
+/* top and bottom bars whose blocks sit under vmax */
+static void bars_rows(const float *mean, const float *var, int wmb, int hmb, double vmax,
+                      int straight, int *top, int *bottom)
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
-    double vmax = AQ_BAR_VAR * sc * sc, tol = AQ_BAR_TOL * sc;
-    double drift = AQ_BAR_DRIFT * sc, vbusy = aq_dark_env(2) * sc * sc;
-    int top = 0, bottom = 0, left = 0, right = 0, sa[2], sb[2];
-    int maxr = hmb * 3 / 8, maxc = wmb * 3 / 8;
-    if (maxr > 0) {
-        double ca = bar_color(mean, var, 0, 1, wmb, vmax, sc);
-        double cb = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax, sc);
-        top = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, ca, vmax, vbusy, tol,
-                        drift, 1, sa);
-        bottom = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax,
-                           vbusy, tol, drift, 1, sb);
-        int t = top, b = bottom;
-        pair_sides(&top, &bottom, sa[0], sb[0], ca, cb, drift, maxr, 1);
-        /* a lit subject clear of both sides, against a black sky at the bar's
-         * inner edge, can read as text and carry a solid depth into the
-         * picture; when nothing pairs, try again without the glyph edges */
-        if (!top) {
-            top = t; bottom = b;
-            pair_sides(&top, &bottom, sa[1], sb[1], ca, cb, drift, maxr, 1);
-        }
+    double tol = AQ_BAR_TOL * sc, drift = AQ_BAR_DRIFT * sc, vbusy = aq_dark_env(2) * sc * sc;
+    int maxr = hmb * 3 / 8, sa[2], sb[2];
+    *top = *bottom = 0;
+    if (maxr <= 0) return;
+    double ca = bar_color(mean, var, 0, 1, wmb, vmax, sc);
+    double cb = bar_color(mean, var, (hmb - 1) * wmb, 1, wmb, vmax, sc);
+    int t = bar_depth(mean, var, 0, wmb, 1, wmb, maxr + 1, ca, vmax, vbusy, tol, drift, 1,
+                      straight, sa);
+    int b = bar_depth(mean, var, (hmb - 1) * wmb, -wmb, 1, wmb, maxr + 1, cb, vmax, vbusy,
+                      tol, drift, 1, straight, sb);
+    *top = t; *bottom = b;
+    pair_sides(top, bottom, sa[0], sb[0], ca, cb, drift, maxr, 1);
+    /* a lit subject clear of both sides, against a black sky at the bar's
+     * inner edge, can read as text and carry a solid depth into the
+     * picture; when nothing pairs, try again without the glyph edges */
+    if (!*top) {
+        *top = t; *bottom = b;
+        pair_sides(top, bottom, sa[1], sb[1], ca, cb, drift, maxr, 1);
     }
-    /* side bars between any top and bottom ones: a windowbox has both */
-    int rows = hmb - top - bottom, i0 = top * wmb;
-    if (maxc > 0 && rows > 0) {
-        double ca = bar_color(mean, var, i0, wmb, rows, vmax, sc);
-        double cb = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax, sc);
-        left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, ca, vmax, vbusy, tol,
-                         drift, 0, sa);
-        right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, cb, vmax,
-                          vbusy, tol, drift, 0, sb);
-        pair_sides(&left, &right, sa[0], sb[0], ca, cb, drift, maxc, 0);
-    }
-    bars[0] = top; bars[1] = bottom; bars[2] = left; bars[3] = right;
+}
+/* side bars between any top and bottom ones: a windowbox has both */
+static void bars_cols(const float *mean, const float *var, int wmb, int hmb, int top,
+                      int bottom, double vmax, int straight, int *left, int *right)
+{
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    double tol = AQ_BAR_TOL * sc, drift = AQ_BAR_DRIFT * sc, vbusy = aq_dark_env(2) * sc * sc;
+    int rows = hmb - top - bottom, i0 = top * wmb, maxc = wmb * 3 / 8, sa[2], sb[2];
+    *left = *right = 0;
+    if (maxc <= 0 || rows <= 0) return;
+    double ca = bar_color(mean, var, i0, wmb, rows, vmax, sc);
+    double cb = bar_color(mean, var, i0 + wmb - 1, wmb, rows, vmax, sc);
+    *left = bar_depth(mean, var, i0, 1, wmb, rows, maxc + 1, ca, vmax, vbusy, tol, drift, 0,
+                      straight, sa);
+    *right = bar_depth(mean, var, i0 + wmb - 1, -1, wmb, rows, maxc + 1, cb, vmax, vbusy, tol,
+                       drift, 0, straight, sb);
+    pair_sides(left, right, sa[0], sb[0], ca, cb, drift, maxc, 0);
+}
+void y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
+{
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8)), vmax = AQ_BAR_VAR * sc * sc;
+    bars_rows(mean, var, wmb, hmb, vmax, 0, &bars[0], &bars[1]);
+    bars_cols(mean, var, wmb, hmb, bars[0], bars[1], vmax, 0, &bars[2], &bars[3]);
 }
 
-/* the share of dark grain macroblocks, bars left out: counted in, they'd
- * dilute a letterboxed night scene's share */
-double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb)
+/* the grain share's bars from one frame: flat ones only, with the flat line
+ * itself taken as flat, since a matte dithered between two levels reaches it */
+static void flat_grain_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4])
 {
-    int bars[4];
-    y264_aq_bars(mean, var, wmb, hmb, bars);
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    double vmax = nextafter(AQ_BAR_VAR * sc * sc, INFINITY);
+    bars_rows(mean, var, wmb, hmb, vmax, 0, &bars[0], &bars[1]);
+    bars_cols(mean, var, wmb, hmb, bars[0], bars[1], vmax, 0, &bars[2], &bars[3]);
+}
+
+/* the mean level of the bar blocks on axis k (0 rows, 1 columns) */
+static float matte_level(const float *mean, int wmb, int hmb, const int bars[4], int k)
+{
+    double sum = 0;
+    int cnt = 0;
+    for (int y = 0; y < hmb; y++)
+        for (int x = 0; x < wmb; x++) {
+            int in = k ? (y >= bars[0] && y < hmb - bars[1] &&
+                          (x < bars[2] || x >= wmb - bars[3]))
+                       : (y < bars[0] || y >= hmb - bars[1]);
+            if (in) { sum += mean[y * wmb + x]; cnt++; }
+        }
+    return cnt ? (float)(sum / cnt) : 0.f;
+}
+/* a matte frames a picture: when a quarter of what lies between noisy bars
+ * is more of the same noisy level, they are part of a dark field, such as
+ * grain behind credits, not a matte */
+static int matte_frames_picture(const float *mean, const float *var, int wmb, int hmb,
+                                const int bars[4], float lvl, double vmax, double tol)
+{
+    int in = 0, same = 0;
+    for (int y = bars[0]; y < hmb - bars[1]; y++)
+        for (int x = bars[2]; x < wmb - bars[3]; x++) {
+            int i = y * wmb + x;
+            in++;
+            same += var[i] < vmax && fabs(mean[i] - lvl) < tol;
+        }
+    return 4 * same < in;
+}
+
+/* One frame's bar candidates: flat bars, or on an axis without them, noisy
+ * ones, which the lookahead takes only when they hold still. Noise near the
+ * grain ceiling straddles it block to block, so the noisy walk allows twice
+ * that. Every line of a noisy bar must be nearly all matte, so it ends on a
+ * straight inner edge. The bars must frame a picture, and sit within four
+ * levels of the coded black (16, or 0 at full range): a grainy dark band at
+ * one level pairs like a matte and holds still too, but real mattes are black.
+ * Returns the noisy axes (1 rows, 2 columns); lvl gets each axis's level */
+#define AQ_MATTE_BLACK 4.0
+int y264_aq_matte_cand(const float *mean, const float *var, int wmb, int hmb, double black,
+                       int bars[4], float lvl[2])
+{
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8)), tol = AQ_BAR_TOL * sc;
+    double vmax = nextafter(AQ_BAR_VAR * sc * sc, INFINITY);
+    double vnoisy = 2.0 * aq_dark_env(2) * sc * sc;
+    int noisy = 0;
+    bars_rows(mean, var, wmb, hmb, vmax, 0, &bars[0], &bars[1]);
+    if (!bars[0] && !bars[1]) {
+        bars_rows(mean, var, wmb, hmb, vnoisy, 1, &bars[0], &bars[1]);
+        noisy |= bars[0] ? 1 : 0;
+    }
+    bars_cols(mean, var, wmb, hmb, bars[0], bars[1], vmax, 0, &bars[2], &bars[3]);
+    if (!bars[2] && !bars[3]) {
+        bars_cols(mean, var, wmb, hmb, bars[0], bars[1], vnoisy, 1, &bars[2], &bars[3]);
+        noisy |= bars[2] ? 2 : 0;
+    }
+    for (int k = 0; k < 2; k++) lvl[k] = matte_level(mean, wmb, hmb, bars, k);
+    int framed = 1;
+    for (int k = 0; k < 2; k++)
+        if (noisy & (1 << k))
+            framed &= lvl[k] < black + AQ_MATTE_BLACK * sc &&
+                      matte_frames_picture(mean, var, wmb, hmb, bars, lvl[k], vnoisy, tol);
+    if (!framed) {                      /* flat bars only */
+        if (noisy & 1) bars[0] = bars[1] = 0;
+        if (noisy) bars_cols(mean, var, wmb, hmb, bars[0], bars[1], vmax, 0, &bars[2], &bars[3]);
+        noisy = 0;
+        for (int k = 0; k < 2; k++) lvl[k] = matte_level(mean, wmb, hmb, bars, k);
+    }
+    return noisy;
+}
+
+/* 1 when two frames' candidates hold the same noisy bars on axis k (0 rows,
+ * 1 columns): the same depths and a level within the bar drift */
+int y264_aq_matte_same(const int a[4], const float la[2], const int b[4], const float lb[2],
+                       int k)
+{
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    return a[2 * k] == b[2 * k] && a[2 * k + 1] == b[2 * k + 1] &&
+           fabs(la[k] - lb[k]) < AQ_BAR_DRIFT * sc;
+}
+
+/* the share of dark grain macroblocks inside bars[], which are left out:
+ * counted in, they'd dilute a letterboxed night scene's share, and a noisy
+ * matte would open the gate on its own */
+double y264_aq_grain_share_in(const float *mean, const float *var, int wmb, int hmb,
+                              const int bars[4])
+{
     int n = 0, g = 0;
     for (int y = bars[0]; y < hmb - bars[1]; y++)
         for (int x = bars[2]; x < wmb - bars[3]; x++) {
@@ -641,6 +747,14 @@ double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb
             g += y264_aq_grain(mean[y * wmb + x], var[y * wmb + x]);
         }
     return n ? (double)g / n : 0.0;
+}
+
+/* the share from one frame alone: flat bars only */
+double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb)
+{
+    int bars[4];
+    flat_grain_bars(mean, var, wmb, hmb, bars);
+    return y264_aq_grain_share_in(mean, var, wmb, hmb, bars);
 }
 
 /* lines (or columns) of a picture's matte, counted inward from line i0 of
@@ -875,7 +989,10 @@ static void aq_analyze(y264_frame_t *f)
     double bs = (double)nbright / n, dg = y264_aq_dark_gate(bs, 0.0, f->fade);
     if (aq_dark_env(0) > 0 && dg < 1.0 && !f->fade) {
         y264_aq_floor_lift(f->src[0], f->src_stride[0], f->wmb, f->hmb, vars);
-        dg = y264_aq_dark_gate(bs, y264_aq_grain_share(means, vars, f->wmb, f->hmb), 0);
+        double gs = f->gbars_ok
+                  ? y264_aq_grain_share_in(means, vars, f->wmb, f->hmb, f->gbars)
+                  : y264_aq_grain_share(means, vars, f->wmb, f->hmb);
+        dg = y264_aq_dark_gate(bs, gs, 0);
     }
     if (aq_dark_env(0) > 0) f->dark_dg = (float)dg;
     f->aq_s = strength; f->aq_c = center;

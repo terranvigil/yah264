@@ -249,6 +249,7 @@ typedef struct {
     int dark_lift;
     float dark_dg;
     int fade;                       /* the lookahead's fade test held: no grain ramp */
+    int gbars[4], gbars_ok;         /* the lookahead's grain-share bars, noisy mattes in */
     float aq_s, aq_c;               /* aq_analyze's strength and centre, for the lift's cap */
     int dl_mbx, dl_mby, dl_l;       /* dark_skip_lift's last answer */
     int clift_720;                  /* 720p class at chroma offset -2: the probe lift applies */
@@ -528,6 +529,12 @@ void             y264_aq_floor_lift(const pixel *p, int stride, int wmb, int hmb
 int              y264_aq_grain(double mean, double var);
 void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4]);
 double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
+double           y264_aq_grain_share_in(const float *mean, const float *var, int wmb, int hmb,
+                                        const int bars[4]);
+int              y264_aq_matte_cand(const float *mean, const float *var, int wmb, int hmb,
+                                    double black, int bars[4], float lvl[2]);
+int              y264_aq_matte_same(const int a[4], const float la[2], const int b[4],
+                                    const float lb[2], int k);
 double           y264_src_bars(const pixel *src, int stride, int wmb, int hmb, int px[4]);
 double           y264_aq_dark_gate(double bright_share, double grain_share, int fade);
 /* the fade test's state, one per encoder instance (so per GOP when GOPs are

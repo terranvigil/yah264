@@ -160,10 +160,12 @@ int main(void)
         /* a bar on one edge only isn't a letterbox */
         FILL(y < 2, 16.0, 0.0, 30.0, 6.0)
         CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (H - 2.0) / H) < 1e-9);
-        /* grainy bars aren't bars: they count as grain */
+        /* grainy bars aren't flat bars: one frame alone counts them as grain,
+         * and only nominates them (y264_aq_matte_cand, below) */
         FILL(y < 3 || y >= H - 3, 16.0, 1.44, 140.0, 80.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - 6.0 / H) < 1e-9);
         /* mattes of any color, and pillarboxes */
         FILL(y < 3 || y >= H - 3, 200.0, 0.1, 90.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
@@ -501,6 +503,107 @@ int main(void)
         FILL(x < 31 || x >= W - 31, 16.0, 0.0, 120.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 0 && e[3] == 0);
+
+        /* noisy mattes: film-scan or analog noise lifts a bar's blocks off
+         * the flat line. They aren't flat bars, and one frame can't tell them
+         * from dark grain in the picture, so the share from one frame keeps
+         * counting them; a frame only nominates them, with their level, and
+         * the lookahead takes them once consecutive frames nominate the same.
+         * The picture is a fifth dark grain, the rest busy */
+        unsigned seed = 1;
+        float lv[2], lv2[2];
+        int c2[4];
+#define JIT(a) ((seed = seed * 1103515245u + 12345u), (a) * (((seed >> 16) & 1023) / 1023.0 - 0.5))
+#define PIC(x, y) (((x) + 2 * (y)) % 5 == 0)
+#define NOISY(cond, mb, vb, vj)                                              \
+        for (int y = 0; y < H; y++)                                          \
+            for (int x = 0; x < W; x++) {                                    \
+                int bar = (cond), g = PIC(x, y);                             \
+                m[y * W + x] = (float)M(bar ? (mb) + JIT(0.4) : g ? 30.0 : 120.0); \
+                v[y * W + x] = (float)V(bar ? (vb) + JIT(vj) : g ? 6.0 : 60.0);   \
+            }
+        const double pic = 0.2;
+        NOISY(x < 27 || x >= W - 26, 16.0, 6.0, 4.0)        /* the repro's pillars */
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[2] == 0 && e[3] == 0);                       /* not flat bars */
+        CHECK(y264_aq_grain_share(m, v, W, H) > 0.5);        /* one frame: grain */
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 2);   /* nominated */
+        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 27 && e[3] == 26);
+        CHECK(fabs(lv[1] - M(16.0)) < 0.1 * SC);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        /* full range puts black at 0: pillars at 16 are picture there */
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(0.0), c2, lv2) == 0);
+        /* the next frame's noise is new, but the matte holds still */
+        NOISY(x < 27 || x >= W - 26, 16.0, 6.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), c2, lv2) == 2);
+        CHECK(y264_aq_matte_same(e, lv, c2, lv2, 1));
+        /* a dark wall that moves doesn't */
+        NOISY(x < 25 || x >= W - 24, 16.0, 6.0, 4.0)
+        y264_aq_matte_cand(m, v, W, H, M(16.0), c2, lv2);
+        CHECK(!y264_aq_matte_same(e, lv, c2, lv2, 1));
+        NOISY(x < 27 || x >= W - 26, 17.0, 6.0, 4.0)        /* nor one whose level moves */
+        y264_aq_matte_cand(m, v, W, H, M(16.0), c2, lv2);
+        CHECK(!y264_aq_matte_same(e, lv, c2, lv2, 1));
+        NOISY(y < 6 || y >= H - 6, 16.0, 6.0, 4.0)          /* a letterbox */
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 1 && e[0] == 6 && e[1] == 6);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        NOISY(y < 5 || y >= H - 5 || x < 10 || x >= W - 10, 16.0, 6.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 3);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        NOISY(x < 27 || x >= W - 26, 16.0, 16.0, 12.0)      /* noise across the ceiling */
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 2);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        /* a matte dithered between two levels sits on the flat line: one
+         * frame takes it as flat bars */
+        NOISY(x < 27 || x >= W - 26, 16.5, 0.25, 0.0)
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++)
+                if ((x < 27 || x >= W - 26) && (x + y) % 3) v[y * W + x] = (float)V(0.24);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - pic) < 0.02);
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[2] == 27);
+        /* noisy black around a column of text, as behind credits, is a dark
+         * field, not a matte: it frames no picture */
+        NOISY(1, 16.0, 6.0, 4.0)
+        for (int y = 2; y < H - 2; y += 3)
+            for (int x = 30; x < 50; x++) {
+                m[y * W + x] = (float)M(160.0);
+                v[y * W + x] = (float)V(900.0);
+            }
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[2] == 0 && e[3] == 0);
+        /* a grainy night sky and ground at one level pair and hold still like
+         * a matte, but sit well above black: not nominated */
+        NOISY(y < 13 || y >= H - 13, 33.0, 9.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[0] == 0 && e[1] == 0);
+        NOISY(x < 20 || x >= W - 20, 31.0, 9.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[2] == 0 && e[3] == 0);
+        /* a uniform dark wall or grainy sky is grain: one frame counts it */
+        NOISY(x < 20 || x >= W - 20, 18.0, 6.0, 4.0)
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (40 + pic * 40) / W) < 0.02);
+        NOISY(y < 12 || y >= H - 12, 18.0, 6.0, 4.0)
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (24 + pic * 21) / H) < 0.02);
+        /* a wall's ragged inner edge ends the bar: every line of a noisy
+         * bar must be nearly all matte */
+        NOISY(x < 14 + y % 7 || x >= W - 14 - (y * 3) % 8, 18.0, 6.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 2 && e[2] == 14 && e[3] == 14);
+        /* real dark grain at one edge only, at two levels, or a whole frame
+         * of it, isn't nominated */
+        NOISY(x < 20, 18.0, 6.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0);
+        NOISY(x < 20 || x >= W - 20, x < 20 ? 18.0 : 22.0, 6.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0);
+        NOISY(1, 18.0, 6.0, 4.0)
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0);
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        /* beside a clean matte, at the matte's own level: flat bars were
+         * found, so the grain beside them is picture */
+        NOISY(y >= 4 && y < H - 4, 16.3, 6.0, 4.0)
+        for (int i = 0; i < W * H; i++)
+            if (i < 4 * W || i >= (H - 4) * W) { m[i] = (float)M(16.0); v[i] = 0.f; }
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[0] == 4 && e[1] == 4);
+#undef NOISY
+#undef PIC
+#undef JIT
 #undef FILL
     }
 

@@ -104,8 +104,11 @@
 #define y264_aq_gain                    y264_aq_gain_10
 #define y264_aq_grain                   y264_aq_grain_10
 #define y264_aq_grain_share             y264_aq_grain_share_10
+#define y264_aq_grain_share_in          y264_aq_grain_share_in_10
 #define y264_aq_l                       y264_aq_l_10
 #define y264_aq_lf                      y264_aq_lf_10
+#define y264_aq_matte_cand              y264_aq_matte_cand_10
+#define y264_aq_matte_same              y264_aq_matte_same_10
 #define y264_aq_vscale                  y264_aq_vscale_10
 #define y264_asm_off_                   y264_asm_off__10
 #define y264_aud_write                  y264_aud_write_10
