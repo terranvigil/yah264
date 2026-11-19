@@ -736,33 +736,51 @@ int y264_aq_matte_same(const int a[4], const float la[2], const int b[4], const 
 
 /* the share of dark grain macroblocks inside bars[], which are left out:
  * counted in, they'd dilute a letterboxed night scene's share, and a noisy
- * matte would open the gate on its own. Flat near-black blocks inside are
- * left out too: a black stage or sky around a lit subject dilutes the share
- * the same way, and whether the bar walk reads it as a matte flips from frame
- * to frame. Under 20 on the 8-bit scale is black plus the matte's four levels */
-#define AQ_VOID_LEVEL 20.0
+ * matte would open the gate on its own. A black stage around a lit subject
+ * dilutes it the same way, and the bar walk takes it for a pillarbox on some
+ * frames only, so on a mostly black frame (bars included) flat black leaves
+ * the count too. Too few blocks left can't speak for the frame, and a slow
+ * fade up from black keeps its void (y264_aq_void_fade_note) */
+#define AQ_VOID_V0 0.60
+#define AQ_VOID_V1 0.70
+#define AQ_VOID_R0 0.05
+#define AQ_VOID_R1 0.15
+static double void_ramp(double x, double a, double b)
+{
+    double r = (x - a) / (b - a);
+    return r < 0.0 ? 0.0 : (r > 1.0 ? 1.0 : r);
+}
 double y264_aq_grain_share_in(const float *mean, const float *var, int wmb, int hmb,
-                              const int bars[4])
+                              const int bars[4], double black, int fading)
 {
     double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
-    double vflat = AQ_GRAIN_VMIN * sc * sc, vlevel = AQ_VOID_LEVEL * sc;
-    int n = 0, g = 0;
-    for (int y = bars[0]; y < hmb - bars[1]; y++)
-        for (int x = bars[2]; x < wmb - bars[3]; x++) {
-            if (var[y * wmb + x] < vflat && mean[y * wmb + x] < vlevel)
+    double vflat = AQ_GRAIN_VMIN * sc * sc, vlevel = black + AQ_MATTE_BLACK * sc;
+    int n = 0, g = 0, nv = 0, all = 0;
+    for (int y = 0; y < hmb; y++)
+        for (int x = 0; x < wmb; x++) {
+            int i = y * wmb + x;
+            int v = var[i] < vflat && mean[i] < vlevel;
+            all += v;
+            if (y < bars[0] || y >= hmb - bars[1] || x < bars[2] || x >= wmb - bars[3])
                 continue;
-            n++;
-            g += y264_aq_grain(mean[y * wmb + x], var[y * wmb + x]);
+            n++; nv += v;
+            g += y264_aq_grain(mean[i], var[i]);
         }
-    return n ? (double)g / n : 0.0;
+    if (!n) return 0.0;
+    double fr = (double)wmb * hmb, vf = all / fr, rem = (n - nv) / fr;
+    double k = fading ? 0.0 : void_ramp(vf, AQ_VOID_V0, AQ_VOID_V1) *
+                              void_ramp(rem, AQ_VOID_R0, AQ_VOID_R1);
+    double s = (double)g / n;
+    return n > nv ? s + k * ((double)g / (n - nv) - s) : s;
 }
 
 /* the share from one frame alone: flat bars only */
-double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb)
+double y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb, double black,
+                           int fading)
 {
     int bars[4];
     flat_grain_bars(mean, var, wmb, hmb, bars);
-    return y264_aq_grain_share_in(mean, var, wmb, hmb, bars);
+    return y264_aq_grain_share_in(mean, var, wmb, hmb, bars, black, fading);
 }
 
 /* lines (or columns) of a picture's matte, counted inward from line i0 of
@@ -866,9 +884,8 @@ double y264_aq_dark_gate(double bright_share, double grain_share, int fade)
  * depth, has moved the same way by at least AQ_FADE_STEP levels on each of
  * the last AQ_FADE_N frames; motion seldom pushes the mean one way that long.
  * A step over AQ_FADE_CUT is a cut, not a fade, and breaks the run. */
-int y264_aq_fade_note(y264_fade_t *t, double mean8)
+static int fade_step(y264_fade_t *t, double m, double step)
 {
-    double step = aq_dark_env(7), m = mean8;
     int dir = 0;
     if (t->have) {
         double d = m - t->prev;
@@ -880,6 +897,27 @@ int y264_aq_fade_note(y264_fade_t *t, double mean8)
     t->prev = m;
     t->have = 1;
     return step > 0.0 && t->run >= (int)aq_dark_env(8);
+}
+int y264_aq_fade_note(y264_fade_t *t, double mean8)
+{
+    return fade_step(t, mean8, aq_dark_env(7));
+}
+
+/* the same test at a quarter of the fade step (Y264_AQ_FADE, 0 turns both
+ * off), for the void rule in the grain share alone: a fade up from black
+ * moves a mostly black picture's mean by well under the fade step at first,
+ * and void that shrinks frame to frame is a picture coming out of black, not
+ * a stage. A slow fade wobbles around that step, so the flag holds for
+ * AQ_FADE_N frames after its run breaks */
+int y264_aq_void_fade_note(y264_fade_t *t, double mean8)
+{
+    if (t->have && fabs(mean8 - t->prev) > AQ_FADE_CUT)
+        t->hold = 0;
+    if (fade_step(t, mean8, aq_dark_env(7) / 4.0)) {
+        t->hold = (int)aq_dark_env(8);
+        return 1;
+    }
+    return t->hold > 0 ? (t->hold--, 1) : 0;
 }
 
 /* Y264_PSY_DARK: a multiplier on the psy-rd weight for the same dark, smooth
@@ -998,8 +1036,8 @@ static void aq_analyze(y264_frame_t *f)
     if (aq_dark_env(0) > 0 && dg < 1.0 && !f->fade) {
         y264_aq_floor_lift(f->src[0], f->src_stride[0], f->wmb, f->hmb, vars);
         double gs = f->gbars_ok
-                  ? y264_aq_grain_share_in(means, vars, f->wmb, f->hmb, f->gbars)
-                  : y264_aq_grain_share(means, vars, f->wmb, f->hmb);
+                  ? y264_aq_grain_share_in(means, vars, f->wmb, f->hmb, f->gbars, f->black, f->vfade)
+                  : y264_aq_grain_share(means, vars, f->wmb, f->hmb, f->black, f->vfade);
         dg = y264_aq_dark_gate(bs, gs, 0);
     }
     if (aq_dark_env(0) > 0) f->dark_dg = (float)dg;

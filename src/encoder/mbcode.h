@@ -249,7 +249,9 @@ typedef struct {
     int dark_lift;
     float dark_dg;
     int fade;                       /* the lookahead's fade test held: no grain ramp */
+    int vfade;                      /* its slow twin held: void stays in the grain share */
     int gbars[4], gbars_ok;         /* the lookahead's grain-share bars, noisy mattes in */
+    double black;                   /* the coded black on this depth's scale: 0 at full range */
     float aq_s, aq_c;               /* aq_analyze's strength and centre, for the lift's cap */
     int dl_mbx, dl_mby, dl_l;       /* dark_skip_lift's last answer */
     int clift_720;                  /* 720p class at chroma offset -2: the probe lift applies */
@@ -528,9 +530,10 @@ int              y264_aq_bright(double mean);
 void             y264_aq_floor_lift(const pixel *p, int stride, int wmb, int hmb, float *vars);
 int              y264_aq_grain(double mean, double var);
 void             y264_aq_bars(const float *mean, const float *var, int wmb, int hmb, int bars[4]);
-double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb);
+double           y264_aq_grain_share(const float *mean, const float *var, int wmb, int hmb,
+                                     double black, int fading);
 double           y264_aq_grain_share_in(const float *mean, const float *var, int wmb, int hmb,
-                                        const int bars[4]);
+                                        const int bars[4], double black, int fading);
 int              y264_aq_matte_cand(const float *mean, const float *var, int wmb, int hmb,
                                     double black, int bars[4], float lvl[2]);
 int              y264_aq_matte_same(const int a[4], const float la[2], const int b[4],
@@ -539,8 +542,9 @@ double           y264_src_bars(const pixel *src, int stride, int wmb, int hmb, i
 double           y264_aq_dark_gate(double bright_share, double grain_share, int fade);
 /* the fade test's state, one per encoder instance (so per GOP when GOPs are
  * coded apart), fed every frame in display order with its 8-bit-scale mean */
-typedef struct { double prev; int have, dir, run; } y264_fade_t;
+typedef struct { double prev; int have, dir, run, hold; } y264_fade_t;
 int              y264_aq_fade_note(y264_fade_t *t, double mean8);
+int              y264_aq_void_fade_note(y264_fade_t *t, double mean8);
 double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
 /* l = log2(variance + floor) on the 8-bit scale, and the factor a coded
