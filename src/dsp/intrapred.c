@@ -554,7 +554,8 @@ void y264_intra8_dvhp(pixel out[4][64], const pixel top[8], const pixel left[8],
     y264_intra8_dvhp_c(out, top, left, dc, a, b, c);
 }
 
-/* Same per-mode routing table as y264_intra8x8, one derivation earlier. */
+/* VERT/DDR/VR/HD/VL go to the kernels; HORIZ/DC/DDL/HU stay on C, where the
+ * auto-vectorized builder wins. */
 void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
                              int mode, int have_top, int have_left)
 {
@@ -662,48 +663,3 @@ void y264_intra4x4(pixel pred[16], const pixel *rec, int stride,
                     have_topleft, have_topright);
 }
 
-void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
-                   int mode, int have_top, int have_left,
-                   int have_topleft, int have_topright)
-{
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10
-    switch (mode) {
-    case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
-    case Y264_I4_HD: case Y264_I4_VL:
-        if (pr_have_simd()) {
-            y264_intra8x8_neon(pred, rec, stride, mode, have_top, have_left,
-                               have_topleft, have_topright);
-            return;
-        }
-        break;
-    default:                    /* HORIZ/DC/DDL/HU: auto-vectorized C wins */
-        break;
-    }
-#endif
-#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
-    switch (mode) {
-    case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
-    case Y264_I4_HD: case Y264_I4_VL:
-        if (pr_have_simd()) {
-            int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
-            if (tier >= Y264_TIER_AVX2) {
-                y264_intra8x8_avx2(pred, rec, stride, mode, have_top, have_left,
-                                   have_topleft, have_topright);
-                return;
-            }
-#endif
-            if (tier >= Y264_TIER_SSE4) {
-                y264_intra8x8_sse4(pred, rec, stride, mode, have_top, have_left,
-                                   have_topleft, have_topright);
-                return;
-            }
-        }
-        break;
-    default:                    /* HORIZ/DC/DDL/HU: auto-vectorized C wins */
-        break;
-    }
-#endif
-    y264_intra8x8_c(pred, rec, stride, mode, have_top, have_left,
-                    have_topleft, have_topright);
-}

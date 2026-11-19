@@ -40,14 +40,14 @@ static inline void f121_8(const uint8_t *in, uint8_t *outF, uint8_t *outH)
     vst1_u8(outH, vrhadd_u8(a, b));
 }
 
-/* ---- Intra8x8 (reference-sample filter + routed modes) ------------------
+/* ---- Intra8x8 (routed modes) ---------------------------------------------
  * Only the modes the dispatcher routes here (VERT/DDR/VR/HD/VL) are
  * implemented; a 4x4 variant and the remaining 8x8 modes measured slower
  * than the auto-vectorized C and were dropped. */
-/* The routed modes, from the flat filtered edge array alone. Split out of
- * y264_intra8x8_neon so a nine-mode decision loop derives that array once
- * instead of once per mode; the loop's other four modes read the same numbers
- * through the C builder's t/l/tl view of the same struct. */
+/* The routed modes, from the flat filtered edge array alone, so a nine-mode
+ * decision loop derives that array once instead of once per mode; the loop's
+ * other four modes read the same numbers through the C builder's t/l/tl view
+ * of the same struct. */
 void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
 {
     uint8_t Fb[24], Hb[24];
@@ -142,7 +142,7 @@ void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel lef
 
 /* y264_intra8x8_dir6_neon from the reconstructed neighbours directly, for
  * a block with the top, left and top-left samples and no top-right: the
- * edge filter of y264_intra8x8_neon at that availability, then the six. */
+ * 8.3.2.2.1 edge filter at that availability, then the six. */
 void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
 {
     uint8_t a[20], al[12], e[32];
@@ -163,57 +163,6 @@ void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
     vst1_u8(e, vrev64_u8(vrhadd_u8(vhadd_u8(w0, w2), w1)));
     e[25] = e[26] = e[24];
     y264_intra8x8_dir6_neon(out, e);
-}
-
-void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
-                        int mode, int have_top, int have_left,
-                        int have_topleft, int have_topright)
-{
-    /* raw samples */
-    uint8_t rt[16], rl[8];
-    int rtl = 0;
-    for (int i = 0; i < 8; i++) {
-        rt[i] = have_top ? rec[-stride + i] : 0;
-        rl[i] = have_left ? rec[i * stride - 1] : 0;
-    }
-    for (int i = 8; i < 16; i++)
-        rt[i] = have_topright ? rec[-stride + i] : rt[7];
-    if (have_topleft)
-        rtl = rec[-stride - 1];
-
-    /* 8.3.2.2.1 low-pass -> filtered t[16], l[8], tl (all in one edge array
- * e = { l7..l0, tl, t0..t15, t15, t15 }). The endpoint specials fold into
- * the same 121 filter via source replication. */
-    uint8_t e[32];
-    memset(e, 0, sizeof(e));
-    int tl = 0;
-    if (have_topleft) {
-        if (have_top && have_left) tl = (rt[0] + 2 * rtl + rl[0] + 2) >> 2;
-        else if (have_top)         tl = (3 * rtl + rt[0] + 2) >> 2;
-        else                       tl = (3 * rtl + rl[0] + 2) >> 2;
-    }
-    e[8] = (uint8_t)tl;
-    if (have_top) {
-        uint8_t a[20];
-        a[0] = have_topleft ? (uint8_t)rtl : rt[0];
-        memcpy(a + 1, rt, 16);
-        a[17] = rt[15]; a[18] = a[19] = 0;
-        uint8x16_t v0 = vld1q_u8(a), v1 = vld1q_u8(a + 1), v2 = vld1q_u8(a + 2);
-        vst1q_u8(e + 9, vrhaddq_u8(vhaddq_u8(v0, v2), v1));   /* t[0..15] */
-    }
-    if (have_left) {
-        uint8_t al[12];
-        al[0] = have_topleft ? (uint8_t)rtl : rl[0];
-        memcpy(al + 1, rl, 8);
-        al[9] = rl[7]; al[10] = al[11] = 0;
-        uint8x8_t v0 = vld1_u8(al), v1 = vld1_u8(al + 1), v2 = vld1_u8(al + 2);
-        uint8_t lf[8];
-        vst1_u8(lf, vrhadd_u8(vhadd_u8(v0, v2), v1));         /* l[0..7] */
-        for (int i = 0; i < 8; i++) e[7 - i] = lf[i];
-    }
-    e[25] = e[26] = e[24];               /* t15 replication for DDL's tail */
-
-    y264_intra8x8_from_edge_neon(pred, e, mode);
 }
 
 /* ---- Intra16x16 --------------------------------------------------------- */

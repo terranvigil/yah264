@@ -314,88 +314,10 @@ void y264_mc_luma_neon8(uint8_t *dst, int dstride,
     }
 }
 
-/* ---- hpel plane build row helpers ----------------------------------------
- * Vectorized interiors of y264_mc_build_hpel_rows (interp.c keeps the border
- * columns scalar). All are pure functions of their inputs, so overlapping
- * tail vectors recompute identical values -- bit-exact and band-safe.
- * Load discipline: the reference plane is only guaranteed readable on
- * [0, pw); the horizontal helper therefore uses two 8-byte loads covering
- * exactly offsets [x-2, x+11) instead of one 16-byte load. */
-
-/* srow[x] = unclipped tap6(row[x-2..x+3]) for x in [x0, x1); caller
- * guarantees x0 >= 2 and x1 <= pw - 3 and x1 - x0 >= 8. */
-void y264_hpel_hrow_neon(int32_t *srow, const uint8_t *row, int x0, int x1)
-{
-    for (int x = x0; x < x1; x += 8) {
-        if (x > x1 - 8) x = x1 - 8;                 /* overlap tail */
-        const uint8_t *p = row + x - 2;
-        int16x8_t lo = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(p)));      /* off 0..7 */
-        int16x8_t hi = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(p + 5)));  /* off 5..12 */
-        int16x8_t xh = vextq_s16(hi, hi, 3);        /* lanes 0..4 = off 8..12 */
-        int16x8_t l0 = lo;
-        int16x8_t l1 = vextq_s16(lo, xh, 1);
-        int16x8_t l2 = vextq_s16(lo, xh, 2);
-        int16x8_t l3 = vextq_s16(lo, xh, 3);
-        int16x8_t l4 = vextq_s16(lo, xh, 4);
-        int16x8_t l5 = vextq_s16(lo, xh, 5);
-        int16x8_t t = vaddq_s16(l0, l5);
-        t = vsubq_s16(t, vmulq_n_s16(vaddq_s16(l1, l4), 5));
-        t = vaddq_s16(t, vmulq_n_s16(vaddq_s16(l2, l3), 20));
-        vst1q_s32(srow + x, vmovl_s16(vget_low_s16(t)));
-        vst1q_s32(srow + x + 4, vmovl_s16(vget_high_s16(t)));
-    }
-}
-
-/* H/V/C output for x in [x0, x1): Hr = (s2+16)>>5 clip, Cr = vertical tap6 of
- * the six int32 scratch rows then (+512)>>10 clip, Vr = vertical tap6 of the
- * six integer rows then (+16)>>5 clip. Caller guarantees 0 <= x0, x1 <= pw
- * (so the r* reads need no clamp) and x1 - x0 >= 8. */
-void y264_hpel_outrow_neon(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
-                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
-                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
-                           const uint8_t *r0, const uint8_t *r1, const uint8_t *r2,
-                           const uint8_t *r3, const uint8_t *r4, const uint8_t *r5,
-                           int x0, int x1)
-{
-    for (int x = x0; x < x1; x += 8) {
-        if (x > x1 - 8) x = x1 - 8;                 /* overlap tail */
-        /* H: clip1((s2[x] + 16) >> 5) */
-        int32x4_t h0 = vshrq_n_s32(vaddq_s32(vld1q_s32(s2 + x), vdupq_n_s32(16)), 5);
-        int32x4_t h1 = vshrq_n_s32(vaddq_s32(vld1q_s32(s2 + x + 4), vdupq_n_s32(16)), 5);
-        vst1_u8(Hr + x, vqmovun_s16(vcombine_s16(vqmovn_s32(h0), vqmovn_s32(h1))));
-
-        /* C: clip1((tap6(s0..s5[x]) + 512) >> 10), int32 throughout */
-        for (int half = 0; half < 2; half++) {
-            int off = x + 4 * half;
-            int32x4_t c = vaddq_s32(vld1q_s32(s0 + off), vld1q_s32(s5 + off));
-            c = vsubq_s32(c, vmulq_n_s32(vaddq_s32(vld1q_s32(s1 + off), vld1q_s32(s4 + off)), 5));
-            c = vaddq_s32(c, vmulq_n_s32(vaddq_s32(vld1q_s32(s2 + off), vld1q_s32(s3 + off)), 20));
-            c = vshrq_n_s32(vaddq_s32(c, vdupq_n_s32(512)), 10);
-            if (half == 0)
-                h0 = c;
-            else
-                vst1_u8(Cr + x, vqmovun_s16(vcombine_s16(vqmovn_s32(h0), vqmovn_s32(c))));
-        }
-
-        /* V: clip1((tap6(r0..r5[x]) + 16) >> 5), 16-bit taps */
-        int16x8_t a0 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(r0 + x)));
-        int16x8_t a1 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(r1 + x)));
-        int16x8_t a2 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(r2 + x)));
-        int16x8_t a3 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(r3 + x)));
-        int16x8_t a4 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(r4 + x)));
-        int16x8_t a5 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(r5 + x)));
-        int16x8_t t = vaddq_s16(a0, a5);
-        t = vsubq_s16(t, vmulq_n_s16(vaddq_s16(a1, a4), 5));
-        t = vaddq_s16(t, vmulq_n_s16(vaddq_s16(a2, a3), 20));
-        vst1_u8(Vr + x, vqmovun_s16(vshrq_n_s16(vaddq_s16(t, vdupq_n_s16(16)), 5)));
-    }
-}
-
 /* The whole half-pel build for a band of output rows, borders included, in
- * one NEON pass (the row helpers above leave the border columns to scalar
- * code and stage the horizontal taps as int32). Each source row is clamped
- * into a padded copy once, its horizontal 6-tap kept as int16 (the tap of
- * bytes spans [-2550, 10710]); a ring of six of each feeds the output rows:
+ * one NEON pass. Each source row is clamped into a padded copy once, its
+ * horizontal 6-tap kept as int16 (the tap of bytes spans [-2550, 10710]); a
+ * ring of six of each feeds the output rows:
  *   H = clip1((htap + 16) >> 5)          the rounding narrow does it
  *   V = clip1((vtap of bytes + 16) >> 5) int16 throughout
  *   C = clip1((vtap of htaps + 512) >> 10), the pair sums in int16 (at most
@@ -555,35 +477,6 @@ void y264_avg_mb420_flat_neon(uint8_t *pred, uint8_t *cu, uint8_t *cv,
     for (int y = 0; y < 8; y++, u0 += t0, v0 += t0, u1 += t1, v1 += t1) {
         vst1_u8(cu + 8 * y, vrhadd_u8(vld1_u8(u0), vld1_u8(u1)));
         vst1_u8(cv + 8 * y, vrhadd_u8(vld1_u8(v0), vld1_u8(v1)));
-    }
-}
-
-/* One row of a four-tap bilinear plane, n samples:
- * o[X] = (w00*r0[X] + w10*r0[X+ax] + w01*r1[X] + w11*r1[X+ax] + 8) >> 4,
- * weights summing to 16 (so every sum fits u16 and the rounding narrow is the
- * shift). Reads r0/r1 up to index n - 1 + ax. Bit-exact with the scalar row. */
-void y264_bilin4_row_neon(uint8_t *o, const uint8_t *r0, const uint8_t *r1, int n, int ax,
-                          int w00, int w10, int w01, int w11)
-{
-    uint8x8_t k00 = vdup_n_u8((uint8_t)w00), k10 = vdup_n_u8((uint8_t)w10);
-    uint8x8_t k01 = vdup_n_u8((uint8_t)w01), k11 = vdup_n_u8((uint8_t)w11);
-    int X = 0;
-    for (; X + 16 <= n; X += 16) {
-        uint8x16_t a = vld1q_u8(r0 + X), b = vld1q_u8(r0 + X + ax);
-        uint8x16_t c = vld1q_u8(r1 + X), d = vld1q_u8(r1 + X + ax);
-        uint16x8_t lo = vmull_u8(vget_low_u8(a), k00);
-        lo = vmlal_u8(lo, vget_low_u8(b), k10);
-        lo = vmlal_u8(lo, vget_low_u8(c), k01);
-        lo = vmlal_u8(lo, vget_low_u8(d), k11);
-        uint16x8_t hi = vmull_u8(vget_high_u8(a), k00);
-        hi = vmlal_u8(hi, vget_high_u8(b), k10);
-        hi = vmlal_u8(hi, vget_high_u8(c), k01);
-        hi = vmlal_u8(hi, vget_high_u8(d), k11);
-        vst1q_u8(o + X, vcombine_u8(vrshrn_n_u16(lo, 4), vrshrn_n_u16(hi, 4)));
-    }
-    for (; X < n; X++) {
-        int v = w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax];
-        o[X] = (uint8_t)((v + 8) >> 4);
     }
 }
 

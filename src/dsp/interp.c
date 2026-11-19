@@ -597,10 +597,11 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     if (xin1 > x1) xin1 = x1;
     if (xin1 < xin0) xin1 = xin0;                   /* tiny frame: no interior */
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
-    /* Which tier owns the two row kernels for this band, or Y264_TIER_C for
- * none: the span test is the kernels' own contract (they step back to end on
- * the span and need eight columns to do it), and it is asked once per band
- * rather than once per row. */
+    /* the band's tier, asked once per band; the span test is the row
+     * kernels' contract (eight columns to step back onto). the rows are
+     * 10-bit only: with the encoder's 32-sample border every 8-bit band fits
+     * the band build below, and a 10-bit one-row band doesn't (a pooled
+     * build at certain heights and 38+ threads, 2160p at 58, can end on one) */
     int hpel_tier = (y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8)
                   ? y264_cpu_tier() : Y264_TIER_C;
 #endif
@@ -651,19 +652,19 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         for (; x < xin0; x++)                            /* left border */
             srow[x] = tap6(row[HPX(x-2)], row[HPX(x-1)], row[HPX(x)],
                            row[HPX(x+1)], row[HPX(x+2)], row[HPX(x+3)]);
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10
+#if Y264_HAVE_NEON10
         if (hpel_tier == Y264_TIER_NEON) {
             y264_hpel_hrow_neon(srow, row, xin0, xin1);
             x = xin1;
         } else
 #endif
-#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
+#if Y264_HAVE_AVX2_10
         if (hpel_tier >= Y264_TIER_AVX2) {
             y264_hpel_hrow_avx2(srow, row, xin0, xin1);
             x = xin1;
         } else
 #endif
-#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
+#if Y264_HAVE_SSE4_10
         if (hpel_tier >= Y264_TIER_SSE4) {
             y264_hpel_hrow_sse4(srow, row, xin0, xin1);
             x = xin1;
@@ -710,16 +711,16 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         int nseg = 0;
         int v0 = x0 > 0 ? x0 : 0, v1 = x1 < pw ? x1 : pw;
         int mid = 0;
-#if Y264_HAVE_NEON || Y264_HAVE_NEON10
+#if Y264_HAVE_NEON10
         if (hpel_tier == Y264_TIER_NEON && v1 - v0 >= 8) {
             y264_hpel_outrow_neon(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                   r0, r1, r2, r3, r4, r5, v0, v1);
             mid = 1;
         }
 #endif
-#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
+#if Y264_HAVE_SSE4_10
         if (hpel_tier >= Y264_TIER_SSE4 && v1 - v0 >= 8) {
-#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
+#if Y264_HAVE_AVX2_10
             if (hpel_tier >= Y264_TIER_AVX2)
                 y264_hpel_outrow_avx2(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                       r0, r1, r2, r3, r4, r5, v0, v1);

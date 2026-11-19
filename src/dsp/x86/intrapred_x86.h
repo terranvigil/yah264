@@ -192,60 +192,6 @@ static inline void y264_i8_from_edge_x86(pixel pred[64], const pixel e[32],
     }
 }
 
-/* ---- Intra8x8: the 8.3.2.2.1 reference filter, then the builder ---------- *
- *
- * The filtered edge is the SAME 121 filter, with the two endpoint specials
- * folded into it by replicating the source: t[0] reads the corner (or its own
- * first sample when there is no corner) and t[15] reads itself, so no lane is
- * a special case.
- */
-static inline void y264_i8_edge_x86(uint8_t e[32], const pixel *rec, int stride,
-                                    int have_top, int have_left,
-                                    int have_topleft, int have_topright)
-{
-    uint8_t rt[16], rl[8];
-    int rtl = 0;
-    for (int i = 0; i < 8; i++) {
-        rt[i] = have_top ? rec[-stride + i] : 0;
-        rl[i] = have_left ? rec[i * stride - 1] : 0;
-    }
-    for (int i = 8; i < 16; i++)
-        rt[i] = have_topright ? rec[-stride + i] : rt[7];
-    if (have_topleft)
-        rtl = rec[-stride - 1];
-
-    memset(e, 0, 32);
-    int tl = 0;
-    if (have_topleft) {
-        if (have_top && have_left) tl = (rt[0] + 2 * rtl + rl[0] + 2) >> 2;
-        else if (have_top)         tl = (3 * rtl + rt[0] + 2) >> 2;
-        else                       tl = (3 * rtl + rl[0] + 2) >> 2;
-    }
-    e[8] = (uint8_t)tl;
-    if (have_top) {
-        uint8_t a[20];
-        a[0] = have_topleft ? (uint8_t)rtl : rt[0];
-        memcpy(a + 1, rt, 16);
-        a[17] = rt[15]; a[18] = a[19] = 0;
-        __m128i v0 = y264_ld128(a), v1 = y264_ld128(a + 1), v2 = y264_ld128(a + 2);
-        _mm_storeu_si128((__m128i *)(void *)(e + 9),
-                         _mm_avg_epu8(y264_hadd_u8(v0, v2), v1));
-    }
-    if (have_left) {
-        uint8_t al[12];
-        al[0] = have_topleft ? (uint8_t)rtl : rl[0];
-        memcpy(al + 1, rl, 8);
-        al[9] = rl[7]; al[10] = al[11] = 0;
-        __m128i v0 = y264_ld64(al), v1 = y264_ld64(al + 1), v2 = y264_ld64(al + 2);
-        __m128i lf = _mm_avg_epu8(y264_hadd_u8(v0, v2), v1);
-        /* e[7 - i] = l[i]: the eight filtered left samples, reversed. */
-        _mm_storel_epi64((__m128i *)(void *)e,
-            _mm_shuffle_epi8(lf, _mm_setr_epi8(7, 6, 5, 4, 3, 2, 1, 0,
-                                               -1, -1, -1, -1, -1, -1, -1, -1)));
-    }
-    e[25] = e[26] = e[24];               /* t15 replication for DDL's tail */
-}
-
 /* ---- Intra16x16 ---------------------------------------------------------- */
 static inline void y264_i16_x86(pixel pred[256], const pixel *rec, int stride,
                                 int mode, int have_top, int have_left)
@@ -396,9 +342,8 @@ static inline void y264_ichroma_x86(pixel *pred, const pixel *rec, int stride,
 
 /* ---- the filtered edge of one Intra8x8 block, as registers ---------------- *
  *
- * y264_i8_edge_x86 above stages the raw samples through byte arrays, which is
- * fine once per prediction and too much once per BLOCK of a decision loop
- * that asks for nothing else. This form keeps them in registers: the top row
+ * Derived once per BLOCK of a decision loop, so the samples stay in
+ * registers rather than staging through byte arrays: the top row
  * is one load (eight samples replicated out to sixteen when there is no top
  * right), the left column is eight byte inserts, and the two neighbours each
  * filter tap needs are a byte shift of the same register with the endpoint

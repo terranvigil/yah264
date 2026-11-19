@@ -39,9 +39,6 @@ M10_SATD_AVG(sse4, 16, 8)
 M10_SATD_AVG(sse4, 8, 16)
 M10_SATD_AVG(sse4, 8, 8)
 
-int y264_sa8d_8x8_sse4(const pixel *a, int as, const pixel *b, int bs)
-{ return m10_sa8d_8x8(a, as, b, bs); }
-
 int y264_sa8d_16x16_sse4(const pixel *a, int as, const pixel *b, int bs)
 {
     return m10_sa8d_8x8(a, as, b, bs)
@@ -49,12 +46,6 @@ int y264_sa8d_16x16_sse4(const pixel *a, int as, const pixel *b, int bs)
          + m10_sa8d_8x8(a + 8 * as, as, b + 8 * bs, bs)
          + m10_sa8d_8x8(a + 8 * as + 8, as, b + 8 * bs + 8, bs);
 }
-
-long y264_hadamard_ac_8x8_sse4(const pixel *p, int stride)
-{ return m10_hadamard_ac_8x8(p, stride); }
-
-long y264_texture_ac4_16x16_sse4(const pixel *p, int stride)
-{ return m10_texture_ac4_16x16(p, stride); }
 
 void y264_texture_ac48_16x16_sse4(const pixel *p, int stride, long out[2])
 { m10_texture_ac48_16x16(p, stride, out); }
@@ -83,9 +74,5 @@ void y264_ssdsum4x4_16_sse4(const pixel *a, int as, const pixel *b, int bs,
 void y264_ssdsum4x4_8_sse4(const pixel *a, int as, const pixel *b, int bs,
                            uint32_t e[4], int32_t sum[4])
 { m10_ssdsum4x4_8(a, as, b, bs, e, sum); }
-
-void y264_ssd4x4_map16_sse4(const pixel *a, int as, const pixel *b, int bs,
-                            uint32_t out[16])
-{ m10_ssd4x4_map16(a, as, b, bs, out); }
 
 #endif /* Y264_HAVE_SSE4_10 */

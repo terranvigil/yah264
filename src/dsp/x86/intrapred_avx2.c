@@ -185,16 +185,6 @@ void y264_intra8x8_from_edge_avx2(pixel pred[64], const pixel e[32], int mode)
     y264_i8_from_edge_x86(pred, e, mode);
 }
 
-void y264_intra8x8_avx2(pixel pred[64], const pixel *rec, int stride,
-                        int mode, int have_top, int have_left,
-                        int have_topleft, int have_topright)
-{
-    uint8_t e[32];
-    y264_i8_edge_x86(e, rec, stride, have_top, have_left,
-                     have_topleft, have_topright);
-    y264_i8_from_edge_x86(pred, e, mode);
-}
-
 /* The filtered edge in both views of y264_i8_edge_t. The filter is the shared
  * 128-bit one (sixteen samples is the whole top row); what widens is the
  * integer view, eight entries to a store. */

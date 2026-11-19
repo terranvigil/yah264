@@ -332,19 +332,6 @@ static inline long m10_tex_corr(int dc)
     return (long)(dc < flat ? flat - dc : dc - flat) - (long)dc;
 }
 
-static inline long m10_texture_ac4_16x16(const pixel *p, int stride)
-{
-    __m128i acc = _mm_setzero_si128();
-    long corr = 0;
-    for (int by = 0; by < 16; by += 4)
-        for (int bx = 0; bx < 16; bx += 8) {
-            int dc[2];
-            acc = _mm_add_epi32(acc, m10_tex_group8(p + by * stride + bx, stride, dc));
-            corr += m10_tex_corr(dc[0]) + m10_tex_corr(dc[1]);
-        }
-    return (long)m10_hsum32(acc) + corr;
-}
-
 static inline void m10_texture_ac48_16x16(const pixel *p, int stride, long out[2])
 {
     __m128i a4 = _mm_setzero_si128();
@@ -592,22 +579,6 @@ static inline void m10_ssdsum4x4_8(const pixel *a, int as, const pixel *b, int b
     _mm_storeu_si128((__m128i *)(void *)e, _mm_hadd_epi32(e0, e1));
     _mm_storeu_si128((__m128i *)(void *)sum,
                      _mm_hadd_epi32(_mm_madd_epi16(s0, one), _mm_madd_epi16(s1, one)));
-}
-
-static inline void m10_ssd4x4_map16(const pixel *a, int as, const pixel *b, int bs,
-                                    uint32_t out[16])
-{
-    for (int r = 0; r < 4; r++) {
-        __m128i el = _mm_setzero_si128(), eh = el;
-        for (int y = 0; y < 4; y++) {
-            const pixel *pa = a + (4 * r + y) * as, *pb = b + (4 * r + y) * bs;
-            __m128i dl = _mm_sub_epi16(m10_ld8(pa), m10_ld8(pb));
-            __m128i dh = _mm_sub_epi16(m10_ld8(pa + 8), m10_ld8(pb + 8));
-            el = _mm_add_epi32(el, _mm_madd_epi16(dl, dl));
-            eh = _mm_add_epi32(eh, _mm_madd_epi16(dh, dh));
-        }
-        _mm_storeu_si128((__m128i *)(void *)(out + 4 * r), _mm_hadd_epi32(el, eh));
-    }
 }
 
 /* ---- every 128-bit kernel under one tier's names --------------------------

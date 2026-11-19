@@ -186,7 +186,7 @@ void y264_satd_quad_8x8_sse4(const pixel *src, int ss, const pixel *r0,
 
 /* ---- SA8D and the 8x8 AC magnitude --------------------------------------- */
 
-int y264_sa8d_8x8_sse4(const pixel *a, int as, const pixel *b, int bs)
+static int sa8d_8x8(const pixel *a, int as, const pixel *b, int bs)
 {
     __m128i d[8];
     y264_load8x8_diff(d, a, as, b, bs);
@@ -197,10 +197,10 @@ int y264_sa8d_8x8_sse4(const pixel *a, int as, const pixel *b, int bs)
 
 int y264_sa8d_16x16_sse4(const pixel *a, int as, const pixel *b, int bs)
 {
-    return y264_sa8d_8x8_sse4(a, as, b, bs)
-         + y264_sa8d_8x8_sse4(a + 8, as, b + 8, bs)
-         + y264_sa8d_8x8_sse4(a + 8 * as, as, b + 8 * bs, bs)
-         + y264_sa8d_8x8_sse4(a + 8 * as + 8, as, b + 8 * bs + 8, bs);
+    return sa8d_8x8(a, as, b, bs)
+         + sa8d_8x8(a + 8, as, b + 8, bs)
+         + sa8d_8x8(a + 8 * as, as, b + 8 * bs, bs)
+         + sa8d_8x8(a + 8 * as + 8, as, b + 8 * bs + 8, bs);
 }
 
 /* Sum of the 64 samples of an 8x8, which IS the DC coefficient of its
@@ -214,13 +214,6 @@ static inline int sum8x8(const uint8_t *p, int stride)
             _mm_unpacklo_epi64(y264_ld64(p + y * stride),
                                y264_ld64(p + (y + 1) * stride)), z));
     return y264_hsum_sad(acc);
-}
-
-long y264_hadamard_ac_8x8_sse4(const pixel *p, int stride)
-{
-    __m128i d[8];
-    y264_load8x8(d, p, stride);
-    return (long)y264_had8x8_absum(d) - (long)sum8x8(p, stride);
 }
 
 /* ---- the psy texture terms ----------------------------------------------- */
@@ -260,19 +253,6 @@ static inline long tex_correction(int dc)
 {
     int flat = 16 * ((dc + 8) >> 4);
     return (long)(dc < flat ? flat - dc : dc - flat) - (long)dc;
-}
-
-long y264_texture_ac4_16x16_sse4(const pixel *p, int stride)
-{
-    __m128i acc = _mm_setzero_si128();
-    long corr = 0;
-    for (int by = 0; by < 16; by += 4)
-        for (int bx = 0; bx < 16; bx += 8) {
-            int dc[2];
-            acc = _mm_add_epi32(acc, tex_group8(p + by * stride + bx, stride, dc));
-            corr += tex_correction(dc[0]) + tex_correction(dc[1]);
-        }
-    return (long)y264_hsum_epi32(acc) + corr;
 }
 
 void y264_texture_ac48_16x16_sse4(const pixel *p, int stride, long out[2])
@@ -464,29 +444,6 @@ void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
     _mm_storeu_si128((__m128i *)(void *)sum,
                      _mm_hadd_epi32(_mm_madd_epi16(s0, one),
                                     _mm_madd_epi16(s1, one)));
-}
-
-/* The SSD half of the 16x16 map on its own, for callers that want only the
- * per-4x4 distortion: the same pair sums and the same fold. */
-void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
-                            uint32_t out[16])
-{
-    const __m128i z = _mm_setzero_si128();
-    for (int r = 0; r < 4; r++) {
-        __m128i el = z, eh = z;
-        for (int y = 0; y < 4; y++) {
-            __m128i va = y264_ld128(a + (4 * r + y) * as);
-            __m128i vb = y264_ld128(b + (4 * r + y) * bs);
-            __m128i dl = _mm_sub_epi16(_mm_unpacklo_epi8(va, z),
-                                       _mm_unpacklo_epi8(vb, z));
-            __m128i dh = _mm_sub_epi16(_mm_unpackhi_epi8(va, z),
-                                       _mm_unpackhi_epi8(vb, z));
-            el = _mm_add_epi32(el, _mm_madd_epi16(dl, dl));
-            eh = _mm_add_epi32(eh, _mm_madd_epi16(dh, dh));
-        }
-        _mm_storeu_si128((__m128i *)(void *)(out + 4 * r),
-                         _mm_hadd_epi32(el, eh));
-    }
 }
 
 /* ---- SAD, three and two candidates ---------------------------------------

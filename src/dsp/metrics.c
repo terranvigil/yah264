@@ -229,101 +229,6 @@ static int satd_c_16x16(const pixel *a, int as, const pixel *b, int bs)
     return s;
 }
 
-/* 8-point Walsh-Hadamard (unnormalized). Sum-abs is order-agnostic, so any valid
- * butterfly ordering gives the same SA8D. */
-static inline void had8(const int in[8], int out[8])
-{
-    int a[8], b[8];
-    for (int i = 0; i < 4; i++) { a[i] = in[i] + in[i+4]; a[i+4] = in[i] - in[i+4]; }
-    b[0]=a[0]+a[2]; b[1]=a[1]+a[3]; b[2]=a[0]-a[2]; b[3]=a[1]-a[3];
-    b[4]=a[4]+a[6]; b[5]=a[5]+a[7]; b[6]=a[4]-a[6]; b[7]=a[5]-a[7];
-    out[0]=b[0]+b[1]; out[1]=b[0]-b[1]; out[2]=b[2]+b[3]; out[3]=b[2]-b[3];
-    out[4]=b[4]+b[5]; out[5]=b[4]-b[5]; out[6]=b[6]+b[7]; out[7]=b[6]-b[7];
-}
-
-/* SA8D of an 8x8: sum |2D 8x8 Walsh-Hadamard of the residual|, normalised
- * ((sum+2)>>2) so it compares directly against the 4x4-support SATD for the
- * transform-size pre-decision. */
-static int sa8d_c_8x8(const pixel *a, int as, const pixel *b, int bs)
-{
-    NLED(sa8d_call, 1); NLED(sa8d_pix, 64); NLED_SATD(64);
-    int t[8][8], r[8], c[8];
-    for (int y = 0; y < 8; y++) {
-        int d[8];
-        for (int x = 0; x < 8; x++) d[x] = (int)a[y*as+x] - (int)b[y*bs+x];
-        had8(d, r);
-        for (int x = 0; x < 8; x++) t[y][x] = r[x];
-    }
-    long sum = 0;
-    for (int x = 0; x < 8; x++) {
-        int col[8];
-        for (int y = 0; y < 8; y++) col[y] = t[y][x];
-        had8(col, c);
-        for (int y = 0; y < 8; y++) sum += c[y] < 0 ? -c[y] : c[y];
-    }
-    return (int)((sum + 2) >> 2);
-}
-
-
-/* AC magnitude of one 8x8 via the 8x8 Hadamard (SA8D support): sum |coeff|
- * minus |DC|. The psy-RD texture term (moved here from mbcode.c so it can
- * dispatch). */
-static long hadamard_ac_c_8x8(const pixel *p, int stride)
-{
-    int m[8][8];
-    for (int i = 0; i < 8; i++) {
-        int r[8];
-        for (int j = 0; j < 8; j++) r[j] = p[i * stride + j];
-        had8(r, m[i]);
-    }
-    long s = 0;
-    int dc = 0;
-    for (int j = 0; j < 8; j++) {
-        int col[8], c[8];
-        for (int i = 0; i < 8; i++) col[i] = m[i][j];
-        had8(col, c);
-        for (int i = 0; i < 8; i++) s += c[i] < 0 ? -c[i] : c[i];
-        if (j == 0) dc = c[0] < 0 ? -c[0] : c[0];
-    }
-    return s - dc;
-}
-
-/* SATD of one 4x4 tile against a flat block of its own rounded mean -- the
- * psy-RD texture term. Subtracting a constant only moves the Hadamard's DC, so
- * this is (sum-abs of the tile's own 2D Hadamard, minus its DC) plus the DC
- * against the rounded mean; the tile's pixel sum IS that DC coefficient. */
-static inline long ac4_tile(const pixel *b, int s)
-{
-    int tmp[4][4];
-    for (int i = 0; i < 4; i++, b += s) {
-        int s0 = b[0] + b[1], d0 = b[0] - b[1];
-        int s1 = b[2] + b[3], d1 = b[2] - b[3];
-        tmp[i][0] = s0 + s1; tmp[i][1] = d0 + d1;
-        tmp[i][2] = s0 - s1; tmp[i][3] = d0 - d1;
-    }
-    long sum = 0;
-    int dc = 0;
-    for (int j = 0; j < 4; j++) {
-        int s0 = tmp[0][j] + tmp[1][j], d0 = tmp[0][j] - tmp[1][j];
-        int s1 = tmp[2][j] + tmp[3][j], d1 = tmp[2][j] - tmp[3][j];
-        int c0 = s0 + s1, c1 = d0 + d1, c2 = s0 - s1, c3 = d0 - d1;
-        if (j == 0) dc = c0;                  /* == the tile's pixel sum */
-        sum += (c0 < 0 ? -c0 : c0) + (c1 < 0 ? -c1 : c1)
-             + (c2 < 0 ? -c2 : c2) + (c3 < 0 ? -c3 : c3);
-    }
-    int flat = 16 * ((dc + 8) >> 4);
-    return sum - dc + (dc < flat ? flat - dc : dc - flat);
-}
-
-static long texture_ac4_c_16x16(const pixel *p, int stride)
-{
-    long e = 0;
-    for (int by = 0; by < 16; by += 4)
-        for (int bx = 0; bx < 16; bx += 4)
-            e += ac4_tile(p + by * stride + bx, stride);
-    return e;
-}
-
 /* Both psy-RD texture terms of one 16x16 in one pass over the pixels.
  *
  * A 2D 8x8 Walsh-Hadamard is the four quadrant 4x4 transforms combined by one
@@ -411,9 +316,9 @@ static void texture_ac48_c_16x16(const pixel *p, int stride, long out[2])
  * quadrant's four 4x4 transforms into its 8x8 one. Each 8x8's sum is kept
  * apart (the band pair picks top or bottom, the tile pair left or right) and
  * accumulated per lane so the last loop vectorises too. Bit-identical to
- * four sa8d_c_8x8 calls (random, extreme and every +/-max Hadamard basis
- * pattern per quadrant). Range as for texture_ac48: an 8x8 coefficient of
- * an 8-bit residual is at most 64 * 255 and fits int16. */
+ * four 8x8 SA8Ds (checkasm's sa8d16_c: random, extreme and every +/-max
+ * Hadamard basis pattern per quadrant). Range as for texture_ac48: an 8x8
+ * coefficient of an 8-bit residual is at most 64 * 255 and fits int16. */
 static int sa8d_c_16x16(const pixel *p, int ps, const pixel *q, int qs)
 {
     NLED(sa8d_call, 4); NLED(sa8d_pix, 256); NLED_SATD(64); NLED_SATD(64);
@@ -529,10 +434,7 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->satd_quad_8x8 = satd_quad_c_8x8;
     for (int pu = 0; pu < Y264_PU_COUNT; pu++) { pf->satd_avg[pu] = NULL; pf->satd_pu[pu] = NULL; }
     pf->satd16x16 = satd_c_16x16;
-    pf->sa8d8x8 = sa8d_c_8x8;
     pf->sa8d16x16 = sa8d_c_16x16;
-    pf->hadamard_ac8x8 = hadamard_ac_c_8x8;
-    pf->texture_ac4_16x16 = texture_ac4_c_16x16;
     pf->texture_ac48_16x16 = texture_ac48_c_16x16;
     pf->var16x16 = var_c_16x16;
     pf->intra4_mode_search = intra4_mode_search_c;
@@ -586,10 +488,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_neon;
         pf->satd_pu[Y264_PU_8x16]   = y264_satd_8x16_neon;
         pf->satd16x16          = y264_satd_16x16_neon_ded;
-        pf->sa8d8x8            = y264_sa8d_8x8_neon;
         pf->sa8d16x16          = y264_sa8d_16x16_neon;
-        pf->hadamard_ac8x8     = y264_hadamard_ac_8x8_neon;
-        pf->texture_ac4_16x16  = y264_texture_ac4_16x16_neon;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_neon;
         pf->var16x16           = y264_var_16x16_neon;
         pf->intra4_mode_search        = y264_intra4_mode_search_neon;
@@ -652,10 +551,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_neon;
         pf->satd_pu[Y264_PU_8x16]   = y264_satd_8x16_neon;
         pf->satd16x16          = y264_satd_16x16_neon_ded;
-        pf->sa8d8x8            = y264_sa8d_8x8_neon;
         pf->sa8d16x16          = y264_sa8d_16x16_neon;
-        pf->hadamard_ac8x8     = y264_hadamard_ac_8x8_neon;
-        pf->texture_ac4_16x16  = y264_texture_ac4_16x16_neon;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_neon;
         pf->var16x16           = y264_var_16x16_neon;
         pf->intra4_mode_search  = y264_intra4_mode_search_neon;
@@ -694,10 +590,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd_avg[Y264_PU_8x8] = y264_satd_avg_8x8_sse4;
         pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_sse4;
         pf->satd_pu[Y264_PU_8x16]   = y264_satd_8x16_sse4;
-        pf->sa8d8x8            = y264_sa8d_8x8_sse4;
         pf->sa8d16x16          = y264_sa8d_16x16_sse4;
-        pf->hadamard_ac8x8     = y264_hadamard_ac_8x8_sse4;
-        pf->texture_ac4_16x16  = y264_texture_ac4_16x16_sse4;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_sse4;
         pf->var16x16           = y264_var_16x16_sse4;
         pf->intra4_mode_search        = y264_intra4_mode_search_sse4;
@@ -735,10 +628,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd_avg[Y264_PU_8x8] = y264_satd_avg_8x8_avx2;
         pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_avx2;
         pf->satd_pu[Y264_PU_8x16]   = y264_satd_8x16_avx2;
-        pf->sa8d8x8            = y264_sa8d_8x8_avx2;
         pf->sa8d16x16          = y264_sa8d_16x16_avx2;
-        pf->hadamard_ac8x8     = y264_hadamard_ac_8x8_avx2;
-        pf->texture_ac4_16x16  = y264_texture_ac4_16x16_avx2;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_avx2;
         pf->var16x16           = y264_var_16x16_avx2;
         pf->intra4_mode_search        = y264_intra4_mode_search_avx2;

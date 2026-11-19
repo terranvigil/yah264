@@ -2266,69 +2266,15 @@ static int psy_chroma_x256(void)
 {
     return 256;
 }
-/* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. Its sum is the
- * block's SSD exactly, so a caller that wants the map gets the SSD for free. */
-static void ssd4x4_map16(const pixel *a, int as, const pixel *b, int bs, uint32_t out[16])
-{
-#if Y264_HAVE_NEON
-    if (y264_asm_on(Y264_ASM_SSD)) {
-        if (y264_cpu_detect() & Y264_CPU_DOTPROD)
-            y264_ssd4x4_map16_neon_dotprod(a, as, b, bs, out);
-        else
-            y264_ssd4x4_map16_neon(a, as, b, bs, out);
-        return;
-    }
-#endif
-#if Y264_HAVE_NEON10
-    if (y264_asm_on(Y264_ASM_SSD)) {
-        y264_ssd4x4_map16_neon(a, as, b, bs, out);
-        return;
-    }
-#endif
-#if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
-    if (y264_asm_on(Y264_ASM_SSD)) {
-        int tier = y264_cpu_tier();
-#if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
-        if (tier >= Y264_TIER_AVX2) {
-            y264_ssd4x4_map16_avx2(a, as, b, bs, out);
-            return;
-        }
-#endif
-        if (tier >= Y264_TIER_SSE4) {
-            y264_ssd4x4_map16_sse4(a, as, b, bs, out);
-            return;
-        }
-    }
-#endif
-    for (int r = 0; r < 4; r++)
-        for (int c = 0; c < 4; c++) {
-            uint32_t e = 0;
-            for (int y = 0; y < 4; y++)
-                for (int x = 0; x < 4; x++) {
-                    int d = a[(4*r + y) * as + 4*c + x] - b[(4*r + y) * bs + 4*c + x];
-                    e += (uint32_t)(d * d);
-                }
-            out[r * 4 + c] = e;
-        }
-}
-
-/* `pl`, when non-NULL, gets each plane's raw SSD (before the chroma scale),
- * and `e4`, when non-NULL, the luma plane's per-4x4 map: the B skip screen
- * reads both to prove the skip probe's answer. */
-static int ssd_mb_pl_k(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16],
-                       long luma_known)
+/* `pl`, when non-NULL, gets each plane's raw SSD (before the chroma scale). */
+static int ssd_mb_pl_k(y264_frame_t *f, int mbx, int mby, long pl[3], long luma_known)
 {
     const pixel *ys = f->src[0] + (mby*16)*f->src_stride[0] + mbx*16;
     const pixel *yr = f->rec[0] + (mby*16)*f->rec_stride[0] + mbx*16;
     int d;
-    if (luma_known >= 0 && !e4) {
+    if (luma_known >= 0)
         d = (int)luma_known;
-    } else if (e4) {
-        ssd4x4_map16(ys, f->src_stride[0], yr, f->rec_stride[0], e4);
-        uint32_t t = 0;
-        for (int k = 0; k < 16; k++) t += e4[k];
-        d = (int)t;
-    } else
+    else
         d = ssd_block(ys, f->src_stride[0], yr, f->rec_stride[0], 16, 16);
     if (pl) pl[0] = d;
     {
@@ -2345,9 +2291,9 @@ static int ssd_mb_pl_k(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e
     }
     return d;
 }
-static int ssd_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16])
+static int ssd_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3])
 {
-    return ssd_mb_pl_k(f, mbx, mby, pl, e4, -1);
+    return ssd_mb_pl_k(f, mbx, mby, pl, -1);
 }
 
 /* A skip candidate's residual statistics for the zero-block screen: per-plane
@@ -2524,27 +2470,26 @@ static long dist_psy_term(y264_frame_t *f, int mbx, int mby, int have)
     }
     return d;
 }
-static long dist_mb_pl_t(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16],
-                         int trial)
+static long dist_mb_pl_t(y264_frame_t *f, int mbx, int mby, long pl[3], int trial)
 {
     /* an inter trial scoring the reconstruction it has just made reads its
      * own luma terms (encode_inter_res_tp); everyone else reads the frame */
-    int have = trial && !e4 && f->te_rec_mbx == mbx && f->te_rec_mby == mby;
-    long d = ssd_mb_pl_k(f, mbx, mby, pl, e4, have ? f->te_rec_ssd : -1);
+    int have = trial && f->te_rec_mbx == mbx && f->te_rec_mby == mby;
+    long d = ssd_mb_pl_k(f, mbx, mby, pl, have ? f->te_rec_ssd : -1);
     return d + dist_psy_term(f, mbx, mby, have);
 }
-static long dist_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16])
+static long dist_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3])
 {
-    return dist_mb_pl_t(f, mbx, mby, pl, e4, 0);
+    return dist_mb_pl_t(f, mbx, mby, pl, 0);
 }
 /* the distortion of the inter trial just coded at (mbx, mby) */
 static long dist_mb_trial(y264_frame_t *f, int mbx, int mby)
 {
-    return dist_mb_pl_t(f, mbx, mby, NULL, NULL, 1);
+    return dist_mb_pl_t(f, mbx, mby, NULL, 1);
 }
 static long dist_mb(y264_frame_t *f, int mbx, int mby)
 {
-    return dist_mb_pl(f, mbx, mby, NULL, NULL);
+    return dist_mb_pl(f, mbx, mby, NULL);
 }
 
 /* --- Intra neighbour availability ------------------------------------------
@@ -8851,7 +8796,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * front, as before. */
         if (!dp_in_rec) store_pred_rec(f, mbx, mby, dp, dcp);
         if (bssd < 0) bssd = pst ? ssd_mb_stats(f, mbx, mby, &bst)
-                                 : ssd_mb_pl(f, mbx, mby, bst.pl, NULL);
+                                 : ssd_mb_pl(f, mbx, mby, bst.pl);
         skip_lazy = f->subme <= 8 && !blate_fp();
         if (!skip_lazy) b_skip_cost();
         else skip_unsaved = 1;
@@ -11523,7 +11468,7 @@ static void skip_clift_off(y264_frame_t *f, const struct cqp_save *sv)
 static int probe_bskip_strict_in(y264_frame_t *f, int mbx, int mby,
                                  const struct skip_stats *st);
 /* The strict B skip probe with the screen in front. `pl` = the skip
- * candidate's per-plane SSD and `e4` its luma per-4x4 map (dist_mb_pl), both
+ * candidate's per-plane SSD and `e4` its luma per-4x4 map (ssd_mb_stats), both
  * taken on the prediction the probe reads out of rec. */
 static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
                               const struct skip_stats *st)
@@ -12309,7 +12254,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
      * snapshot wait until the probe has said no, so a macroblock it commits
      * never pays them and keeps the prediction it left in rec. */
     pssd = f->bskip_screen ? ssd_mb_stats(f, mbx, mby, &pstat)
-                           : ssd_mb_pl(f, mbx, mby, pstat.pl, NULL);
+                           : ssd_mb_pl(f, mbx, mby, pstat.pl);
     STG_END();  /* STG_SKIP */
     if (f->subme <= 8 && fast_pskip_on())
         p_unsaved = 1;

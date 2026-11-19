@@ -293,9 +293,6 @@ static inline void had8x8_half_pair(const __m256i d[8], int *lo, int *hi)
     *hi = m10_hsum32(_mm256_extracti128_si256(acc, 1));
 }
 
-int y264_sa8d_8x8_avx2(const pixel *a, int as, const pixel *b, int bs)
-{ return m10_sa8d_8x8(a, as, b, bs); }
-
 int y264_sa8d_16x16_avx2(const pixel *a, int as, const pixel *b, int bs)
 {
     int q[4];
@@ -310,9 +307,6 @@ int y264_sa8d_16x16_avx2(const pixel *a, int as, const pixel *b, int bs)
     return ((2 * q[0] + 2) >> 2) + ((2 * q[1] + 2) >> 2)
          + ((2 * q[2] + 2) >> 2) + ((2 * q[3] + 2) >> 2);
 }
-
-long y264_hadamard_ac_8x8_avx2(const pixel *p, int stride)
-{ return m10_hadamard_ac_8x8(p, stride); }
 
 /* ---- the psy texture terms ----------------------------------------------- */
 
@@ -341,19 +335,6 @@ static inline __m256i tex_group16(const pixel *p, int stride, int dc[4])
     dc[3] = (int16_t)_mm_extract_epi16(hi, 1);
     return _mm256_madd_epi16(_mm256_add_epi16(_mm256_add_epi16(a, b),
                                               _mm256_add_epi16(c, e)), one);
-}
-
-long y264_texture_ac4_16x16_avx2(const pixel *p, int stride)
-{
-    __m256i acc = _mm256_setzero_si256();
-    long corr = 0;
-    for (int by = 0; by < 16; by += 4) {
-        int dc[4];
-        acc = _mm256_add_epi32(acc, tex_group16(p + by * stride, stride, dc));
-        for (int k = 0; k < 4; k++)
-            corr += m10_tex_corr(dc[k]);
-    }
-    return (long)m10_hsum32_256(acc) + corr;
 }
 
 void y264_texture_ac48_16x16_avx2(const pixel *p, int stride, long out[2])
@@ -525,26 +506,6 @@ void y264_ssdsum4x4_8_avx2(const pixel *a, int as, const pixel *b, int bs,
         _mm256_hadd_epi32(ea, _mm256_madd_epi16(sa, _mm256_set1_epi16(1))), 0xd8);
     _mm_storeu_si128((__m128i *)(void *)e, _mm256_castsi256_si128(v));
     _mm_storeu_si128((__m128i *)(void *)sum, _mm256_extracti128_si256(v, 1));
-}
-
-/* two block rows per pass: the hadd of their pair sums leaves (upper, upper,
- * lower, lower) per lane, and the permute orders eight map entries */
-void y264_ssd4x4_map16_avx2(const pixel *a, int as, const pixel *b, int bs,
-                            uint32_t out[16])
-{
-    for (int r = 0; r < 4; r += 2) {
-        __m256i e0 = _mm256_setzero_si256(), e1 = e0;
-        for (int y = 0; y < 4; y++) {
-            __m256i d0 = _mm256_sub_epi16(m10_ld16(a + (4 * r + y) * as),
-                                          m10_ld16(b + (4 * r + y) * bs));
-            __m256i d1 = _mm256_sub_epi16(m10_ld16(a + (4 * r + 4 + y) * as),
-                                          m10_ld16(b + (4 * r + 4 + y) * bs));
-            e0 = _mm256_add_epi32(e0, _mm256_madd_epi16(d0, d0));
-            e1 = _mm256_add_epi32(e1, _mm256_madd_epi16(d1, d1));
-        }
-        _mm256_storeu_si256((__m256i *)(void *)(out + 4 * r),
-                            _mm256_permute4x64_epi64(_mm256_hadd_epi32(e0, e1), 0xd8));
-    }
 }
 
 #endif /* Y264_HAVE_AVX2_10 */

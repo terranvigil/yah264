@@ -343,62 +343,6 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
     return bad;
 }
 
-/* The lowres bilinear row has kernels at 8 bits only. */
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4
-typedef void (*bilin4_row_fn)(pixel *, const pixel *, const pixel *, int, int,
-                              int, int, int, int);
-/* The lowres plane's bilinear row against the scalar row: every phase weight
- * set, lengths on both sides of every register step, the output guarded and
- * both rows mapped to exactly the n + ax columns the row declares. */
-static int run_bilin4_row(const char *name, bilin4_row_fn kern)
-{
-    static const int ns[] = { 5, 15, 16, 17, 31, 32, 33, 47, 48, 56 };
-    enum { NMAX = 56 };
-    pixel *o = ca_guard_alloc(NMAX * sizeof(pixel));
-    pixel r[NMAX];
-    int bad = 0;
-    for (int t = 0; t < TRIALS && !bad; t++) {
-        plane();
-        if (t % 4 == 1) for (int i = 0; i < STRIDE * 8; i++) pa[i] = ca_rnd_edge();
-        for (int fy = 0; fy < 4; fy++)
-            for (int fx = 0; fx < 4; fx++) {
-                if (!(fx | fy)) continue;
-                int ax = fx ? 1 : 0;
-                int n = ns[(unsigned)(t + fx + 4 * fy) % (sizeof(ns) / sizeof(ns[0]))] - ax;
-                int w00 = (4 - fx) * (4 - fy), w10 = fx * (4 - fy), w01 = (4 - fx) * fy, w11 = fx * fy;
-                const pixel *r0 = pa + (int)ca_below(4) * STRIDE, *r1 = r0 + STRIDE;
-                memset(o, CA_POISON, NMAX * sizeof(pixel));
-                ca_guard_poison(o, (size_t)n * sizeof(pixel));
-                kern(o, r0, r1, n, ax, w00, w10, w01, w11);
-                for (int X = 0; X < n; X++)
-                    r[X] = (pixel)((w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax] + 8) >> 4);
-                if (memcmp(o, r, (size_t)n * sizeof(pixel))) {
-                    if (!bad) ca_fail("%s: phase %d,%d n=%d", name, fx, fy, n);
-                    bad++;
-                }
-                if (!bad && ca_guard_check(o, (size_t)n * sizeof(pixel), name)) bad++;
-            }
-    }
-    for (unsigned k = 0; k < sizeof(ns) / sizeof(ns[0]) && !bad; k++)
-        for (int ax = 0; ax <= 1; ax++)
-            for (int tail = 0; tail <= 1; tail++) {
-                int n = ns[k] - ax;
-                ca_pg g0, g1;
-                pixel *s0 = ca_pg_alloc(&g0, (size_t)(n + ax) * sizeof(pixel), tail);
-                pixel *s1 = ca_pg_alloc(&g1, (size_t)(n + ax) * sizeof(pixel), tail);
-                ca_pg_fill_pix(&g0, (size_t)(n + ax));
-                ca_pg_fill_pix(&g1, (size_t)(n + ax));
-                ca_pg_arm(name);
-                kern(o, s0, s1, n, ax, ax ? 6 : 12, ax ? 6 : 0, ax ? 2 : 4, ax ? 2 : 0);
-                ca_pg_disarm();
-                ca_pg_free(&g1);
-                ca_pg_free(&g0);
-            }
-    ca_guard_free(o);
-    return bad;
-}
-#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
-
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*mc_chroma_bi8_fn)(pixel *, int, const pixel *, int, int, int,
                                  const pixel *, int, int, int, int, int);
@@ -726,12 +670,14 @@ static int run_mc_chroma_win(const char *name, mc_chroma_fn k8h,
     return bad;
 }
 
+#if Y264_HAVE_NEON10 || Y264_HAVE_SSE4_10
 /* ---- the half-pel plane rows ---------------------------------------------
  *
  * These two are the row kernels the plane builder calls over the interior
- * span, and they were only ever reachable through the whole-plane build
- * before. Both are checked against the definitional 6-tap at every column of
- * the span, which is what the builder's own C body computes.
+ * span of a band too short for the band build, which happens at 10 bits
+ * only, so only the 10-bit tiers have them. Both are checked against the
+ * definitional 6-tap at every column of the span, which is what the
+ * builder's own C body computes.
  *
  * The spans are several, not one. A kernel that computes sixteen columns at a
  * time has a tail to get back onto a span of nine, and a span of exactly the
@@ -787,12 +733,8 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
         for (int k = 0; k < 6; k++) {
             ca_fill(r[k], HRST);
             for (int x = 0; x < HRST; x++)
-#if Y264_BIT_DEPTH > 8
                 /* a horizontal six-tap of 10-bit samples: [-10230, 42966] */
                 s[k][x] = (int32_t)((int)ca_below(53197) - 10230);
-#else
-                s[k][x] = (int32_t)((int)ca_rnd() * 32 - 4096);
-#endif
         }
         memset(Hr, 0x5a, sizeof(Hr));
         memset(Vr, 0x5a, sizeof(Vr));
@@ -829,6 +771,7 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
     }
     return bad;
 }
+#endif /* Y264_HAVE_NEON10 || Y264_HAVE_SSE4_10 */
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10 */
 
@@ -1049,10 +992,6 @@ static int t_mc_chroma_bi8_neon(void)
 { return run_mc_chroma_bi8("mc_chroma_bi8", y264_mc_chroma_bi8_neon); }
 static int t_avg_mb420_flat_neon(void)
 { return run_avg_mb420_flat("avg_mb420_flat", y264_avg_mb420_flat_neon); }
-#if Y264_HAVE_NEON
-static int t_bilin4_row_neon(void)
-{ return run_bilin4_row("bilin4_row", y264_bilin4_row_neon); }
-#endif
 
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
@@ -1064,10 +1003,10 @@ static int t_mc_luma_win_neon(void)
 static int t_mc_chroma_win_neon(void)
 { return run_mc_chroma_win("mc_chroma_win", y264_mc_chroma_neon_w8h,
                            y264_mc_chroma_neon_w4h, y264_mc_chroma_neon8); }
-static int t_hpel_rows_neon(void)
-{ return run_hpel_rows("hpel_rows", y264_hpel_hrow_neon, y264_hpel_outrow_neon); }
 
 #if Y264_HAVE_NEON10
+static int t_hpel_rows_neon(void)
+{ return run_hpel_rows("hpel_rows", y264_hpel_hrow_neon, y264_hpel_outrow_neon); }
 static int t_lr_hp_row_neon(void)
 { return run_lr_hp_row("lr_hp_row", y264_lr_hp_row_neon, lr_hp_row8_ref); }
 static int t_hpel_band_neon(void)
@@ -1097,15 +1036,13 @@ static int t_mc_luma_win_sse4(void)
 static int t_mc_chroma_win_sse4(void)
 { return run_mc_chroma_win("mc_chroma_win_sse4", y264_mc_chroma_w8h_sse4,
                            y264_mc_chroma_w4h_sse4, NULL); }
+#if Y264_HAVE_SSE4_10    /* no 8-bit twin */
 static int t_hpel_rows_sse4(void)
 { return run_hpel_rows("hpel_rows_sse4", y264_hpel_hrow_sse4,
                        y264_hpel_outrow_sse4); }
+#endif
 static int t_hpel_band_sse4(void)
 { return run_hpel_band("hpel_band_sse4", y264_hpel_build_band_sse4); }
-#if Y264_HAVE_SSE4  /* no 10-bit twin */
-static int t_bilin4_row_sse4(void)
-{ return run_bilin4_row("bilin4_row_sse4", y264_bilin4_row_sse4); }
-#endif
 static int t_lr_hp_row_sse4(void)
 { return run_lr_hp_row("lr_hp_row_sse4", y264_lr_hp_row_sse4, LR_HP_X86_REF); }
 static int t_pixel_avg_wt_2d_sse4(void)
@@ -1131,15 +1068,13 @@ static int t_mc_luma_win_avx2(void)
 static int t_mc_chroma_win_avx2(void)
 { return run_mc_chroma_win("mc_chroma_win_avx2", y264_mc_chroma_w8h_avx2,
                            y264_mc_chroma_w4h_avx2, NULL); }
+#if Y264_HAVE_AVX2_10    /* no 8-bit twin */
 static int t_hpel_rows_avx2(void)
 { return run_hpel_rows("hpel_rows_avx2", y264_hpel_hrow_avx2,
                        y264_hpel_outrow_avx2); }
+#endif
 static int t_hpel_band_avx2(void)
 { return run_hpel_band("hpel_band_avx2", y264_hpel_build_band_avx2); }
-#if Y264_HAVE_AVX2  /* no 10-bit twin */
-static int t_bilin4_row_avx2(void)
-{ return run_bilin4_row("bilin4_row_avx2", y264_bilin4_row_avx2); }
-#endif
 static int t_lr_hp_row_avx2(void)
 { return run_lr_hp_row("lr_hp_row_avx2", y264_lr_hp_row_avx2, LR_HP_X86_REF); }
 static int t_pixel_avg_wt_2d_avx2(void)
@@ -1522,11 +1457,9 @@ const ca_test ca_mc_tests[] = {
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
     { "mc_chroma_bi8",     "mc", Y264_CPU_NEON, t_mc_chroma_bi8_neon },
-    { "bilin4_row",        "mc", Y264_CPU_NEON, t_bilin4_row_neon },
     { "avg_mb420_flat",    "mc", Y264_CPU_NEON, t_avg_mb420_flat_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
-    { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
 #endif
 #if Y264_HAVE_NEON10
     { "pred_copy",         "mc", Y264_CPU_NEON, t_pred_copy_neon },
@@ -1547,11 +1480,10 @@ const ca_test ca_mc_tests[] = {
     { "pixel_avg_wt_sse4", "mc", Y264_CPU_SSE4_ALL, t_pixel_avg_wt_sse4 },
     { "mc_luma_win_sse4",  "mc", Y264_CPU_SSE4_ALL, t_mc_luma_win_sse4 },
     { "mc_chroma_win_sse4","mc", Y264_CPU_SSE4_ALL, t_mc_chroma_win_sse4 },
+#if Y264_HAVE_SSE4_10
     { "hpel_rows_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_rows_sse4 },
-    { "hpel_band_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_band_sse4 },
-#if Y264_HAVE_SSE4
-    { "bilin4_row_sse4",   "mc", Y264_CPU_SSE4_ALL, t_bilin4_row_sse4 },
 #endif
+    { "hpel_band_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_band_sse4 },
     { "lr_hp_row_sse4",    "mc", Y264_CPU_SSE4_ALL, t_lr_hp_row_sse4 },
     { "pixel_avg_wt_2d_sse4", "mc", Y264_CPU_SSE4_ALL, t_pixel_avg_wt_2d_sse4 },
     { "mc_chroma_bi8_sse4", "mc", Y264_CPU_SSE4_ALL, t_mc_chroma_bi8_sse4 },
@@ -1563,11 +1495,10 @@ const ca_test ca_mc_tests[] = {
     { "pixel_avg_wt_avx2", "mc", Y264_CPU_AVX2_ALL, t_pixel_avg_wt_avx2 },
     { "mc_luma_win_avx2",  "mc", Y264_CPU_AVX2_ALL, t_mc_luma_win_avx2 },
     { "mc_chroma_win_avx2","mc", Y264_CPU_AVX2_ALL, t_mc_chroma_win_avx2 },
+#if Y264_HAVE_AVX2_10
     { "hpel_rows_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_rows_avx2 },
-    { "hpel_band_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_band_avx2 },
-#if Y264_HAVE_AVX2
-    { "bilin4_row_avx2",   "mc", Y264_CPU_AVX2_ALL, t_bilin4_row_avx2 },
 #endif
+    { "hpel_band_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_band_avx2 },
     { "lr_hp_row_avx2",    "mc", Y264_CPU_AVX2_ALL, t_lr_hp_row_avx2 },
     { "pixel_avg_wt_2d_avx2", "mc", Y264_CPU_AVX2_ALL, t_pixel_avg_wt_2d_avx2 },
     { "mc_chroma_bi8_avx2", "mc", Y264_CPU_AVX2_ALL, t_mc_chroma_bi8_avx2 },

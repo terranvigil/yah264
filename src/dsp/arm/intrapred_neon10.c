@@ -183,48 +183,6 @@ void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
     y264_intra8x8_dir6_neon(out, e);
 }
 
-void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
-                        int mode, int have_top, int have_left,
-                        int have_topleft, int have_topright)
-{
-    pixel rt[16], rl[8];
-    int rtl = have_topleft ? rec[-stride - 1] : 0;
-    for (int i = 0; i < 8; i++) {
-        rt[i] = have_top ? rec[-stride + i] : 0;
-        rl[i] = have_left ? rec[i * stride - 1] : 0;
-    }
-    for (int i = 8; i < 16; i++)
-        rt[i] = have_topright ? rec[-stride + i] : rt[7];
-
-    /* 8.3.2.2.1 low-pass into e = { l7..l0, tl, t0..t15, t15, t15 }; the
-     * endpoint specials fold into the same filter by replicating a source */
-    pixel e[32];
-    memset(e, 0, sizeof(e));
-    int tl = 0;
-    if (have_topleft) {
-        if (have_top && have_left) tl = (rt[0] + 2 * rtl + rl[0] + 2) >> 2;
-        else if (have_top)         tl = (3 * rtl + rt[0] + 2) >> 2;
-        else                       tl = (3 * rtl + rl[0] + 2) >> 2;
-    }
-    e[8] = (pixel)tl;
-    if (have_top) {
-        pixel a[24];
-        a[0] = have_topleft ? (pixel)rtl : rt[0];
-        memcpy(a + 1, rt, 16 * sizeof(pixel));
-        a[17] = rt[15];
-        edge_top(e, a);
-    }
-    if (have_left) {
-        pixel al[16];
-        al[0] = have_topleft ? (pixel)rtl : rl[0];
-        memcpy(al + 1, rl, 8 * sizeof(pixel));
-        al[9] = rl[7];
-        edge_left(e, al);
-    }
-    e[25] = e[26] = e[24];
-    y264_intra8x8_from_edge_neon(pred, e, mode);
-}
-
 /* The lowres intra estimate's four base 8x8 predictions: DC, vertical,
  * horizontal and the plane with a, b, c already derived. The estimate's
  * samples are on the 8-bit scale at every depth, so |a| <= 8160 and |b|,

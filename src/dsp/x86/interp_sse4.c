@@ -6,7 +6,7 @@
  * Wave 2 of docs/simd.md: the SSE4.2 twin of every mc and hpel kernel the
  * NEON twin covers. Each one is bit-exact with the portable reference in
  * src/dsp/interp.c -- the luma half-pel planes, the chroma bilinear, the two plane
- * fetches, the weighted average and the two half-pel plane build rows -- which
+ * fetches, the weighted average and the half-pel plane band build -- which
  * is what lets the tier be a runtime axis that cannot move a byte of output.
  *
  * The shared building blocks and the two plane-scheme bodies are in interp_x86.h.
@@ -148,32 +148,6 @@ void y264_pixel_avg_wt_sse4(pixel *dst, const pixel *a, const pixel *b, int n,
     }
 }
 
-/* The interior of one half-pel scratch row. The caller guarantees x0 >= 2,
- * x1 <= pw - 3 and x1 - x0 >= 8; the last pass steps back to end ON the span,
- * which recomputes columns rather than skipping them and stays bit-exact
- * because every column is a pure function of the source. */
-void y264_hpel_hrow_sse4(int32_t *srow, const pixel *row, int x0, int x1)
-{
-    for (int x = x0; x < x1; x += 8) {
-        if (x > x1 - 8) x = x1 - 8;
-        y264_hpel_hrow8(srow, row, x);
-    }
-}
-
-void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
-                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
-                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
-                           const pixel *r0, const pixel *r1, const pixel *r2,
-                           const pixel *r3, const pixel *r4, const pixel *r5,
-                           int x0, int x1)
-{
-    for (int x = x0; x < x1; x += 8) {
-        if (x > x1 - 8) x = x1 - 8;
-        y264_hpel_outrow8(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
-                          r0, r1, r2, r3, r4, r5, x);
-    }
-}
-
 void y264_pixel_avg_wt_2d_sse4(pixel *dst, int ds, const pixel *a, int as,
                                const pixel *b, int bs, int w, int h, int w0, int w1)
 {
@@ -256,27 +230,6 @@ static inline void hpb_cout_sse4(const int16_t *t0, const int16_t *t1,
 
 Y264_HPEL_BAND_BODY(y264_hpel_build_band_sse4, hpb_htap_sse4, hpb_hout_sse4,
                     hpb_vout_sse4, hpb_cout_sse4)
-
-/* One row of a lowres bilinear phase plane, n samples. Sixteen columns per
- * pass with the last pass stepped back onto the span; a row shorter than one
- * register is the scalar formula. The output never aliases the two rows. */
-void y264_bilin4_row_sse4(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
-                          int w00, int w10, int w01, int w11)
-{
-    if (n >= 16) {
-        __m128i wa = y264_mcc_w(w00, w10), wb = y264_mcc_w(w01, w11);
-        for (int X = 0; X < n; X += 16) {
-            if (X > n - 16) X = n - 16;
-            _mm_storeu_si128((__m128i *)(void *)(o + X),
-                             y264_bilin4_16(r0 + X, r1 + X, ax, wa, wb));
-        }
-        return;
-    }
-    for (int X = 0; X < n; X++) {
-        int v = w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax];
-        o[X] = (pixel)((v + 8) >> 4);
-    }
-}
 
 /* Eight columns per pass, the last pass stepped back to end on the span. The
  * outputs never alias the source rows, so the overlap recomputes the same

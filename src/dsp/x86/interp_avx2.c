@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 2 of docs/simd.md, the wide half. The same nine kernels as the
+ * Wave 2 of docs/simd.md, the wide half. The same kernels as the
  * SSE4.2 file and the same values out of them, bit for bit: the two tiers are
  * an A/B axis for speed and never for output, which is what the kit's identity
  * leg exists to hold them to.
@@ -14,8 +14,7 @@
  * columns of 16-bit lanes is exactly one 256-bit register, so a 16-wide luma
  * row -- the horizontal tap, the vertical tap, the centre tap -- goes from two
  * registers to one and the whole plane build halves its instruction count.
- * A half-pel plane build row is unbounded in width, so it simply steps sixteen
- * columns at a time instead of eight. The weighted average is a PACKED run
+ * The weighted average is a PACKED run
  * with no stride in it at all, which is the friendliest shape in the encoder:
  * sixteen samples widen into one register and the multiply chain runs once
  * where SSE4.2 runs it twice. The chroma bilinear has only eight or four
@@ -297,70 +296,6 @@ void y264_pixel_avg_wt_avx2(pixel *dst, const pixel *a, const pixel *b, int n,
     }
 }
 
-/* Sixteen columns per pass, then the 128-bit form steps back onto the span --
- * the caller guarantees eight columns, not sixteen, so the wide loop may not
- * run at all. Both forms are pure functions of their inputs, so the overlap
- * recomputes identical values. */
-void y264_hpel_hrow_avx2(int32_t *srow, const pixel *row, int x0, int x1)
-{
-    int x = x0;
-    for (; x + 16 <= x1; x += 16) {
-        const uint8_t *p = row + x - 2;
-        __m256i t = y256_tap6_16(y256_ld16w(p + 0), y256_ld16w(p + 1),
-                                 y256_ld16w(p + 2), y256_ld16w(p + 3),
-                                 y256_ld16w(p + 4), y256_ld16w(p + 5));
-        y256_st256(srow + x,
-                   _mm256_cvtepi16_epi32(_mm256_castsi256_si128(t)));
-        y256_st256(srow + x + 8,
-                   _mm256_cvtepi16_epi32(_mm256_extracti128_si256(t, 1)));
-    }
-    for (; x < x1; x += 8) {
-        if (x > x1 - 8) x = x1 - 8;
-        y264_hpel_hrow8(srow, row, x);
-    }
-}
-
-void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
-                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
-                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
-                           const pixel *r0, const pixel *r1, const pixel *r2,
-                           const pixel *r3, const pixel *r4, const pixel *r5,
-                           int x0, int x1)
-{
-    __m256i k16 = _mm256_set1_epi32(16), k512 = _mm256_set1_epi32(512);
-    int x = x0;
-    for (; x + 16 <= x1; x += 16) {
-        /* H: the middle intermediate rescaled */
-        __m256i ha = _mm256_srai_epi32(_mm256_add_epi32(y256_ld256(s2 + x), k16), 5);
-        __m256i hb = _mm256_srai_epi32(_mm256_add_epi32(y256_ld256(s2 + x + 8), k16), 5);
-        _mm_storeu_si128((__m128i *)(void *)(Hr + x),
-                         _mm_packus_epi16(y256_pack32(ha), y256_pack32(hb)));
-
-        /* C: the vertical tap over the six intermediate rows */
-        __m256i ca = y256_tap6_32(y256_ld256(s0 + x), y256_ld256(s1 + x),
-                                  y256_ld256(s2 + x), y256_ld256(s3 + x),
-                                  y256_ld256(s4 + x), y256_ld256(s5 + x));
-        __m256i cb = y256_tap6_32(y256_ld256(s0 + x + 8), y256_ld256(s1 + x + 8),
-                                  y256_ld256(s2 + x + 8), y256_ld256(s3 + x + 8),
-                                  y256_ld256(s4 + x + 8), y256_ld256(s5 + x + 8));
-        ca = _mm256_srai_epi32(_mm256_add_epi32(ca, k512), 10);
-        cb = _mm256_srai_epi32(_mm256_add_epi32(cb, k512), 10);
-        _mm_storeu_si128((__m128i *)(void *)(Cr + x),
-                         _mm_packus_epi16(y256_pack32(ca), y256_pack32(cb)));
-
-        /* V: the vertical tap over the six integer rows */
-        __m256i v = y256_tap6_16(y256_ld16w(r0 + x), y256_ld16w(r1 + x),
-                                 y256_ld16w(r2 + x), y256_ld16w(r3 + x),
-                                 y256_ld16w(r4 + x), y256_ld16w(r5 + x));
-        _mm_storeu_si128((__m128i *)(void *)(Vr + x), y256_clip5(v));
-    }
-    for (; x < x1; x += 8) {
-        if (x > x1 - 8) x = x1 - 8;
-        y264_hpel_outrow8(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
-                          r0, r1, r2, r3, r4, r5, x);
-    }
-}
-
 /* The weighted pair at sixteen columns is the one shape here with a second
  * half: sixteen samples widen into one register and the multiply chain runs
  * once. Everything else is the shared 128-bit body. */
@@ -490,44 +425,6 @@ static inline void hpb_cout_avx2(const int16_t *t0, const int16_t *t1,
 
 Y264_HPEL_BAND_BODY(y264_hpel_build_band_avx2, hpb_htap_avx2, hpb_hout_avx2,
                     hpb_vout_avx2, hpb_cout_avx2)
-
-/* Thirty-two columns per pass: the interleaves and the pack both work inside
- * each 128-bit lane, so the columns come out in order. Then the 128-bit step,
- * stepped back onto the span. */
-void y264_bilin4_row_avx2(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
-                          int w00, int w10, int w01, int w11)
-{
-    if (n >= 16) {
-        __m256i wa = _mm256_set1_epi16((short)(w00 | (w10 << 8)));
-        __m256i wb = _mm256_set1_epi16((short)(w01 | (w11 << 8)));
-        __m256i k8 = _mm256_set1_epi16(8);
-        int X = 0;
-        for (; X + 32 <= n; X += 32) {
-            __m256i a = y256_ld256(r0 + X), b = y256_ld256(r0 + X + ax);
-            __m256i c = y256_ld256(r1 + X), d = y256_ld256(r1 + X + ax);
-            __m256i lo = _mm256_add_epi16(
-                _mm256_maddubs_epi16(_mm256_unpacklo_epi8(a, b), wa),
-                _mm256_maddubs_epi16(_mm256_unpacklo_epi8(c, d), wb));
-            __m256i hi = _mm256_add_epi16(
-                _mm256_maddubs_epi16(_mm256_unpackhi_epi8(a, b), wa),
-                _mm256_maddubs_epi16(_mm256_unpackhi_epi8(c, d), wb));
-            y256_st256(o + X, _mm256_packus_epi16(
-                _mm256_srli_epi16(_mm256_add_epi16(lo, k8), 4),
-                _mm256_srli_epi16(_mm256_add_epi16(hi, k8), 4)));
-        }
-        __m128i wa8 = y264_mcc_w(w00, w10), wb8 = y264_mcc_w(w01, w11);
-        for (; X < n; X += 16) {
-            if (X > n - 16) X = n - 16;
-            _mm_storeu_si128((__m128i *)(void *)(o + X),
-                             y264_bilin4_16(r0 + X, r1 + X, ax, wa8, wb8));
-        }
-        return;
-    }
-    for (int X = 0; X < n; X++) {
-        int v = w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax];
-        o[X] = (pixel)((v + 8) >> 4);
-    }
-}
 
 /* Sixteen outputs from thirty-two source columns: the pair mean runs inside
  * each 128-bit lane, and the narrowing takes the two lanes in order. */

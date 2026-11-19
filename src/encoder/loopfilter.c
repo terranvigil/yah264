@@ -337,36 +337,10 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     continue;
                 }
 #endif
-                /* The four-line kernels below are 8-bit only. At 10 bits
-                 * every SIMD tier has taken the edge whole above, so a
-                 * 10-bit build reaches this loop only on C. */
+                /* every SIMD tier has taken the edge whole above */
                 for (int yb = 0; yb < 4; yb++) {
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
-#if Y264_HAVE_NEON
-                    if (tier >= Y264_TIER_NEON) {
-                        y264_deblock_luma_v4_neon(Y + (by0 * 4 + yb * 4) * rs + lx,
-                                                  rs, bs, qa, qb,
-                                                  qtc[bs < 4 ? bs - 1 : 0]);
-                        continue;
-                    }
-#endif
-#if Y264_HAVE_AVX2
-                    if (tier >= Y264_TIER_AVX2) {
-                        y264_deblock_luma_v4_avx2(Y + (by0 * 4 + yb * 4) * rs + lx,
-                                                  rs, bs, qa, qb,
-                                                  qtc[bs < 4 ? bs - 1 : 0]);
-                        continue;
-                    }
-#endif
-#if Y264_HAVE_SSE4
-                    if (tier >= Y264_TIER_SSE4) {
-                        y264_deblock_luma_v4_sse4(Y + (by0 * 4 + yb * 4) * rs + lx,
-                                                  rs, bs, qa, qb,
-                                                  qtc[bs < 4 ? bs - 1 : 0]);
-                        continue;
-                    }
-#endif
                     for (int ln = 0; ln < 4; ln++)
                         filter_line(Y + (by0 * 4 + yb * 4 + ln) * rs + lx, 1,
                                     bs, qa, qb, qtc[bs < 4 ? bs - 1 : 0], 0);
@@ -406,30 +380,6 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 for (int xb = 0; xb < 4; xb++) {
                     int bs = bsg.h[yb][xb];
                     if (!bs) continue;
-#if Y264_HAVE_NEON
-                    if (tier >= Y264_TIER_NEON) {
-                        y264_deblock_luma_h4_neon(Y + ly * rs + (mbx * 16 + xb * 4),
-                                                  rs, bs, qa, qb,
-                                                  qtc[bs < 4 ? bs - 1 : 0]);
-                        continue;
-                    }
-#endif
-#if Y264_HAVE_AVX2
-                    if (tier >= Y264_TIER_AVX2) {
-                        y264_deblock_luma_h4_avx2(Y + ly * rs + (mbx * 16 + xb * 4),
-                                                  rs, bs, qa, qb,
-                                                  qtc[bs < 4 ? bs - 1 : 0]);
-                        continue;
-                    }
-#endif
-#if Y264_HAVE_SSE4
-                    if (tier >= Y264_TIER_SSE4) {
-                        y264_deblock_luma_h4_sse4(Y + ly * rs + (mbx * 16 + xb * 4),
-                                                  rs, bs, qa, qb,
-                                                  qtc[bs < 4 ? bs - 1 : 0]);
-                        continue;
-                    }
-#endif
                     for (int ln = 0; ln < 4; ln++)
                         filter_line(Y + ly * rs + (mbx * 16 + xb * 4 + ln), rs,
                                     bs, qa, qb, qtc[bs < 4 ? bs - 1 : 0], 0);
