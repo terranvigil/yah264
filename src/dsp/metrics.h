@@ -107,26 +107,18 @@ typedef struct {
      * shape; NULL entries fall back to looping satd8x8 / satd4x4 */
     y264_satd_fn satd_pu[Y264_PU_COUNT];
     y264_satd_fn satd16x16;
-    /* SA8D (8x8 Hadamard sum-abs, (sum+2)>>2 normalised) for the transform-size
- * pre-decision: SA8D(residual) < SATD(residual) => the 8x8 transform. */
-    y264_satd_fn sa8d8x8;
+    /* SA8D of a 16x16: the four 8x8 SA8Ds (8x8 Hadamard sum-abs, each
+ * (sum+2)>>2 normalised) summed, for the transform-size pre-decision:
+ * SA8D(residual) < SATD(residual) => the 8x8 transform. */
     y264_satd_fn sa8d16x16;
-    /* Single-plane 8x8 Hadamard AC energy (sum|coef| - |DC|), the psy-RD
- * texture metric's SA8D-support term. */
-    long (*hadamard_ac8x8)(const pixel *p, int stride);
-    /* Single-plane 16x16 psy-RD texture energy, SATD-support term: the sum over
- * the sixteen 4x4 tiles of SATD(tile, flat block of the tile's rounded
- * mean). Fused because the caller's per-tile form paid a pixel-sum pass, a
- * flat-block fill and a second operand load per tile; here the tile's DC
- * falls out of the Hadamard itself. */
-    long (*texture_ac4_16x16)(const pixel *p, int stride);
     /* BOTH psy-RD texture terms of one 16x16 in a single pass: out[0] is the
- * SATD-support term above, out[1] the SA8D-support term (the four 8x8
- * hadamard_ac8x8 values summed). The RD metric always wants the pair for
- * the same block, and a 2D 8x8 Walsh-Hadamard is the four quadrant 4x4
- * transforms combined by one 2x2 butterfly per coefficient position -- so
- * the 8x8 term reads off the coefficients the 4x4 term already produced
- * instead of transforming every pixel a second time. */
+ * SATD-support term, the sum over the sixteen 4x4 tiles of SATD(tile, flat
+ * block of the tile's rounded mean); out[1] the SA8D-support term, the four
+ * 8x8 Hadamard AC energies (sum|coef| - |DC|) summed. The RD metric always
+ * wants the pair for the same block, and a 2D 8x8 Walsh-Hadamard is the four
+ * quadrant 4x4 transforms combined by one 2x2 butterfly per coefficient
+ * position -- so the 8x8 term reads off the coefficients the 4x4 term
+ * already produced instead of transforming every pixel a second time. */
     void (*texture_ac48_16x16)(const pixel *p, int stride, long out[2]);
     /* Pixel sum and sum of squares of a 16x16 : the AQ /
  * mb-tree variance grids want both for every macroblock of a full-res

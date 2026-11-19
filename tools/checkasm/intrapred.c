@@ -67,7 +67,6 @@ static int i4_allowed(int mode, int ht, int hl)
 
 typedef void (*i16_fn)(pixel *, const pixel *, int, int, int, int);
 typedef void (*ichroma_fn)(pixel *, const pixel *, int, int, int, int, int, int);
-typedef void (*i8_fn)(pixel *, const pixel *, int, int, int, int, int, int);
 typedef void (*i8edge_fn)(pixel *, const pixel *, int);
 
 /* The 8x8 kernels cover five of the nine modes -- the ones whose diagonals pay
@@ -194,7 +193,10 @@ static int run_intra_chroma(const char *name, ichroma_fn kern)
     return bad;
 }
 
-static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
+/* The from-edge builder against the whole-block C reference, in the
+ * decision loop's shape: ONE edge derivation feeding every mode. The kernel
+ * takes the flat edge array; the reference takes the neighbours. */
+static int run_intra8x8(const char *name, i8edge_fn edge_kern)
 {
     pixel *o1 = ca_guard_alloc(64 * sizeof(pixel));
     pixel o2[64];
@@ -205,43 +207,30 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
         for (int ht = 0; ht <= 1; ht++)
             for (int hl = 0; hl <= 1; hl++)
                 for (int htl = 0; htl <= (ht && hl); htl++)
-                    for (int htr = 0; htr <= ht; htr++)
+                    for (int htr = 0; htr <= ht; htr++) {
+                        y264_i8_edge_t ed;
+                        y264_intra8x8_edge_c(&ed, rc, st, ht, hl, htl, htr);
                         for (int mode = 0; mode < 9; mode++) {
                             if (!i4_allowed(mode, ht, hl) || !i8_routed(mode))
                                 continue;
                             ca_guard_poison(o1, 64 * sizeof(pixel));
                             memset(o1, 0, 64 * sizeof(pixel));
                             memset(o2, 0, sizeof(o2));
-                            kern(o1, rc, st, mode, ht, hl, htl, htr);
+                            edge_kern(o1, ed.f, mode);
                             y264_intra8x8_c(o2, rc, st, mode, ht, hl, htl, htr);
                             if (memcmp(o1, o2, sizeof(o2))) {
                                 if (!bad)
-                                    ca_fail("%s: mode %d avail %d%d%d%d",
+                                    ca_fail("%s from_edge: mode %d avail %d%d%d%d",
                                             name, mode, ht, hl, htl, htr);
                                 bad++;
                             }
                             if (!bad && ca_guard_check(o1, 64 * sizeof(pixel), name))
                                 bad++;
-                            /* The decision loop's shape: ONE edge derivation
-                             * feeding every mode. The kernel takes the flat
-                             * edge array; the reference takes the struct. */
-                            {
-                                y264_i8_edge_t ed;
-                                y264_intra8x8_edge_c(&ed, rc, st, ht, hl, htl, htr);
-                                memset(o1, 0, 64 * sizeof(pixel));
-                                edge_kern(o1, ed.f, mode);
-                                if (memcmp(o1, o2, sizeof(o2))) {
-                                    if (!bad)
-                                        ca_fail("%s from_edge: mode %d "
-                                                "avail %d%d%d%d", name, mode, ht,
-                                                hl, htl, htr);
-                                    bad++;
-                                }
-                            }
                         }
+                    }
     }
-    /* The output block is 64 packed bytes, and the from-edge form's INPUT is
-     * exactly 32: both tails, both buffers. */
+    /* The output block is 64 packed bytes, and the input is exactly 32: both
+     * tails, both buffers. */
     if (!bad) {
         const pixel *rc = rec + PORG;
         y264_i8_edge_t ed;
@@ -252,9 +241,6 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
                     continue;
                 ca_pg gd, ge;
                 pixel *d = ca_pg_alloc(&gd, 64 * sizeof(pixel), tail);
-                ca_pg_arm(name);
-                kern(d, rc, STRIDE, mode, 1, 1, 1, 1);
-                ca_pg_disarm();
                 pixel *e = ca_pg_alloc(&ge, 32 * sizeof(pixel), tail);
                 memcpy(e, ed.f, 32 * sizeof(pixel));
                 ca_pg_arm(name);
@@ -265,23 +251,15 @@ static int run_intra8x8(const char *name, i8_fn kern, i8edge_fn edge_kern)
             }
     }
     {
+        /* the reference column pays the edge derivation and its filter on
+         * every call; the decision loop derives the edge once per block */
         const pixel *rc = rec + PORG;
-        CA_BENCH2("intra8x8_vr", kern(o1, rc, STRIDE, Y264_I4_VR, 1, 1, 1, 1),
+        y264_i8_edge_t ed;
+        y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, 1);
+        CA_BENCH2("intra8x8_vr from edge", edge_kern(o1, ed.f, Y264_I4_VR),
                   y264_intra8x8_c(o2, rc, STRIDE, Y264_I4_VR, 1, 1, 1, 1));
-        CA_BENCH2("intra8x8_hd", kern(o1, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1),
+        CA_BENCH2("intra8x8_hd from edge", edge_kern(o1, ed.f, Y264_I4_HD),
                   y264_intra8x8_c(o2, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1));
-        /* The two rows above include the edge derivation and its filter, which
-         * they pay on every call. The decision loop does NOT: it derives the
-         * edge once and feeds every mode from it, which is the from_edge form
-         * below and the only shape a bare predictor elsewhere compares with. */
-        {
-            y264_i8_edge_t ed;
-            y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, 1);
-            CA_BENCH2("intra8x8_vr from edge", edge_kern(o1, ed.f, Y264_I4_VR),
-                      y264_intra8x8_c(o2, rc, STRIDE, Y264_I4_VR, 1, 1, 1, 1));
-            CA_BENCH2("intra8x8_hd from edge", edge_kern(o1, ed.f, Y264_I4_HD),
-                      y264_intra8x8_c(o2, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1));
-        }
     }
     ca_guard_free(o1);
     return bad;
@@ -300,8 +278,7 @@ static int t_intra_chroma_neon(void)
 }
 static int t_intra8x8_neon(void)
 {
-    return run_intra8x8("intra8x8", y264_intra8x8_neon,
-                        y264_intra8x8_from_edge_neon);
+    return run_intra8x8("intra8x8", y264_intra8x8_from_edge_neon);
 }
 #endif
 
@@ -316,8 +293,7 @@ static int t_intra_chroma_sse4(void)
 }
 static int t_intra8x8_sse4(void)
 {
-    return run_intra8x8("intra8x8_sse4", y264_intra8x8_sse4,
-                        y264_intra8x8_from_edge_sse4);
+    return run_intra8x8("intra8x8_sse4", y264_intra8x8_from_edge_sse4);
 }
 #endif
 
@@ -332,8 +308,7 @@ static int t_intra_chroma_avx2(void)
 }
 static int t_intra8x8_avx2(void)
 {
-    return run_intra8x8("intra8x8_avx2", y264_intra8x8_avx2,
-                        y264_intra8x8_from_edge_avx2);
+    return run_intra8x8("intra8x8_avx2", y264_intra8x8_from_edge_avx2);
 }
 #endif
 

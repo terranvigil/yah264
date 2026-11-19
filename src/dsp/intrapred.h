@@ -42,13 +42,6 @@ void y264_intra4x4(pixel pred[16], const pixel *rec, int stride,
                    int mode, int have_top, int have_left,
                    int have_topleft, int have_topright);
 
-/* Intra8x8 for one 8x8 block (8.3.2), High profile. Same prediction modes as
- * Intra4x4 but preceded by the reference-sample low-pass filter (8.3.2.2.1);
- * `have_topright` covers the eight samples above and to the right. */
-void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
-                   int mode, int have_top, int have_left,
-                   int have_topleft, int have_topright);
-
 /* The filtered reference samples of one Intra8x8 block, split out because the
  * 8.3.2.2.1 low-pass depends on the NEIGHBOURHOOD and not on the mode: a
  * nine-mode decision loop was running it nine times per block. Unavailable
@@ -102,8 +95,7 @@ void y264_intra8x8_edge_c(y264_i8_edge_t *e, const pixel *rec, int stride,
                           int have_topleft, int have_topright);
 /* Build one mode's prediction from those samples. `have_top`/`have_left` are
  * still needed: they select the DC mode's divisor. `_c` is the portable
- * reference; the unsuffixed entry dispatches per mode exactly as
- * y264_intra8x8 does. */
+ * reference; the unsuffixed entry dispatches per mode to the kernels. */
 void y264_intra8x8_from_edge_c(pixel pred[64], const y264_i8_edge_t *e,
                                int mode, int have_top, int have_left);
 void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,

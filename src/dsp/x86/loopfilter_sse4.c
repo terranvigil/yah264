@@ -3,20 +3,20 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Wave 3b of docs/simd.md. Four kernels: the two luma edge shapes, the
- * eight-line chroma horizontal edge, and the whole-macroblock strength
- * derivation. The filters themselves live in loopfilter_x86.h, written once at
- * 128 bits and shared with the AVX2 tier, because a four-line luma segment and
- * an eight-line chroma edge have nothing for a wider register to hold. Only
- * the strength derivation widens, and its AVX2 twin is in loopfilter_avx2.c.
+ * Wave 3b of docs/simd.md. The eight-line chroma horizontal edge and the
+ * whole-macroblock strength derivation, with their bodies in
+ * loopfilter_x86.h, written once at 128 bits and shared with the AVX2 tier,
+ * because an eight-line chroma edge has nothing for a wider register to hold.
+ * Only the strength derivation widens, and its AVX2 twin is in
+ * loopfilter_avx2.c.
  *
- * Since the x86 optimisation round there are four more, the whole-edge forms
- * the NEON twin has: a sixteen-line luma edge with its four bS values in each
- * direction, and a 4:2:0 chroma edge of BOTH planes in each direction. bS is
- * carried per lane, so an edge is one call where it was four (luma) or, for
- * the vertical chroma edge, sixteen scalar lines. The single-plane vertical
- * chroma edge stays scalar as on NEON (it measured slower there in time); the
- * two-plane form is judged on retired instructions, as its NEON twin is.
+ * Then the whole-edge forms the NEON twin has: a sixteen-line luma edge with
+ * its four bS values in each direction, and a 4:2:0 chroma edge of BOTH
+ * planes in each direction. bS is carried per lane, so an edge is one call
+ * where the scalar path takes four (luma) or, for the vertical chroma edge,
+ * sixteen lines. The single-plane vertical chroma edge stays scalar as on
+ * NEON (it measured slower there in time); the two-plane form is judged on
+ * retired instructions, as its NEON twin is.
  *
  * What is NOT here, and why:
  *   - 4:4:4 chroma, which takes the LUMA-style filter on chroma planes and is
@@ -30,18 +30,6 @@
 #if Y264_HAVE_SSE4
 
 #include "dsp/x86/loopfilter_x86.h"
-
-void y264_deblock_luma_v4_sse4(pixel *q0p, int stride, int bs, int alpha,
-                               int beta, int tc0)
-{
-    y264_db_luma_v4_x86(q0p, stride, bs, alpha, beta, tc0);
-}
-
-void y264_deblock_luma_h4_sse4(pixel *q0p, int stride, int bs, int alpha,
-                               int beta, int tc0)
-{
-    y264_db_luma_h4_x86(q0p, stride, bs, alpha, beta, tc0);
-}
 
 void y264_deblock_chroma8_h_sse4(pixel *q0p, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],

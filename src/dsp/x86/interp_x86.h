@@ -630,68 +630,13 @@ static inline void y264_mc_chroma_bi8_x86(uint8_t *dst, int dstride,
     }
 }
 
-/* ---- the half-pel plane build rows ---------------------------------------
- *
- * The interiors of y264_mc_build_hpel_rows; interp.c keeps the border columns
- * scalar. Both are pure functions of their inputs, so the overlapping tail --
- * a last pass that steps back to end on the span -- recomputes identical
- * values and the result is bit-exact and band-safe, exactly as the NEON twin's
- * is.
- *
- * The reference plane is only guaranteed readable on [0, pw), so the
- * horizontal helper loads eight bytes six times over [x-2, x+11) rather than
- * sixteen bytes once.
- */
-static inline void y264_hpel_hrow8(int32_t *srow, const uint8_t *row, int x)
-{
-    __m128i t = y264_hfilt8(row + x - 2);
-    _mm_storeu_si128((__m128i *)(void *)(srow + x), _mm_cvtepi16_epi32(t));
-    _mm_storeu_si128((__m128i *)(void *)(srow + x + 4),
-                     _mm_cvtepi16_epi32(_mm_srli_si128(t, 8)));
-}
-
-static inline __m128i y264_ld128i(const int32_t *p)
-{
-    return _mm_loadu_si128((const __m128i *)(const void *)p);
-}
-
-/* H, V and C at eight columns from x. H is the middle intermediate rescaled,
- * C the vertical tap over the six intermediate rows, V the vertical tap over
- * the six integer rows. */
-static inline void y264_hpel_outrow8(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
-                                     const int32_t *s0, const int32_t *s1,
-                                     const int32_t *s2, const int32_t *s3,
-                                     const int32_t *s4, const int32_t *s5,
-                                     const uint8_t *r0, const uint8_t *r1,
-                                     const uint8_t *r2, const uint8_t *r3,
-                                     const uint8_t *r4, const uint8_t *r5, int x)
-{
-    __m128i r16 = _mm_set1_epi32(16);
-    __m128i h0 = _mm_srai_epi32(_mm_add_epi32(y264_ld128i(s2 + x), r16), 5);
-    __m128i h1 = _mm_srai_epi32(_mm_add_epi32(y264_ld128i(s2 + x + 4), r16), 5);
-    __m128i hp = _mm_packs_epi32(h0, h1);
-    _mm_storel_epi64((__m128i *)(void *)(Hr + x), _mm_packus_epi16(hp, hp));
-
-    __m128i clo = y264_tap6_32(y264_ld128i(s0 + x), y264_ld128i(s1 + x),
-                               y264_ld128i(s2 + x), y264_ld128i(s3 + x),
-                               y264_ld128i(s4 + x), y264_ld128i(s5 + x));
-    __m128i chi = y264_tap6_32(y264_ld128i(s0 + x + 4), y264_ld128i(s1 + x + 4),
-                               y264_ld128i(s2 + x + 4), y264_ld128i(s3 + x + 4),
-                               y264_ld128i(s4 + x + 4), y264_ld128i(s5 + x + 4));
-    _mm_storel_epi64((__m128i *)(void *)(Cr + x), y264_clip10_8(clo, chi));
-
-    _mm_storel_epi64((__m128i *)(void *)(Vr + x),
-        y264_clip5_8(y264_vfilt8(r0 + x, r1 + x, r2 + x, r3 + x, r4 + x, r5 + x)));
-}
-
 /* ---- the half-pel plane build, a whole band --------------------------------
  *
- * The two row kernels above leave the border columns to scalar code and stage
- * the horizontal taps as int32. This builds a band of output rows, borders
- * included, in one pass. Each source row is clamped into a padded copy once
- * (the replicated columns are two memsets), and its horizontal six-tap is
- * kept as int16, which the tap of bytes fits. A ring of six padded rows and
- * six tap rows feeds each output row:
+ * This builds a band of output rows, borders included, in one pass. Each
+ * source row is clamped into a padded copy once (the replicated columns are
+ * two memsets), and its horizontal six-tap is kept as int16, which the tap
+ * of bytes fits. A ring of six padded rows and six tap rows feeds each
+ * output row:
  *
  *   H = clip1((htap + 16) >> 5)            from the centre tap row
  *   V = clip1((vtap of bytes + 16) >> 5)   16-bit lanes
@@ -758,28 +703,6 @@ void NAME(uint8_t *Hp, uint8_t *Vp, uint8_t *Cp, int stride,                   \
             COUT(t0 + j, t1 + j, t2 + j, t3 + j, t4 + j, t5 + j, Cr + j);      \
         }                                                                      \
     }                                                                          \
-}
-
-/* ---- the lowres bilinear phase row -----------------------------------------
- *
- * o[X] = (w00*r0[X] + w10*r0[X+ax] + w01*r1[X] + w11*r1[X+ax] + 8) >> 4 with
- * the four weights summing to 16, so the sum is at most 16 * 255 and the
- * chroma kernel's PMADDUBSW pairing serves it unchanged: each row's two
- * samples interleaved against that row's weight pair. Sixteen columns from X;
- * reads r0 and r1 over [X, X + 15 + ax].
- */
-static inline __m128i y264_bilin4_16(const uint8_t *r0, const uint8_t *r1, int ax,
-                                     __m128i wa, __m128i wb)
-{
-    __m128i a = y264_ld128(r0), b = y264_ld128(r0 + ax);
-    __m128i c = y264_ld128(r1), d = y264_ld128(r1 + ax);
-    __m128i k8 = _mm_set1_epi16(8);
-    __m128i lo = _mm_add_epi16(_mm_maddubs_epi16(_mm_unpacklo_epi8(a, b), wa),
-                               _mm_maddubs_epi16(_mm_unpacklo_epi8(c, d), wb));
-    __m128i hi = _mm_add_epi16(_mm_maddubs_epi16(_mm_unpackhi_epi8(a, b), wa),
-                               _mm_maddubs_epi16(_mm_unpackhi_epi8(c, d), wb));
-    return _mm_packus_epi16(_mm_srli_epi16(_mm_add_epi16(lo, k8), 4),
-                            _mm_srli_epi16(_mm_add_epi16(hi, k8), 4));
 }
 
 /* ---- the lowres half-pel plane row ----------------------------------------

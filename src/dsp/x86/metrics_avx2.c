@@ -306,15 +306,6 @@ static inline void load8x8_pair(__m256i d[8], const uint8_t *p0,
                           _mm_cvtepu8_epi16(y264_ld64(p1 + i * stride)));
 }
 
-int y264_sa8d_8x8_avx2(const pixel *a, int as, const pixel *b, int bs)
-{
-    /* One block, one lane's worth of work: the shared 128-bit form, here in
-     * its VEX encoding. */
-    __m128i d[8];
-    y264_load8x8_diff(d, a, as, b, bs);
-    return (y264_had8x8_absum(d) + 2) >> 2;
-}
-
 int y264_sa8d_16x16_avx2(const pixel *a, int as, const pixel *b, int bs)
 {
     __m256i d[8];
@@ -337,13 +328,6 @@ static inline int sum8x8_avx2(const uint8_t *p, int stride)
                                                                  stride),
                                                     _mm256_setzero_si256()));
     return y256_hsum_sad(acc);
-}
-
-long y264_hadamard_ac_8x8_avx2(const pixel *p, int stride)
-{
-    __m128i d[8];
-    y264_load8x8(d, p, stride);
-    return (long)y264_had8x8_absum(d) - (long)sum8x8_avx2(p, stride);
 }
 
 /* ---- the psy texture terms ----------------------------------------------- */
@@ -382,19 +366,6 @@ static inline long tex_corr(int dc)
 {
     int flat = 16 * ((dc + 8) >> 4);
     return (long)(dc < flat ? flat - dc : dc - flat) - (long)dc;
-}
-
-long y264_texture_ac4_16x16_avx2(const pixel *p, int stride)
-{
-    __m256i acc = _mm256_setzero_si256();
-    long corr = 0;
-    for (int by = 0; by < 16; by += 4) {
-        int dc[4];
-        acc = _mm256_add_epi32(acc, tex_group16(p + by * stride, stride, dc));
-        for (int k = 0; k < 4; k++)
-            corr += tex_corr(dc[k]);
-    }
-    return (long)y256_hsum32(acc) + corr;
 }
 
 void y264_texture_ac48_16x16_avx2(const pixel *p, int stride, long out[2])
@@ -614,31 +585,6 @@ void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
             0xd8);
         _mm_storeu_si128((__m128i *)(void *)e, _mm256_castsi256_si128(v));
         _mm_storeu_si128((__m128i *)(void *)sum, _mm256_extracti128_si256(v, 1));
-    }
-}
-
-/* The SSD half of the 16x16 map on its own. Two block rows go through per
- * pass: each one's pair sums fill a register, the horizontal add of the two
- * leaves (upper, upper, lower, lower) in each lane, and the same permute
- * orders them into eight consecutive map entries. */
-void y264_ssd4x4_map16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
-                            uint32_t out[16])
-{
-    for (int r = 0; r < 4; r += 2) {
-        __m256i e0 = _mm256_setzero_si256(), e1 = e0;
-        for (int y = 0; y < 4; y++) {
-            __m256i d0 = _mm256_sub_epi16(
-                _mm256_cvtepu8_epi16(y264_ld128(a + (4 * r + y) * as)),
-                _mm256_cvtepu8_epi16(y264_ld128(b + (4 * r + y) * bs)));
-            __m256i d1 = _mm256_sub_epi16(
-                _mm256_cvtepu8_epi16(y264_ld128(a + (4 * r + 4 + y) * as)),
-                _mm256_cvtepu8_epi16(y264_ld128(b + (4 * r + 4 + y) * bs)));
-            e0 = _mm256_add_epi32(e0, _mm256_madd_epi16(d0, d0));
-            e1 = _mm256_add_epi32(e1, _mm256_madd_epi16(d1, d1));
-        }
-        _mm256_storeu_si256((__m256i *)(void *)(out + 4 * r),
-                            _mm256_permute4x64_epi64(_mm256_hadd_epi32(e0, e1),
-                                                     0xd8));
     }
 }
 

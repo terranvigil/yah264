@@ -22,28 +22,9 @@
  * as having cost 3.6x there. Exactness: each u16 lane holds one squared byte
  * difference (<= 65025), the pairwise accumulate widens it to u32 immediately,
  * and a 16x16 block's whole sum is at most 16*16*65025 = 16.6M, inside u32. */
-/* The per-4x4 SSD map of a 16x16 block, plain NEON (the dotprod twin is
- * below). The pairwise widening add leaves column pairs in u32 lanes; one
- * final pairwise add folds them into the four 4-column groups. */
-void y264_ssd4x4_map16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
-                            uint32_t out[16])
-{
-    for (int r = 0; r < 4; r++) {
-        uint32x4_t lo = vdupq_n_u32(0), hi = vdupq_n_u32(0);
-        for (int y = 0; y < 4; y++) {
-            uint8x16_t d = vabdq_u8(vld1q_u8(a + (4 * r + y) * as),
-                                    vld1q_u8(b + (4 * r + y) * bs));
-            lo = vpadalq_u16(lo, vmull_u8(vget_low_u8(d), vget_low_u8(d)));
-            hi = vpadalq_u16(hi, vmull_high_u8(d, d));
-        }
-        vst1q_u32(out + 4 * r, vpaddq_u32(lo, hi));
-    }
-}
-
 /* Per-4x4 SSD and signed sum of a - b over a 16x16 block (out[row4*4 +
  * col4]), and the same for an 8x8 block (four entries): the residual
- * statistics the skip screen proves blocks zero from. The SSD entries equal
- * y264_ssd4x4_map16's. */
+ * statistics the skip screen proves blocks zero from. */
 void y264_ssdsum4x4_16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
                             uint32_t e[16], int32_t sum[16])
 {
@@ -415,30 +396,11 @@ Y264_DOTPROD_ATTR int y264_sad_8x16_neon_dotprod(const uint8_t *a, int as, const
  * 16x16 block's largest lane is 16*4*65025 = 4,161,600, inside u32; the final
  * fold is the same 16.6M bound as the plain form. Bit-exact with it and with
  * the C reference by construction, which is what checkasm gates. */
-/* The per-4x4 SSD map of a 16x16 block: out[r*4+c] is the SSD of the 4x4 at
- * rows 4r..4r+3, columns 4c..4c+3. One dot product per row puts each 4-pixel
- * row segment's squared differences straight into its own u32 lane, so the
- * map costs what the whole-block SSD does. Each lane is at most 16*65025. */
-Y264_DOTPROD_ATTR
-void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as,
-                                    const uint8_t *b, int bs, uint32_t out[16])
-{
-    for (int r = 0; r < 4; r++) {
-        uint32x4_t acc = vdupq_n_u32(0);
-        for (int y = 0; y < 4; y++) {
-            uint8x16_t d = vabdq_u8(vld1q_u8(a + (4 * r + y) * as),
-                                    vld1q_u8(b + (4 * r + y) * bs));
-            acc = vdotq_u32(acc, d, d);
-        }
-        vst1q_u32(out + 4 * r, acc);
-    }
-}
-
 /* The dotprod form of y264_ssdsum4x4_16_neon / _8_neon: one dot product
  * per row puts each 4-pixel segment's squared differences in its own u32
  * lane, and two more against a vector of ones give each segment's pixel sum
- * of a and of b; the signed sum is their difference. Lane bounds: squares as
- * in the SSD map, pixel sums at most 16 * 4 * 255. Bit-exact with the plain
+ * of a and of b; the signed sum is their difference. Lane bounds: squares at
+ * most 16 * 65025, pixel sums at most 16 * 4 * 255. Bit-exact with the plain
  * forms. */
 Y264_DOTPROD_ATTR
 void y264_ssdsum4x4_16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
@@ -883,7 +845,7 @@ static inline uint32_t sa8d_half_core(int16x8_t v0, int16x8_t v1, int16x8_t v2,
 
 /* SA8D of an 8x8 diff, normalised like the C reference: (sum + 2) >> 2
  * with sum = the full 2D Hadamard abs-sum = 2 * the half-core total. */
-int y264_sa8d_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+static int sa8d_8x8(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int16x8_t d0 = vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a+0*as), vld1_u8(b+0*bs)));
     int16x8_t d1 = vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a+1*as), vld1_u8(b+1*bs)));
@@ -899,62 +861,10 @@ int y264_sa8d_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 
 int y264_sa8d_16x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
-    return y264_sa8d_8x8_neon(a, as, b, bs)
-         + y264_sa8d_8x8_neon(a + 8, as, b + 8, bs)
-         + y264_sa8d_8x8_neon(a + 8*as, as, b + 8*bs, bs)
-         + y264_sa8d_8x8_neon(a + 8*as + 8, as, b + 8*bs + 8, bs);
-}
-
-/* AC magnitude of one 8x8 via the 8x8 Hadamard: full abs-sum minus |DC|,
- * DC = the plain pixel sum. Matches the scalar hadamard_ac_8x8 exactly. */
-long y264_hadamard_ac_8x8_neon(const uint8_t *p, int stride)
-{
-    uint8x8_t r0 = vld1_u8(p + 0*stride), r1 = vld1_u8(p + 1*stride);
-    uint8x8_t r2 = vld1_u8(p + 2*stride), r3 = vld1_u8(p + 3*stride);
-    uint8x8_t r4 = vld1_u8(p + 4*stride), r5 = vld1_u8(p + 5*stride);
-    uint8x8_t r6 = vld1_u8(p + 6*stride), r7 = vld1_u8(p + 7*stride);
-
-    uint16x8_t dcv = vaddl_u8(r0, r1);
-    dcv = vaddq_u16(dcv, vaddl_u8(r2, r3));
-    dcv = vaddq_u16(dcv, vaddl_u8(r4, r5));
-    dcv = vaddq_u16(dcv, vaddl_u8(r6, r7));
-    uint32_t dc = vaddlvq_u16(dcv);
-
-    uint32_t half = sa8d_half_core(
-        vreinterpretq_s16_u16(vmovl_u8(r0)), vreinterpretq_s16_u16(vmovl_u8(r1)),
-        vreinterpretq_s16_u16(vmovl_u8(r2)), vreinterpretq_s16_u16(vmovl_u8(r3)),
-        vreinterpretq_s16_u16(vmovl_u8(r4)), vreinterpretq_s16_u16(vmovl_u8(r5)),
-        vreinterpretq_s16_u16(vmovl_u8(r6)), vreinterpretq_s16_u16(vmovl_u8(r7)));
-    return (long)(2 * half - dc);
-}
-
-/* psy-RD texture energy of a 16x16, SATD-support term: the sum over sixteen
- * 4x4 tiles of SATD(tile, flat block of the tile's rounded mean). Two tiles per
- * pass through satd_4rows_half (lanes 0-3 are the left tile, 4-7 the right --
- * every transpose there stays inside its 4-lane half), whose per-lane maxes sum
- * to HALF the true Hadamard abs-sum. The tile's DC is its pixel sum, taken from
- * the same loads. Bit-exact with texture_ac4_c_16x16. */
-long y264_texture_ac4_16x16_neon(const uint8_t *p, int stride)
-{
-    long e = 0;
-    for (int by = 0; by < 16; by += 4)
-        for (int bx = 0; bx < 16; bx += 8) {
-            const uint8_t *q = p + by * stride + bx;
-            uint8x8_t a0 = vld1_u8(q), a1 = vld1_u8(q + stride);
-            uint8x8_t a2 = vld1_u8(q + 2 * stride), a3 = vld1_u8(q + 3 * stride);
-            uint16x8_t dcv = vaddq_u16(vaddl_u8(a0, a1), vaddl_u8(a2, a3));
-            int dcl = (int)vaddlv_u16(vget_low_u16(dcv));
-            int dch = (int)vaddlv_u16(vget_high_u16(dcv));
-            uint16x8_t m = satd_4rows_half(
-                vreinterpretq_s16_u16(vmovl_u8(a0)), vreinterpretq_s16_u16(vmovl_u8(a1)),
-                vreinterpretq_s16_u16(vmovl_u8(a2)), vreinterpretq_s16_u16(vmovl_u8(a3)));
-            long sl = 2 * (long)vaddlv_u16(vget_low_u16(m));
-            long sh = 2 * (long)vaddlv_u16(vget_high_u16(m));
-            int fl = 16 * ((dcl + 8) >> 4), fh = 16 * ((dch + 8) >> 4);
-            e += sl - dcl + (dcl < fl ? fl - dcl : dcl - fl);
-            e += sh - dch + (dch < fh ? fh - dch : dch - fh);
-        }
-    return e;
+    return sa8d_8x8(a, as, b, bs)
+         + sa8d_8x8(a + 8, as, b + 8, bs)
+         + sa8d_8x8(a + 8*as, as, b + 8*bs, bs)
+         + sa8d_8x8(a + 8*as + 8, as, b + 8*bs + 8, bs);
 }
 
 /* Full 4x4 Hadamard of two side-by-side tiles (lanes 0-3 = left tile, 4-7 =

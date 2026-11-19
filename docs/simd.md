@@ -40,7 +40,7 @@ SVE2 at 128 bits and runs the NEON code.
 
 | family | NEON | SVE | SSE4.2 | AVX2 | AVX-512 |
 |---|---|---|---|---|---|
-| pixel metrics: SAD, SAD x4, SATD, SA8D, Hadamard AC, texture AC, variance, intra 4x4 search, intra 16x16 SATD, SSD | yes | part | yes | yes | part |
+| pixel metrics: SAD, SAD x4, SATD, SA8D, texture AC, variance, intra 4x4 search, intra 16x16 SATD, SSD | yes | part | yes | yes | part |
 | motion compensation: luma quarter/half-pel, chroma bilinear, copy, average, weighted average, half-pel plane build | yes | | yes | yes | |
 | transform, quant, scan: 4x4 and 8x8 forward and inverse, batched 4x4 grid, quant, dequant, zigzag | yes | forward quant | yes | yes | |
 | intra prediction: 8x8, 16x16, chroma | yes | | yes | yes | |
@@ -86,11 +86,14 @@ the two depths apart. The tier answers `Y264_TIER_NEON` and takes the same
 
 | family | 10-bit NEON | stays C |
 |---|---|---|
-| pixel metrics | SAD and its batches, SATD at every shape and its average form, SA8D, Hadamard AC, both texture terms, variance, intra 4x4 search, intra 16x16 SATD, SSD and its per-4x4 maps | none |
-| motion compensation | six-tap luma, plane fetch, weighted average, chroma at widths 8 and 4, the half-pel plane build (whole band and rows), the lowres half-pel rows, the fused bi-prediction forms | the lowres bilinear row, which no current path builds |
+| pixel metrics | SAD and its batches, SATD at every shape and its average form, SA8D, both texture terms, variance, intra 4x4 search, intra 16x16 SATD, SSD and its per-4x4 maps | none |
+| motion compensation | six-tap luma, plane fetch, weighted average, chroma at widths 8 and 4, the half-pel plane build (whole band and rows), the lowres half-pel rows, the fused bi-prediction forms | as on 8 bits |
 | transform, quant, scan | every NEON dispatch site | as on 8 bits |
-| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | four-line luma: no 10-bit twin, since the whole-edge kernels serve every call site |
+| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | as on 8 bits |
 | intra prediction | 16x16, 8-wide chroma, the routed 8x8 modes, the six-mode 8x8 form, the lowres four-mode builder | as on 8 bits |
+
+The half-pel plane rows exist at 10 bits only. They cover a band too short
+for the whole-band kernel, and at 8 bits every band fits it.
 
 A coefficient is an int32 at 10 bits, so the transforms run on int32 lanes. The
 pixel, intra and deblock kernels keep int16 lanes and widen where 1023 pushes a
@@ -124,9 +127,9 @@ assembly on most clips and within about 10% on the rest.
 | family | 10-bit SSE4.2 and AVX2 | stays C |
 |---|---|---|
 | pixel metrics | every kernel the 8-bit x86 tiers have | none |
-| motion compensation | six-tap luma, chroma at widths 8 and 4, plane fetch, average, weighted average, the half-pel plane build (whole band and rows), the lowres half-pel row, the fused 4:2:0 average and two-list chroma | the lowres bilinear row |
+| motion compensation | six-tap luma, chroma at widths 8 and 4, plane fetch, average, weighted average, the half-pel plane build (whole band and rows), the lowres half-pel row, the fused 4:2:0 average and two-list chroma | as on 8 bits |
 | transform, quant, scan | every x86 dispatch site | as on 8 bits |
-| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | four-line luma, which the whole-edge kernels make unreachable |
+| deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | as on 8 bits |
 | intra prediction | 16x16, 8-wide chroma, the routed 8x8 modes and their edge, the six-mode 8x8 forms, the lowres four-mode builder | as on 8 bits |
 
 A 16-wide row of 10-bit samples is exactly one AVX2 register, so the AVX2

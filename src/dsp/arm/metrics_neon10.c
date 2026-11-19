@@ -399,7 +399,7 @@ static inline uint32_t sa8d_half_core(int16x8_t v0, int16x8_t v1, int16x8_t v2,
     return vaddvq_u32(acc);
 }
 
-int y264_sa8d_8x8_neon(const pixel *a, int as, const pixel *b, int bs)
+static int sa8d_8x8(const pixel *a, int as, const pixel *b, int bs)
 {
     uint32_t half = sa8d_half_core(diff8(a, b), diff8(a + as, b + bs),
                                    diff8(a + 2 * as, b + 2 * bs),
@@ -413,56 +413,16 @@ int y264_sa8d_8x8_neon(const pixel *a, int as, const pixel *b, int bs)
 
 int y264_sa8d_16x16_neon(const pixel *a, int as, const pixel *b, int bs)
 {
-    return y264_sa8d_8x8_neon(a, as, b, bs)
-         + y264_sa8d_8x8_neon(a + 8, as, b + 8, bs)
-         + y264_sa8d_8x8_neon(a + 8 * as, as, b + 8 * bs, bs)
-         + y264_sa8d_8x8_neon(a + 8 * as + 8, as, b + 8 * bs + 8, bs);
-}
-
-/* Full abs-sum minus |DC|, DC = the pixel sum (<= 65472). */
-long y264_hadamard_ac_8x8_neon(const pixel *p, int stride)
-{
-    uint16x8_t r[8];
-    for (int i = 0; i < 8; i++)
-        r[i] = vld1q_u16(p + i * stride);
-    uint16x8_t dcv = vaddq_u16(vaddq_u16(vaddq_u16(r[0], r[1]), vaddq_u16(r[2], r[3])),
-                               vaddq_u16(vaddq_u16(r[4], r[5]), vaddq_u16(r[6], r[7])));
-    uint32_t dc = vaddlvq_u16(dcv);
-    uint32_t half = sa8d_half_core(
-        vreinterpretq_s16_u16(r[0]), vreinterpretq_s16_u16(r[1]),
-        vreinterpretq_s16_u16(r[2]), vreinterpretq_s16_u16(r[3]),
-        vreinterpretq_s16_u16(r[4]), vreinterpretq_s16_u16(r[5]),
-        vreinterpretq_s16_u16(r[6]), vreinterpretq_s16_u16(r[7]));
-    return (long)(2 * half) - (long)dc;
+    return sa8d_8x8(a, as, b, bs)
+         + sa8d_8x8(a + 8, as, b + 8, bs)
+         + sa8d_8x8(a + 8 * as, as, b + 8 * bs, bs)
+         + sa8d_8x8(a + 8 * as + 8, as, b + 8 * bs + 8, bs);
 }
 
 /* ---- psy-RD texture --------------------------------------------------------
  *
- * The SATD-support term: each 4x4 tile's SATD against a flat block of its own
- * rounded mean, two tiles per satd_4rows_half pass. A tile's DC is its pixel
- * sum, <= 16368. */
-long y264_texture_ac4_16x16_neon(const pixel *p, int stride)
-{
-    long e = 0;
-    for (int by = 0; by < 16; by += 4)
-        for (int bx = 0; bx < 16; bx += 8) {
-            const pixel *q = p + by * stride + bx;
-            uint16x8_t a0 = vld1q_u16(q), a1 = vld1q_u16(q + stride);
-            uint16x8_t a2 = vld1q_u16(q + 2 * stride), a3 = vld1q_u16(q + 3 * stride);
-            uint16x8_t dcv = vaddq_u16(vaddq_u16(a0, a1), vaddq_u16(a2, a3));
-            int dcl = (int)vaddlv_u16(vget_low_u16(dcv));
-            int dch = (int)vaddlv_u16(vget_high_u16(dcv));
-            uint16x8_t m = satd_4rows_half(
-                vreinterpretq_s16_u16(a0), vreinterpretq_s16_u16(a1),
-                vreinterpretq_s16_u16(a2), vreinterpretq_s16_u16(a3));
-            long sl = 2 * (long)vaddlv_u16(vget_low_u16(m));
-            long sh = 2 * (long)vaddlv_u16(vget_high_u16(m));
-            int fl = 16 * ((dcl + 8) >> 4), fh = 16 * ((dch + 8) >> 4);
-            e += sl - dcl + (dcl < fl ? fl - dcl : dcl - fl);
-            e += sh - dch + (dch < fh ? fh - dch : dch - fh);
-        }
-    return e;
-}
+ * The SATD-support term is each 4x4 tile's SATD against a flat block of its
+ * own rounded mean. A tile's DC is its pixel sum, <= 16368. */
 
 /* The full 4x4 Hadamard of two side-by-side tiles, the final butterfly taken.
  * The coefficients come out in a fixed permutation, the same for every call,
@@ -753,28 +713,6 @@ int y264_ssd_8xh_neon(const pixel *a, int as, const pixel *b, int bs, int h)
         s1 = sq_hi(s1, d);
     }
     return (int)vaddvq_u32(vaddq_u32(s0, s1));
-}
-
-/* Per-4x4 SSD of a 16x16 block, out[row4 * 4 + col4]: one accumulator per
- * 4x4 column, folded to one lane per block with two pairwise adds. */
-void y264_ssd4x4_map16_neon(const pixel *a, int as, const pixel *b, int bs,
-                            uint32_t out[16])
-{
-    for (int r = 0; r < 4; r++) {
-        uint32x4_t e0 = vdupq_n_u32(0), e1 = vdupq_n_u32(0);
-        uint32x4_t e2 = vdupq_n_u32(0), e3 = vdupq_n_u32(0);
-        for (int y = 0; y < 4; y++) {
-            const pixel *pa = a + (4 * r + y) * as, *pb = b + (4 * r + y) * bs;
-            uint16x8x2_t va = vld1q_u16_x2(pa), vb = vld1q_u16_x2(pb);
-            uint16x8_t d0 = vabdq_u16(va.val[0], vb.val[0]);
-            uint16x8_t d1 = vabdq_u16(va.val[1], vb.val[1]);
-            e0 = sq_lo(e0, d0);
-            e1 = sq_hi(e1, d0);
-            e2 = sq_lo(e2, d1);
-            e3 = sq_hi(e3, d1);
-        }
-        vst1q_u32(out + 4 * r, vpaddq_u32(vpaddq_u32(e0, e1), vpaddq_u32(e2, e3)));
-    }
 }
 
 /* The same map with the signed sum of a - b per 4x4 beside it, for the

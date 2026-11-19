@@ -27,18 +27,6 @@ void y264_intra_chroma_sse4(pixel *pred, const pixel *rec, int stride,
 void y264_intra8x8_from_edge_sse4(pixel pred[64], const pixel e[32], int mode)
 { ip10_i8_from_edge(pred, e, mode); }
 
-void y264_intra8x8_sse4(pixel pred[64], const pixel *rec, int stride,
-                        int mode, int have_top, int have_left,
-                        int have_topleft, int have_topright)
-{
-    pixel e[32];
-    __m128i t0, t1, lf;
-    int tl = ip10_edge_regs(rec, stride, have_top, have_left, have_topleft,
-                            have_topright, &t0, &t1, &lf);
-    ip10_edge_flat(e, t0, t1, lf, tl);
-    ip10_i8_from_edge(pred, e, mode);
-}
-
 /* both views of y264_i8_edge_t: the flat array and the t/l/tl integers */
 void y264_intra8x8_edge_sse4(y264_i8_edge_t *e, const pixel *rec, int stride,
                              int have_top, int have_left,

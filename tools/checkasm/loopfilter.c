@@ -249,98 +249,6 @@ static void db_thr_plane(int d, int vert)
     memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
 }
 
-#if Y264_HAVE_NEON || Y264_HAVE_SSE4   /* the four-line kernels: no 10-bit twin */
-/* The window a luma edge kernel DECLARES, mapped against an unmapped page at
- * both tails. A vertical edge reads eight samples across four lines and a
- * horizontal one four samples down eight lines; a ninth sample or a ninth line
- * faults here whether or not its value reaches the output, which is the only
- * net that catches a load sized to the register rather than to the block. */
-static void luma_pages(const char *name, db_luma_fn v4, db_luma_fn h4)
-{
-    for (int tail = 0; tail <= 1; tail++) {
-        ca_pg g;
-        size_t win = ca_pg_window_pix(STRIDE, 8, 4);
-        pixel *base = ca_pg_alloc(&g, win, tail);
-        ca_pg_fill_pix(&g, win / sizeof(pixel));
-        ca_pg_arm(name);
-        v4(base + 4, STRIDE, 3, 40, 10, 4);
-        ca_pg_disarm();
-        ca_pg_free(&g);
-
-        win = ca_pg_window_pix(STRIDE, 4, 8);
-        base = ca_pg_alloc(&g, win, tail);
-        ca_pg_fill_pix(&g, win / sizeof(pixel));
-        ca_pg_arm(name);
-        h4(base + 4 * STRIDE, STRIDE, 4, 40, 10, 4);
-        ca_pg_disarm();
-        ca_pg_free(&g);
-    }
-}
-
-static int run_deblock_luma(const char *name, db_luma_fn v4, db_luma_fn h4)
-{
-    int bad = 0;
-    const int n1 = TRIALS * 4, n2 = n1 + DB_EXTRA_OF(n1);
-    for (int t = 0; t < n2 + DB_DIRECTED; t++) {
-        const int d = t - n2;
-        int qi = t < n1 ? db_qi(t) : d < 0 ? 16 + (int)ca_below(36) : db_dir_qi(d);
-        int bs = d < 0 ? 1 + (int)ca_below(4) : 1 + (d & 3);
-        int alpha = ALPHA[qi], beta = BETA[qi];
-        int tc0 = TC0[qi][bs < 4 ? bs - 1 : 0];
-        if (d >= 0) db_thr_plane(d, !(d & 4));
-        else edge_plane(t < n1 ? t & 1 : 2 + (t & 1));
-        ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
-        pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
-
-        luma_edge4_c(ra, 1, STRIDE, bs, alpha, beta, tc0);   /* vertical edge */
-        v4(rb, STRIDE, bs, alpha, beta, tc0);
-        if (memcmp(ea, eb, STRIDE * PLANE_H * sizeof(pixel))) {
-            if (!bad) ca_fail("%s v4: bs=%d qi=%d", name, bs, qi);
-            bad++;
-        }
-        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel), name))
-            bad++;
-
-        memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
-        luma_edge4_c(ra, STRIDE, 1, bs, alpha, beta, tc0);   /* horizontal edge */
-        h4(rb, STRIDE, bs, alpha, beta, tc0);
-        if (memcmp(ea, eb, STRIDE * PLANE_H * sizeof(pixel))) {
-            if (!bad) ca_fail("%s h4: bs=%d qi=%d", name, bs, qi);
-            bad++;
-        }
-        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel), name))
-            bad++;
-    }
-    if (!bad)
-        luma_pages(name, v4, h4);
-    if (ca_bench) {
-        pixel *r = eb + 8 * STRIDE + 8;
-        CA_BENCH2("deblock_v4 bs3", v4(r, STRIDE, 3, 40, 10, 4),
-                  luma_edge4_c(r, 1, STRIDE, 3, 40, 10, 4));
-        CA_BENCH2("deblock_h4 bs4", h4(r, STRIDE, 4, 40, 10, 4),
-                  luma_edge4_c(r, STRIDE, 1, 4, 40, 10, 4));
-        /* The WHOLE macroblock edge, sixteen lines, which is the unit the
-         * reference filter takes in one call and we take in four. The h2h
-         * column needs this shape or it compares a quarter-edge against a
-         * whole one. */
-        CA_BENCH2("deblock_edge16 v",
-                  (v4(r, STRIDE, 3, 40, 10, 4),
-                   v4(r + 4 * STRIDE, STRIDE, 3, 40, 10, 4),
-                   v4(r + 8 * STRIDE, STRIDE, 3, 40, 10, 4),
-                   v4(r + 12 * STRIDE, STRIDE, 3, 40, 10, 4)),
-                  luma_edge4_c(r, 1, STRIDE, 3, 40, 10, 4));
-        CA_BENCH2("deblock_edge16 h",
-                  (h4(r, STRIDE, 3, 40, 10, 4),
-                   h4(r + 4, STRIDE, 3, 40, 10, 4),
-                   h4(r + 8, STRIDE, 3, 40, 10, 4),
-                   h4(r + 12, STRIDE, 3, 40, 10, 4)),
-                  luma_edge4_c(r, STRIDE, 1, 3, 40, 10, 4));
-    }
-    return bad;
-}
-
-#endif
-
 /* The whole-edge chroma filter: eight lines in one pass with per-lane tc and a
  * bS == 4 select. Every bS combination over the four groups is drawn, including
  * all-zero and mixed bS == 4, because sharing one pass across four groups with
@@ -599,11 +507,6 @@ static int t_deblock_chroma2_v_neon(void)
     return run_deblock_chroma2("deblock_chroma2", y264_deblock_chroma2_v_neon,
                                y264_deblock_chroma2_h_neon);
 }
-static int t_deblock_luma_neon(void)
-{
-    return run_deblock_luma("deblock_luma", y264_deblock_luma_v4_neon,
-                            y264_deblock_luma_h4_neon);
-}
 static int t_deblock_chroma_neon(void)
 {
     return run_deblock_chroma("deblock_chroma8_h", y264_deblock_chroma8_h_neon);
@@ -611,14 +514,6 @@ static int t_deblock_chroma_neon(void)
 static int t_deblock_strength_neon(void)
 {
     return run_deblock_strength("deblock_strength", y264_deblock_strength_neon);
-}
-#endif
-
-#if Y264_HAVE_SSE4
-static int t_deblock_luma_sse4(void)
-{
-    return run_deblock_luma("deblock_luma_sse4", y264_deblock_luma_v4_sse4,
-                            y264_deblock_luma_h4_sse4);
 }
 #endif
 
@@ -632,14 +527,6 @@ static int t_deblock_strength_sse4(void)
 {
     return run_deblock_strength("deblock_strength_sse4",
                                 y264_deblock_strength_sse4);
-}
-#endif
-
-#if Y264_HAVE_AVX2
-static int t_deblock_luma_avx2(void)
-{
-    return run_deblock_luma("deblock_luma_avx2", y264_deblock_luma_v4_avx2,
-                            y264_deblock_luma_h4_avx2);
 }
 #endif
 
@@ -659,6 +546,13 @@ static int t_deblock_strength_avx2(void)
 
 #if Y264_HAVE_NEON || Y264_HAVE_NEON10 || Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 typedef void (*db_luma16_fn)(pixel *, int, int, int, const uint8_t *, const uint8_t *);
+
+/* only the whole-edge forms ship; the bench's four-call baseline is the
+ * reference filter's four-line unit */
+static void c_v4(pixel *q0, int st, int bs, int a, int b, int tc0)
+{ luma_edge4_c(q0, 1, st, bs, a, b, tc0); }
+static void c_h4(pixel *q0, int st, int bs, int a, int b, int tc0)
+{ luma_edge4_c(q0, st, 1, bs, a, b, tc0); }
 
 /* A whole sixteen-line luma edge with four bS values, against four scalar
  * four-line edges (a bS 0 unit left alone). bS values are drawn over 0-4 so
@@ -733,18 +627,8 @@ static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h
 static int t_deblock_luma16_neon(void)
 {
     return run_deblock_luma16("deblock_luma16", y264_deblock_luma_v16_neon,
-                              y264_deblock_luma_h16_neon,
-                              y264_deblock_luma_v4_neon, y264_deblock_luma_h4_neon);
+                              y264_deblock_luma_h16_neon, c_v4, c_h4);
 }
-#endif
-
-#if Y264_HAVE_NEON10 || Y264_HAVE_SSE4_10
-/* The 10-bit tiers have the whole-edge forms only; the bench's four-call
- * baseline is the reference filter's four-line unit. */
-static void c_v4(pixel *q0, int st, int bs, int a, int b, int tc0)
-{ luma_edge4_c(q0, 1, st, bs, a, b, tc0); }
-static void c_h4(pixel *q0, int st, int bs, int a, int b, int tc0)
-{ luma_edge4_c(q0, st, 1, bs, a, b, tc0); }
 #endif
 
 #if Y264_HAVE_NEON10
@@ -771,14 +655,8 @@ static int t_deblock_strength_neon(void)
 #if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
 static int t_deblock_luma16_sse4(void)
 {
-#if Y264_HAVE_SSE4
-    return run_deblock_luma16("deblock_luma16_sse4", y264_deblock_luma_v16_sse4,
-                              y264_deblock_luma_h16_sse4,
-                              y264_deblock_luma_v4_sse4, y264_deblock_luma_h4_sse4);
-#else
     return run_deblock_luma16("deblock_luma16_sse4", y264_deblock_luma_v16_sse4,
                               y264_deblock_luma_h16_sse4, c_v4, c_h4);
-#endif
 }
 static int t_deblock_chroma2_sse4(void)
 {
@@ -790,14 +668,8 @@ static int t_deblock_chroma2_sse4(void)
 #if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
 static int t_deblock_luma16_avx2(void)
 {
-#if Y264_HAVE_AVX2
-    return run_deblock_luma16("deblock_luma16_avx2", y264_deblock_luma_v16_avx2,
-                              y264_deblock_luma_h16_avx2,
-                              y264_deblock_luma_v4_avx2, y264_deblock_luma_h4_avx2);
-#else
     return run_deblock_luma16("deblock_luma16_avx2", y264_deblock_luma_v16_avx2,
                               y264_deblock_luma_h16_avx2, c_v4, c_h4);
-#endif
 }
 static int t_deblock_chroma2_avx2(void)
 {
@@ -808,7 +680,6 @@ static int t_deblock_chroma2_avx2(void)
 
 const ca_test ca_deblock_tests[] = {
 #if Y264_HAVE_NEON
-    { "deblock_luma",          "deblock", Y264_CPU_NEON, t_deblock_luma_neon },
     { "deblock_chroma8_h",     "deblock", Y264_CPU_NEON, t_deblock_chroma_neon },
     { "deblock_strength",      "deblock", Y264_CPU_NEON, t_deblock_strength_neon },
     { "deblock_luma16",        "deblock", Y264_CPU_NEON, t_deblock_luma16_neon },
@@ -820,17 +691,11 @@ const ca_test ca_deblock_tests[] = {
     { "deblock_luma16",        "deblock", Y264_CPU_NEON, t_deblock_luma16_neon },
     { "deblock_chroma2_v",     "deblock", Y264_CPU_NEON, t_deblock_chroma2_v_neon },
 #endif
-#if Y264_HAVE_SSE4
-    { "deblock_luma_sse4",     "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma_sse4 },
-#endif
 #if Y264_HAVE_SSE4 || Y264_HAVE_SSE4_10
     { "deblock_chroma8_h_sse4","deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma_sse4 },
     { "deblock_strength_sse4", "deblock", Y264_CPU_SSE4_ALL, t_deblock_strength_sse4 },
     { "deblock_luma16_sse4",   "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma16_sse4 },
     { "deblock_chroma2_sse4",  "deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma2_sse4 },
-#endif
-#if Y264_HAVE_AVX2
-    { "deblock_luma_avx2",     "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma_avx2 },
 #endif
 #if Y264_HAVE_AVX2 || Y264_HAVE_AVX2_10
     { "deblock_chroma8_h_avx2","deblock", Y264_CPU_AVX2_ALL, t_deblock_chroma_avx2 },

@@ -5,8 +5,7 @@
  *
  * each kernel is an interp_x86_10.h body under its SSE4.2 name. the names are
  * the 8-bit tier's; src/common/symbols10.h adds the _10 suffix, so arch.h
- * keeps one prototype set and the dispatch sites are shared. the lowres
- * bilinear row has no twin: no 10-bit caller builds a bilinear lowres plane.
+ * keeps one prototype set and the dispatch sites are shared.
  */
 #include "dsp/x86/interp_x86_10.h"
 

@@ -5,16 +5,14 @@
  *
  * Wave 3b of docs/simd.md, the AVX2 twins of loopfilter_sse4.c.
  *
- * WHICH OF THE FIRST FOUR ACTUALLY WIDENS, AND WHY THE OTHER THREE DO NOT. A luma
- * edge segment is FOUR lines and a chroma edge is EIGHT, because four lines is
- * the unit one bS value covers and eight is a whole chroma edge. Those are
- * four and eight lanes of 16-bit arithmetic, so a 256-bit register has nothing
+ * WHY THE SINGLE-PLANE CHROMA EDGE DOES NOT WIDEN. A chroma edge is EIGHT
+ * lines, eight lanes of 16-bit arithmetic, so a 256-bit register has nothing
  * to put in its upper half and a widened kernel would be the same work plus a
- * cross-lane fixup. Those three take loopfilter_x86.h's bodies whole and differ
- * from the SSE4.2 tier only in that this translation unit's flags make the
- * compiler emit VEX encodings of them -- three-operand forms, so the register
+ * cross-lane fixup. It takes loopfilter_x86.h's body whole and differs from
+ * the SSE4.2 tier only in that this translation unit's flags make the
+ * compiler emit VEX encodings of it -- three-operand forms, so the register
  * copies the two-operand encodings need go away, which is the honest part of
- * what this tier buys at these widths.
+ * what this tier buys at that width.
  *
  * The strength derivation is the one that widens, and it widens exactly:
  * sixteen edges of an axis are sixteen 16-bit lanes, so a whole axis is ONE
@@ -32,18 +30,6 @@
 #if Y264_HAVE_AVX2
 
 #include "dsp/x86/loopfilter_x86.h"
-
-void y264_deblock_luma_v4_avx2(pixel *q0p, int stride, int bs, int alpha,
-                               int beta, int tc0)
-{
-    y264_db_luma_v4_x86(q0p, stride, bs, alpha, beta, tc0);
-}
-
-void y264_deblock_luma_h4_avx2(pixel *q0p, int stride, int bs, int alpha,
-                               int beta, int tc0)
-{
-    y264_db_luma_h4_x86(q0p, stride, bs, alpha, beta, tc0);
-}
 
 void y264_deblock_chroma8_h_avx2(pixel *q0p, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],

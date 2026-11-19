@@ -42,22 +42,15 @@ KNOBS = ("Y264_SIMD_FORCE", "YAH264_NO_ASM", "Y264_ASM_OFF")
 NM = os.environ.get("NM", "nm")
 # nm -A: "archive:member:value type name", the value absent on U lines
 NMLINE = re.compile(r"^([^:]+):([^:]+):\s*(?:[0-9a-f]+\s+)?(\S)\s+(\S+)$")
-# kernels no encode can reach, by name without tier or depth suffix. checkasm
-# still tests each of them; these are the encoder paths that never call them
+# kernels the probe's one-thread encodes can't reach, by name without tier or
+# depth suffix. checkasm still tests each of them
 ALLOWED = {
-    "y264_bilin4_row": "its call is live, but the lowres subpel build returns early: "
-                       "every lowres buffer has half-pel planes",
-    "y264_deblock_luma_h4": "compiled out at 10 bits; at 8 bits the 16-wide path takes every edge first",
-    "y264_deblock_luma_v4": "compiled out at 10 bits; at 8 bits the 16-wide path takes every edge first",
-    "y264_ssd4x4_map16": "reached only with e4 != NULL, which no caller passes",
     "y264_hpel_hrow": "10-bit only, when a pooled half-pel build ends on a one-row band "
-                      "(about 40+ threads); the probe runs at one thread",
+                      "(certain heights at 38+ threads, 2160p at 58); the probe runs at one "
+                      "thread",
     "y264_hpel_outrow": "10-bit only, when a pooled half-pel build ends on a one-row band "
-                        "(about 40+ threads); the probe runs at one thread",
-    "y264_intra8x8": "no caller: intra 8x8 goes through intra8x8_edge and from_edge",
-    "y264_sa8d_8x8": "a pixel-table entry the encoder never reads",
-    "y264_hadamard_ac_8x8": "a pixel-table entry the encoder never reads",
-    "y264_texture_ac4_16x16": "a pixel-table entry the encoder never reads",
+                        "(certain heights at 38+ threads, 2160p at 58); the probe runs at one "
+                        "thread",
 }
 CLIPS = (("420w336", ["-vf", "crop=336:288:0:0"], "yuv420p"),
          ("422", [], "yuv422p"),
