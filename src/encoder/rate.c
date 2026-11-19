@@ -1777,7 +1777,8 @@ void rcp_note_first_build(yah264_encoder_t *e, double bits)
 static double rf2_open_cme(const yah264_encoder_t *e, int *nusable)
 {
     double v[32]; int n = 0;
-    for (int i = 0; i < e->la_n && n < (int)(sizeof v / sizeof v[0]); i++) {
+    int nwin = e->la_depth - 1;         /* what a ring of just the window holds */
+    for (int i = 0; i < e->la_n && i < nwin && n < (int)(sizeof v / sizeof v[0]); i++) {
         const struct la_entry *en = &e->la[(e->la_head + i) % e->la_cap];
         if (en->sum_cost[LR_LEG_PREV] > 0) v[n++] = (double)en->sum_cost[LR_LEG_PREV];
     }
@@ -1793,12 +1794,13 @@ static double rf2_open_qp(yah264_encoder_t *e, int *flat)
  * min(intra, vs-previous) lowres sum, the same metric the rcp decide
  * reads per frame. The oldest entry is the frame being decided (its
  * inter cost is against nothing) and is skipped. */
-    /* A FIXED window of the oldest 32 buffered frames, not "whatever the
- * ring holds": la_n at the first decide grows with the lookahead lead,
- * which is a function of the thread count, and a thread-dependent median
- * made the opening QP (and every later bit) differ between --threads 1
- * and 8 (review 2026-09-04). Index 0 is the oldest BUFFERED frame -- the
- * frame being decided was already popped -- so it is a live sample. */
+    /* A FIXED window of the oldest 32 buffered frames, and no more than the
+ * lookahead window itself, not "whatever the ring holds": la_n at the
+ * first decide grows with the lookahead lead, which is a function of the
+ * thread count, and a thread-dependent median made the opening QP (and
+ * every later bit) differ between --threads 1 and 8 (review 2026-09-04).
+ * Index 0 is the oldest BUFFERED frame -- the frame being decided was
+ * already popped -- so it is a live sample. */
     int n = 0;
     double cme = RCR_VAL(e->rcr, RCR_RF2CME, rf2_open_cme(e, &n));
     if (cme < 0.0) return 0.0;

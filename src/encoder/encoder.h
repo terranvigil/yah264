@@ -31,7 +31,7 @@ typedef struct y264_lr_blk {
  * la_thread.q[]): la_depth's own clamp (64) plus headroom for Y264_LA_BUF's
  * extra input buffering (docs/rate-control.md). la_depth itself --
  * the WINDOW a given mb-tree/scene-cut walk is capped at -- never grows past
- * 64; only ring CAPACITY (la_cap = la_depth + la_buf) uses the extra room. */
+ * 64; only ring CAPACITY (la_cap = la_ring + la_buf) uses the extra room. */
 #define Y264_LA_CAP_MAX 80
 
 /* Distinct anchor subpel sets one mb-tree Phase A can share (encoder.mbt_sub).
@@ -705,7 +705,9 @@ struct yah264_encoder {
  * this value regardless of la_cap */
     int      la_buf;            /* Y264_LA_BUF: extra input-buffering frames
  * ahead of the window (0 = no extra buffering) */
-    int      la_cap;            /* ring capacity = la_depth + la_buf; only
+    int      la_ring;           /* the ring at a lead of 0: la_depth, or a
+ * whole B run when the window is shorter */
+    int      la_cap;            /* ring capacity = la_ring + la_buf; only
  * used for slot indices / wraparound / fill
  * threshold, never for a window walk bound */
     int      la_n, la_head;     /* buffered count, ring index of the oldest */
