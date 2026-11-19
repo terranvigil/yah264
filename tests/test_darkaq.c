@@ -158,8 +158,21 @@ int main(void)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
         /* a bar on one edge only isn't a letterbox */
-        FILL(y < 2, 16.0, 0.0, 30.0, 6.0)
+        FILL(y < 2, 60.0, 0.0, 30.0, 6.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
         CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (H - 2.0) / H) < 1e-9);
+        /* flat near-black stays out wherever it lies: a black edge, or a black
+         * stage around a lit subject that no bar walk would take for a matte */
+        FILL(y < 2, 16.0, 0.0, 30.0, 6.0)
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        FILL((x + y) % 3 == 0, 16.0, 0.0, 30.0, 6.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        /* a dark gray that's flat is picture, and dilutes the share */
+        FILL((x + y) % 3 == 0, 24.0, 0.0, 30.0, 6.0)
+        CHECK(y264_aq_grain_share(m, v, W, H) < 0.7);
         /* grainy bars aren't flat bars: one frame alone counts them as grain,
          * and only nominates them (y264_aq_matte_cand, below) */
         FILL(y < 3 || y >= H - 3, 16.0, 1.44, 140.0, 80.0)

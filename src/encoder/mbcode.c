@@ -736,13 +736,21 @@ int y264_aq_matte_same(const int a[4], const float la[2], const int b[4], const 
 
 /* the share of dark grain macroblocks inside bars[], which are left out:
  * counted in, they'd dilute a letterboxed night scene's share, and a noisy
- * matte would open the gate on its own */
+ * matte would open the gate on its own. Flat near-black blocks inside are
+ * left out too: a black stage or sky around a lit subject dilutes the share
+ * the same way, and whether the bar walk reads it as a matte flips from frame
+ * to frame. Under 20 on the 8-bit scale is black plus the matte's four levels */
+#define AQ_VOID_LEVEL 20.0
 double y264_aq_grain_share_in(const float *mean, const float *var, int wmb, int hmb,
                               const int bars[4])
 {
+    double sc = (double)(1 << (Y264_BIT_DEPTH - 8));
+    double vflat = AQ_GRAIN_VMIN * sc * sc, vlevel = AQ_VOID_LEVEL * sc;
     int n = 0, g = 0;
     for (int y = bars[0]; y < hmb - bars[1]; y++)
         for (int x = bars[2]; x < wmb - bars[3]; x++) {
+            if (var[y * wmb + x] < vflat && mean[y * wmb + x] < vlevel)
+                continue;
             n++;
             g += y264_aq_grain(mean[y * wmb + x], var[y * wmb + x]);
         }
