@@ -105,10 +105,52 @@ rate factor. Two terms move the anchor base QP.
   (10 and 4 under CBR, whose window is a quarter of the buffer).
 
 The ledger opens on one frame of prior at a fitted opening QP:
-`8.69 + 2.92 log2(cme/MB) - 1.32 log2(bits/MB)`,
+`24.63 + 2.42 log2(cme/MB) - 4.12 log2(bits/MB)`,
 clamped to 15..45, read off the median lowres inter cost of the frames already
-in the lookahead. The cumulative ledger never forgets its first second, so the
-opening matters. Mid-stream I frames take a decayed track of the P base QPs
+in the lookahead. It's fitted on fixed-QP encodes of 32 clips across QP 16-44,
+so its rate term is read within each clip, and it sits in the rate factor's
+DC-free domain: each frame codes at it plus its own frame DC. An older fit,
+`8.69 + 2.92 log2(cme/MB) - 1.32 log2(bits/MB)`, read near each clip's own
+operating point, does two jobs beside it. The ledger opens at the lower of the
+two, which keeps static content at a low rate where the opening I and the first
+P frames are what the GOP lives on. And where the older fit falls under 15, the
+lowres cost is too small for either fit: flat 4K animation, and dark or black
+openings. The opening then comes from the intra fit, 8 QP lower. The
+cumulative ledger never forgets its first second, so the opening matters.
+
+Unpredictable content, where the window's median lowres inter cost is over 0.9
+of its intra cost and the opening isn't dark (full-swing noise; a dark fade at
+1080p reads near 1 too), opens at the older fit instead, keeps its
+opening I whole and gets no slew window: there every frame costs about what an
+I does. None of the opening rules below apply to it.
+
+Two more rules cover the first seconds of an encoder that opened cold, not
+from a carried ledger. After a lowres-fit opening on an unshared ledger, the
+opening I counts at half its work when it cost up to 10 frames of target,
+rising to its whole work at 16: a cheap I's bits are spent once and a young
+ledger would read them as the cost of every frame to come, while an I that
+cost many frames' target was opened low and a short encode has to repay it.
+Its bits always count in full in the feedback. And for the first 2 seconds the
+ledger may fall a whole `--qpstep` per anchor decide, except on a dark frame
+(mean luma within 16 of coded black, on the 8-bit scale) while predictions are
+in flight: on a fade from black those are priced at the
+near-black frames' cost, so it falls at the normal slew then. It may rise a
+whole step too after a lowres-fit opening on an unshared ledger. A ledger
+shared by GOP workers keeps every I whole, because those recur once a GOP, and
+rises at 0.35 of a step. After an intra-fit opening a rise is mostly the
+opening I's own cost: it rises at 0.35, or at the normal 0.25 when the opening
+I was set under the fit's level. A dark opening I never codes under QP 15,
+frame DC included, whichever route opened it.
+
+CBR keeps the older fit as its opening, since its buffer already holds the
+rate and the refit's opening ran short CBR buffers a few points over. After an
+intra-fit opening it keeps the first-two-second slew it always had: a full-step
+fall whether or not frames are in flight, and a rise at 0.35 of a step (0.25
+when the opening I was set under the fit's level). None of the other rules
+above apply to CBR: no floor on the coded opening, no weighted I, and no slew
+window after a lowres-fit opening.
+
+Mid-stream I frames take a decayed track of the P base QPs
 (decay 0.9). B frames take the anchor's base plus the cascade, as under CRF.
 Frames whose decide complexity per MB is below 4 (a black opening) stay out of
 the ledger but still count in the feedback.
@@ -434,7 +476,7 @@ and `--bframes 3`.
 | Frame DC 1.04 under capped CRF and bitrate targets | at 1.3 the capped-VBR compliance gate with CBR HRD read 68/72; 72/72 at 1.04 |
 | `--aq-strength` 0.4 | a seven-clip VMAF-NEG sweep put the optimum near 0.3 |
 | RF2 ledger for ABR | the CRF path plus a rate factor; every constant was read on the ABR band and the capped-VBR tracking cells |
-| Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27; the fit scores out of sample at rms 2.5 QP |
+| Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27; the fit reads rms 3.2 QP over QP 16-44 on 32 clips |
 | Half-full handoff for segments | it's the CRF fill budget's fixed point, so segments compose without extra machinery |
 | Zero-lag anchors | burst-lagged anchors doubled the rate deviation |
 | Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads, BD inside the noise |
@@ -492,6 +534,11 @@ and `--bframes 3`.
   the encoder's buffer, `scripts/hrd_check.py` against a declared HRD.
 - **A rate divided by the wrong duration** reads as a large undershoot. Check the
   frame count before believing one.
+- **A clip that ends on credits reads under target over the whole clip.** A
+  title card and credits on black code to almost nothing at any QP a one-pass
+  controller reaches (sintel_720p's closing ten seconds included), and the
+  reference encoder misses the same way. The parity cells stop before the
+  credits; read a corpus clip the same way.
 - **Check engagement before pricing a threading knob.** An unengaged arm is
   byte-identical and reads as a 0.00% BD. Engagement depends on threads per GOP worker, so a
   long clip can be inert at 18 threads and engaged at 36.

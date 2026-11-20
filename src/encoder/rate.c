@@ -275,6 +275,36 @@ static double rfm_itrk_qp(const yah264_encoder_t *e)
     return e->itrk_qp / e->itrk_wt;
 }
 
+/* a frame's mean luma over its coded black, on the 8-bit scale, from a
+ * 4x4 subsample */
+static double frame_luma_over_black(const yah264_encoder_t *e, pixel *const src[3])
+{
+    if (!src || !src[0]) return 255.0;
+    int w = e->width, h = e->height, stride = e->pstride[0];
+    uint64_t sum = 0; long n = 0;
+    for (int y = 0; y < h; y += 4) {
+        const pixel *row = src[0] + (size_t)y * stride;
+        for (int x = 0; x < w; x += 4) sum += row[x];
+        n += (w + 3) / 4;
+    }
+    double u = (double)(1 << (Y264_BIT_DEPTH - 8));
+    double black = e->sps.vs_full_range ? 0.0 : 16.0 * u;
+    return n ? ((double)sum / (double)n - black) / u : 255.0;
+}
+
+/* a dark frame: mean luma within 16 of coded black (8-bit scale); never
+ * under CBR, which doesn't measure it */
+static int rf2_dark(const yah264_encoder_t *e)
+{
+    return !e->vbv_cbr && e->rf2_cold && e->rf2_luma < 16.0;
+}
+
+/* set at the opening (rfm_open_qp): see rf2_open_iratio */
+static int rf2_unpredictable(const yah264_encoder_t *e)
+{
+    return e->rf2_unpred;
+}
+
 /* --- the bits model (struct rc_bmodel, encoder.h) ---------------------- */
 
 /* The type's k, else P's, else I's, else B's (a type not yet calibrated
@@ -503,13 +533,31 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  *     textured, moving content does not (bus, park_joy and ducks lose 1..4%
  *     with any flat offset). g 6 / 8 / 10, m 6 / 8: 10 / 6 is the only pair
  *     with every band clip ahead of the old opening at no lookahead;
+ *   rfm_open_iw 0.5: the opening I's weight in an unshared ledger after a
+ *     lowres-fit opening. 0 (out) put 24-frame clips on target but let the
+ *     first two seconds of screen content, noise and 4K live action run
+ *     12-46 points over; 0.35 / 0.5 / 0.7 / 1 (the unweighted I) were read on 15 cells
+ *     of both kinds, mean |rate error| 13.1 / 12.5 / 12.6 / 22.5%. it
+ *     rises to whole as the I's cost goes from 10 to 16 frames of target
+ *     (steps at 8-14, 10-16, 11-12 and 12-20 read on 28 cells: 10-16 put
+ *     every overshoot case within 5 points of the unweighted I and kept the short-clip
+ *     wins but 3 points of bbb 720p's), and is whole on unpredictable
+ *     content.
  *   rfm_slew_fb 1 / rfm_slew_fb_up 0.35 (x qp_step): the ledger's slew while
- *     the opening is unproven, falling and rising. A falling ledger is the
- *     fit having opened too high and may follow at a full step; a rising one
+ *     the opening is unproven, the first rfm_fb_t seconds of an instance
+ *     that opened cold (under CBR, only of one that opened on the intra
+ *     fit, where it falls a full step even with frames in flight). a
+ *     falling ledger is the fit having opened too high
+ *     and may follow at a full step. after an intra-fit opening a rising one
  *     is mostly the opening I's own spike, so it rises at 0.35, and not
  *     faster than the normal slew after an I lowered on purpose. Symmetric
  *     0.5 / 1 / 2 and rising 0.25 / 0.35 / 0.4 / 0.5 / 0.75 were read; 0.35
- *     is the only rising value with every clip ahead.
+ *     is the only rising value with every clip ahead. after a lowres-fit
+ *     opening on an unshared ledger half of the I is out of it, so a rising
+ *     ledger is the fit having opened low (grain), and it follows at
+ *     the full step too: the fixed slew left 24-frame clips 20-50% under
+ *     target. a shared ledger holds every GOP's I and rises at 0.35 (the
+ *     full step there cost sunflower 1080p 4% BD-VMAF v1 at six threads).
  *   open_ioff, open_ip0: see the per-frame opening in rcp_decide.
  *   open_rfs: see the per-frame opening in rcp_decide.
  *   pf_slew 1, blur_decay 0.5: the per-frame rf model (--abr-model rf);
@@ -533,6 +581,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->rfm_slew_fb    = 1.0;
     k->rfm_fb_t       = 2.0;
     k->rfm_slew_fb_up = 0.35;
+    k->rfm_open_iw    = 0.5;
     k->rfm_degen      = 4.0;
     k->pf_slew        = 1.0;
     k->ovc_gain       = 16.0;
@@ -563,9 +612,12 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->abr_vbvov_grow = 6.0;
     k->abr_vbvov_pow  = 1.0;
     k->abr_vbvov_vbr  = 0.75;
-    k->rf2_seed_a     = 8.692;
-    k->rf2_seed_b     = 2.924;
-    k->rf2_seed_c     = -1.315;
+    k->rf2_seed_a     = 24.63;
+    k->rf2_seed_b     = 2.419;
+    k->rf2_seed_c     = -4.116;
+    k->rf2_iseed_a    = 8.692;
+    k->rf2_iseed_b    = 2.924;
+    k->rf2_iseed_c    = -1.315;
     k->vbv_plan_h     = 32.0;
     k->vbv_plan_t     = 0.5;
     /* A segment of a parallel split assumes the handoff occupancy, half the
@@ -1093,6 +1145,17 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             if (e->abr_rf2 && e->rck.rfm_degen > 0) {
                 double nmb = (double)(e->width_in_mbs * e->height_in_mbs);
                 skip = nmb > 0 && p->cplx / nmb < e->rck.rfm_degen;
+            }
+            /* a young ledger would read the opening I's one-off bits as every
+ * frame's cost, so a cheap one counts at part weight; one that cost many
+ * frames' target was opened low and must be repaid (rfm_open_iw) */
+            if (e->rf2_open_key && p->type == 0) {
+                double w = e->rck.rfm_open_iw;
+                double r = (p->bits / e->abr_target_bpf - 10.0) / 6.0;
+                if (r > 0) w += (1.0 - w) * (r < 1 ? r : 1);
+                if (rf2_unpredictable(e)) w = 1.0;
+                contrib *= w;
+                e->rf2_open_key = 0;
             }
             if (!skip) {
                 e->rfm_work += contrib;
@@ -1768,9 +1831,9 @@ void rcp_note_first_build(yah264_encoder_t *e, double bits)
  * So the opening is fitted on the lookahead window: the median lowres inter
  * cost per macroblock of the frames that arrived before the first decide and
  * the target bits per macroblock,
- *   qp = 8.69 + 2.92 log2(cme/mb) - 1.32 log2(bits/mb), clamped 15..45,
- * least squares on 17 non-board cells (fit rms 3.3 QP), scoring the ten
- * board clips out of sample at rms 2.5 / max 4.1 QP. */
+ *   qp = 24.63 + 2.42 log2(cme/mb) - 4.12 log2(bits/mb), clamped 15..45,
+ * in the rate factor's DC-free domain, fitted on fixed-QP encodes so the
+ * rate term is read within each clip (docs/rate-control.md). */
 /* The opening fit's input: the median lowres cost of the oldest 32 buffered
  * frames, -1 when fewer than two are usable. Its own function so that rate-
  * control replay can supply it (rcreplay.h). */
@@ -1788,6 +1851,32 @@ static double rf2_open_cme(const yah264_encoder_t *e, int *nusable)
     return n & 1 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
 }
 
+/* the median, over the same window, of each frame's lowres min(intra,
+ * inter) cost over its intra cost: near 1 where nothing predicts from the
+ * frame before (full-swing noise), so every frame costs about what an I
+ * does */
+static double rf2_open_iratio(const yah264_encoder_t *e)
+{
+    double v[32]; int n = 0;
+    int nwin = e->la_depth - 1;
+    for (int i = 0; i < e->la_n && i < nwin && n < 32; i++) {
+        const struct la_entry *en = &e->la[(e->la_head + i) % e->la_cap];
+        if (en->sum_cost[LR_LEG_PREV] > 0 && en->sum_icost > 0)
+            v[n++] = (double)en->sum_cost[LR_LEG_PREV] / (double)en->sum_icost;
+    }
+    if (n < 2) return 0.0;
+    for (int i = 1; i < n; i++) { double t = v[i]; int j = i; while (j > 0 && v[j-1] > t) { v[j] = v[j-1]; j--; } v[j] = t; }
+    return n & 1 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+
+/* the form both lowres fits share, unclamped: a + b log2(cme/mb) +
+ * c log2(bits/mb), on the median read at the opening (e->rf2_cme). */
+static double rf2_fit(const yah264_encoder_t *e, double a, double b, double c)
+{
+    double nmb = (double)(e->width_in_mbs * e->height_in_mbs);
+    return a + b * log2(e->rf2_cme / nmb) + c * log2(e->abr_target_bpf / nmb);
+}
+
 static double rf2_open_qp(yah264_encoder_t *e, int *flat)
 {
     /* The lookahead ring at the first decide: every buffered frame's
@@ -1803,25 +1892,25 @@ static double rf2_open_qp(yah264_encoder_t *e, int *flat)
  * already popped -- so it is a live sample. */
     int n = 0;
     double cme = RCR_VAL(e->rcr, RCR_RF2CME, rf2_open_cme(e, &n));
+    e->rf2_cme = cme;
     if (cme < 0.0) return 0.0;
+    e->rf2_iratio = RCR_VAL(e->rcr, RCR_RF2IR, rf2_open_iratio(e));
     double nmb = (double)(e->width_in_mbs * e->height_in_mbs);
     if (nmb <= 0 || cme < 1.0 || e->abr_target_bpf <= 0) return 0.0;
-    double qp = e->rck.rf2_seed_a
-              + e->rck.rf2_seed_b * log2(cme / nmb)
-              + e->rck.rf2_seed_c * log2(e->abr_target_bpf / nmb);
-    /* A fit below its floor is a fit outside
- * the range it was fitted on, not a QP. The fit's cells were all 1080p or
- * below and none animation; flat 4K animation reads a lowres cost per
- * macroblock so small that it lands far below the floor (bbb 2160p: the
- * fit hit 15 at every rung where CRF settles near 34), and clamping it to
- * 15 coded the first I frame at QP 15 with half the encode's bits (ABR
- * +35%, VBR +14% BD-VMAF-NEG against the reference). Under the floor the
- * opening falls back to the intra fit instead. A fit inside
- * [15, 45] is untouched. */
-    if (qp < 15) {
+    /* a lowres cost too small for the operating-point fit (flat 4K
+ * animation, dark openings) takes the intra fit; the refit's steeper rate
+ * term would read any high rate as flat */
+    if (rf2_fit(e, e->rck.rf2_iseed_a, e->rck.rf2_iseed_b, e->rck.rf2_iseed_c) < 15) {
         *flat = 1;
         return 0.0;
     }
+    /* CBR opens on the operating-point fit as it did: its buffer already
+ * holds the rate, and the refit's opening (with the rules below that go
+ * with it) ran short CBR buffers 3-4 points over on cut-heavy content */
+    double qp = e->vbv_cbr
+              ? rf2_fit(e, e->rck.rf2_iseed_a, e->rck.rf2_iseed_b, e->rck.rf2_iseed_c)
+              : rf2_fit(e, e->rck.rf2_seed_a, e->rck.rf2_seed_b, e->rck.rf2_seed_c);
+    if (qp < 15) qp = 15;
     if (qp > 45) qp = 45;
     return qp;
 }
@@ -1850,6 +1939,14 @@ static double rfm_open_intra_qp(const yah264_encoder_t *e, double C)
     return qp;
 }
 
+/* the operating-point fit, read on coded QPs near each clip's own
+ * operating point: its rate term is too flat to open on alone */
+static double rf2_open_iqp(const yah264_encoder_t *e)
+{
+    double qp = rf2_fit(e, e->rck.rf2_iseed_a, e->rck.rf2_iseed_b, e->rck.rf2_iseed_c);
+    return qp > 45 ? 45 : qp;            /* never under 15: rf2_open_qp took the flat route there */
+}
+
 /* The RF2 opening: the lowres fit, else the intra fit. When the lowres fit
  * ran and fell under its floor the content is flatter than anything the
  * intra fit was fitted on (flat 4K animation), and the intra fit opens that
@@ -1859,7 +1956,26 @@ static double rfm_open_qp(yah264_encoder_t *e, double C)
     int flat = 0;
     double oq = rf2_open_qp(e, &flat);
     e->rfm_open_fb = oq <= 0;
+    e->rf2_cold = 1;
+    /* a dark fade at 1080p reads near 1 too, and is not noise */
+    e->rf2_unpred = e->rf2_iratio > 0.9 && !rf2_dark(e);
     return oq > 0 ? oq : rfm_open_intra_qp(e, C) - (flat ? e->rck.open_imargin : 0.0);
+}
+
+/* the ledger's opening prior in the DC-free domain: the lower of the two
+ * fits, so static content at a low rate keeps a good opening I (the
+ * operating-point and intra fits were read on coded QPs: DC off) */
+static double rfm_open_prior(const yah264_encoder_t *e, double oq, double dc)
+{
+    if (e->rfm_open_fb)
+        return oq - dc;
+    double iq = rf2_open_iqp(e);
+    double p = iq - dc < oq ? iq - dc : oq;
+    /* the refit reads noise's cost as a high rate's detail and opens low */
+    if (rf2_unpredictable(e) && iq - dc > p)
+        p = iq - dc;
+    /* a dark opening's DC is strongly negative: keep its coded QP at 15 */
+    return rf2_dark(e) && p + dc < 15.0 ? 15.0 - dc : p;
 }
 
 /* The rate-factor controller runs on the CRF path's field. Until now the absolute AQ anchor
@@ -1972,6 +2088,13 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             dc = RCR_VAL(e->rcr, RCR_CRFDC, crf_frame_dc(e, src));
             e->crf_dc = dc;
         }
+        /* every reader of rf2_luma sits inside this window (the first
+ * rfm_fb_t seconds of owed frames, degenerate ones not counted); past it
+ * the value is stale and unused */
+        if (e->abr_rf2 && !e->vbv_cbr && type != 2
+            && (!e->rf2_opened || (e->rf2_cold && e->rfm_owed < e->rck.rfm_fb_t
+                                   * e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0))))
+            e->rf2_luma = RCR_VAL(e->rcr, RCR_RF2LUMA, frame_luma_over_black(e, src));
         int shared = e->rc_shared && e->abr_rf2;
         if (shared) {
             if (!e->rc_shared_seeded) {
@@ -1979,9 +2102,11 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * another (rc_import) adds its opening -- one frame of prior at the
  * opening QP -- so the ledger's prior is the mean opening of every
  * GOP that started cold. */
-                if (!e->rf2_opened && type != 2)
-                    rc_shared_add(e, pow(2.0, (rfm_open_qp(e, C) - dc - 12.0) / 6.0) * e->abr_target_bpf,
+                if (!e->rf2_opened && type != 2) {
+                    double oq = rfm_open_qp(e, C);
+                    rc_shared_add(e, pow(2.0, (rfm_open_prior(e, oq, dc) - 12.0) / 6.0) * e->abr_target_bpf,
                                   e->abr_target_bpf, 0.0, 0.0);
+                }
                 e->rf2_opened = 1;
                 e->rc_shared_seeded = 1;
             }
@@ -2006,7 +2131,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 int first = e->abr_cum_actual <= 0 && np == 0;
                 if (!e->rf2_opened && !shared) {
                     double oq = rfm_open_qp(e, C);
-                    e->rfm_work = pow(2.0, (oq - dc - 12.0) / 6.0) * e->abr_target_bpf;
+                    e->rfm_work = pow(2.0, (rfm_open_prior(e, oq, dc) - 12.0) / 6.0) * e->abr_target_bpf;
+                    e->rf2_open_key = !e->rfm_open_fb && type == 0 && !e->vbv_cbr;
                     e->rfm_owed = e->abr_target_bpf;
                     e->rf2_opened = 1;
                     L_cplx = e->rfm_work;       /* the ledger read above predates the opening */
@@ -2063,24 +2189,36 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     double qp_lim = qp_led;
                     if (!first) {
                         double sl = e->rck.rfm_slew;
-                        if (e->rfm_open_fb) {
+                        /* cbr keeps its window after an intra-fit opening
+ * only, as it always had: its buffer holds the rate, and the cold-opening
+ * window ran short cbr buffers over */
+                        if ((e->vbv_cbr ? e->rfm_open_fb : e->rf2_cold)
+                            && !(rf2_unpredictable(e) && !e->rfm_open_fb)) {
                             double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
-                            if (bps > 0 && wanted / bps < e->rck.rfm_fb_t)
-                                sl = qp_led < e->slew_ref[1] ? e->rck.rfm_slew_fb
+                            if (bps > 0 && wanted / bps < e->rck.rfm_fb_t) {
+                                sl = qp_led < e->slew_ref[1] || (!e->rfm_open_fb && !shared) ? e->rck.rfm_slew_fb
                                    : e->rfm_open_ioff > 0 ? e->rck.rfm_slew : e->rck.rfm_slew_fb_up;
+                                /* on a fade from black in-flight frames are
+ * priced at near-black cost: a full-step fall overshoots, then swings back */
+                                if (qp_led < e->slew_ref[1] && np > 0 && !e->vbv_cbr && rf2_dark(e))
+                                    sl = e->rck.rfm_slew;
+                            }
                         }
                         qp_lim = rfm_slew_qp(e, qp_led, e->slew_ref[1], sl);
                     }
                     e->slew_ref[1] = qp_lim;
                     qp = qp_lim + fb;
                 }
-                /* The opening I is coded at the opening QP itself; frame_qp
- * takes 3 off every I, so hand it the opening plus 3. */
+                /* the opening I is coded at the ledger's opening prior plus
+ * its own DC; frame_qp takes 3 off every I, so hand it the opening plus 3. */
                 if (type == 0 && first) qp += 3.0 - (e->rfm_open_fb ? e->rfm_open_ioff : 0.0);
                 if (qp < 1) qp = 1;
                 if (qp > 51) qp = 51;
                 e->abr_qp = qp;
                 qp += dc;
+                /* a dark opening I codes at 15 or above on every route (it
+ * codes three under this); CBR keeps its opening */
+                if (type == 0 && first && !e->vbv_cbr && rf2_dark(e) && qp < 18.0) qp = 18.0;
                 if (qp < 1) qp = 1;
                 if (qp > 51) qp = 51;
                 e->qp = qp_bound(e, (int)lround(qp));

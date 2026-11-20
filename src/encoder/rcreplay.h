@@ -49,12 +49,14 @@ enum {
     RCR_QP,             /* a coded slice's QP: base * 64 + frame QP (checked) */
     RCR_SIZE,           /* a coded slice's RBSP bytes */
     RCR_ARR_ACX,        /* arrival, VBV: an anchor's lowres cost vs the previous anchor (0 = none) */
+    RCR_RF2IR,          /* the opening window's median lowres inter/intra cost */
+    RCR_RF2LUMA,        /* an ABR anchor's mean luma over coded black */
     RCR_NTAGS
 };
 
 static const char *const rcr_tag_name[RCR_NTAGS] = {
     "?", "flags", "arr_cme", "arr_ilr", "fc", "fcme", "crf_dc", "rf2_cme",
-    "mbt_mean", "qp", "size", "arr_acx",
+    "mbt_mean", "qp", "size", "arr_acx", "rf2_ir", "rf2_luma",
 };
 
 typedef struct y264_rcr {
