@@ -13,6 +13,10 @@ status and what it says on stderr:
   - a FRAME header (or the stream header) with no newline is malformed and
     fails within its line buffer, on every reader path, instead of reading
     the rest of the input looking for one.
+  - a CRLF Y4M codes as its LF twin: the stream header's last tag (a
+    full-range file's XCOLORRANGE=FULL) still reads.
+  - input refused before the encode removes an output the run made and
+    leaves one that was there as it was.
   - pass 2 with no stats file is refused; pass 3 with none warns that it
     runs without a plan; an unreadable or empty one is refused; pass 1, 3,
     2 in turn over one file runs clean.
@@ -30,7 +34,7 @@ status and what it says on stderr:
   - a two-pass whose stats file can't be written (a file-size limit stands
     in for a full disk) fails, and pass 3 leaves its file as it was.
 """
-import os, resource, shlex, signal, subprocess, sys, tempfile, time
+import os, resource, shlex, shutil, signal, subprocess, sys, tempfile, threading, time
 
 WRAP = shlex.split(os.environ.get("YAH264_WRAP", ""))
 LIMIT = 600 if WRAP else 60
@@ -133,21 +137,50 @@ def unterminated_header(enc, tmp):
     out = os.path.join(tmp, "o.264")
     clip = os.path.join(tmp, "z.y4m")
     zeros = b"\0" * (4 << 20)
+    arms = [["--threads", t] + x for t in ("1", "3")
+            for x in ([], ["--frames", str(FRAMES + 2)], ["--seek", "1"])]
+    arms += [["--intra-refresh", "--threads", "3"], ["--cut-split", "--threads", "3"]]
     for tail, what in ((zeros, "zeros"), (b"FRAME" + b" X" * (2 << 20), "long FRAME line")):
         write_clip(clip, tail)
-        for threads in ("1", "3"):
-            for extra in ([], ["--frames", str(FRAMES + 2)], ["--seek", "1"]):
-                t0 = time.time()
-                rc, err = run(enc, ["--input-y4m", clip, "--threads", threads, "--crf", "26",
-                                    "-o", out] + extra)
-                check(f"y4m {what} past the header cap, threads {threads} {' '.join(extra)}",
-                      rc != 0 and "frame %d's header has no newline" % FRAMES in err
-                      and time.time() - t0 < LIMIT / 2, f"rc {rc}: {err.strip()[-200:]}")
+        for extra in arms:
+            rc, err = run(enc, ["--input-y4m", clip, "--crf", "26", "-o", out] + extra)
+            check(f"y4m {what} past the header cap, {' '.join(extra)}",
+                  rc != 0 and "frame %d's header has no newline" % FRAMES in err,
+                  f"rc {rc}: {err.strip()[-200:]}")
         with open(clip, "rb") as f:
             rc, err = run(enc, ["--input-y4m", "-", "--threads", "3", "--crf", "26",
                                 "-o", out], stdin=f)
         check(f"y4m {what} past the header cap, pipe",
               rc != 0 and "header has no newline" in err, f"rc {rc}: {err.strip()[-200:]}")
+    # a pipe whose writer sends the zeros and stays open: reading on for a
+    # newline would wait on the writer for good
+    write_clip(clip, zeros)
+    data = open(clip, "rb").read()
+    for threads in ("1", "3"):
+        errf = os.path.join(tmp, "pipe.err")
+        with open(errf, "wb") as ef:
+            p = subprocess.Popen(WRAP + [enc, "--no-progress", "--input-y4m", "-", "--threads",
+                                         threads, "--crf", "26", "-o", out],
+                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=ef)
+            def feed():
+                try:
+                    p.stdin.write(data)
+                    p.stdin.flush()
+                except OSError:
+                    pass                    # the encoder stopped reading, as it should
+            w = threading.Thread(target=feed, daemon=True)
+            w.start()
+            try:
+                rc = p.wait(timeout=LIMIT / 2)
+            except subprocess.TimeoutExpired:
+                rc = "hung"
+            finally:
+                reap(p)
+            w.join(timeout=LIMIT)
+        err = open(errf, "rb").read().decode(errors="replace")
+        check(f"y4m zeros past the header cap, open pipe, threads {threads}",
+              rc not in (0, "hung") and "frame %d's header has no newline" % FRAMES in err,
+              f"rc {rc}: {err.strip()[-200:]}")
     # the cut stops nothing --frames doesn't read
     write_clip(clip, zeros)
     rc, err = run(enc, ["--input-y4m", clip, "--frames", str(FRAMES), "--threads", "1",
@@ -165,6 +198,63 @@ def unterminated_header(enc, tmp):
     check("y4m stream header with no newline",
           rc != 0 and "stream header has no newline" in err, f"rc {rc}: {err.strip()[-200:]}")
     os.remove(clip)
+
+
+def crlf_header(enc, tmp):
+    """CRLF line ends: the last tag of the stream header (XCOLORRANGE=FULL in
+    ffmpeg's full-range files) must still read, so the stream is the LF one's"""
+    if not shutil.which("ffmpeg"):
+        print("  skip CRLF y4m (no ffmpeg)")
+        return
+    lf, crlf, lim = (os.path.join(tmp, x) for x in ("lf.y4m", "crlf.y4m", "lim.y4m"))
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=%dx%d:rate=25" % (W, H), "-frames:v", "4", "-pix_fmt",
+                    "yuv420p", "-color_range", "pc", "-strict", "-1", lf],
+                   check=True, timeout=LIMIT)
+    data = open(lf, "rb").read()
+    head, body = data.split(b"\n", 1)
+    if not head.endswith(b"XCOLORRANGE=FULL"):
+        check("ffmpeg writes XCOLORRANGE=FULL last", False, head.decode(errors="replace"))
+        return
+    with open(crlf, "wb") as f:
+        f.write(head + b"\r\n" + body.replace(b"FRAME\n", b"FRAME\r\n"))
+    with open(lim, "wb") as f:
+        f.write(head.replace(b" XCOLORRANGE=FULL", b"") + b"\n" + body)
+    outs = {}
+    for name, clip in (("lf", lf), ("crlf", crlf), ("lim", lim)):
+        o = os.path.join(tmp, name + ".264")
+        rc, err = run(enc, ["--input-y4m", clip, "--threads", "1", "--crf", "26", "-o", o])
+        outs[name] = open(o, "rb").read() if rc == 0 else None
+        os.remove(o)
+    check("CRLF y4m codes as its LF twin, full range kept",
+          outs["crlf"] is not None and outs["crlf"] == outs["lf"] and outs["lf"] != outs["lim"],
+          "crlf %s lf, lf %s limited" % ("==" if outs["crlf"] == outs["lf"] else "!=",
+                                         "==" if outs["lf"] == outs["lim"] else "!="))
+    for x in (lf, crlf, lim):
+        os.remove(x)
+
+
+def refused_output(enc, tmp):
+    """input refused before the encode: an output this run made goes, and
+    one that was there stays as it was"""
+    d = os.path.join(tmp, "refused")
+    os.makedirs(d)
+    bad, out, rec = (os.path.join(d, x) for x in ("bad.y4m", "o.264", "r.yuv"))
+    for what, data in (("not y4m", b"hello\n"), ("header with no newline", HDR[:-1] + b" X" * 600)):
+        with open(bad, "wb") as f:
+            f.write(data)
+        rc, err = run(enc, ["--input-y4m", bad, "-o", out, "--dump-recon", rec])
+        check(f"refused input ({what}) leaves no output",
+              rc != 0 and not os.path.exists(out) and not os.path.exists(rec),
+              f"rc {rc}, left {leftovers(d, ('bad.y4m',))}: {err.strip()[-200:]}")
+        for x in (out, rec):
+            with open(x, "wb") as f:
+                f.write(b"keep me")
+        rc, err = run(enc, ["--input-y4m", bad, "-o", out, "--dump-recon", rec])
+        check(f"refused input ({what}) leaves an existing output as it was",
+              rc != 0 and open(out, "rb").read() == b"keep me"
+              and open(rec, "rb").read() == b"keep me", f"rc {rc}: {err.strip()[-200:]}")
+        os.remove(out); os.remove(rec)
 
 
 def missing_stats(enc, tmp):
@@ -193,11 +283,20 @@ def missing_stats(enc, tmp):
         print("  skip unreadable stats file (running as root)")
     else:
         for p in ("2", "3"):
-            rc, err = run(enc, ["--input-y4m", clip, "--threads", "1", "--bitrate", "300",
-                                "--pass", p, "--stats", st, "-o", out])
-            check(f"pass {p} refuses an unreadable stats file",
-                  rc != 0 and "Permission denied" in err and "without a plan" not in err,
-                  f"rc {rc}: {err.strip()[-200:]}")
+            for threads in ("1", "3"):
+                rc, err = run(enc, ["--input-y4m", clip, "--threads", threads, "--bitrate",
+                                    "300", "--pass", p, "--stats", st, "-o", out])
+                check(f"pass {p} refuses an unreadable stats file, threads {threads}",
+                      rc != 0 and "cannot read stats file" in err and "Permission denied" in err
+                      and "without a plan" not in err and "cannot be honoured" not in err,
+                      f"rc {rc}: {err.strip()[-200:]}")
+    # a path through a file, which no pass can make or read
+    for p in ("2", "3"):
+        rc, err = run(enc, ["--input-y4m", clip, "--threads", "3", "--bitrate", "300",
+                            "--pass", p, "--stats", os.path.join(clip, "x.stats"), "-o", out])
+        check(f"pass {p} refuses a stats path through a file",
+              rc != 0 and "cannot read stats file" in err and "cannot be honoured" not in err,
+              f"rc {rc}: {err.strip()[-200:]}")
     os.chmod(st, 0o600)
     st = os.path.join(tmp, "empty.stats")
     open(st, "w").close()
@@ -802,6 +901,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="y264robust.") as tmp:
         truncated_header(enc, tmp)
         unterminated_header(enc, tmp)
+        crlf_header(enc, tmp)
+        refused_output(enc, tmp)
         missing_stats(enc, tmp)
         fifo_stats(enc, tmp)
         stats_is_output(enc, tmp)

@@ -2701,6 +2701,9 @@ static int out_open(out_file_t *f, const char *path)
 
 /* the run's output and recon, so a later stop can take back files it made */
 static out_file_t g_of = { -1, 0, 0, NULL }, g_rf = { -1, 0, 0, NULL };
+/* set once the encode may write them: before it, a failed run takes back
+ * the files it made and leaves the others untouched */
+static int g_out_begun;
 
 /* undo an out_open: close, and remove the file only if this run made it
  * and the name (through any symlink) still leads to that very file */
@@ -4958,7 +4961,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * Returns line length excluding the newline, -1 on EOF/error before any byte,
  * -2 when the input ends partway through a line (a frame header cut short is
  * a truncated file, not a clean end), or -3 when cap - 1 bytes pass with no
- * newline: a malformed line, and reading on would take the rest of the input. */
+ * newline: a malformed line, and reading on would take the rest of the input.
+ * A CRLF line ends at its '\r' in buf, so a last tag like XCOLORRANGE=FULL
+ * still reads, while the length counts it: the length sizes a frame record. */
 static int read_line(FILE *f, char *buf, int cap)
 {
     int n = 0, any = 0;
@@ -4967,6 +4972,8 @@ static int read_line(FILE *f, char *buf, int cap)
         any = 1;
         if (c == '\n') {
             buf[n] = '\0';
+            if (n > 0 && buf[n - 1] == '\r')
+                buf[n - 1] = '\0';
             return n;
         }
         if (n == cap - 1) {
@@ -6302,11 +6309,22 @@ static int cli_main(int argc, char **argv)
                 "it more than once\n", stats_path, pass);
         return 1;
     }
-    /* said here, before the thread choice warns about a file that isn't there */
-    if (pass == 2 && stat(stats_path, &sst) != 0 && errno == ENOENT) {
-        fprintf(stderr, "yah264: no stats file '%s': pass 2 plans from the records pass 1 "
-                "writes; run pass 1 into it first\n", stats_path);
-        return 1;
+    /* said here, before the thread choice warns about a file that isn't
+     * there or can't be read; pass 3 may start one that isn't there */
+    if (pass >= 2) {
+        FILE *sf = fopen(stats_path, "r");
+        int err = errno;
+        if (sf)
+            fclose(sf);
+        else if (err != ENOENT) {
+            fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n", stats_path,
+                    strerror(err));
+            return 1;
+        } else if (pass == 2) {
+            fprintf(stderr, "yah264: no stats file '%s': pass 2 plans from the records "
+                    "pass 1 writes; run pass 1 into it first\n", stats_path);
+            return 1;
+        }
     }
     /* /dev/stdin and its kin read the descriptor itself, from where it is,
      * as on macOS: a reopen on Linux would start the file over */
@@ -6345,13 +6363,6 @@ static int cli_main(int argc, char **argv)
     }
     if (pass == 3)
         stats_path = g_stats_tmp;
-    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
-                      : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
-    if (tfail) {
-        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
-        out_drop(&g_of); out_drop(&g_rf);
-        return 1;
-    }
     FILE *out = to_stdout ? stdout : fdopen(g_of.fd, "wb");
     FILE *recon = recon_path ? fdopen(g_rf.fd, "wb") : NULL;
     if (!out || (recon_path && !recon)) {
@@ -7209,6 +7220,16 @@ static int cli_main(int argc, char **argv)
         }
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
+    /* cut only now, with the input and the options known good: a run refused
+     * before this leaves an existing file as it was, and main removes one it
+     * made (see out_open) */
+    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
+                      : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
+    if (tfail) {
+        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
+        return 1;
+    }
+    g_out_begun = 1;
     if (!recon_path && tp_mt) {
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (rc != Y264_GO_SERIAL) {
@@ -7491,5 +7512,10 @@ done:
 
 int main(int argc, char **argv)
 {
-    return stats_tmp_finish(cli_main(argc, argv));
+    int rc = cli_main(argc, argv);
+    if (rc != 0 && !g_out_begun) {
+        out_drop(&g_of);
+        out_drop(&g_rf);
+    }
+    return stats_tmp_finish(rc);
 }

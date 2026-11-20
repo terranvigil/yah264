@@ -253,6 +253,12 @@ int main(void)
     q.rc.stats = "test_api.no-such.stats";
     remove(q.rc.stats);
     CHECK(yah264_encoder_open(&q) == NULL);
+    /* any pass with no stats path at all */
+    q.rc.stats = NULL;
+    for (int pass = 1; pass <= 3; pass++) {
+        q.rc.pass = pass;
+        CHECK(yah264_encoder_open(&q) == NULL);
+    }
 
     /* 4c. custom quant matrices: a zero weight has no meaning in a scaling
  * list and is refused at open; a full set of real weights opens and codes */

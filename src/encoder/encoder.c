@@ -4698,6 +4698,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (param->rc.method != YAH264_RC_CQP && param->rc.method != YAH264_RC_CRF &&
         param->rc.method != YAH264_RC_ABR && param->rc.method != YAH264_RC_2PASS)
         return NULL;
+    /* every pass of a two-pass reads or writes its records there: with no
+     * path, pass 1 would write nothing and pass 2 or 3 would code planless */
+    if (param->rc.method == YAH264_RC_2PASS && !param->rc.stats) {
+        fprintf(stderr, "yah264: two-pass needs rc.stats, the stats file's path\n");
+        return NULL;
+    }
     if (param->me_method != YAH264_ME_AUTO && param->me_method != YAH264_ME_DIA &&
         param->me_method != YAH264_ME_HEX && param->me_method != YAH264_ME_UMH &&
         param->me_method != YAH264_ME_ESA && param->me_method != YAH264_ME_TESA)
