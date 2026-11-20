@@ -2319,7 +2319,8 @@ static int tp_split_vbv(const yah264_param_t *param)
 /* --- files a signal must not leave behind ----------------------------------
  *
  * Scratch files a two-pass makes beside the user's (pass 3's working copy,
- * the per-GOP stats files of a threaded run) are removed on the way out, and
+ * the per-GOP stats files of a threaded run), and an output or recon this run
+ * made before its encode starts, are removed on the way out, and
  * the signals in g_clean_sigs are a way out too. clean_start, before any
  * thread exists, blocks them in every thread and starts one that waits for
  * them: it takes g_clean_lock for writing, unlinks every registered path and
@@ -2379,18 +2380,23 @@ static void *clean_waiter(void *arg)
     _exit(128 + sig);       /* not reached: each of these ends the run by default */
 }
 
-/* only a signal still at its default is taken: one the parent left ignored
+/* writes: the run has scratch files to clean up while it writes (a
+ * two-pass's); without them, a write's own signals are left as they were,
+ * since the only scratch is the output, kept once the encode writes it.
+ * only a signal still at its default is taken: one the parent left ignored
  * (nohup, a background job) or blocked stays that way, and one with a
  * handler already (a profiler's SIGPROF, set up before main) keeps it.
  * without the waiter thread, the signals stay as they were and the cleanup
  * is the normal exit's only */
-static void clean_start(void)
+static void clean_start(int writes)
 {
     sigset_t cur;
     sigemptyset(&g_clean_set);
     pthread_sigmask(SIG_BLOCK, NULL, &cur);
     for (size_t i = 0; i < sizeof g_clean_sigs / sizeof *g_clean_sigs; i++) {
         struct sigaction old;
+        if (!writes && (g_clean_sigs[i] == SIGPIPE || g_clean_sigs[i] == SIGXFSZ))
+            continue;
         if (sigaction(g_clean_sigs[i], NULL, &old) == 0 && old.sa_handler == SIG_DFL
             && !(old.sa_flags & SA_SIGINFO) && !sigismember(&cur, g_clean_sigs[i]))
             sigaddset(&g_clean_set, g_clean_sigs[i]);
@@ -2430,16 +2436,17 @@ static void clean_release(void)
 
 /* publish n paths, copied, for the waiter: before their files exist, or
  * inside the clean_hold that makes them */
-static void clean_register(char *const *paths, int n)
+static clean_set_t *clean_register(char *const *paths, int n)
 {
     clean_set_t *s = malloc(sizeof *s);
     char **p = calloc((size_t)(n > 0 ? n : 1), sizeof *p);
-    if (!s || !p) { free(s); free(p); return; }
+    if (!s || !p) { free(s); free(p); return NULL; }
     for (int i = 0; i < n; i++) p[i] = paths[i] ? strdup(paths[i]) : NULL;
     s->n = n; s->path = p;
     s->next = atomic_load(&g_clean);
     while (!atomic_compare_exchange_weak(&g_clean, &s->next, s))
         ;
+    return s;
 }
 
 /* Pass 3 rewrites the stats file it reads, so one cut short would leave a
@@ -2704,6 +2711,38 @@ static out_file_t g_of = { -1, 0, 0, NULL }, g_rf = { -1, 0, 0, NULL };
 /* set once the encode may write them: before it, a failed run takes back
  * the files it made and leaves the others untouched */
 static int g_out_begun;
+static clean_set_t *g_out_clean;
+
+/* until the encode starts, a signal takes back the output and recon this
+ * run made, as a failed run does */
+static void out_clean_register(void)
+{
+    char *p[2] = { NULL, NULL };
+    if (g_of.fd >= 0 && g_of.made) p[0] = realpath(g_of.path, NULL);
+    if (g_rf.fd >= 0 && g_rf.made) p[1] = realpath(g_rf.path, NULL);
+    if (p[0] || p[1]) g_out_clean = clean_register(p, 2);
+    free(p[0]); free(p[1]);
+}
+
+/* the encode starts: cut a file that was there, and keep what follows.
+ * the paths are cleared, not freed, as the waiter may still walk them */
+static int out_cut(void)
+{
+    if (g_out_begun) return 0;
+    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
+                      : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
+    if (tfail) {
+        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
+        return -1;
+    }
+    if (g_out_clean) {
+        clean_hold();
+        for (int i = 0; i < g_out_clean->n; i++) g_out_clean->path[i] = NULL;
+        clean_release();
+    }
+    g_out_begun = 1;
+    return 0;
+}
 
 /* undo an out_open: close, and remove the file only if this run made it
  * and the name (through any symlink) still leads to that very file */
@@ -6297,9 +6336,9 @@ static int cli_main(int argc, char **argv)
         fprintf(stderr, "yah264: --zones and --plan both set zones; give one or the other\n");
         return 2;
     }
-    /* before any thread exists, so every one inherits the blocked signals */
-    if (pass > 0)
-        clean_start();
+    /* before any thread exists, so every one inherits the blocked signals.
+     * every run: until the encode starts, the output it made is scratch too */
+    clean_start(pass > 0);
     /* pass 2 and 3 open the stats file more than once (the CLI looks for GOP
      * markers before the encoder reads it), and a FIFO or a device has
      * nothing left for the second open, which blocks for good */
@@ -6349,6 +6388,7 @@ static int cli_main(int argc, char **argv)
         out_drop(&g_of);
         return 1;
     }
+    out_clean_register();
     const char *clash = files_clash(fileno(in), to_stdout ? STDOUT_FILENO : g_of.fd, g_rf.fd,
                                     pass > 0 ? stats_path : NULL);
     if (clash) {
@@ -7220,17 +7260,12 @@ static int cli_main(int argc, char **argv)
         }
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
-    /* cut only now, with the input and the options known good: a run refused
-     * before this leaves an existing file as it was, and main removes one it
-     * made (see out_open) */
-    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
-                      : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
-    if (tfail) {
-        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
-        return 1;
-    }
-    g_out_begun = 1;
+    /* the outputs are cut only once the encode starts (out_cut): a run
+     * refused before that leaves an existing file as it was, and main
+     * removes one it made */
     if (!recon_path && tp_mt) {
+        if (out_cut() != 0)
+            return 1;
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (rc != Y264_GO_SERIAL) {
             if (g_force_reject) {
@@ -7281,6 +7316,10 @@ static int cli_main(int argc, char **argv)
     apply_forces(enc, 0, INT_MAX, 0, NULL);
     if (g_force_reject)
         return 1;
+    if (out_cut() != 0) {
+        g_api->encoder_close(enc);
+        return 1;
+    }
     if (strcmp(g_api->encoder_backend(enc), "yah264"))
         LOGF(LOG_INFO, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
     else

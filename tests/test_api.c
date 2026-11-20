@@ -255,7 +255,7 @@ int main(void)
     CHECK(yah264_encoder_open(&q) == NULL);
     /* any pass with no stats path at all */
     q.rc.stats = NULL;
-    for (int pass = 1; pass <= 3; pass++) {
+    for (int pass = 0; pass <= 3; pass++) {
         q.rc.pass = pass;
         CHECK(yah264_encoder_open(&q) == NULL);
     }

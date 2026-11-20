@@ -15,8 +15,9 @@ status and what it says on stderr:
     the rest of the input looking for one.
   - a CRLF Y4M codes as its LF twin: the stream header's last tag (a
     full-range file's XCOLORRANGE=FULL) still reads.
-  - input refused before the encode removes an output the run made and
-    leaves one that was there as it was.
+  - input refused before the encode (at the stream header, the options or
+    the encoder's open) or a signal then removes an output the run made, and
+    a refusal leaves one that was there as it was.
   - pass 2 with no stats file is refused; pass 3 with none warns that it
     runs without a plan; an unreadable or empty one is refused; pass 1, 3,
     2 in turn over one file runs clean.
@@ -255,6 +256,47 @@ def refused_output(enc, tmp):
               rc != 0 and open(out, "rb").read() == b"keep me"
               and open(rec, "rb").read() == b"keep me", f"rc {rc}: {err.strip()[-200:]}")
         os.remove(out); os.remove(rec)
+    # a signal while the stream header is awaited on a pipe, as one-pass and
+    # as two-pass: the output this run made goes with it
+    for extra in ([], ["--bitrate", "300", "--pass", "1", "--stats",
+                       os.path.join(d, "s.stats")]):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            q = spawn(enc, ["--input-y4m", "-", "-o", out] + extra)
+            try:
+                t0 = time.time()
+                while not os.path.exists(out) and q.poll() is None and time.time() - t0 < LIMIT:
+                    time.sleep(0.01)
+                made = os.path.exists(out)
+                q.send_signal(sig)
+                try:
+                    rc = q.wait(timeout=LIMIT)
+                except subprocess.TimeoutExpired:
+                    rc = "hung"
+            finally:
+                reap(q)
+            check(f"{sig.name} before the encode removes the output it made"
+                  f"{', pass 1' if extra else ''}",
+                  made and rc == -sig and not os.path.exists(out), f"rc {rc}, made {made}")
+            if os.path.exists(out):
+                os.remove(out)
+    # refused at encoder open: the hardware encoder takes 4:2:0 8-bit only
+    if sys.platform != "darwin":
+        print("  skip hw open refusal (no VideoToolbox)")
+        return
+    c444 = os.path.join(d, "c444.y4m")
+    with open(c444, "wb") as f:
+        f.write(b"YUV4MPEG2 W%d H%d F25:1 Ip A1:1 C444\n" % (W, H))
+        for n in range(4):
+            f.write(b"FRAME\n" + bytes((i * 7 + n) & 0xff for i in range(W * H * 3)))
+    for exists in (False, True):
+        if exists:
+            with open(out, "wb") as f:
+                f.write(b"keep me")
+        rc, err = run(enc, ["--input-y4m", c444, "--hw", "videotoolbox", "-o", out])
+        kept = open(out, "rb").read() == b"keep me" if exists else not os.path.exists(out)
+        check(f"refused hw open {'keeps an existing' if exists else 'leaves no'} output",
+              rc != 0 and kept, f"rc {rc}: {err.strip()[-200:]}")
+    os.remove(out); os.remove(c444)
 
 
 def missing_stats(enc, tmp):
