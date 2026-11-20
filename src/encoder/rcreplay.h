@@ -23,7 +23,7 @@
  * Y264_RC_PLAY_K sets the exponent's scale), which is an estimate and is
  * reported as one.
  *
- * File format: a 16-byte header ("Y264RCR1", then the frame width and height
+ * File format: a 16-byte header ("Y264RCR2", then the frame width and height
  * as uint32), then fixed 16-byte records {uint32 tag, uint32 seq, double v},
  * host byte order (the file never leaves the machine that wrote it).
  */
@@ -49,12 +49,18 @@ enum {
     RCR_QP,             /* a coded slice's QP: base * 64 + frame QP (checked) */
     RCR_SIZE,           /* a coded slice's RBSP bytes */
     RCR_ARR_ACX,        /* arrival, VBV: an anchor's lowres cost vs the previous anchor (0 = none) */
+    RCR_RF2IR,          /* the opening window's median lowres inter/intra cost */
+    RCR_RF2LUMA,        /* an ABR anchor's mean luma over coded black */
+    RCR_HRDEMU,         /* --nal-hrd: a coded picture's emulation-prevention bytes */
+    RCR_NALEMU,         /* --nal-hrd: one slice NAL's escaped size over its RBSP */
+    RCR_NSLICE,         /* a coded picture's slice count */
+    RCR_HRDKEY,         /* --nal-hrd: pictures to the next key, as the reserve reads it */
     RCR_NTAGS
 };
 
 static const char *const rcr_tag_name[RCR_NTAGS] = {
     "?", "flags", "arr_cme", "arr_ilr", "fc", "fcme", "crf_dc", "rf2_cme",
-    "mbt_mean", "qp", "size", "arr_acx",
+    "mbt_mean", "qp", "size", "arr_acx", "rf2_ir", "rf2_luma", "hrd_emu", "nal_emu", "nslice", "hrd_key",
 };
 
 typedef struct y264_rcr {
@@ -202,7 +208,7 @@ static inline int rcr_lazy(y264_rcr *r)
         return -1;
     }
     if (r->play) {
-        if (fread(hdr, sizeof hdr, 1, r->fp) != 1 || memcmp(hdr, "Y264RCR1", 8) != 0 ||
+        if (fread(hdr, sizeof hdr, 1, r->fp) != 1 || memcmp(hdr, "Y264RCR2", 8) != 0 ||
             hdr[2] != (uint32_t)r->width || hdr[3] != (uint32_t)r->height) {
             fprintf(stderr, "yah264: rate-control replay: %s is not a recording of a "
                             "%dx%d encode\n", r->path, r->width, r->height);
@@ -212,7 +218,7 @@ static inline int rcr_lazy(y264_rcr *r)
             return -1;
         }
     } else {
-        memcpy(hdr, "Y264RCR1", 8);
+        memcpy(hdr, "Y264RCR2", 8);
         hdr[2] = (uint32_t)r->width;
         hdr[3] = (uint32_t)r->height;
         fwrite(hdr, sizeof hdr, 1, r->fp);
@@ -228,20 +234,36 @@ static inline void rcr_put(y264_rcr *r, int tag, double v)
     fwrite(&x, sizeof x, 1, r->fp);
 }
 
+/* a replay that can't go on: every later value would be read under the
+ * wrong tag (a size as a frame flag, say) and the encode would run on
+ * garbage until it crashed, so it stops here and says why */
+static inline void rcr_stop(y264_rcr *r, const char *why)
+{
+    if (r->first_diff[0])
+        fprintf(stderr, "RCREPLAY first difference: %s\n", r->first_diff);
+    fprintf(stderr, "RCREPLAY stopped: %s (seq %u)\n", why, r->seq);
+    r->first_diff[0] = 0;               /* rcr_finish runs at exit: say it once */
+    exit(1);
+}
+
 /* The next recorded value, which must carry `tag`. A mismatch means the
  * encoder under replay consumed its inputs in another order than the
  * recording did -- the flow itself changed -- and nothing after it can be
- * trusted; it is counted and reported, and 0 is returned. */
+ * trusted: the replay stops (rcr_stop). */
 static inline double rcr_get(y264_rcr *r, int tag)
 {
     struct rcr_rec x;
-    if (rcr_lazy(r) < 0 || r->eof || fread(&x, sizeof x, 1, r->fp) != 1) {
+    if (rcr_lazy(r) < 0) {
+        r->tag_err++;
+        rcr_stop(r, "no usable recording");
+    }
+    if (r->eof || fread(&x, sizeof x, 1, r->fp) != 1) {
         if (!r->eof && !r->first_diff[0])
             snprintf(r->first_diff, sizeof r->first_diff,
                      "recording ended at seq %u, wanted %s", r->seq, rcr_tag_name[tag]);
         r->eof = 1;
         r->tag_err++;
-        return 0.0;
+        rcr_stop(r, "the recording ended early");
     }
     if ((int)x.tag != tag || x.seq != r->seq) {
         if (!r->first_diff[0])
@@ -249,6 +271,7 @@ static inline double rcr_get(y264_rcr *r, int tag)
                      "order differs at seq %u: recorded %s, replay wants %s", r->seq,
                      x.tag < RCR_NTAGS ? rcr_tag_name[x.tag] : "?", rcr_tag_name[tag]);
         r->tag_err++;
+        rcr_stop(r, "the first order error");
     }
     r->seq++;
     return x.v;

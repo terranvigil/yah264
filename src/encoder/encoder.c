@@ -3398,10 +3398,17 @@ static size_t rcr_build_slice(yah264_encoder_t *e, int type, int is_idr, int is_
     if (!e->rcr->play)
         sz = build_slice(e, type, is_idr, is_ref, src, sm);
     sz = rcr_slice_size(e->rcr, sz, fqp, retry);
+    /* the slice count: under --nal-hrd each slice NAL is charged its own
+ * start code and escape overhead, so a replay appends as many */
+    int ns = (int)RCR_VAL(e->rcr, RCR_NSLICE, (double)sm->n);
     if (e->rcr->play) {
         if (sz > e->rbsp_cap) sz = e->rbsp_cap;
-        sm->n = 1;
-        sm->len[0] = (uint32_t)sz;
+        if (ns < 1) ns = 1;
+        if (ns > Y264_SLICES_MAX) ns = Y264_SLICES_MAX;
+        if ((size_t)ns > sz) ns = sz > 0 ? (int)sz : 1;
+        sm->n = ns;
+        for (int i = 0; i < ns; i++)
+            sm->len[i] = (uint32_t)(sz / ns + ((size_t)i < sz % ns ? 1 : 0));
     }
     return sz;
 }
@@ -3678,6 +3685,26 @@ static double hrd_cost51(double bits, int qp)
     return 1.1 * bits * pow(2.0, (qp - 51) / 8.0);
 }
 
+/* pictures to the next key: the keyint key, or sooner the first typed
+ * lookahead entry flagged a cut or an IDR (the lookahead head is display
+ * frame_count + 1) */
+static long hrd_next_key(const yah264_encoder_t *e)
+{
+    long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
+    for (int i = 0; i < e->la_n && i < la_horizon(e); i++) {
+        const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
+        if (!h->typed)
+            break;
+        if (h->is_cut || h->is_idr) {
+            long dc = (long)e->frame_count + 1 + i - e->cur_disp;
+            if (dc >= 1 && (dc < d || d < 1))
+                d = dc;
+            break;
+        }
+    }
+    return d;
+}
+
 /* bits to leave in the buffer for the next intra picture the encoder can
  * see coming (the keyint key, a scene cut the lookahead flagged, or the P
  * field after an intra first field) at what that type last cost at QP 51,
@@ -3703,20 +3730,9 @@ static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, dou
         tail = e->hrd_rate_pic;
     }
     if (i51 > e->hrd_cpb) i51 = e->hrd_cpb;
-    long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
-    /* the lookahead head is display frame_count + 1, and the first typed
-     * entry flagged a cut or an IDR is the next key */
-    for (int i = 0; i < e->la_n && i < la_horizon(e); i++) {
-        const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
-        if (!h->typed)
-            break;
-        if (h->is_cut || h->is_idr) {
-            long dc = (long)e->frame_count + 1 + i - e->cur_disp;
-            if (dc >= 1 && (dc < d || d < 1))
-                d = dc;
-            break;
-        }
-    }
+    /* the lookahead's typing isn't reproduced under rate-control replay,
+     * so the distance goes through the recorder */
+    long d = (long)RCR_VAL(e->rcr, RCR_HRDKEY, (double)hrd_next_key(e));
     if (d < 1 || d > e->param.keyint)
         return nx;
     double per = e->fields ? 2.0 * e->hrd_rate_pic : e->hrd_rate_pic;
@@ -3724,9 +3740,9 @@ static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, dou
     return r > nx ? r : nx;
 }
 
-/* the bits an access unit's slices take on the wire: start codes, NAL
- * headers and the emulation-prevention bytes the escape will add */
-static double hrd_slice_bits(const uint8_t *rbsp, const struct slice_map *sm)
+/* the emulation-prevention bytes the escape will add to a picture's
+ * slices; hrd_slice_bits adds their start codes and payload */
+static double hrd_emu_bytes(const uint8_t *rbsp, const struct slice_map *sm)
 {
     size_t n = 0, at = 0;
     for (int s = 0; s < sm->n; s++) {
@@ -3736,10 +3752,19 @@ static double hrd_slice_bits(const uint8_t *rbsp, const struct slice_map *sm)
             z = rbsp[i] == 0 ? z + 1 : 0;
         }
         if (z >= 2) n++;                /* the 0x03 after trailing cabac_zero_words */
-        n += sm->len[s] + Y264_NAL_START_BYTES;
         at += sm->len[s];
     }
-    return 8.0 * (double)n;
+    return (double)n;
+}
+
+/* the emulation bytes depend on the coded payload, which rate-control
+ * replay doesn't produce, so they go through the recorder. */
+static double hrd_slice_bits(yah264_encoder_t *e, const struct slice_map *sm)
+{
+    double n = RCR_VAL(e->rcr, RCR_HRDEMU, hrd_emu_bytes(e->rbsp, sm));
+    for (int s = 0; s < sm->n; s++)
+        n += (double)(sm->len[s] + Y264_NAL_START_BYTES);
+    return 8.0 * n;
 }
 
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
@@ -3771,6 +3796,17 @@ static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int t
     return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
 }
 
+/* a NAL's size on the wire, n as written. a slice's emulation bytes follow
+ * its payload, which a rate-control replay doesn't produce, so under
+ * --nal-hrd (whose buffer charges them) a slice's escape overhead goes
+ * through the recorder. */
+static size_t nal_wire_size(yah264_encoder_t *e, int type, size_t rbsp_size, size_t n)
+{
+    if (!e->rcr || !e->hrd_on || (type != YAH264_NAL_SLICE && type != YAH264_NAL_SLICE_IDR))
+        return n;
+    return rbsp_size + (size_t)RCR_VAL(e->rcr, RCR_NALEMU, (double)(n - rbsp_size));
+}
+
 static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                           const uint8_t *rbsp, size_t rbsp_size)
 {
@@ -3786,6 +3822,7 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
         }
         size_t m = y264_nal_write(e->nal_measure_buf, e->nal_measure_cap, ref_idc, type,
                                   rbsp, rbsp_size);
+        m = nal_wire_size(e, type, rbsp_size, m);
         if (e->nal_measure == 1) e->nal_measure_bytes += m;
         else e->hrd_au_bytes += m;
         return 0;
@@ -3799,6 +3836,7 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
     if (e->nal_count >= e->nal_cap)
         return -1;                      /* never write past the array: it is
  * immediately followed by nal_count */
+    size_t wire = nal_wire_size(e, type, rbsp_size, n);
     yah264_nal_t *nl = &e->nal[e->nal_count++];
     nl->type = type;
     nl->ref_idc = ref_idc;
@@ -3820,12 +3858,12 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
                         ? (double)Y264_NAL_START_BYTES : (double)n;
     /* ...but the underflow count reads the wire, so it gets them apart */
     if ((type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
-        && n > Y264_NAL_START_BYTES + rbsp_size)
-        e->nal_emu += (double)(n - Y264_NAL_START_BYTES - rbsp_size);
+        && wire > Y264_NAL_START_BYTES + rbsp_size)
+        e->nal_emu += (double)(wire - Y264_NAL_START_BYTES - rbsp_size);
     /* Every byte that crosses the wire, start code included, because that is
  * what a receiver's buffer holds. The count runs across encode calls, so it
  * cannot be read off `off`, which restarts at every one of them. */
-    e->hrd_au_bytes += n;
+    e->hrd_au_bytes += wire;
     return 0;
 }
 
@@ -12116,7 +12154,7 @@ static double bound_over(yah264_encoder_t *e, const struct slice_map *sm, int ty
     if (e->hrd_on) {
         double room = hrd_room(e, is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE,
                                e->cur_disp, e->cur_open_key);
-        double sb = hrd_slice_bits(e->rbsp, sm);
+        double sb = hrd_slice_bits(e, sm);
         double ho = room > 0.0 ? sb / room : 64.0;
         if (ho > over) over = ho;
         if (*kovh < 0.0) {
@@ -12388,7 +12426,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     }
     if (e->hrd_on) {
         /* what this picture's type costs at the highest QP, for the reserve */
-        double c51 = hrd_cost51(hrd_slice_bits(e->rbsp, &sm), frame_qp(e, type, is_ref));
+        double c51 = hrd_cost51(hrd_slice_bits(e, &sm), frame_qp(e, type, is_ref));
         /* only an intra frame's second field prices the next key's */
         if (!(e->fld_pic && e->fld_second))
             e->hrd_c51[type] = c51;

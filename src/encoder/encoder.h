@@ -189,7 +189,8 @@ struct rc_buffer {
 struct rc_knobs {
     double abr_pbf;
     double rfm_slew;            /* the ledger QP's slew per anchor, x qp_step */
-    double rfm_slew_fb, rfm_slew_fb_up, rfm_fb_t;  /* after an intra-fit opening: the slew for the first rfm_fb_t seconds */
+    double rfm_slew_fb, rfm_slew_fb_up, rfm_fb_t;  /* a cold opening's slew for its first rfm_fb_t seconds: falling, and rising after an intra-fit opening or on a shared ledger */
+    double rfm_open_iw;         /* the opening I's weight in an unshared ledger after a lowres-fit opening */
     double rfm_degen;           /* complexity per MB under which a frame stays out of the ledger (0 = none) */
     double pf_slew;             /* per-frame rf model: its per-type slew, x qp_step */
     double ovc_gain, ovc_gain_up, ovc_gain_cbr, ovc_gain_cbr_up, ovc_lo, ovc_hi;   /* feedback: QP per window of error (under, over, CBR), and its bounds */
@@ -205,6 +206,7 @@ struct rc_knobs {
     double abr_vbvov_grow, abr_vbvov_pow;
     double abr_vbvov_vbr;      /* capped VBR's overflow window, as a fraction of the buffer */
     double rf2_seed_a, rf2_seed_b, rf2_seed_c;
+    double rf2_iseed_a, rf2_iseed_b, rf2_iseed_c;  /* the operating-point fit (rf2_open_iqp): the flat route and the opening's upper bound */
     double vbv_plan_h, vbv_plan_t;
     double vbv_plan_tj;        /* in a segment that assumed the handoff occupancy, the floor of the plan's target (vbv_burst_plan_qp) */
     int    vbv_plan;           /* Y264_VBV_PLAN: the capped-VBR burst plan on (vbv_plan_on) */
@@ -1144,6 +1146,13 @@ struct yah264_encoder {
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
     int      rfm_open_fb;       /* the opening came from the intra fit (no lookahead fit) */
+    int      rf2_cold;          /* this instance opened cold (rfm_open_qp ran), not from a carry */
+    int      rf2_open_key;      /* the opening I is still to be kept out of the ledger */
+    double   rf2_luma;          /* the anchor's mean luma over coded black, 8-bit scale (rf2_dark);
+                                 * 0 = unmeasured, and stale outside a cold opening's window */
+    int      rf2_unpred;        /* the opening read unpredictable and not dark */
+    double   rf2_iratio;        /* the opening window's median lowres inter/intra cost (rf2_open_iratio) */
+    double   rf2_cme;           /* the opening fit's median lowres cost, as read */
     int      vbv_joined;        /* capped segment that assumed the handoff occupancy at its start, not a measured one */
     double   vbv_jpk;           /* a joined segment's highest modeled occupancy so far, bits */
     double   rfm_open_ioff;     /* the opening I's offset under the intra fit's level */
