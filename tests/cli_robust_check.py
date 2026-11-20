@@ -10,9 +10,12 @@ status and what it says on stderr:
 
   - a Y4M that ends partway through a FRAME header is a truncated file and
     fails the way a short frame body does, on every reader path.
-  - pass 2 or 3 with no stats file warns that it runs without a plan; an
-    unreadable or empty one is refused; pass 1, 3, 2 in turn over one file
-    runs clean.
+  - a FRAME header (or the stream header) with no newline is malformed and
+    fails within its line buffer, on every reader path, instead of reading
+    the rest of the input looking for one.
+  - pass 2 with no stats file is refused; pass 3 with none warns that it
+    runs without a plan; an unreadable or empty one is refused; pass 1, 3,
+    2 in turn over one file runs clean.
   - pass 2 or 3 refuses a stats file that isn't a regular file (a FIFO hung
     on its second open).
   - pass 3 replaces its stats file only when it succeeds: a failed run or
@@ -124,6 +127,46 @@ def truncated_header(enc, tmp):
     check("y4m whole clip", rc == 0, f"rc {rc}: {err.strip()[-200:]}")
 
 
+def unterminated_header(enc, tmp):
+    """a header with no newline: zeros where FRAME headers belong, far past
+    the line buffer, must fail at the buffer and not after reading it all"""
+    out = os.path.join(tmp, "o.264")
+    clip = os.path.join(tmp, "z.y4m")
+    zeros = b"\0" * (4 << 20)
+    for tail, what in ((zeros, "zeros"), (b"FRAME" + b" X" * (2 << 20), "long FRAME line")):
+        write_clip(clip, tail)
+        for threads in ("1", "3"):
+            for extra in ([], ["--frames", str(FRAMES + 2)], ["--seek", "1"]):
+                t0 = time.time()
+                rc, err = run(enc, ["--input-y4m", clip, "--threads", threads, "--crf", "26",
+                                    "-o", out] + extra)
+                check(f"y4m {what} past the header cap, threads {threads} {' '.join(extra)}",
+                      rc != 0 and "frame %d's header has no newline" % FRAMES in err
+                      and time.time() - t0 < LIMIT / 2, f"rc {rc}: {err.strip()[-200:]}")
+        with open(clip, "rb") as f:
+            rc, err = run(enc, ["--input-y4m", "-", "--threads", "3", "--crf", "26",
+                                "-o", out], stdin=f)
+        check(f"y4m {what} past the header cap, pipe",
+              rc != 0 and "header has no newline" in err, f"rc {rc}: {err.strip()[-200:]}")
+    # the cut stops nothing --frames doesn't read
+    write_clip(clip, zeros)
+    rc, err = run(enc, ["--input-y4m", clip, "--frames", str(FRAMES), "--threads", "1",
+                        "--crf", "26", "-o", out])
+    check("y4m zeros past --frames", rc == 0, f"rc {rc}: {err.strip()[-200:]}")
+    # --seek past the clip's frames onto the zeros
+    rc, err = run(enc, ["--input-y4m", clip, "--seek", str(FRAMES + 1), "--threads", "1",
+                        "--crf", "26", "-o", out])
+    check("y4m --seek onto zeros past the header cap",
+          rc != 0 and "frame %d's header has no newline" % FRAMES in err,
+          f"rc {rc}: {err.strip()[-200:]}")
+    with open(clip, "wb") as f:
+        f.write(HDR[:-1] + b" X" * (1 << 20))
+    rc, err = run(enc, ["--input-y4m", clip, "--crf", "26", "-o", out])
+    check("y4m stream header with no newline",
+          rc != 0 and "stream header has no newline" in err, f"rc {rc}: {err.strip()[-200:]}")
+    os.remove(clip)
+
+
 def missing_stats(enc, tmp):
     clip, out = os.path.join(tmp, "s.y4m"), os.path.join(tmp, "o.264")
     write_clip(clip)
@@ -134,8 +177,13 @@ def missing_stats(enc, tmp):
                 os.remove(st)
             rc, err = run(enc, ["--input-y4m", clip, "--threads", threads, "--bitrate", "300",
                                 "--pass", p, "--stats", st, "-o", out])
-            check(f"pass {p} with no stats file warns, threads {threads}",
-                  rc == 0 and "runs without a plan" in err, f"rc {rc}: {err.strip()[-200:]}")
+            if p == "2":
+                check(f"pass 2 with no stats file is refused, threads {threads}",
+                      rc != 0 and "no stats file" in err and "warning" not in err
+                      and not os.path.exists(st), f"rc {rc}: {err.strip()[-200:]}")
+            else:
+                check(f"pass 3 with no stats file warns, threads {threads}",
+                      rc == 0 and "runs without a plan" in err, f"rc {rc}: {err.strip()[-200:]}")
     # one that is there but can't be read is an error, not a missing plan
     st = os.path.join(tmp, "locked.stats")
     run(enc, ["--input-y4m", clip, "--threads", "1", "--bitrate", "300",
@@ -753,6 +801,7 @@ def main():
     enc = sys.argv[1]
     with tempfile.TemporaryDirectory(prefix="y264robust.") as tmp:
         truncated_header(enc, tmp)
+        unterminated_header(enc, tmp)
         missing_stats(enc, tmp)
         fifo_stats(enc, tmp)
         stats_is_output(enc, tmp)

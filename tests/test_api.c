@@ -248,6 +248,12 @@ int main(void)
     CHECK(yah264_encoder_open(&q) == NULL);
     CHECK(p.size == (int)sizeof(p));    /* param_default wrote it */
 
+    /* 4b'. pass 2 with no stats file has no plan to code from: refused */
+    q = p; q.rc.method = YAH264_RC_2PASS; q.rc.bitrate = 300; q.rc.pass = 2;
+    q.rc.stats = "test_api.no-such.stats";
+    remove(q.rc.stats);
+    CHECK(yah264_encoder_open(&q) == NULL);
+
     /* 4c. custom quant matrices: a zero weight has no meaning in a scaling
  * list and is refused at open; a full set of real weights opens and codes */
     q = p; q.cqm = YAH264_CQM_CUSTOM;

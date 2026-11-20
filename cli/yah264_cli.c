@@ -1164,6 +1164,7 @@ static void usage(const char *argv0)
 }
 
 static int read_line(FILE *f, char *buf, int cap);
+static void hdr_fail_report(int len, long frame, int cap);
 static void clean_hold(void);
 static void clean_release(void);
 
@@ -1940,8 +1941,8 @@ static void *y4m_reader(void *arg)
         if (!g_raw_input) {
             len = read_line(r->in, line, sizeof(line));
             if (len == -1) break;                       /* EOF */
-            if (len < 0) {                              /* a cut-off header */
-                read_fail_report(RP_SHORT, 0, n);
+            if (len < 0) {                              /* cut off, or no newline */
+                hdr_fail_report(len, n, sizeof line);
                 reader_fail(j); return NULL;
             }
             if (strncmp(line, "FRAME", 5) != 0) {
@@ -3477,7 +3478,7 @@ static int scan_frame_header(FILE *in, int n, int hdr_len)
     int len = read_line(in, line, sizeof line);
     if (len == -1) return 0;
     if (len < 0) {
-        fprintf(stderr, "yah264: short read on frame %ld\n", n + g_seek_frames);
+        hdr_fail_report(len, n, sizeof line);
         return -1;
     }
     if (strncmp(line, "FRAME", 5) != 0) {
@@ -4955,8 +4956,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
 
 /* Read one newline-terminated header line (Y4M stream or frame header) into buf.
  * Returns line length excluding the newline, -1 on EOF/error before any byte,
- * or -2 when the input ends partway through a line: a frame header cut short
- * is a truncated file, not a clean end. */
+ * -2 when the input ends partway through a line (a frame header cut short is
+ * a truncated file, not a clean end), or -3 when cap - 1 bytes pass with no
+ * newline: a malformed line, and reading on would take the rest of the input. */
 static int read_line(FILE *f, char *buf, int cap)
 {
     int n = 0, any = 0;
@@ -4967,18 +4969,32 @@ static int read_line(FILE *f, char *buf, int cap)
             buf[n] = '\0';
             return n;
         }
-        if (n < cap - 1)
-            buf[n++] = (char)c;
+        if (n == cap - 1) {
+            buf[n] = '\0';
+            return -3;
+        }
+        buf[n++] = (char)c;
     }
     buf[n] = '\0';
     return any ? -2 : -1;
+}
+
+/* the message for a frame header read_line failed on (-2 or -3) */
+static void hdr_fail_report(int len, long frame, int cap)
+{
+    if (len == -3)
+        fprintf(stderr, "yah264: frame %ld's header has no newline in its first %d bytes: "
+                "the input is malformed\n", frame + g_seek_frames, cap - 1);
+    else
+        fprintf(stderr, "yah264: short read on frame %ld\n", frame + g_seek_frames);
 }
 
 /* --- the serial path's reader ---------------------------------------------
  *
  * One frame of input for the serial path: 1 read, 0 clean EOF, -1 a header
  * that isn't FRAME (left in line for the message), -2 a short read, -3 a
- * sample above the depth's maximum (left in *bad). */
+ * sample above the depth's maximum (left in *bad), -4 a header with no
+ * newline within the line buffer. */
 static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
                              size_t y_size, size_t c_size, char *line, int cap,
                              unsigned *bad)
@@ -4990,6 +5006,7 @@ static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
     } else {
         int len = read_line(in, line, cap);
         if (len == -1) return 0;
+        if (len == -3) return -4;
         if (len < 0) return -2;                 /* a cut-off header is a short read */
         if (strncmp(line, "FRAME", 5) != 0) return -1;
     }
@@ -6285,6 +6302,12 @@ static int cli_main(int argc, char **argv)
                 "it more than once\n", stats_path, pass);
         return 1;
     }
+    /* said here, before the thread choice warns about a file that isn't there */
+    if (pass == 2 && stat(stats_path, &sst) != 0 && errno == ENOENT) {
+        fprintf(stderr, "yah264: no stats file '%s': pass 2 plans from the records pass 1 "
+                "writes; run pass 1 into it first\n", stats_path);
+        return 1;
+    }
     /* /dev/stdin and its kin read the descriptor itself, from where it is,
      * as on macOS: a reopen on Linux would start the file over */
     int in_fd = strcmp(in_path, "-") ? name_fd(in_path, -1) : -1;
@@ -6366,7 +6389,13 @@ static int cli_main(int argc, char **argv)
                 "disagree with it. Use --input-raw, or drop them.\n");
         return 1;
     }
-    if (read_line(in, line, sizeof(line)) < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
+    int hlen = read_line(in, line, sizeof(line));
+    if (hlen == -3 && !strncmp(line, "YUV4MPEG2", 9)) {
+        fprintf(stderr, "yah264: the Y4M stream header has no newline in its first %d "
+                "bytes: the input is malformed\n", (int)sizeof(line) - 1);
+        return 1;
+    }
+    if (hlen < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
         fprintf(stderr, "yah264: input is not a Y4M stream\n");
         return 1;
     }
@@ -6481,8 +6510,12 @@ static int cli_main(int argc, char **argv)
         size_t fc = (size_t)(g_in_w / g_sub_w) * (g_in_h / g_sub_h) * (size_t)g_in_sample_sz;
         for (long k = 0; k < seek_frames; k++) {
             if (!g_raw_input) {
-                if (read_line(in, line, sizeof(line)) < 0 ||
-                    strncmp(line, "FRAME", 5) != 0) {
+                int len = read_line(in, line, sizeof(line));
+                if (len == -3) {
+                    hdr_fail_report(len, k - seek_frames, sizeof line);
+                    return 1;
+                }
+                if (len < 0 || strncmp(line, "FRAME", 5) != 0) {
                     fprintf(stderr, "yah264: --seek %ld is past the end of the input "
                             "(%ld frame(s))\n", seek_frames, k);
                     return 1;
@@ -7315,6 +7348,11 @@ static int cli_main(int argc, char **argv)
         if (s == -1) {
             fprintf(stderr, "yah264: expected FRAME header at frame %ld, got '%s'\n",
                     frame + g_seek_frames, rd_on ? rd.line : line);
+            rc = 1;
+            goto done;
+        }
+        if (s == -4) {
+            hdr_fail_report(-3, frame, sizeof line);
             rc = 1;
             goto done;
         }

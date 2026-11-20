@@ -5936,12 +5936,19 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
-            } else if (errno == ENOENT) {
-                /* a missing file still encodes, but with no plan the rate
-                 * goes nowhere near the target: say so */
-                fprintf(stderr, "yah264: warning: no stats file '%s': pass %d runs without "
+            } else if (errno == ENOENT && e->tp_pass == 3) {
+                /* pass 3 writes the records it codes, so it can start one;
+                 * with no plan the rate goes nowhere near the target: say so */
+                fprintf(stderr, "yah264: warning: no stats file '%s': pass 3 runs without "
                         "a plan, every frame at the base QP; run pass 1 into it first\n",
-                        param->rc.stats, e->tp_pass);
+                        param->rc.stats);
+            } else if (errno == ENOENT) {
+                /* pass 2 writes nothing, so a run with no plan only misses
+                 * its target */
+                fprintf(stderr, "yah264: no stats file '%s': pass 2 plans from the records "
+                        "pass 1 writes; run pass 1 into it first\n", param->rc.stats);
+                yah264_encoder_close(e);
+                return NULL;
             } else {
                 /* one that is there but can't be read is not a missing plan */
                 fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n",
