@@ -40,6 +40,28 @@ def frame(n):
     return b"FRAME\n" + bytes(y) + u + v
 
 
+CUT_CLIPS = ("shields", "park_joy", "ducks", "in_to_tree", "old_town", "stockholm", "sintel")
+
+
+def make_cuts(corpus, out):
+    """8 pictures from each of seven 720p corpus clips, back to back; False
+    when any is missing."""
+    srcs = [os.path.join(corpus, f"{c}_720p.y4m") for c in CUT_CLIPS]
+    if not all(os.path.exists(p) for p in srcs):
+        return False
+    fs = 1280 * 720 * 3 // 2
+    with open(out, "wb") as o:
+        o.write(b"YUV4MPEG2 W1280 H720 F50:1 Ip A1:1 C420jpeg\n")
+        for p in srcs:
+            with open(p, "rb") as f:
+                f.readline()
+                f.seek(f.tell() + 20 * (fs + 6))
+                for _ in range(8):
+                    f.read(6)
+                    o.write(b"FRAME\n" + f.read(fs))
+    return True
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: rc_selftest.py CLI")
@@ -57,9 +79,27 @@ def main():
             del env[k]
     env.pop("PLAY_BIN", None); env.pop("PLAY_ENV", None); env.pop("ONLY", None); env.pop("KEEP", None)
     p = subprocess.run([sys.executable, os.path.join(root, "scripts", "rc_replay.py")], env=env)
+    rc = p.returncode
+    # the --nal-hrd hold binds on real content where the synthetic clip
+    # leaves it slack, and it reads the coded payload's emulation bytes, so
+    # the CBR cell runs once more on a corpus clip when there is one
+    corpus = os.path.join(root, "tests", "corpus")
+    real = os.path.join(corpus, "foreman_cif.y4m")
+    if os.path.exists(real):
+        q = subprocess.run([sys.executable, os.path.join(root, "scripts", "rc_replay.py")],
+                           env=dict(env, CLIP=real, FRAMES="120", ONLY="^cbr"))
+        rc = rc or q.returncode
+    # a cut every 8 pictures: the hold's reserve reads the next key off the
+    # lookahead's cut flags, which bind there and nowhere slower
+    cut = os.path.join(work, "cuts_720p.y4m")
+    if make_cuts(corpus, cut):
+        q = subprocess.run([sys.executable, os.path.join(root, "scripts", "rc_replay.py")],
+                           env=dict(env, CLIP=cut, FRAMES="56", ONLY="^cbr"))
+        rc = rc or q.returncode
+        os.remove(cut)
     os.remove(clip)
     os.rmdir(work)
-    sys.exit(p.returncode)
+    sys.exit(rc)
 
 
 main()

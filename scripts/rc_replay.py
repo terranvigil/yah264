@@ -63,6 +63,8 @@ CONFIGS = [
     ("no_la",      "--bitrate 500 --rc-lookahead 0"),
     ("keyint",     "--bitrate 500 --keyint 24 --open-gop"),
     ("slices",     "--crf 23 --slices 3"),
+    ("cbr_slices", "--bitrate 500 --vbv-maxrate 500 --vbv-bufsize 500 --nal-hrd cbr --slices 4"),
+    ("vbr_slices", "--bitrate 500 --vbv-maxrate 750 --vbv-bufsize 1500 --nal-hrd vbr --slices 4"),
     ("paff",       "--crf 23 --tff"),
     ("cavlc",      "--bitrate 500 --cavlc"),
     ("fast",       "--preset fast --bitrate 500 --vbv-maxrate 750 --vbv-bufsize 750"),
