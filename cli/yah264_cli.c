@@ -2356,6 +2356,12 @@ static atomic_int g_clean_dying;
 /* pushed whole, never freed: the waiter may walk it while a set is added */
 static _Atomic(clean_set_t *) g_clean;
 
+/* the output and recon this run made, until its encode starts (out_open,
+ * out_cut): the waiter removes one only while its name still leads to the
+ * file made, so one renamed away and replaced is left alone. Written under
+ * clean_hold, read by the waiter under the write lock */
+static struct { char *path; dev_t dev; ino_t ino; } g_clean_out[2];
+
 static void *clean_waiter(void *arg)
 {
     (void)arg;
@@ -2371,6 +2377,12 @@ static void *clean_waiter(void *arg)
     for (clean_set_t *s = atomic_load(&g_clean); s; s = s->next)
         for (int i = 0; i < s->n; i++)
             if (s->path[i]) unlink(s->path[i]);
+    for (int i = 0; i < 2; i++) {
+        struct stat st;
+        if (g_clean_out[i].path && stat(g_clean_out[i].path, &st) == 0
+            && st.st_dev == g_clean_out[i].dev && st.st_ino == g_clean_out[i].ino)
+            unlink(g_clean_out[i].path);
+    }
     signal(sig, SIG_DFL);
     sigset_t one;
     sigemptyset(&one);
@@ -2436,17 +2448,16 @@ static void clean_release(void)
 
 /* publish n paths, copied, for the waiter: before their files exist, or
  * inside the clean_hold that makes them */
-static clean_set_t *clean_register(char *const *paths, int n)
+static void clean_register(char *const *paths, int n)
 {
     clean_set_t *s = malloc(sizeof *s);
     char **p = calloc((size_t)(n > 0 ? n : 1), sizeof *p);
-    if (!s || !p) { free(s); free(p); return NULL; }
+    if (!s || !p) { free(s); free(p); return; }
     for (int i = 0; i < n; i++) p[i] = paths[i] ? strdup(paths[i]) : NULL;
     s->n = n; s->path = p;
     s->next = atomic_load(&g_clean);
     while (!atomic_compare_exchange_weak(&g_clean, &s->next, s))
         ;
-    return s;
 }
 
 /* Pass 3 rewrites the stats file it reads, so one cut short would leave a
@@ -2665,7 +2676,21 @@ static int id_same(file_id_t a, file_id_t b)
 /* a file this run writes, opened but not yet truncated */
 typedef struct { int fd, made, trunc; const char *path; } out_file_t;
 
-static int out_open(out_file_t *f, const char *path)
+/* inside the clean_hold around a create: name the file made for the waiter */
+static void out_clean_add(int slot, const char *path, int fd)
+{
+    struct stat st;
+    char *real = realpath(path, NULL);
+    if (real && fstat(fd, &st) == 0) {
+        g_clean_out[slot].path = real;
+        g_clean_out[slot].dev = st.st_dev;
+        g_clean_out[slot].ino = st.st_ino;
+    } else {
+        free(real);
+    }
+}
+
+static int out_open(out_file_t *f, const char *path, int slot)
 {
     f->path = path; f->made = 0; f->trunc = 0;
     /* a descriptor's file (/dev/stdout however spelled) isn't ours to
@@ -2683,7 +2708,14 @@ static int out_open(out_file_t *f, const char *path)
         f->fd = open(path, O_WRONLY);
         return f->fd;
     }
+    /* a create and its naming for the waiter are one step to a signal; the
+     * plain opens below may block (a FIFO), so they stay outside it */
+    clean_hold();
     f->fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    int err = errno;
+    if (f->fd >= 0) out_clean_add(slot, path, f->fd);
+    clean_release();
+    errno = err;
     if (f->fd >= 0) { f->made = 1; return f->fd; }
     if (errno != EEXIST) return -1;
     f->fd = open(path, O_WRONLY);
@@ -2694,7 +2726,12 @@ static int out_open(out_file_t *f, const char *path)
         snprintf(cur, sizeof cur, "%s", path);
         for (int hop = 0; hop < 40 && follow_link(cur, sizeof cur); hop++)
             ;
+        clean_hold();
         f->fd = open(cur, O_WRONLY | O_CREAT | O_EXCL, 0666);
+        err = errno;
+        if (f->fd >= 0) out_clean_add(slot, cur, f->fd);
+        clean_release();
+        errno = err;
         f->made = f->fd >= 0;
         if (f->fd >= 0 || errno != EEXIST)
             return f->fd;
@@ -2711,21 +2748,8 @@ static out_file_t g_of = { -1, 0, 0, NULL }, g_rf = { -1, 0, 0, NULL };
 /* set once the encode may write them: before it, a failed run takes back
  * the files it made and leaves the others untouched */
 static int g_out_begun;
-static clean_set_t *g_out_clean;
 
-/* until the encode starts, a signal takes back the output and recon this
- * run made, as a failed run does */
-static void out_clean_register(void)
-{
-    char *p[2] = { NULL, NULL };
-    if (g_of.fd >= 0 && g_of.made) p[0] = realpath(g_of.path, NULL);
-    if (g_rf.fd >= 0 && g_rf.made) p[1] = realpath(g_rf.path, NULL);
-    if (p[0] || p[1]) g_out_clean = clean_register(p, 2);
-    free(p[0]); free(p[1]);
-}
-
-/* the encode starts: cut a file that was there, and keep what follows.
- * the paths are cleared, not freed, as the waiter may still walk them */
+/* the encode starts: cut a file that was there, and keep what follows */
 static int out_cut(void)
 {
     if (g_out_begun) return 0;
@@ -2735,11 +2759,12 @@ static int out_cut(void)
         fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
         return -1;
     }
-    if (g_out_clean) {
-        clean_hold();
-        for (int i = 0; i < g_out_clean->n; i++) g_out_clean->path[i] = NULL;
-        clean_release();
+    clean_hold();
+    for (int i = 0; i < 2; i++) {
+        free(g_clean_out[i].path);
+        g_clean_out[i].path = NULL;
     }
+    clean_release();
     g_out_begun = 1;
     return 0;
 }
@@ -4788,6 +4813,21 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         return stats_clash ? 2 : 1;
     }
     g_api->encoder_close(prime);
+    /* every refusal on this path is behind us, and no worker has written */
+    if (out_cut() != 0) {
+        tp_free_paths(gop_stats, n_gops, 1);
+        free(gop_target);
+        pthread_mutex_lock(&job.lock);
+        job.abort_ = 1;
+        pthread_cond_broadcast(&job.cv_space);
+        pthread_mutex_unlock(&job.lock);
+        if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
+        for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
+        for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
+        job_rc_free(&job); free(job.seg); free(job.gop_start);
+        free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_rd); free(job.gop_cons);
+        return 1;
+    }
 
     job.param = &p;
     /* the seek reader is already running and reads these under the lock;
@@ -6379,16 +6419,15 @@ static int cli_main(int argc, char **argv)
      * the input, in whichever order the run reaches them: open, compare,
      * and only then truncate (see files_clash) */
     int to_stdout = !strcmp(out_path, "-");
-    if (!to_stdout && out_open(&g_of, out_path) < 0) {
+    if (!to_stdout && out_open(&g_of, out_path, 0) < 0) {
         fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);
         return 1;
     }
-    if (recon_path && out_open(&g_rf, recon_path) < 0) {
+    if (recon_path && out_open(&g_rf, recon_path, 1) < 0) {
         fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
         out_drop(&g_of);
         return 1;
     }
-    out_clean_register();
     const char *clash = files_clash(fileno(in), to_stdout ? STDOUT_FILENO : g_of.fd, g_rf.fd,
                                     pass > 0 ? stats_path : NULL);
     if (clash) {
@@ -7260,12 +7299,11 @@ static int cli_main(int argc, char **argv)
         }
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
-    /* the outputs are cut only once the encode starts (out_cut): a run
+    /* the outputs are cut only once the encode starts (out_cut, here on the
+     * serial path and inside encode_threaded on the per-GOP one): a run
      * refused before that leaves an existing file as it was, and main
      * removes one it made */
     if (!recon_path && tp_mt) {
-        if (out_cut() != 0)
-            return 1;
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (rc != Y264_GO_SERIAL) {
             if (g_force_reject) {
@@ -7279,7 +7317,12 @@ static int cli_main(int argc, char **argv)
                 rc = 1;
             }
             if (in != stdin) fclose(in);
-            if (rc == 2 && out != stdout) {         /* the stats recheck stopped it */
+            /* a clean end with nothing to code never reached the cut */
+            if (rc == 0 && out_cut() != 0)
+                rc = 1;
+            /* the stats recheck stopped it, or a refusal came before the
+             * cut: only files this run made go */
+            if ((rc == 2 || !g_out_begun) && out != stdout) {
                 out_forget(&g_of, out);
                 return rc;
             }

@@ -279,6 +279,72 @@ def refused_output(enc, tmp):
                   made and rc == -sig and not os.path.exists(out), f"rc {rc}, made {made}")
             if os.path.exists(out):
                 os.remove(out)
+    # a signal while the recon open waits on a FIFO nobody reads: the output
+    # made just before it goes
+    fifo = os.path.join(d, "rf.fifo")
+    os.mkfifo(fifo)
+    q = spawn(enc, ["--input-y4m", "-", "--dump-recon", fifo, "-o", out])
+    try:
+        t0 = time.time()
+        while not os.path.exists(out) and q.poll() is None and time.time() - t0 < LIMIT:
+            time.sleep(0.01)
+        made = os.path.exists(out)
+        time.sleep(0.2)
+        q.send_signal(signal.SIGINT)
+        try:
+            rc = q.wait(timeout=LIMIT)
+        except subprocess.TimeoutExpired:
+            rc = "hung"
+    finally:
+        reap(q)
+    check("SIGINT while the recon open blocks removes the output it made",
+          made and rc == -signal.SIGINT and not os.path.exists(out), f"rc {rc}, made {made}")
+    os.remove(fifo)
+    if os.path.exists(out):
+        os.remove(out)
+    # the output renamed away and replaced before the signal: the new file
+    # at the name isn't the run's, and stays
+    q = spawn(enc, ["--input-y4m", "-", "-o", out])
+    try:
+        t0 = time.time()
+        while not os.path.exists(out) and q.poll() is None and time.time() - t0 < LIMIT:
+            time.sleep(0.01)
+        moved = out + ".moved"
+        os.rename(out, moved)
+        with open(out, "wb") as f:
+            f.write(b"not yours")
+        q.send_signal(signal.SIGTERM)
+        try:
+            rc = q.wait(timeout=LIMIT)
+        except subprocess.TimeoutExpired:
+            rc = "hung"
+    finally:
+        reap(q)
+    check("a signal leaves a file that replaced the output",
+          rc == -signal.SIGTERM and open(out, "rb").read() == b"not yours", f"rc {rc}")
+    for x in (out, moved):
+        if os.path.exists(x):
+            os.remove(x)
+    # refused on the per-GOP path before any GOP is coded: an option the path
+    # refuses, and the priming open (pass 1 can't make its stats file)
+    clip = os.path.join(d, "ok.y4m")
+    write_clip(clip)
+    for name, extra in (("--scan-in, threads 3", ["--threads", "3", "--scan-in",
+                                                  os.path.join(d, "nosuch")]),
+                        ("unmakeable stats, threads 1", ["--threads", "1", "--bitrate", "300",
+                                                         "--pass", "1", "--stats",
+                                                         os.path.join(d, "no", "s.stats")])):
+        for exists in (False, True):
+            if exists:
+                with open(out, "wb") as f:
+                    f.write(b"keep me")
+            rc, err = run(enc, ["--input-y4m", clip, "-o", out] + extra)
+            kept = open(out, "rb").read() == b"keep me" if exists else not os.path.exists(out)
+            check(f"refused per-GOP run ({name}) "
+                  f"{'keeps an existing' if exists else 'leaves no'} output",
+                  rc != 0 and kept, f"rc {rc}: {err.strip()[-200:]}")
+        os.remove(out)
+    os.remove(clip)
     # refused at encoder open: the hardware encoder takes 4:2:0 8-bit only
     if sys.platform != "darwin":
         print("  skip hw open refusal (no VideoToolbox)")
