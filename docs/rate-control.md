@@ -142,6 +142,18 @@ opening I's own cost: it rises at 0.35, or at the normal 0.25 when the opening
 I was set under the fit's level. A dark opening I never codes under QP 15,
 frame DC included, whichever route opened it.
 
+With no lookahead (`--rc-lookahead 0`, B frames on) two more rules apply to
+an encoder with its own ledger, outside CBR and two-pass. In the first 2
+seconds, once a mini-GOP has been coded after the opening I, a ledger whose
+coded frames alone read more than 12 QP over the slew reference is followed
+whole instead of at 0.35 of a step: on noise every frame costs what an I does,
+so the rise isn't the I's. And past the first 4 seconds, when the ledger reads
+more than 4 QP over what the last second of frames would read on their own,
+its history is scaled down to sit 4 QP over them. Nothing else tells a ledger
+with no lookahead that the content changed, and after an expensive run (noise
+before a static scene) it would otherwise hold that run's QP for the rest of
+the encode.
+
 CBR keeps the older fit as its opening, since its buffer already holds the
 rate and the refit's opening ran short CBR buffers a few points over. After an
 intra-fit opening it keeps the first-two-second slew it always had: a full-step
