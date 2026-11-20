@@ -110,6 +110,7 @@
 #define y264_aq_matte_cand              y264_aq_matte_cand_10
 #define y264_aq_matte_same              y264_aq_matte_same_10
 #define y264_aq_vscale                  y264_aq_vscale_10
+#define y264_aq_void_fade_note          y264_aq_void_fade_note_10
 #define y264_asm_off_                   y264_asm_off__10
 #define y264_aud_write                  y264_aud_write_10
 #define y264_avg_mb420_flat_avx2        y264_avg_mb420_flat_avx2_10

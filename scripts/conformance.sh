@@ -61,7 +61,7 @@
 #      YAH264_CONF_ONLY      run only the sections whose name contains this
 set -euo pipefail
 
-FIXVER=6                        # bump to invalidate cached fixtures
+FIXVER=7                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -274,6 +274,20 @@ check_same_stream() {   # check_same_stream <label> <src> <flags> <flags-that-mu
         echo "  ok   $extra leaves the stream unchanged ($label)"; echo "SUMMARY 1 0"
     else
         echo "  FAIL $extra changed the stream ($label)"; echo "SUMMARY 1 1"
+    fi
+}
+
+check_same_stream_cut() {  # check_same_stream_cut <label> <src> <flags> <extra> <display>
+    # check_same_stream, then require the cut the clip is built around: a
+    # stream with no I frame there never exercised the cut, so that fails too
+    check_same_stream "$1" "$2" "$3" "$4"
+    local p="$work/same_$1" t
+    t="$(ffprobe -v error -show_entries frame=pict_type -of csv=p=0 "$p.0.264" 2>/dev/null |
+         sed -n "$(( $5 + 1 ))p" | tr -d ', ')"
+    if [ "$t" = I ]; then
+        echo "  ok   the cut at display $5 codes as I ($1)"; echo "SUMMARY 1 0"
+    else
+        echo "  FAIL no I frame at display $5, got '${t:-nothing}' ($1)"; echo "SUMMARY 1 1"
     fi
 }
 
@@ -1425,6 +1439,17 @@ if [ ! -f "$fixdir/syn_npillar.y4m" ]; then
         -frames:v 16 -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_npillar.y4m.tmp.$$"
     mv "$fixdir/syn_npillar.y4m.tmp.$$" "$fixdir/syn_npillar.y4m"
 fi
+# a cut into a slow fade up from black: a textured picture, then a lit subject
+# on a black stage brightening by about 0.09 levels a frame. The slow-fade test
+# the dark gate reads restarts at the cut, and must read the same at any
+# lookahead lead (npillar_la1 has no cut). The dither is a fixed pattern, not
+# geq's random(), whose state is per slice job and so moves with core count
+if [ ! -f "$fixdir/syn_cutfade.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "nullsrc=size=640x480:rate=25" -vf \
+        "format=yuv420p,geq=lum='if(lt(N\,30)\,30+14*sin(X*0.9)*sin(Y*1.1)\,16+(0.4+0.02*(N-30))*70*exp(-((X-320)*(X-320)+(Y-240)*(Y-240))/6000)*(1+0.5*sin(X*0.7)*sin(Y*0.9))+0.6*mod(X*7+Y*13+N*29\,10)/10)':cb=128:cr=128" \
+        -frames:v 60 -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_cutfade.y4m.tmp.$$"
+    mv "$fixdir/syn_cutfade.y4m.tmp.$$" "$fixdir/syn_cutfade.y4m"
+fi
 # 4:2:2 clip (genlavfi hardcodes yuv420p, so build this one inline). Chroma is
 # full-height here, exercising the 4:2:2 B-frame reconstruction path.
 if [ ! -f "$fixdir/syn_422.y4m" ]; then
@@ -2098,6 +2123,7 @@ add "motion search modes" check_clip nomix_wp2      "$S/syn_fade.y4m"    "--caba
 add "motion search modes" check_same_stream chroma_me "$S/syn_motion.y4m" "--qp 26 --cabac --bframes 2" "--no-chroma-me"
 add "lookahead lead" check_same_stream npillar_la1 "$S/syn_npillar.y4m" "--crf 23 --rc-lookahead 1 --bframes 0" "--sync-lookahead 3"
 add "lookahead lead" check_same_stream npillar_la40 "$S/syn_npillar.y4m" "--crf 23" "--sync-lookahead 3"
+add "lookahead lead" check_same_stream_cut cutfade_la1 "$S/syn_cutfade.y4m" "--crf 23 --rc-lookahead 1 --bframes 0" "--sync-lookahead 3" 30
 add "lookahead lead" check_rc npillar "$S/syn_npillar.y4m" "--crf 23 --cabac --bframes 2"
 add "motion search modes" check_determinism me_esa  "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 3 --me esa"
 add "motion search modes" check_determinism me_tesa "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 3 --me tesa"

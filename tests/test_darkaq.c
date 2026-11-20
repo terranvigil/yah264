@@ -16,6 +16,7 @@
 #define SC ((double)(1 << (Y264_BIT_DEPTH - 8)))
 #define M(m) ((m) * SC)
 #define V(v) ((v) * SC * SC)
+#define BLK M(16.0)                     /* limited-range black */
 
 static int fails;
 /* a subtitle row from block 22 on: a quiet glow then a busy glyph (1, 2), at
@@ -88,6 +89,24 @@ int main(void)
         CHECK(on == 0);                                     /* five steps only */
         CHECK(y264_aq_fade_note(&u, 68.0) == 1);            /* the sixth */
         CHECK(y264_aq_fade_note(&u, 67.9) == 0);            /* too small a step */
+        /* the slow twin the void rule reads: a mostly black picture coming
+         * up at a tenth of a level a frame, which the fade test misses */
+        y264_fade_t s = { 0 }, f = { 0 };
+        for (int i = 0; i <= 6; i++) {
+            on = y264_aq_void_fade_note(&s, 16.2 + 0.1 * i);
+            CHECK(y264_aq_fade_note(&f, 16.2 + 0.1 * i) == 0);
+        }
+        CHECK(on == 1);
+        /* a step that falls short holds the flag AQ_FADE_N frames, so a slow
+         * fade that wobbles doesn't drop it; a still stage then lets it go */
+        for (int i = 0; i < 6; i++)
+            CHECK(y264_aq_void_fade_note(&s, 16.82) == 1);
+        CHECK(y264_aq_void_fade_note(&s, 16.82) == 0);
+        /* a cut right after a slow fade drops the hold */
+        y264_fade_t c2 = { 0 };
+        for (int i = 0; i <= 6; i++) on = y264_aq_void_fade_note(&c2, 16.2 + 0.1 * i);
+        CHECK(on == 1);
+        CHECK(y264_aq_void_fade_note(&c2, 60.0) == 0);
         /* a cut that jumps the fade's way breaks the run */
         y264_fade_t c = { 0 };
         for (int i = 0; i <= 3; i++) on = y264_aq_fade_note(&c, 20.0 + i);
@@ -149,23 +168,79 @@ int main(void)
         FILL(y < 3 || y >= H - 3, 16.0, 0.0, 30.0, 6.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 3 && e[1] == 3 && e[2] == 0 && e[3] == 0);
-        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) == 1.0);
         /* a subtitle in the bottom bar doesn't end it */
         for (int x = 5; x < 11; x++) { m[(H - 2) * W + x] = M(180.0); v[(H - 2) * W + x] = V(300.0); }
-        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) == 1.0);
         /* flat all over: deeper than the cap, so no bars */
         FILL(1, 16.0, 0.0, 16.0, 0.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
         /* a bar on one edge only isn't a letterbox */
+        FILL(y < 2, 60.0, 0.0, 30.0, 6.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 0) - (H - 2.0) / H) < 1e-9);
+        /* a black stage, three quarters of the frame and no bar walk's matte:
+         * the void leaves the count */
+        FILL((x + y) % 4 != 0, 16.0, 0.0, 30.0, 6.0)
+        y264_aq_bars(m, v, W, H, e);
+        CHECK(e[0] == 0 && e[1] == 0 && e[2] == 0 && e[3] == 0);
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) == 1.0);
+        /* the same picture on a slow fade up from black keeps its void */
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 1) - 0.25) < 0.02);
+        /* a black edge, or black shadow over a third of the picture, is dark
+         * picture and still dilutes it */
         FILL(y < 2, 16.0, 0.0, 30.0, 6.0)
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (H - 2.0) / H) < 1e-9);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 0) - (H - 2.0) / H) < 1e-9);
+        FILL((x + y) % 3 == 0, 16.0, 0.0, 30.0, 6.0)
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) < 0.7);
+        /* a nearly black frame: the few blocks left don't open the gate */
+        FILL((x + y) % 32 != 0, 16.0, 0.0, 30.0, 6.0)
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) < 0.1);
+        /* part way up the ramp in: 65% void opens half of it */
+        {
+            int nv = 187, b0[4] = { 0, 0, 0, 0 };
+            FILL((y * W + x) * 7 % (W * H) < nv, 16.0, 0.0, 30.0, 6.0)
+            double sp = (double)(W * H - nv) / (W * H), k = ((double)nv / (W * H) - 0.60) / 0.10;
+            CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, b0, BLK, 0) - (sp + k * (1 - sp))) < 1e-9);
+            /* and part way down the ramp out: 10% of the frame left */
+            nv = 259;
+            FILL((y * W + x) * 7 % (W * H) < nv, 16.0, 0.0, 30.0, 6.0)
+            sp = (double)(W * H - nv) / (W * H); k = (sp - 0.05) / 0.10;
+            CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, b0, BLK, 0) - (sp + k * (1 - sp))) < 1e-9);
+        }
+        /* black bars count toward the frame's void, so the same picture
+         * between black pillars opens more of the ramp than between grey ones */
+        {
+            int pb[4] = { 0, 0, 3, 3 };
+            FILL(x < 3 || x >= W - 3 || (x - 3) % 5 < 2, 16.0, 0.0, 30.0, 6.0)
+            CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, pb, BLK, 0) - 0.7) < 1e-9);
+            FILL(x < 3 || x >= W - 3 || (x - 3) % 5 < 2, x < 3 || x >= W - 3 ? 60.0 : 16.0, 0.0,
+                 30.0, 6.0)
+            CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, pb, BLK, 0) - 0.6) < 1e-9);
+            /* a black card between noisy grey pillars: three grain blocks are
+             * all that's left, and they don't open the gate */
+            int nb[4] = { 0, 0, 2, 2 };
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int pil = x < 2 || x >= W - 2, gr = !pil && y == 9 && x >= 6 && x < 9;
+                    m[y * W + x] = M(pil ? 40.0 : gr ? 30.0 : 16.0);
+                    v[y * W + x] = V(pil ? 30.0 : gr ? 6.0 : 0.0);
+                }
+            CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, nb, BLK, 0) - 3.0 / 216.0) < 1e-9);
+        }
+        /* at full range black is 0, so a flat stage at 16 is dark gray picture */
+        FILL((x + y) % 4 != 0, 16.0, 0.0, 30.0, 6.0)
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, 0.0, 0) - 0.25) < 0.02);
+        FILL((x + y) % 4 != 0, 2.0, 0.0, 30.0, 6.0)
+        CHECK(y264_aq_grain_share(m, v, W, H, 0.0, 0) == 1.0);
         /* grainy bars aren't flat bars: one frame alone counts them as grain,
          * and only nominates them (y264_aq_matte_cand, below) */
         FILL(y < 3 || y >= H - 3, 16.0, 1.44, 140.0, 80.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 0 && e[1] == 0);
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - 6.0 / H) < 1e-9);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 0) - 6.0 / H) < 1e-9);
         /* mattes of any color, and pillarboxes */
         FILL(y < 3 || y >= H - 3, 200.0, 0.1, 90.0, 60.0)
         y264_aq_bars(m, v, W, H, e);
@@ -272,7 +347,7 @@ int main(void)
         FILL(y < 6 || y >= H - 6, 16.0, 0.0, y < 22 ? 16.9 : 150.0, y < 22 ? 0.5 : 90.0)
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[0] == 6 && e[1] == 6);
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - 16.0 / 33.0) < 1e-9);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 0) - 16.0 / 33.0) < 1e-9);
         /* black bars beside dark grain */
         FILL(y < 6 || y >= H - 6, 16.0, 0.0, 24.0, 3.0)
         y264_aq_bars(m, v, W, H, e);
@@ -526,11 +601,11 @@ int main(void)
         NOISY(x < 27 || x >= W - 26, 16.0, 6.0, 4.0)        /* the repro's pillars */
         y264_aq_bars(m, v, W, H, e);
         CHECK(e[2] == 0 && e[3] == 0);                       /* not flat bars */
-        CHECK(y264_aq_grain_share(m, v, W, H) > 0.5);        /* one frame: grain */
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) > 0.5);        /* one frame: grain */
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 2);   /* nominated */
         CHECK(e[0] == 0 && e[1] == 0 && e[2] == 27 && e[3] == 26);
         CHECK(fabs(lv[1] - M(16.0)) < 0.1 * SC);
-        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e, BLK, 0) - pic) < 0.02);
         /* full range puts black at 0: pillars at 16 are picture there */
         CHECK(y264_aq_matte_cand(m, v, W, H, M(0.0), c2, lv2) == 0);
         /* the next frame's noise is new, but the matte holds still */
@@ -546,20 +621,20 @@ int main(void)
         CHECK(!y264_aq_matte_same(e, lv, c2, lv2, 1));
         NOISY(y < 6 || y >= H - 6, 16.0, 6.0, 4.0)          /* a letterbox */
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 1 && e[0] == 6 && e[1] == 6);
-        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e, BLK, 0) - pic) < 0.02);
         NOISY(y < 5 || y >= H - 5 || x < 10 || x >= W - 10, 16.0, 6.0, 4.0)
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 3);
-        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e, BLK, 0) - pic) < 0.02);
         NOISY(x < 27 || x >= W - 26, 16.0, 16.0, 12.0)      /* noise across the ceiling */
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 2);
-        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e) - pic) < 0.02);
+        CHECK(fabs(y264_aq_grain_share_in(m, v, W, H, e, BLK, 0) - pic) < 0.02);
         /* a matte dithered between two levels sits on the flat line: one
          * frame takes it as flat bars */
         NOISY(x < 27 || x >= W - 26, 16.5, 0.25, 0.0)
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++)
                 if ((x < 27 || x >= W - 26) && (x + y) % 3) v[y * W + x] = (float)V(0.24);
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - pic) < 0.02);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 0) - pic) < 0.02);
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[2] == 27);
         /* noisy black around a column of text, as behind credits, is a dark
          * field, not a matte: it frames no picture */
@@ -578,9 +653,9 @@ int main(void)
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[2] == 0 && e[3] == 0);
         /* a uniform dark wall or grainy sky is grain: one frame counts it */
         NOISY(x < 20 || x >= W - 20, 18.0, 6.0, 4.0)
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (40 + pic * 40) / W) < 0.02);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 0) - (40 + pic * 40) / W) < 0.02);
         NOISY(y < 12 || y >= H - 12, 18.0, 6.0, 4.0)
-        CHECK(fabs(y264_aq_grain_share(m, v, W, H) - (24 + pic * 21) / H) < 0.02);
+        CHECK(fabs(y264_aq_grain_share(m, v, W, H, BLK, 0) - (24 + pic * 21) / H) < 0.02);
         /* a wall's ragged inner edge ends the bar: every line of a noisy
          * bar must be nearly all matte */
         NOISY(x < 14 + y % 7 || x >= W - 14 - (y * 3) % 8, 18.0, 6.0, 4.0)
@@ -593,13 +668,13 @@ int main(void)
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0);
         NOISY(1, 18.0, 6.0, 4.0)
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0);
-        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) == 1.0);
         /* beside a clean matte, at the matte's own level: flat bars were
          * found, so the grain beside them is picture */
         NOISY(y >= 4 && y < H - 4, 16.3, 6.0, 4.0)
         for (int i = 0; i < W * H; i++)
             if (i < 4 * W || i >= (H - 4) * W) { m[i] = (float)M(16.0); v[i] = 0.f; }
-        CHECK(y264_aq_grain_share(m, v, W, H) == 1.0);
+        CHECK(y264_aq_grain_share(m, v, W, H, BLK, 0) == 1.0);
         CHECK(y264_aq_matte_cand(m, v, W, H, M(16.0), e, lv) == 0 && e[0] == 4 && e[1] == 4);
 #undef NOISY
 #undef PIC
