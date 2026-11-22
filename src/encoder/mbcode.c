@@ -8851,6 +8851,9 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * round-to-nearest test, commit it before any ME / RD analysis. Stricter
  * than P_Skip's deadzone probe -- direct MVs are guesses. */
         if (b8_stat_on()) { b8_stat_register(); bxa_reach++; bxa_admit++; }
+        if (f->force_skip) {
+            mode = 0; bl_path = 1; goto b_decided;
+        }
         if (f->subme <= 8) {
             if (dsk_cur >= 0 ? dsk_cur
                              : probe_bskip_strict(f, mbx, mby, pst)) {
@@ -12348,6 +12351,8 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         mode = 2;
         goto decided;
     }
+    if (!early && skip_ok && f->force_skip)
+        early = 1;
     if (early) {
         NLED(mb_p_early, 1);
         mode = 0;

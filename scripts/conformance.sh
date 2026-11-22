@@ -1983,10 +1983,15 @@ add "nal-hrd" check_rc hrd_sl  "$S/syn_motion.y4m" \
     "--cabac --crf 20 --vbv-maxrate 600 --vbv-bufsize 600 --slices 4 --nal-hrd vbr"
 add "nal-hrd" check_hrd_mt hrd_2pass_mt "$S/syn_shots.y4m" \
     "--cabac --bitrate 800 --vbv-maxrate 1000 --vbv-bufsize 1000 --nal-hrd vbr --keyint 60"
-# 1200, not 800: at 800 the P frames after a mid-clip IDR don't fit even at
-# QP 51, which the encoder warns about and the checker rightly fails
+# cbr where the cut's key and the P frames after it are tightest: at 300 and
+# 800 the P frames after the cut don't fit at QP 51, and at 1400 the cut's
+# key costs several times the first shot's
 add "nal-hrd" check_hrd_1pass hrd_cbr_1p "$S/syn_shots.y4m" \
-    "--cabac --bitrate 1200 --vbv-maxrate 1200 --vbv-bufsize 1200 --bframes 3 --nal-hrd cbr"
+    "--cabac --bitrate 800 --vbv-maxrate 800 --vbv-bufsize 800 --bframes 3 --nal-hrd cbr"
+add "nal-hrd" check_hrd_1pass hrd_cbr_1p_300 "$S/syn_shots.y4m" \
+    "--cabac --bitrate 300 --vbv-maxrate 300 --vbv-bufsize 300 --bframes 3 --nal-hrd cbr"
+add "nal-hrd" check_hrd_1pass hrd_cbr_1p_1400 "$S/syn_shots.y4m" \
+    "--cabac --bitrate 1400 --vbv-maxrate 1400 --vbv-bufsize 1400 --bframes 3 --nal-hrd cbr"
 add "nal-hrd" check_hrd_1pass hrd_vbr_1p "$S/syn_shots.y4m" \
     "--cabac --bitrate 600 --vbv-maxrate 800 --vbv-bufsize 800 --bframes 3 --nal-hrd vbr"
 

@@ -923,10 +923,20 @@ struct yah264_encoder {
     int      tp_split;                  /* the stats are a section the GOP splitter wrote */
     long     hrd_last_idr;              /* display index of the last key (IDR or open key), -1 none */
     double   hrd_c51[4];                /* last slice bits at QP 51 per type: I, P, B, an intra frame's second field */
+    double   hrd_key_ic;                /* the last key's lowres intra cost, 0 unknown */
+    long     hrd_ic_disp[64];           /* popped lookahead entries' lowres intra cost, */
+    long     hrd_ic_val[64];            /* by display index mod 64 */
+    long     hrd_pend_key;              /* display index of the last key popped, -1 none */
+    /* the reserve's view of the lookahead, read once per picture */
+    long     hrd_pf_disp;               /* the picture it was read for, -1 none */
+    int      hrd_pf_fld;
+    long     hrd_pf_d;                  /* pictures to the next key */
+    double   hrd_pf_kic, hrd_pf_cic;    /* lowres intra cost of the next key, of this picture */
     int      hrd_qfloor[3];             /* per type, the base QP the next frame starts from, -1 none */
     long     hrd_qfloor_at[3];          /* display index of the frame that set it */
     int      hrd_f0_intra;              /* the current frame's first field was intra */
     int      hrd_flat;                  /* re-coding at QP 51 without macroblock offsets */
+    int      hrd_skip;                  /* and with every inter macroblock that can be skipped */
     int      nal_measure;               /* 0 write NALs; 1 count them; 2 only charge the AU */
     size_t   nal_measure_bytes;
     uint8_t *nal_measure_buf;

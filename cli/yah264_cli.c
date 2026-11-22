@@ -1095,13 +1095,16 @@ static void usage(const char *argv0)
         "                     needs a buffer larger than one picture period of\n"
         "                     arrival. Either way each picture is re-coded up to\n"
         "                     the QP ceiling until it arrives in time, leaving room\n"
-        "                     for the next key the lookahead shows; one that still\n"
-        "                     cannot, even where QP 51 would have fitted, is counted\n"
-        "                     in a warning at the end. Pass 1 of a two-pass is not\n"
-        "                     held (send its stream to /dev/null). Runs one\n"
-        "                     encoder; refused with --crf-max, --qpmax under 51,\n"
-        "                     forced qpfile QPs, --zones q=, --cut-split,\n"
-        "                     --shot-table, --shot-crf and --segment-out.\n");
+        "                     for the next key the lookahead shows. An inter picture\n"
+        "                     at QP 51 skips what it can when it is still late, or\n"
+        "                     when it would make the coming key late and costs over\n"
+        "                     twice the per-picture arrival by itself; one that\n"
+        "                     still cannot fit is counted in a warning at the end.\n"
+        "                     Pass 1 of a two-pass is not held (send its stream\n"
+        "                     to /dev/null). Runs one encoder; refused with\n"
+        "                     --crf-max, --qpmax under 51, forced qpfile QPs,\n"
+        "                     --zones q=, --cut-split, --shot-table, --shot-crf\n"
+        "                     and --segment-out.\n");
     /* the --nal-hrd lines push this chunk past 4095 bytes too */
     fprintf(stderr,
         "  --filler / --no-filler   pad (or refuse to pad) access units to the\n"

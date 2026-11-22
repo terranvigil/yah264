@@ -2951,6 +2951,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     }
     if (e->hrd_flat)
         f.aq_off = NULL, f.mbtree_off = NULL;
+    f.force_skip = e->hrd_skip;
     /* P-frame lowres ME seed (ref0), for the hex search: the medium tier and
  * any tier run with --me hex. Hex has no wide grid, so without this field it
  * can't follow a fast pan; that holds at any subme. Only for P (the anchor
@@ -3141,6 +3142,16 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * (stair_lag_for), not recomputed per slice -- see encoder.h. */
     f.stair_mvy_max = e->stair_mvy_max;
     f.mv_xlim_q = e->mv_xlim_q; f.mv_ylim_q = e->mv_ylim_q;
+    /* a forced-skip re-code under --nal-hrd: the clamp would turn P_Skip and
+     * B_Skip off wherever the derived vector reaches past it, and the
+     * picture would stay late. The clamp only matters while a reference is
+     * still streaming, and a declared buffer runs every burst on the serial
+     * schedule, where each reference was finished before this re-code */
+    if (e->hrd_skip) {
+        f.stair_clamp = 0;
+        for (int h = 0; h < Y264_STAIR_HOPS; h++)
+            f.stair_clamp0_poc[h] = -1;
+    }
 
     /* Reset both motion fields: all blocks start "intra/unused" (refIdx -1).
  * Via fw so a per-leaf prep resets ITS slot's grids, never a live frame's.
@@ -3687,31 +3698,87 @@ static double hrd_cost51(double bits, int qp)
 
 /* pictures to the next key: the keyint key, or sooner the first typed
  * lookahead entry flagged a cut or an IDR (the lookahead head is display
- * frame_count + 1) */
-static long hrd_next_key(const yah264_encoder_t *e)
+ * frame_count + 1). *at is that entry's offset, -2 for a key popped but
+ * not yet coded, -1 when the key is out of sight */
+static long hrd_next_key(const yah264_encoder_t *e, int *at)
 {
     long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
+    *at = -1;
+    /* a key already popped but not coded yet: the pictures before it that
+     * the lookahead released with it (the run of B frames a cut closes,
+     * coded as P) come out after its pop */
+    if (e->hrd_pend_key > e->cur_disp && e->hrd_pend_key > e->hrd_last_idr) {
+        *at = -2;
+        return e->hrd_pend_key - e->cur_disp;
+    }
     for (int i = 0; i < e->la_n && i < la_horizon(e); i++) {
         const struct la_entry *h = &e->la[(e->la_head + i) % e->la_cap];
         if (!h->typed)
             break;
         if (h->is_cut || h->is_idr) {
             long dc = (long)e->frame_count + 1 + i - e->cur_disp;
-            if (dc >= 1 && (dc < d || d < 1))
+            if (dc >= 1 && (dc < d || d < 1)) {
                 d = dc;
+                *at = i;
+            }
             break;
         }
     }
     return d;
 }
 
+/* a popped entry's lowres intra cost by display index, for when it codes
+ * as a key */
+static void hrd_note_ic(yah264_encoder_t *e, const struct la_entry *en)
+{
+    if (!e->hrd_on)
+        return;
+    long disp = en->push_idx - 1;
+    e->hrd_ic_disp[disp & 63] = disp;
+    e->hrd_ic_val[disp & 63] = en->sum_icost;
+    if (en->is_cut || en->is_idr)
+        e->hrd_pend_key = disp;
+}
+
+/* what the reserve reads off the lookahead, once per picture: the distance
+ * to the next key, that key's lowres intra cost and this picture's. Through
+ * the recorder, since rate-control replay runs without the lookahead */
+static void hrd_profile(yah264_encoder_t *e)
+{
+    if (e->hrd_pf_disp == e->cur_disp && e->hrd_pf_fld == e->fld_second)
+        return;
+    e->hrd_pf_disp = e->cur_disp;
+    e->hrd_pf_fld = e->fld_second;
+    long d = 0;
+    double kic = 0.0, cic = 0.0;
+    if (!RCR_PLAY(e)) {
+        int at;
+        d = hrd_next_key(e, &at);
+        /* a key already popped is priced at the last key's cost unscaled:
+         * scaling it moved clean cells for nothing */
+        if (at >= 0)
+            kic = (double)e->la[(e->la_head + at) % e->la_cap].sum_icost;
+        int k = e->cur_disp & 63;
+        if (e->hrd_ic_disp[k] == e->cur_disp)
+            cic = (double)e->hrd_ic_val[k];
+    }
+    e->hrd_pf_d = (long)RCR_VAL(e->rcr, RCR_HRDKEY, (double)d);
+    e->hrd_pf_kic = RCR_VAL(e->rcr, RCR_HRDLA, kic);
+    e->hrd_pf_cic = RCR_VAL(e->rcr, RCR_HRDLA, cic);
+}
+
 /* bits to leave in the buffer for the next intra picture the encoder can
  * see coming (the keyint key, a scene cut the lookahead flagged, or the P
  * field after an intra first field) at what that type last cost at QP 51,
- * capped at CpbSize, less what arrives before it. Inter pictures are not
- * priced: their QP-51 cost extrapolated from this picture's QP held clean
- * cells far under their rate. */
-static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, double kovh)
+ * capped at CpbSize, less what arrives before it. A key the lookahead shows
+ * with a higher lowres intra cost than the last key's is priced up by that
+ * ratio, except under field coding: a cut into harder content cost several
+ * times the easier shot's key at QP 51, and a key can't go under that.
+ * Inter pictures are not priced: their QP-51 cost extrapolated from this
+ * picture's QP held clean cells far under their rate; one that this
+ * reserve finds over at QP 51 skips if it alone costs over twice what
+ * arrives per picture. */
+static double hrd_reserve(yah264_encoder_t *e, int type, double cur51, double kovh)
 {
     if (e->fld_pic && !e->fld_second && type == 0) {
         /* no second field seen yet: price it at twice this first field, since
@@ -3723,16 +3790,21 @@ static double hrd_reserve(const yah264_encoder_t *e, int type, double cur51, dou
     double i51 = e->hrd_c51[0];
     if (i51 <= 0.0 || e->hrd_last_idr < 0)
         return nx;
+    hrd_profile(e);
     double tail = 0.0;
     if (e->fields) {
         /* the key's second field lands before the buffer refills */
         i51 += e->hrd_c51[3];
         tail = e->hrd_rate_pic;
+    } else if (e->hrd_pf_kic > e->hrd_key_ic && e->hrd_key_ic > 0.0) {
+        /* at most 16: a cut out of black reads a ratio in the hundreds,
+         * which priced the key at the whole buffer for a lookahead's
+         * worth of pictures, and syn_shots' cut into noise needed 12 */
+        double kr = e->hrd_pf_kic / e->hrd_key_ic;
+        i51 *= kr < 16.0 ? kr : 16.0;
     }
     if (i51 > e->hrd_cpb) i51 = e->hrd_cpb;
-    /* the lookahead's typing isn't reproduced under rate-control replay,
-     * so the distance goes through the recorder */
-    long d = (long)RCR_VAL(e->rcr, RCR_HRDKEY, (double)hrd_next_key(e));
+    long d = e->hrd_pf_d;
     if (d < 1 || d > e->param.keyint)
         return nx;
     double per = e->fields ? 2.0 * e->hrd_rate_pic : e->hrd_rate_pic;
@@ -5686,6 +5758,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->hrd_disp_base = -1;
             e->hrd_last_idr = -1;
             e->hrd_c51[0] = e->hrd_c51[1] = e->hrd_c51[2] = e->hrd_c51[3] = 0.0;
+            e->hrd_key_ic = 0.0;
+            e->hrd_pf_disp = -1;
+            e->hrd_pend_key = -1;
+            for (int k = 0; k < 64; k++)
+                e->hrd_ic_disp[k] = -1;
             e->hrd_f0_intra = 0;
             e->sps.hrd = param->nal_hrd;
             e->sps.hrd_bit_rate = (unsigned)e->hrd_bitrate;
@@ -12139,10 +12216,17 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
 
 
 /* how far a built frame runs over what the measured-size bound allows it:
- * the buffer's limit, and under --nal-hrd the declared buffer too */
+ * the buffer's limit, and under --nal-hrd the declared buffer too. *late,
+ * when asked for, is how far it runs over what the declared schedule alone
+ * allows: its room, or the room less the reserve when the picture by itself
+ * costs over twice what arrives per picture (it would make the coming key
+ * late, and nothing else ahead of the key can give that back). The VBV
+ * model's term is never in it */
 static double bound_over(yah264_encoder_t *e, const struct slice_map *sm, int type,
-                         int is_idr, int is_ref, double limit, double *kovh)
+                         int is_idr, int is_ref, double limit, double *kovh, double *late)
 {
+    if (late)
+        *late = 0.0;
     double bits = sm_wire_bits(sm);     /* what the buffer is charged */
     /* a pass 2 also charges what its access unit carries ahead of the
      * slices, the parameter sets and SEI of a key */
@@ -12157,6 +12241,8 @@ static double bound_over(yah264_encoder_t *e, const struct slice_map *sm, int ty
         double sb = hrd_slice_bits(e, sm);
         double ho = room > 0.0 ? sb / room : 64.0;
         if (ho > over) over = ho;
+        if (late)
+            *late = ho;
         if (*kovh < 0.0) {
             double hc = 0.0, hk = 0.0;
             *kovh = 0.0;
@@ -12171,6 +12257,8 @@ static double bound_over(yah264_encoder_t *e, const struct slice_map *sm, int ty
             double lim = room - res;
             double hr = lim > 0.0 ? sb / lim : 64.0;
             if (hr > over) over = hr;
+            if (late && sb > 2.0 * e->hrd_rate_pic && hr > *late)
+                *late = hr;
         }
     }
     return over;
@@ -12315,7 +12403,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
          * 1/qscale step past it overshot to QP 51 and starved the burst */
         int tries = e->hrd_on ? 64 : e->rcp_vbv_bstight ? 8 : 4;
         for (int k = 0; k < tries && limit > 0.0 && forced_qp(e) < 0; k++) {
-            double over = bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh);
+            double late;
+            double over = bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh, &late);
             last_over = over;
             if (over <= 1.0)
                 break;
@@ -12340,9 +12429,19 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                 /* at the ceiling the per-macroblock offsets still code some
                  * blocks under 51: under a declared buffer or a two-pass
                  * pass 2, drop them once */
-                if ((!e->hrd_on && e->tp_pass < 2) || e->hrd_flat || (!e->aq_off && !e->mbtree_on))
+                if (!e->hrd_on && e->tp_pass < 2)
                     break;
-                e->hrd_flat = 1;
+                if (!e->hrd_flat && (e->aq_off || e->mbtree_on))
+                    e->hrd_flat = 1;
+                else if (e->hrd_on && type != 0 && !e->hrd_skip && late > 1.0)
+                    /* still over the declared schedule at QP 51 (late, or
+                     * making the coming key late): skip every macroblock
+                     * that can be. a picture that is all prediction beats
+                     * a late one, which stalls the decoder; the VBV model
+                     * alone is an estimate, and never skips one */
+                    e->hrd_flat = e->hrd_skip = 1;
+                else
+                    break;
             }
             int good = e->qp;
             bound_fail = good;
@@ -12378,7 +12477,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         double fill = e->rcp_on ? rcp_vbv_vfill_bound(e, 1) : e->vbv.fill;
         double limit = vbv_bound_limit(e, fill);
         double kovh = -1.0;
-        double over = limit > 0.0 ? bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh) : 1.0;
+        double over = limit > 0.0 ? bound_over(e, &sm, type, is_idr, is_ref, limit, &kovh, NULL) : 1.0;
         int fit = e->qp, fail = bound_fail, built = e->qp;
         for (int t = 0; t < 3 && fit - fail > 1 && over < 0.5 && limit > 0.0; t++) {
             int mid = (fit + fail) / 2;
@@ -12390,7 +12489,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
             if (sz == 0) { built = -1; fail = mid; break; }
             built = mid;
-            double o2 = bound_over(e, &sm2, type, is_idr, is_ref, limit, &kovh);
+            double o2 = bound_over(e, &sm2, type, is_idr, is_ref, limit, &kovh, NULL);
             if (o2 <= 1.0) { fit = mid; rbsp_size = sz; sm = sm2; over = o2; }
             else fail = mid;
         }
@@ -12406,6 +12505,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         last_over = over;               /* the floor below reads the frame kept */
     }
     e->hrd_flat = 0;
+    e->hrd_skip = 0;
     if (floored) {
         /* a raise of --qpstep or more sets the floor of its type, the drift
          * the floor is for, so a frame that needed a step or two does not
@@ -12434,8 +12534,13 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             e->hrd_c51[3] = c51;
         if (e->fld_pic && !e->fld_second)
             e->hrd_f0_intra = type == 0;
-        if ((is_idr || e->cur_open_key) && !(e->fld_pic && e->fld_second))
+        if ((is_idr || e->cur_open_key) && !(e->fld_pic && e->fld_second)) {
             e->hrd_last_idr = e->cur_disp;
+            if (type == 0 && !e->fields) {
+                hrd_profile(e);
+                e->hrd_key_ic = e->hrd_pf_cic;
+            }
+        }
     }
     /* The recon may serve as a reference (copied into the ring / DPB / ref1):
  * replicate its edges outward so out-of-frame MC reads the borders. */
@@ -16386,6 +16491,7 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
                 e->la_th->pop_seq++;        /* keep pop k == push k accounting */
             if (!en->typed)                 /* the pending tail: no future frame */
                 la_finalize(e, en, NULL);
+            hrd_note_ic(e, en);
             stash_lr_seed(e, en);
             e->cur_la_en = en;
             if (encode_frame_core(e, en->plane, 1, en->is_cut, en->is_anchor, &off) < 0)
@@ -16508,6 +16614,7 @@ static int encode_push(yah264_encoder_t *e, const yah264_picture_t *pic, size_t 
         }
         if (!en->typed)
             la_finalize(e, en, NULL);
+        hrd_note_ic(e, en);
         stash_lr_seed(e, en);
         e->cur_la_en = en;
         if (encode_frame_core(e, en->plane, 1, en->is_cut, en->is_anchor, &off) < 0)

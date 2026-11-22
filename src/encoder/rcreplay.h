@@ -23,7 +23,7 @@
  * Y264_RC_PLAY_K sets the exponent's scale), which is an estimate and is
  * reported as one.
  *
- * File format: a 16-byte header ("Y264RCR2", then the frame width and height
+ * File format: a 16-byte header ("Y264RCR3", then the frame width and height
  * as uint32), then fixed 16-byte records {uint32 tag, uint32 seq, double v},
  * host byte order (the file never leaves the machine that wrote it).
  */
@@ -55,12 +55,14 @@ enum {
     RCR_NALEMU,         /* --nal-hrd: one slice NAL's escaped size over its RBSP */
     RCR_NSLICE,         /* a coded picture's slice count */
     RCR_HRDKEY,         /* --nal-hrd: pictures to the next key, as the reserve reads it */
+    RCR_HRDLA,          /* --nal-hrd: lowres intra costs of the next key and this picture */
     RCR_NTAGS
 };
 
 static const char *const rcr_tag_name[RCR_NTAGS] = {
     "?", "flags", "arr_cme", "arr_ilr", "fc", "fcme", "crf_dc", "rf2_cme",
     "mbt_mean", "qp", "size", "arr_acx", "rf2_ir", "rf2_luma", "hrd_emu", "nal_emu", "nslice", "hrd_key",
+    "hrd_la",
 };
 
 typedef struct y264_rcr {
@@ -208,17 +210,23 @@ static inline int rcr_lazy(y264_rcr *r)
         return -1;
     }
     if (r->play) {
-        if (fread(hdr, sizeof hdr, 1, r->fp) != 1 || memcmp(hdr, "Y264RCR2", 8) != 0 ||
+        int got = fread(hdr, sizeof hdr, 1, r->fp) == 1;
+        int old = got && memcmp(hdr, "Y264RCR", 7) == 0 && memcmp(hdr, "Y264RCR3", 8) != 0;
+        if (old || !got || memcmp(hdr, "Y264RCR3", 8) != 0 ||
             hdr[2] != (uint32_t)r->width || hdr[3] != (uint32_t)r->height) {
-            fprintf(stderr, "yah264: rate-control replay: %s is not a recording of a "
-                            "%dx%d encode\n", r->path, r->width, r->height);
+            if (old)
+                fprintf(stderr, "yah264: rate-control replay: %s is an older recording "
+                                "format; record it again with this build\n", r->path);
+            else
+                fprintf(stderr, "yah264: rate-control replay: %s is not a recording of a "
+                                "%dx%d encode\n", r->path, r->width, r->height);
             fclose(r->fp);
             r->fp = NULL;
             r->broken = 1;
             return -1;
         }
     } else {
-        memcpy(hdr, "Y264RCR2", 8);
+        memcpy(hdr, "Y264RCR3", 8);
         hdr[2] = (uint32_t)r->width;
         hdr[3] = (uint32_t)r->height;
         fwrite(hdr, sizeof hdr, 1, r->fp);
