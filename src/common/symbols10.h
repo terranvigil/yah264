@@ -38,6 +38,14 @@
 #define anchor_leg_cost                 anchor_leg_cost_10
 #define crf_cplx_env                    crf_cplx_env_10
 #define crf_max_clip                    crf_max_clip_10
+#define ctl_flush_end                   ctl_flush_end_10
+#define ctl_free                        ctl_free_10
+#define ctl_hand_in                     ctl_hand_in_10
+#define ctl_hand_in_failed              ctl_hand_in_failed_10
+#define ctl_new                         ctl_new_10
+#define ctl_note_emit                   ctl_note_emit_10
+#define ctl_rc_land_slow                ctl_rc_land_slow_10
+#define ctl_rc_snapshot                 ctl_rc_snapshot_10
 #define frame_complexity_ilr            frame_complexity_ilr_10
 #define frame_complexity_me             frame_complexity_me_10
 #define frame_qp                        frame_qp_10
@@ -59,6 +67,7 @@
 #define ntp_wavefront_batch             ntp_wavefront_batch_10
 #define ntp_wavefront_gated             ntp_wavefront_gated_10
 #define qp_bound                        qp_bound_10
+#define rc_ctl_retarget                 rc_ctl_retarget_10
 #define rc_head_crf                     rc_head_crf_10
 #define rc_head_serial                  rc_head_serial_10
 #define rc_knobs_resolve                rc_knobs_resolve_10
@@ -314,6 +323,7 @@
 #define y264_ip_beg                     y264_ip_beg_10
 #define y264_ip_end                     y264_ip_end_10
 #define y264_ip_scope_end               y264_ip_scope_end_10
+#define y264_level_max_br               y264_level_max_br_10
 #define y264_lr_hp_row                  y264_lr_hp_row_10
 #define y264_lr_hp_row_avx2             y264_lr_hp_row_avx2_10
 #define y264_lr_hp_row_c                y264_lr_hp_row_c_10

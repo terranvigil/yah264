@@ -93,6 +93,12 @@ extern "C" {
 #define yah264_rc_shared_new            YAH264_API(yah264_rc_shared_new)
 #define yah264_rc_shared_free           YAH264_API(yah264_rc_shared_free)
 #define yah264_encoder_rc_share         YAH264_API(yah264_encoder_rc_share)
+#define yah264_control_init             YAH264_API(yah264_control_init)
+#define yah264_control_strerror         YAH264_API(yah264_control_strerror)
+#define yah264_encoder_control          YAH264_API(yah264_encoder_control)
+#define yah264_encoder_control_check    YAH264_API(yah264_encoder_control_check)
+#define yah264_encoder_controls_applied YAH264_API(yah264_encoder_controls_applied)
+#define yah264_encoder_status           YAH264_API(yah264_encoder_status)
 #endif
 
 #define YAH264_VERSION_MAJOR 0
@@ -1372,6 +1378,138 @@ typedef struct yah264_rc_shared yah264_rc_shared_t;
 YAH264_EXPORT yah264_rc_shared_t *yah264_rc_shared_new(void);
 YAH264_EXPORT void yah264_rc_shared_free(yah264_rc_shared_t *s);
 YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *enc, yah264_rc_shared_t *s);
+
+/* ===========================================================================
+ * Live control (docs/live-control.md).
+ *
+ * Between encode calls a caller hands the encoder control events. Each names
+ * the input frame it lands on (pictures handed to encode, counted from zero,
+ * the index zones and frame stats use) or YAH264_CTL_NEXT for the next one.
+ * An event may name a frame only while that frame has not been handed in;
+ * after that it is refused with YAH264_CTL_ELATE, however deep the pipeline.
+ *
+ *   RATE, CRF   take effect at the rate-control decision of the first frame,
+ *               in coding order, numbered F or later: every frame from F on is
+ *               coded under them, and so is a reordered B frame below F that
+ *               is coded after that decision.
+ *   QP_LIMITS   every frame numbered F or later, exactly.
+ *   KEYFRAME    frame F is an IDR that starts a closed GOP.
+ *   ZONE        every frame F..last, exactly; qp_offset is added to each
+ *               frame's QP (rounded to a whole QP), as a plan zone's is.
+ *
+ * With no events the stream is byte-identical to an encode that never called
+ * these. A recorded log of events replays to the same bytes at --threads 1.
+ *
+ * Both structs are versioned by `size`, their first field: fields are only
+ * appended, the library reads none past the caller's size and treats them as
+ * unset, and a size below the first version's or above the library's is
+ * refused. None of this touches yah264_param_t.
+ *
+ * Bounds: at most 4096 queued events may name frames after the next one to be
+ * handed in, and queued events plus applied records not yet drained may number
+ * at most 1 << 20 (events for the next frame count only toward this one); past
+ * either an event is refused with YAH264_CTL_EFULL, so a queued event always
+ * has a record slot. An event is 120 bytes, so the live queue and records
+ * together are at most about 126 MB at the bound. Their buffers grow by
+ * doubling and shrink only once under a quarter full, so what is allocated
+ * can reach about 2.25 times that (about 285 MB) and stays there while
+ * records go undrained; a doubling realloc briefly adds the old block on top,
+ * and yah264_encoder_control_check() holds a copy of the queue while it runs.
+ * A RATE event's submit replays the queued rate events, and a QP_LIMITS
+ * submit the queued frame events, each O(queued), under the lock the
+ * encoder's rate decisions also take. */
+typedef struct {
+    int     size;               /* sizeof(yah264_control_t); yah264_control_init sets it */
+    int     kind;               /* YAH264_CTL_* */
+    int64_t frame;              /* landing input frame, or YAH264_CTL_NEXT; resolved on return */
+    int64_t applied_frame;      /* out (controls_applied): where it took effect, -1 if never */
+    int     bitrate_kbps;       /* RATE: 0 = unchanged */
+    int     vbv_maxrate_kbps;   /* RATE: 0 = unchanged */
+    int     vbv_bufsize_kbit;   /* RATE: 0 = unchanged */
+    double  crf;                /* CRF: 0 < crf <= 51 */
+    int     qp_min, qp_max;     /* QP_LIMITS: -1 = unchanged */
+    int64_t last;               /* ZONE: last frame, inclusive */
+    double  qp_offset;          /* ZONE */
+    int     fps_num, fps_den;   /* FPS (not supported) */
+    char    preset[32];         /* PRESET (not supported) */
+    int     width, height;      /* RESOLUTION (not supported) */
+} yah264_control_t;
+
+#define YAH264_CTL_NEXT        (-1)
+
+#define YAH264_CTL_RATE        1
+#define YAH264_CTL_CRF         2
+#define YAH264_CTL_QP_LIMITS   3
+#define YAH264_CTL_KEYFRAME    4
+#define YAH264_CTL_ZONE        5
+#define YAH264_CTL_FPS         6    /* refused: YAH264_CTL_EUNSUPPORTED */
+#define YAH264_CTL_PRESET      7    /* refused: YAH264_CTL_EUNSUPPORTED */
+#define YAH264_CTL_RESOLUTION  8    /* refused: YAH264_CTL_EUNSUPPORTED */
+
+#define YAH264_CTL_OK            0
+#define YAH264_CTL_EINVAL       (-1) /* bad pointer, size or value */
+#define YAH264_CTL_EUNSUPPORTED (-2) /* this library does not implement the kind */
+#define YAH264_CTL_ELATE        (-3) /* the landing frame has already been handed in */
+#define YAH264_CTL_EMODE        (-4) /* does not fit the encode's rate-control mode */
+#define YAH264_CTL_EHRD         (-5) /* would break the signalled HRD (--nal-hrd) */
+#define YAH264_CTL_ELEVEL       (-6) /* exceeds the declared level */
+#define YAH264_CTL_ECONFLICT    (-7) /* overlaps a zone already set */
+#define YAH264_CTL_ENOMEM       (-8)
+#define YAH264_CTL_EFULL        (-9) /* the control queue is full: resend once events have landed */
+
+/* Zero the event, set its size and kind, land it on the next frame and leave
+ * every field unset. */
+YAH264_EXPORT void yah264_control_init(yah264_control_t *ev, int kind);
+YAH264_EXPORT const char *yah264_control_strerror(int err);
+
+/* Validate and queue one event. Returns YAH264_CTL_OK with ev->frame resolved,
+ * or a negative YAH264_CTL_* code and nothing queued. Call between encode
+ * calls, from the thread that calls encode. */
+YAH264_EXPORT int yah264_encoder_control(yah264_encoder_t *enc, yah264_control_t *ev);
+
+/* Check n events as yah264_encoder_control would take them, in order, each
+ * as if the ones before it and everything already queued were queued too,
+ * against the encoder's current state. Nothing is queued or changed, and
+ * there is no queue bound. Returns YAH264_CTL_OK with *bad_index set to -1,
+ * or the first refusal's code with its index in *bad_index. A bad pointer or n < 0 returns
+ * YAH264_CTL_EINVAL with *bad_index -1 (not written when bad_index is
+ * NULL). Each event's size is checked as yah264_encoder_control checks it.
+ * Call it between encode calls, from the thread that calls encode. */
+YAH264_EXPORT int yah264_encoder_control_check(yah264_encoder_t *enc, const yah264_control_t *ev,
+                                               int n, int *bad_index);
+
+/* Drain the events that took effect since the last call, in the order they
+ * were applied, each with applied_frame set. After the flush, an event whose
+ * frame never arrived comes back with applied_frame -1. Returns the count, or
+ * -1 on bad arguments or when records were lost since the last call (only an
+ * allocation failure loses one). The caller's out[] entries must
+ * have size set (the library writes no byte past it); yah264_control_init
+ * does that. */
+YAH264_EXPORT int yah264_encoder_controls_applied(yah264_encoder_t *enc, yah264_control_t *out,
+                                                  int max);
+
+/* Backpressure and the live rate state. Set size, then call between encode
+ * calls. Everything but oldest_age_ms is a function of the input and the
+ * events, so it reads the same on a replay. Returns 0, or -1 on bad
+ * arguments. */
+typedef struct {
+    int     size;               /* sizeof(yah264_status_t) */
+    int64_t frames_in;          /* pictures handed in */
+    int64_t frames_out;         /* coded frames returned */
+    int     queue_depth;        /* frames_in - frames_out */
+    int64_t next_frame;         /* the earliest frame an event can name */
+    double  queue_ms;           /* queue_depth at the open-time frame rate */
+    double  oldest_age_ms;      /* wall time the oldest frame not yet returned has been inside */
+    double  target_kbps;        /* current bitrate target, 0 if none */
+    double  vbv_maxrate_kbps;   /* current buffer, 0 if none */
+    double  vbv_bufsize_kbit;
+    double  vbv_fill_bits;      /* buffer occupancy after the last frame whose bits the rate control has counted */
+    double  budget_bits;        /* what the next frame may spend: the VBV fill, else the ledger surplus, else 0 */
+    double  rate_balance_bits;  /* bitrate mode: target bits minus bits spent (positive = under) */
+    int64_t controls_pending;   /* queued, not yet applied */
+    int64_t controls_applied;   /* applied since open */
+} yah264_status_t;
+YAH264_EXPORT int yah264_encoder_status(yah264_encoder_t *enc, yah264_status_t *st);
 
 #ifdef __cplusplus
 }

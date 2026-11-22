@@ -969,6 +969,10 @@ struct yah264_encoder {
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
     double   slew_ref[3];        /* per type: the previous decide's slew-limited
                                   * equation QP (rf2 reads type 1 only) */
+    int      slew_set[3];        /* slew_ref[t] holds a value, which may be negative */
+    double   rt_owed_end;        /* a live retarget's fast-slew window ends when rfm_owed passes this; 0 = none */
+    int      rt_done;            /* a live retarget happened: the references go by their flags, not their sign */
+    int      last_ref_n;         /* how many of last_ref_qp hold a value */
     struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
                                 * (in-flight prediction); have = meas */
     double   blur_csum, blur_cwt;   /* per-frame model: the decayed complexity
@@ -1440,6 +1444,10 @@ struct yah264_encoder {
 
     /* mb-tree Phase-A warm thread (see mbt_warm_window); state in encoder.c. */
     struct mbt_pre    *mbtp;
+
+    /* live control (yah264_encoder_control) and the status bookkeeping;
+ * control.h */
+    struct y264_ctl   *ctl;
 };
 
 #endif /* YAH264_ENCODER_INT_H */
