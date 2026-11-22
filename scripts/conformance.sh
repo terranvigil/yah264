@@ -1212,7 +1212,7 @@ print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/de
 # one-pass --nal-hrd at one thread and at three. --nal-hrd runs one encoder,
 # so the threads go to the lookahead and the row wavefront, and every burst
 # must still take the serial re-encode that holds it to the declared buffer.
-# The clip has to cut to an IDR mid-stream: the buffer is tightest after one
+# The clip has to cut to an IDR mid-stream: the buffer is tightest after one.
 check_hrd_1pass() {   # check_hrd_1pass <name> <src> <spec>
     local name="$1" src="$2" spec="$3" t f=0 n=0 p idrs
     for t in 1 3; do

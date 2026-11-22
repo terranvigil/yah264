@@ -206,10 +206,11 @@ picture that is all prediction beats one that stalls the decoder. The rate
 control's own buffer model alone never skips a picture. The room left after a
 picture is a reserve for the next key the encoder can see coming (the keyint
 key or a scene cut the lookahead flagged) at what the last intra picture cost
-at QP 51, scaled up by the two keys' lowres intra costs when the coming one's
-is higher (at most 16 times, and not under field coding), less what arrives
-before it, and under field coding for the second field of an intra first
-field. The rate control never sees these raises, so after a frame is raised by
+at QP 51. When the coming key is a scene cut ahead of the keyint key, that
+cost is scaled up by the two keys' lowres intra costs if the cut's is higher
+(at most 16 times, and not under field coding). The reserve is that cost
+less what arrives before the key. Under field coding it also holds room for
+the second field of an intra first field. The rate control never sees these raises, so after a frame is raised by
 `--qpstep` or more, the next frame of its type starts from that QP; a frame
 with room to spare lowers that start, and a key, a cut or a lookahead window
 without use drops it. A key still late at QP 51, or an inter picture still

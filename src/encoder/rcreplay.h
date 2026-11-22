@@ -211,7 +211,8 @@ static inline int rcr_lazy(y264_rcr *r)
     }
     if (r->play) {
         int got = fread(hdr, sizeof hdr, 1, r->fp) == 1;
-        int old = got && memcmp(hdr, "Y264RCR", 7) == 0 && memcmp(hdr, "Y264RCR3", 8) != 0;
+        int old = got && memcmp(hdr, "Y264RCR", 7) == 0 &&
+                  ((const char *)hdr)[7] >= '1' && ((const char *)hdr)[7] < '3';
         if (old || !got || memcmp(hdr, "Y264RCR3", 8) != 0 ||
             hdr[2] != (uint32_t)r->width || hdr[3] != (uint32_t)r->height) {
             if (old)

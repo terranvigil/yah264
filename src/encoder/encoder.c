@@ -3699,7 +3699,8 @@ static double hrd_cost51(double bits, int qp)
 /* pictures to the next key: the keyint key, or sooner the first typed
  * lookahead entry flagged a cut or an IDR (the lookahead head is display
  * frame_count + 1). *at is that entry's offset, -2 for a key popped but
- * not yet coded, -1 when the key is out of sight */
+ * not yet coded, -1 for the keyint key or no key in sight; only a cut
+ * found in the lookahead gets its intra cost scaled */
 static long hrd_next_key(const yah264_encoder_t *e, int *at)
 {
     long d = e->hrd_last_idr + e->param.keyint - e->cur_disp;
