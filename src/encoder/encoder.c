@@ -3755,10 +3755,12 @@ static void hrd_profile(yah264_encoder_t *e)
     if (!RCR_PLAY(e)) {
         int at;
         d = hrd_next_key(e, &at);
-        /* a key already popped is priced at the last key's cost unscaled:
-         * scaling it moved clean cells for nothing */
+        /* a key already popped keeps its scaled price: the pictures it
+         * releases are the last chance to leave it room */
         if (at >= 0)
             kic = (double)e->la[(e->la_head + at) % e->la_cap].sum_icost;
+        else if (at == -2 && e->hrd_ic_disp[e->hrd_pend_key & 63] == e->hrd_pend_key)
+            kic = (double)e->hrd_ic_val[e->hrd_pend_key & 63];
         int k = e->cur_disp & 63;
         if (e->hrd_ic_disp[k] == e->cur_disp)
             cic = (double)e->hrd_ic_val[k];
