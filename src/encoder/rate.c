@@ -13,6 +13,7 @@
 #include "rcreplay.h"
 #include "encoder.h"
 #include "rate.h"
+#include "control.h"
 #include "../dsp/interp.h"
 #include "../common/threadpool.h"
 #include <stdlib.h>
@@ -995,6 +996,7 @@ double crf_max_clip(const yah264_encoder_t *e, double base, double raised, int o
 void rc_head_serial(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3])
 {
     (void)is_ref;
+    ctl_rc_land(e);
     if (!e->crf_on) return;             /* CQP: the base QP is fixed */
     double C = 0.0;
     if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, type == 0)); e->rc_cplx = C; }
@@ -1010,6 +1012,7 @@ void rc_head_serial(yah264_encoder_t *e, int type, int is_ref, pixel *const src[
  * want_c = 0 skips the full-resolution probe where it would race (async). */
 void rc_head_crf(yah264_encoder_t *e, int type, pixel *const src[3], int want_c)
 {
+    ctl_rc_land(e);
     double C = 0.0;
     if (want_c && rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, 0)); e->rc_cplx = C; }
     double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
@@ -1592,8 +1595,11 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * its base may rise that far past the ceiling, or a starved all-intra
  * stream stops 3 QP short of what the buffer needs */
     int lift = coded < e->qp ? e->qp - coded : 0;
-    if (q < e->qp_min) q = e->qp_min;
-    if (q > e->qp_max + lift) q = e->qp_max + lift;
+    int qlo = e->qp_min, qhi = e->qp_max;
+    const struct ctl_slot *cs = ctl_slot_at(e, e->cur_disp);
+    if (cs) { qlo = cs->qp_min; qhi = cs->qp_max; }   /* a live QP_LIMITS event */
+    if (q < qlo) q = qlo;
+    if (q > qhi + lift) q = qhi + lift;
     /* An intra frame the buffer raised: the anchors that refine it are
  * the ones the bits model cannot price (see the burst gate). */
     if (type == 0 && e->crf_on && !e->abr_on)
@@ -1997,6 +2003,7 @@ static int abr_dc_on(const yah264_encoder_t *e)
 void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                        pixel *const src[3])
 {
+    ctl_rc_land(e);
     double C = type == 0 ? RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, 1)) : e->rcp_cur_cme;
     if (e->abr_on && type != 0) {
         double f = e->rcp_cur_cvi * 0.2;
@@ -2452,6 +2459,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         e->rcp_n++;
     }
     rcp_pop_ready(e);
+    ctl_rc_snapshot(e);
 }
 
 /* The emit-head hook: either a fresh decision, or -- when a bailed parallel
@@ -3418,4 +3426,47 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
     if (e->vbv_on) { out->vbv_fill = e->vbv.fill; out->vbv_have = 1; }
     memcpy(dst, out, dsz);
     return 0;
+}
+
+/* a live rate event: retarget in place (docs/live-control.md). Owed and spent
+ * scale by r, so the ledger QP moves to the new target and the error stays the
+ * same fraction of the rate; the slew and tracking references move with it. */
+void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
+{
+    double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
+               ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 25.0;
+    double fdiv = e->fields ? 2.0 : 1.0;
+    if (kbps > 0 && e->abr_on && e->abr_target_bpf > 0) {
+        double nb = (double)kbps * 1000.0 / fps / fdiv;
+        double r = nb / e->abr_target_bpf;
+        double dq = -6.0 * log2(r);
+        e->rfm_owed *= r;
+        e->abr_cum_target *= r;
+        e->abr_cum_actual *= r;
+        for (int t = 0; t < 3; t++)
+            if (e->slew_ref[t] >= 0) e->slew_ref[t] += dq;
+        e->itrk_qp += dq * e->itrk_wt;
+        for (int k = 0; k < 2; k++)
+            if (e->last_ref_qp[k] >= 0) e->last_ref_qp[k] += dq;
+        e->abr_qp += dq;
+        if (e->abr_qp < 1) e->abr_qp = 1;
+        if (e->abr_qp > 51) e->abr_qp = 51;
+        /* a B landing before the next anchor codes on this base */
+        int q = e->qp + (int)lround(dq);
+        e->qp = qp_bound(e, q < 0 ? 0 : q > 51 ? 51 : q);
+        e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+        e->abr_target_bpf = nb;
+        e->param.rc.bitrate = kbps;
+    }
+    if (maxrate > 0 && e->vbv_on) {
+        e->vbv.rate = (double)maxrate * 1000.0 / fps / fdiv;
+        e->param.rc.vbv_maxrate = maxrate;
+    }
+    if (bufsize > 0 && e->vbv_on && e->vbv.size > 0) {
+        double ns = (double)bufsize * 1000.0;
+        e->vbv.fill *= ns / e->vbv.size;
+        e->vbv.size = ns;
+        e->vbv_seg_h = e->rck.vbv_fill_frac * ns;
+        e->param.rc.vbv_bufsize = bufsize;
+    }
 }

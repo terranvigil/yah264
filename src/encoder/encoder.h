@@ -1431,6 +1431,10 @@ struct yah264_encoder {
 
     /* mb-tree Phase-A warm thread (see mbt_warm_window); state in encoder.c. */
     struct mbt_pre    *mbtp;
+
+    /* live control (yah264_encoder_control) and the status bookkeeping;
+ * control.h */
+    struct y264_ctl   *ctl;
 };
 
 #endif /* YAH264_ENCODER_INT_H */

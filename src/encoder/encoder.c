@@ -17,6 +17,7 @@
 #define RCR_PLAY(e) ((e)->rcr && (e)->rcr->play)
 #include "encoder.h"
 #include "rate.h"
+#include "control.h"
 #include "../hw/vt.h"
 #include "../dsp/interp.h"
 #include "motion.h"
@@ -1247,9 +1248,19 @@ static int forced_qp(const yah264_encoder_t *e)
  * not on the base QP the offsets are taken from. */
 int qp_bound(const yah264_encoder_t *e, int q)
 {
-    if (q < e->qp_min) q = e->qp_min;
-    if (q > e->qp_max) q = e->qp_max;
+    int lo = e->qp_min, hi = e->qp_max;
+    const struct ctl_slot *s = ctl_slot_at(e, e->cur_disp);
+    if (s) { lo = s->qp_min; hi = s->qp_max; }   /* a live QP_LIMITS event */
+    if (q < lo) q = lo;
+    if (q > hi) q = hi;
     return q;
+}
+
+/* the live-control zone's offset on frame `disp`, whole QPs, as a plan zone's */
+static int ctl_zone_qp(const yah264_encoder_t *e, int q)
+{
+    const struct ctl_slot *s = ctl_slot_at(e, e->cur_disp);
+    return s && s->zone_on ? q + (int)s->zone_off : q;
 }
 
 int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
@@ -1271,6 +1282,7 @@ int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
         const yah264_zone_t *z = zone_at(e, e->cur_disp);
         if (z) q = zone_base_qp(z, q);
     }
+    q = ctl_zone_qp(e, q);
     if (e->tp_pass >= 2)                            /* 2-pass sets the coded QP directly */
         return qp_bound(e, q);
     if (type == 0) q -= 3;
@@ -1288,6 +1300,7 @@ int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
             const yah264_zone_t *z = zone_at(e, e->cur_disp);
             if (z) qpre = zone_base_qp(z, qpre);
         }
+        qpre = ctl_zone_qp(e, qpre);
         if (type == 0) qpre -= 3;
         else if (type == 2) qpre += frame_b_casc(e, is_ref);
         int ceiling = (int)e->crf_max;
@@ -3990,24 +4003,36 @@ static int fn_wrap(const yah264_encoder_t *e, int fn)
     return fn > e->next_frame_num ? fn - maxfn : fn;
 }
 
+static const struct level_lim { int idc; long max_mbps, max_fs, max_dpb, max_br; } level_lims[] = {
+    {10,     1485,     99,    396,     64}, {11,     3000,    396,    900,    192},
+    {12,     6000,    396,   2376,    384}, {13,    11880,    396,   2376,    768},
+    {20,    11880,    396,   2376,   2000}, {21,    19800,    792,   4752,   4000},
+    {22,    20250,   1620,   8100,   4000}, {30,    40500,   1620,   8100,  10000},
+    {31,   108000,   3600,  18000,  14000}, {32,   216000,   5120,  20480,  20000},
+    {40,   245760,   8192,  32768,  20000}, {41,   245760,   8192,  32768,  50000},
+    {42,   522240,   8704,  34816,  50000}, {50,   589824,  22080, 110400, 135000},
+    {51,   983040,  36864, 184320, 240000}, {52,  2073600,  36864, 184320, 240000},
+    {60,  4177920, 139264, 696320, 240000}, {61,  8355840, 139264, 696320, 480000},
+    {62, 16711680, 139264, 696320, 800000},
+};
+
+/* MaxBR of the declared level, kbit/s, with the High profiles' 1.25x */
+long y264_level_max_br(const yah264_encoder_t *e)
+{
+    int high = e->sps.profile_idc >= 100;
+    for (size_t i = 0; i < sizeof level_lims / sizeof level_lims[0]; i++)
+        if (level_lims[i].idc >= e->sps.level_idc)
+            return high ? level_lims[i].max_br * 5 / 4 : level_lims[i].max_br;
+    return high ? 800000L * 5 / 4 : 800000L;
+}
+
 static int compute_level_idc(int fs, long mbps, long dpb_mbs, long br_kbps, int high)
 {
     /* MaxBR (kbit/s, Table A-1) applies to the target or the VBV cap when one
  * is set (0 = no rate constraint, as under CRF/CQP); the High profiles'
  * factor is 1.25x (cpbBrNalFactor 1500 vs 1200). */
-    static const struct { int idc; long max_mbps, max_fs, max_dpb, max_br; } L[] = {
-        {10,     1485,     99,    396,     64}, {11,     3000,    396,    900,    192},
-        {12,     6000,    396,   2376,    384}, {13,    11880,    396,   2376,    768},
-        {20,    11880,    396,   2376,   2000}, {21,    19800,    792,   4752,   4000},
-        {22,    20250,   1620,   8100,   4000}, {30,    40500,   1620,   8100,  10000},
-        {31,   108000,   3600,  18000,  14000}, {32,   216000,   5120,  20480,  20000},
-        {40,   245760,   8192,  32768,  20000}, {41,   245760,   8192,  32768,  50000},
-        {42,   522240,   8704,  34816,  50000}, {50,   589824,  22080, 110400, 135000},
-        {51,   983040,  36864, 184320, 240000}, {52,  2073600,  36864, 184320, 240000},
-        {60,  4177920, 139264, 696320, 240000}, {61,  8355840, 139264, 696320, 480000},
-        {62, 16711680, 139264, 696320, 800000},
-    };
-    for (size_t i = 0; i < sizeof L / sizeof L[0]; i++) {
+    const struct level_lim *L = level_lims;
+    for (size_t i = 0; i < sizeof level_lims / sizeof level_lims[0]; i++) {
         long br_cap = high ? L[i].max_br * 5 / 4 : L[i].max_br;
         if (fs <= L[i].max_fs && mbps <= L[i].max_mbps && dpb_mbs <= L[i].max_dpb &&
             br_kbps <= br_cap)
@@ -6648,6 +6673,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->rcr = rcr_open_env(e->param.threads, e->width, e->height);
     rcr_set_vbv(e->rcr, e->param.rc.vbv_maxrate, e->param.rc.vbv_bufsize, e->param.rc.vbv_init,
                 e->param.timebase.fps_num, e->param.timebase.fps_den);
+    e->ctl = ctl_new(e);
+    if (!e->ctl) { yah264_encoder_close(e); return NULL; }
     return e;
 }
 
@@ -11436,6 +11463,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     const yah264_frame_force_t *ff = e->nforces ? force_at(e, force_disp) : NULL;
     if (ff && ff->type == YAH264_FORCE_IDR) raw_cut = 1;
     else if (ff && ff->type != YAH264_FORCE_NONE) raw_cut = 0;
+    if (ctl_key_at(e, force_disp)) raw_cut = 1;    /* a live keyframe request */
     en->is_cut = raw_cut;
     if (raw_cut)
         e->la_since_idr = 0;
@@ -12031,6 +12059,7 @@ static void y264_note_emit(yah264_encoder_t *e, int disp)
 {
     if (e->emit_count < (int)(sizeof e->emit_disp / sizeof e->emit_disp[0]))
         e->emit_disp[e->emit_count++] = disp;
+    ctl_note_emit(e, disp);
 }
 
 static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
@@ -16428,12 +16457,15 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
                 return -1;
             }
         }
+        if (off == 0)                   /* the stream has ended: what never landed */
+            ctl_flush_end(e);
         *count = e->nal_count;
         return (int)off;
     }
     if (pic->csp != e->param.csp ||
         pic->width != e->width || pic->height != e->height)
         return -1;
+    ctl_hand_in(e);                     /* before the picture can reach the lookahead */
     if (e->mcstf) {
         const pixel *pl[3];
         for (int c = 0; c < 3; c++) pl[c] = (const pixel *)pic->plane[c];
@@ -16651,6 +16683,8 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                   : (have_flags ? flag_cut
                      : (e->since_idr >= sc.keyint_min &&
                         detect_scenecut(e, e->since_idr))));
+    if (rcr_flags < 0 && ctl_key_at(e, (int)e->frame_count))
+        is_cut = 1;                             /* a live keyframe request, whatever the detector */
     if (is_cut)
         e->since_idr = 0;
     { pixel *t = e->lowres_prev; e->lowres_prev = e->lowres_cur; e->lowres_cur = t; }
@@ -16677,6 +16711,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         const yah264_frame_force_t *ff = force_at(e, (int)e->frame_count);
         zone_idr |= ff && ff->type == YAH264_FORCE_IDR;
     }
+    zone_idr |= is_key && ctl_key_at(e, (int)e->frame_count);
     int is_idr = is_key && (!e->open_gop || e->frame_count == 0 || zone_idr);
     int open_key = is_key && !is_idr;
     /* With window flags the anchor decision was made at push time (b-adapt);
@@ -17381,6 +17416,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->fld_mbt);
     free(e->zones);
     free(e->forces);
+    ctl_free(e->ctl);
     free(e->mbqp);
     free(e->mb_tr8);
     if (e->lr_bufhp[0][0]) { lr_hpreg_set(e->lowres_cur, NULL); lr_hpreg_set(e->lowres_prev, NULL); }

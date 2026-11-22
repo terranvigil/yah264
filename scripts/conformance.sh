@@ -733,6 +733,59 @@ sys.exit(1 if bad else 0)
         fi
         ;;
     esac
+    # --control: every event in the log is echoed on a stats line at the frame
+    # the landing rules give it (docs/live-control.md), a keyframe event codes
+    # an IDR on exactly its frame, a QP_LIMITS event bounds every coded QP from
+    # its frame on, and a second encode at one thread repeats the stream and
+    # the stats byte for byte. The log is the assertion.
+    case "$spec" in
+      *--control*)
+        local cf
+        cf=$(printf '%s\n' "$spec" | sed -n 's/.*--control \([^ ]*\).*/\1/p')
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads 1 --frame-stats "$p.cl.json" -o "$p.cl.264" 2>/dev/null || true
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads 1 --frame-stats "$p.cl2.json" -o "$p.cl2.264" 2>/dev/null || true
+        t=$((t + 1))
+        if [ -s "$p.cl.json" ] && python3 -c "
+import json,sys
+want=[l.strip() for l in open('$cf') if l.strip() and not l.lstrip().startswith('#')]
+rows={}
+echo=[]
+for l in open('$p.cl.json'):
+    if l.strip():
+        d=json.loads(l); rows[d['frame']]=d
+        for c in d.get('control',[]): echo.append((c,d['frame']))
+bad=[]
+got=[c for c,_ in echo]
+for w in want:
+    if w not in got: bad.append('not echoed: '+w)
+for c,at in echo:
+    f=int(c.split()[0]); kind=c.split()[1]
+    if kind in ('key','qp','zone') and at!=f: bad.append('%s landed at %d' % (c,at))
+    if kind in ('rate','crf') and at<f: bad.append('%s landed early, at %d' % (c,at))
+    if kind=='key' and not rows[f]['idr']: bad.append('frame %d asked IDR, coded %s' % (f,rows[f]['type']))
+    if kind=='qp':
+        a=dict(x.split('=') for x in c.split()[2:])
+        lo=int(a.get('min',0)); hi=int(a.get('max',51))
+        for fr,d in rows.items():
+            if fr>=f and not lo<=d['qp']<=hi: bad.append('frame %d qp %d outside %s' % (fr,d['qp'],c))
+for b in bad[:8]: print(b, file=sys.stderr)
+sys.exit(1 if bad else 0)
+"; then
+            echo "  ok   every control event landed where the rules put it ($spec)"
+        else
+            echo "  FAIL a control event did not land where the rules put it ($spec)"; f=$((f + 1))
+        fi
+        t=$((t + 1))
+        if [ -s "$p.cl.264" ] && cmp -s "$p.cl.264" "$p.cl2.264" && cmp -s "$p.cl.json" "$p.cl2.json"; then
+            echo "  ok   repeats byte for byte at one thread ($spec)"
+        else
+            echo "  FAIL a second encode at one thread differed ($spec)"; f=$((f + 1))
+        fi
+        rm -f "$p.cl.264" "$p.cl2.264" "$p.cl.json" "$p.cl2.json"
+        ;;
+    esac
     # --zones q=N: a fixed QP is the base the cascade sits on, so every P frame
     # inside the zone codes exactly N whatever the rate control would have
     # picked. Read back out of the coded stats, so a zone that parsed but did
@@ -1577,6 +1630,23 @@ if [ ! -f "$fixdir/qpfile_qp.txt" ]; then
     printf '# frame type qp\n4 P 33\n9 - 22\n18 I 29\n19 B 38\n' > "$fixdir/qpfile_qp.txt.tmp.$$"
     mv "$fixdir/qpfile_qp.txt.tmp.$$" "$fixdir/qpfile_qp.txt"
 fi
+# The live-control logs (docs/live-control.md), sized to syn_rc's 48 frames:
+# a rate step down and back with a keyframe, QP limits and a zone between;
+# CRF steps; and a step inside a declared VBR buffer under --nal-hrd.
+if [ ! -f "$fixdir/ctl_abr.txt" ]; then
+    printf '#livectl 1\n6 rate bitrate=200 maxrate=200\n12 key\n18 qp min=24 max=44\n24 zone last=31 offset=-3\n36 rate bitrate=600 maxrate=600\n' \
+        > "$fixdir/ctl_abr.txt.tmp.$$"
+    mv "$fixdir/ctl_abr.txt.tmp.$$" "$fixdir/ctl_abr.txt"
+fi
+if [ ! -f "$fixdir/ctl_crf.txt" ]; then
+    printf '10 crf value=34\n20 key\n30 crf value=20\n' > "$fixdir/ctl_crf.txt.tmp.$$"
+    mv "$fixdir/ctl_crf.txt.tmp.$$" "$fixdir/ctl_crf.txt"
+fi
+if [ ! -f "$fixdir/ctl_hrd.txt" ]; then
+    printf '8 rate bitrate=250 maxrate=300 bufsize=300\n30 rate bitrate=400 maxrate=600 bufsize=600\n' \
+        > "$fixdir/ctl_hrd.txt.tmp.$$"
+    mv "$fixdir/ctl_hrd.txt.tmp.$$" "$fixdir/ctl_hrd.txt"
+fi
 S="$fixdir"      # shorthand for job specs below
 
 # --- build the job list --------------------------------------------------
@@ -1931,6 +2001,14 @@ add "rate-control bounds" check_rc zones_crf "$S/syn_rc.y4m" \
 add "rate-control bounds" check_rc zones_abr "$S/syn_rc.y4m" \
     "--bitrate 400 --bframes 3 --zones 0,7,b=2/12,19,q=34"
 add "rate-control bounds" check_clip zones_cqp "$S/syn_rc.y4m" "--cabac --bframes 3 --zones 2,9,q=18/14,21,b=0.7"
+# live control: the logs above run through the reference decoders, and
+# check_rc reads every event back off the stats (and the HRD cell's buffer
+# out of its stream)
+add "live control" check_rc ctl_abr "$S/syn_rc.y4m" \
+    "--bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400 --bframes 3 --control $S/ctl_abr.txt"
+add "live control" check_rc ctl_crf "$S/syn_rc.y4m" "--cabac --crf 26 --bframes 3 --control $S/ctl_crf.txt"
+add "live control" check_rc ctl_hrd "$S/syn_rc.y4m" \
+    "--bitrate 400 --vbv-maxrate 600 --vbv-bufsize 600 --bframes 3 --nal-hrd vbr --control $S/ctl_hrd.txt"
 add "CRF rate control" check_rc crf1 "$S/syn_motion.y4m" "--crf 26"
 add "CRF rate control" check_rc crf2 "$S/syn_motion.y4m" "--cabac --crf 22 --bframes 3"
 

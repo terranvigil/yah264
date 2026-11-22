@@ -43,6 +43,11 @@ test_api = executable('test_api',
   dependencies : yah264_dep)
 test('api', test_api, timeout : test_timeout_floor)
 
+test_control = executable('test_control',
+  'test_control.c', '../cli/ctl_log.c',
+  dependencies : yah264_dep)
+test('control', test_control, timeout : test_timeout_floor)
+
 # these two drive the encoder through Y264_* knobs, which only a dev_knobs
 # build reads
 if get_option('dev_knobs')
@@ -109,6 +114,14 @@ endif
 if rc_python.found()
   test('refwindow', rc_python,
     args : [files('refwindow_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif
+
+# Live control through the CLI: bad --control logs refused before a byte is
+# written, a live --control-fd run replayed from its --control-out log
+if rc_python.found()
+  test('control_cli', rc_python,
+    args : [files('control_check.py'), yah264_cli_exe],
     timeout : 300)
 endif
 

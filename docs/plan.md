@@ -137,10 +137,11 @@ goes into its subsystem doc's "What didn't work" table.
 
 ### New features
 
-21. A live control plane: per-frame bitrate, CRF, QP limits, keyframe and
-    resolution events, echoed in the stats and fed to the rate control, with a
-    replayable log ([live-control.md](live-control.md)). It also answers the
-    ffmpeg wrapper's question of mid-stream reconfiguration.
+21. A live control plane ([live-control.md](live-control.md)). Built:
+    bitrate and buffer, CRF, QP limits, keyframe and zone events landing on
+    named frames, echoed in the stats, with status out and a replayable log.
+    Left: frame-rate, preset and resolution events, and the ffmpeg wrapper's
+    mapping onto it.
 22. Film grain synthesis via the H.264 film grain SEI, with `--mcstf` as the
     denoiser ([denoise.md](denoise.md)). yah265 already has one to port.
 23. Segment output (CMAF/fMP4), then MPEG-TS.
