@@ -243,9 +243,10 @@ never skips a picture.
 The room left after a picture is a reserve for the next key the encoder can see
 coming: the keyint key or a scene cut the lookahead flagged. The reserve is
 what the last intra picture cost at QP 51, less what arrives before that key.
-When the coming key is a scene cut ahead of the keyint key, that cost is scaled
-up by the two keys' lowres intra costs if the cut's is higher (at most 16
-times, and not under field coding). Under field coding the reserve also covers
+When the coming key is a scene cut ahead of the keyint key, or a key the
+lookahead has already released, that cost is scaled up by the two keys' lowres
+intra costs if the coming one's is higher (at most 16 times, and not under
+field coding). Under field coding the reserve also covers
 the second field of an intra first field. Because the rate control never sees
 these raises, a frame raised by `--qpstep` or more makes the next frame of its
 type start from the raised QP. A frame with room to spare lowers that start. A
