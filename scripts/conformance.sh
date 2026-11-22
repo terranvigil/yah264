@@ -1209,6 +1209,30 @@ print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/de
     echo "SUMMARY $n $f"
 }
 
+# one-pass --nal-hrd at one thread and at three. --nal-hrd runs one encoder,
+# so the threads go to the lookahead and the row wavefront, and every burst
+# must still take the serial re-encode that holds it to the declared buffer.
+# The clip has to cut to an IDR mid-stream: the buffer is tightest after one
+check_hrd_1pass() {   # check_hrd_1pass <name> <src> <spec>
+    local name="$1" src="$2" spec="$3" t f=0 n=0 p idrs
+    for t in 1 3; do
+        p="$work/hrd1p.$name.t$t"
+        n=$((n + 1))
+        rm -f "$p.264"
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads $t -o "$p.264" 2>/dev/null || true
+        idrs=$(python3 -c "
+import sys; sys.path.insert(0, '$root/scripts'); import h264_syntax as H
+print(sum(n['type'] == 5 for n in H.split_nals(H.read_stream('$p.264'))))" 2>/dev/null || echo 0)
+        if [ "${idrs:-0}" -gt 1 ] && python3 "$root/scripts/hrd_check.py" "$p.264" --quiet >/dev/null 2>&1; then
+            echo "  ok   HRD clean over $idrs IDRs at $t thread(s) ($spec)"
+        else
+            echo "  FAIL hrd_check over $idrs IDRs at $t thread(s) ($spec)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $n $f"
+}
+
 # vbv_check at one thread and at three: a pooled burst is coded on its
 # predictions, so a short buffer underflows threaded where one thread can't
 check_vbv_mt() {   # check_vbv_mt <name> <src> <spec>
@@ -1959,6 +1983,12 @@ add "nal-hrd" check_rc hrd_sl  "$S/syn_motion.y4m" \
     "--cabac --crf 20 --vbv-maxrate 600 --vbv-bufsize 600 --slices 4 --nal-hrd vbr"
 add "nal-hrd" check_hrd_mt hrd_2pass_mt "$S/syn_shots.y4m" \
     "--cabac --bitrate 800 --vbv-maxrate 1000 --vbv-bufsize 1000 --nal-hrd vbr --keyint 60"
+# 1200, not 800: at 800 the P frames after a mid-clip IDR don't fit even at
+# QP 51, which the encoder warns about and the checker rightly fails
+add "nal-hrd" check_hrd_1pass hrd_cbr_1p "$S/syn_shots.y4m" \
+    "--cabac --bitrate 1200 --vbv-maxrate 1200 --vbv-bufsize 1200 --bframes 3 --nal-hrd cbr"
+add "nal-hrd" check_hrd_1pass hrd_vbr_1p "$S/syn_shots.y4m" \
+    "--cabac --bitrate 600 --vbv-maxrate 800 --vbv-bufsize 800 --bframes 3 --nal-hrd vbr"
 
 add "2-pass rate control" check_twopass base "$S/syn_motion.y4m"
 
