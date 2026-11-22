@@ -144,15 +144,20 @@ frame DC included, whichever route opened it.
 
 With no lookahead (`--rc-lookahead 0`, B frames on) two more rules apply to
 an encoder with its own ledger, outside CBR and two-pass. In the first 2
-seconds, once a mini-GOP has been coded after the opening I, a ledger whose
-coded frames alone read more than 12 QP over the slew reference is followed
-whole instead of at 0.35 of a step: on noise every frame costs what an I does,
-so the rise isn't the I's. And past the first 4 seconds, when the ledger reads
-more than 4 QP over what the last second of frames would read on their own,
-its history is scaled down to sit 4 QP over them. Nothing else tells a ledger
-with no lookahead that the content changed, and after an expensive run (noise
-before a static scene) it would otherwise hold that run's QP for the rest of
-the encode.
+seconds after an intra-fit opening that isn't dark, once 4 frames have been
+coded after the opening I, a ledger whose coded frames alone read more than
+12 QP over the slew reference is followed whole instead of at 0.35 of a step:
+on noise every frame costs what an I does, so the rise isn't the I's. And past
+the first 4 seconds, when the ledger reads more than 4 QP over what the last
+second of frames would read on their own, its history is scaled down to sit
+4 QP over them. Nothing else tells a ledger with no lookahead that the content
+changed, and after an expensive run (noise before a static scene) it would
+otherwise hold that run's QP for the rest of the encode. The history set aside
+is kept: when the last second reads 2 QP over the ledger again, the expensive
+content has come back, so the history is restored, that frame follows the
+ledger whole, and the rule turns off for the rest of the encode, since content
+that alternates is what the whole history is for. Near-black frames, which the
+ledger doesn't count, don't count toward either time.
 
 CBR keeps the older fit as its opening, since its buffer already holds the
 rate and the refit's opening ran short CBR buffers a few points over. After an

@@ -285,20 +285,37 @@ static int rfm_open_miss(const yah264_encoder_t *e, double work, double owed, in
 /* the ledger never forgets, and with no lookahead nothing tells it the
  * content changed, so after a costly run it keeps that run's qp over what
  * follows. past the opening, a ledger more than RFM_REC_QP over the last
- * second's reading is scaled down to sit that far over it. a smaller
- * margin also pulls steady clips off their rate. */
-#define RFM_REC_QP 4.0
+ * second's reading is scaled down to sit that far over it; a smaller margin
+ * also pulls steady clips off their rate. what it drops is kept: once the
+ * last second reads RFM_REC_BACK over the ledger, the costly content has
+ * come back, so the history is restored, the ledger is followed whole for
+ * that decide (the next burst would land at the cheap run's qp otherwise),
+ * and the rule stays off: content that alternates is what the whole
+ * history is for. */
+#define RFM_REC_QP   4.0
+#define RFM_REC_BACK 2.0
 static double rfm_recent(yah264_encoder_t *e, double work, double owed, int shared)
 {
     double bps = e->abr_target_bpf * rfm_pic_rate(e);
     if (shared || e->vbv_cbr || e->tp_pass || e->la_depth > 0 || bps <= 0.0
-        || owed <= 0.0 || work <= 0.0 || e->rfm_rec_work <= 0.0
+        || owed <= 0.0 || work <= 0.0 || e->rfm_rec_work <= 0.0 || e->rfm_rec_state == 2
         || e->rfm_rec_owed < 0.5 * bps || owed / bps < 2.0 * e->rck.rfm_fb_t)
         return work;
     double rq = 12.0 + 6.0 * log2(e->rfm_rec_work / e->rfm_rec_owed);
-    if (12.0 + 6.0 * log2(work / owed) <= rq + RFM_REC_QP)
+    double lq = 12.0 + 6.0 * log2(work / owed);
+    if (e->rfm_rec_state == 1 && rq > lq + RFM_REC_BACK) {
+        e->rfm_rec_state = 2;
+        e->rfm_rec_jump = 1;
+        e->rfm_work += e->rfm_rec_lost;
+        e->rfm_rec_lost = 0.0;
+        return e->rfm_work;
+    }
+    if (lq <= rq + RFM_REC_QP)
         return work;
-    e->rfm_work = owed * pow(2.0, (rq + RFM_REC_QP - 12.0) / 6.0);
+    double cut = owed * pow(2.0, (rq + RFM_REC_QP - 12.0) / 6.0);
+    e->rfm_rec_state = 1;
+    e->rfm_rec_lost += e->rfm_work - cut;
+    e->rfm_work = cut;
     return e->rfm_work;
 }
 
@@ -1218,8 +1235,9 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
                 e->rfm_owed += e->abr_target_bpf;
             }
             /* a degenerate opening i owes nothing, so the miss is read from
-             * where the ledger stands once the i is counted */
-            if (e->abr_rf2 && p->type == 0 && e->rfm_open_owed < 0.0) {
+             * where the ledger stands once the opening frame is counted,
+             * both fields of it under field coding */
+            if (e->abr_rf2 && e->rfm_open_owed < 0.0 && --e->rfm_open_left <= 0) {
                 e->rfm_open_work = e->rfm_work;
                 e->rfm_open_owed = e->rfm_owed;
             }
@@ -2195,6 +2213,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     double oq = rfm_open_qp(e, C);
                     e->rfm_work = pow(2.0, (rfm_open_prior(e, oq, dc) - 12.0) / 6.0) * e->abr_target_bpf;
                     e->rfm_open_owed = -1.0;
+                    e->rfm_open_left = e->pvmul > 1 ? e->pvmul : 1;
                     e->rf2_open_key = !e->rfm_open_fb && type == 0 && !e->vbv_cbr;
                     e->rfm_owed = e->abr_target_bpf;
                     e->rf2_opened = 1;
@@ -2253,6 +2272,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     double qp_lim = qp_led;
                     if (!first) {
                         double sl = e->rck.rfm_slew;
+                        int open_win = 0;
                         /* cbr keeps its window after an intra-fit opening
  * only, as it always had: its buffer holds the rate, and the cold-opening
  * window ran short cbr buffers over */
@@ -2260,6 +2280,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                             && !(rf2_unpredictable(e) && !e->rfm_open_fb)) {
                             double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                             if (bps > 0 && wanted / bps < e->rck.rfm_fb_t) {
+                                open_win = 1;
                                 sl = qp_led < e->slew_ref[1] || (!e->rfm_open_fb && !shared) ? e->rck.rfm_slew_fb
                                    : e->rfm_open_ioff > 0 ? e->rck.rfm_slew : e->rck.rfm_slew_fb_up;
                                 /* on a fade from black in-flight frames are
@@ -2269,8 +2290,12 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                             }
                         }
                         qp_lim = rfm_slew_qp(e, qp_led, e->slew_ref[1], sl);
-                        if (qp_led > qp_lim && rfm_open_miss(e, L_cplx, L_wanted, shared))
+                        /* the miss only lifts the opening slew, never the ordinary one */
+                        if (open_win && qp_led > qp_lim && rfm_open_miss(e, L_cplx, L_wanted, shared))
                             qp_lim = qp_led;
+                        if (e->rfm_rec_jump && qp_led > qp_lim)
+                            qp_lim = qp_led;
+                        e->rfm_rec_jump = 0;
                     }
                     e->slew_ref[1] = qp_lim;
                     qp = qp_lim + fb;
@@ -3393,13 +3418,18 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         for (int t = 0; t < 3; t++) { e->bm_rf2kc.k[t] = c->rf2_kc[t]; e->bm_rf2kc.have[t] = c->rf2_kc_cal[t]; }
     /* the recent window continues too, or a continued encode would read
      * its own first second against the whole ledger; frames in flight
-     * decay it and come in at its own rate */
+     * decay it and come in at its own rate. it counts pictures, two a frame
+     * under field coding; the ledger above credits one a frame */
     if (RC_STATE_HAS(csz, rf_rec_owed) && c->rf_rec_owed > 0.0 && c->rf_rec_work > 0.0) {
         double d = exp(-1.0 / rfm_pic_rate(e));
-        double dn = pow(d, n);
+        double dn = pow(d, n * (e->pvmul > 1 ? e->pvmul : 1));
         double owed = c->rf_rec_owed * dn + e->abr_target_bpf * (1.0 - dn) / (1.0 - d);
         e->rfm_rec_work = c->rf_rec_work * (owed / c->rf_rec_owed);
         e->rfm_rec_owed = owed;
+    }
+    if (RC_STATE_HAS(csz, rf_rec_state)) {
+        e->rfm_rec_lost = c->rf_rec_lost;
+        e->rfm_rec_state = c->rf_rec_state;
     }
     e->rf2_opened = 1;                  /* the opening belongs to the first instance only */
     vbv_import_fill(e, c, csz, frames_ahead);
@@ -3492,6 +3522,7 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
     out->last_anchor_type = e->last_anchor_type;
     for (int t = 0; t < 3; t++) { out->rf2_kc[t] = e->bm_rf2kc.k[t]; out->rf2_kc_cal[t] = e->bm_rf2kc.have[t]; }
     out->rf_rec_work = e->rfm_rec_work; out->rf_rec_owed = e->rfm_rec_owed;
+    out->rf_rec_lost = e->rfm_rec_lost; out->rf_rec_state = e->rfm_rec_state;
     if (e->vbv_on) { out->vbv_fill = e->vbv.fill; out->vbv_have = 1; }
     memcpy(dst, out, dsz);
     return 0;

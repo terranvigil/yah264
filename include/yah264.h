@@ -1300,6 +1300,8 @@ typedef struct yah264_rc_state {
     double   vbv_fill;                         /* VBV occupancy at the export, bits */
     int      vbv_have;                         /* vbv_fill is meaningful (appended 2026-10-03) */
     double   rf_rec_work, rf_rec_owed;         /* the rate factor over about the last second */
+    double   rf_rec_lost;                      /* history that rate factor set aside */
+    int      rf_rec_state;
 } yah264_rc_state_t;
 
 /* The smallest size accepted: the struct up to and including last_anchor_type. */
