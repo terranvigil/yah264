@@ -1404,9 +1404,12 @@ YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *enc, yah264_rc_share
  * handed in, and queued events plus applied records not yet drained may number
  * at most 1 << 20 (events for the next frame count only toward this one); past
  * either an event is refused with YAH264_CTL_EFULL, so a queued event always
- * has a record slot. An event is 120 bytes, so the queue and records together
- * are at most about 126 MB, and yah264_encoder_control_check() copies the
- * queue while it runs. A RATE
+ * has a record slot. An event is 120 bytes, so the live queue and records
+ * together are at most about 126 MB. Their buffers grow by doubling and give
+ * memory back as they drain, so a burst moving from the queue into the
+ * records can briefly allocate about twice that (about 250 MB at the bound),
+ * and yah264_encoder_control_check() holds a copy of the queue while it runs.
+ * A RATE
  * event's submit replays the queued events (O(queued)) under the lock the
  * encoder's rate decisions also take. */
 typedef struct {
@@ -1417,7 +1420,7 @@ typedef struct {
     int     bitrate_kbps;       /* RATE: 0 = unchanged */
     int     vbv_maxrate_kbps;   /* RATE: 0 = unchanged */
     int     vbv_bufsize_kbit;   /* RATE: 0 = unchanged */
-    double  crf;                /* CRF: 0 < crf <= 51, the CLI's --crf range */
+    double  crf;                /* CRF: 0 < crf <= 51 */
     int     qp_min, qp_max;     /* QP_LIMITS: -1 = unchanged */
     int64_t last;               /* ZONE: last frame, inclusive */
     double  qp_offset;          /* ZONE */
@@ -1472,8 +1475,8 @@ YAH264_EXPORT int yah264_encoder_control_check(yah264_encoder_t *enc, const yah2
 /* Drain the events that took effect since the last call, in the order they
  * were applied, each with applied_frame set. After the flush, an event whose
  * frame never arrived comes back with applied_frame -1. Returns the count, or
- * -1 on bad arguments or when records were lost since the last call (memory,
- * or more than the library holds undrained). The caller's out[] entries must
+ * -1 on bad arguments or when records were lost since the last call (only an
+ * allocation failure loses one). The caller's out[] entries must
  * have size set (the library writes no byte past it); yah264_control_init
  * does that. */
 YAH264_EXPORT int yah264_encoder_controls_applied(yah264_encoder_t *enc, yah264_control_t *out,

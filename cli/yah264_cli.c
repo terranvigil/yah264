@@ -1676,7 +1676,8 @@ static void usage(const char *argv0)
         "                          key, zone (last= offset=); frames from 0, nondecreasing\n"
         "  --control-fd N          the same lines read live from descriptor N between frames; the frame\n"
         "                          may be \"next\" (the next frame handed in)\n"
-        "  --control-out FILE      write every applied event as a replayable --control log\n"
+        "  --control-out FILE      write every applied event as a replayable --control log;\n"
+        "                          needs --control or --control-fd\n"
         "                          (all three run one encoder instance; docs/live-control.md)\n"
         "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
         "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description: an H.273\n"
@@ -6830,6 +6831,11 @@ static int cli_main(int argc, char **argv)
     /* the encoder would write its records over the stream, or either over
      * the input, in whichever order the run reaches them: open, compare,
      * and only then truncate (see files_clash) */
+    if (g_control_out && !g_control_file && g_control_fd < 0) {
+        fprintf(stderr, "yah264: --control-out records live control events and needs "
+                "--control or --control-fd\n");
+        return 2;
+    }
     if (g_control_file || g_control_fd >= 0) {
         /* live control runs one continuous encoder; these need the per-GOP ones */
         const char *why = hw != YAH264_HW_OFF ? "the hardware encoder (--hw)"

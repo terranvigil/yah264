@@ -18,7 +18,7 @@ zones and frame stats in [engine-interface.md](engine-interface.md).
 | event | log line | lands on | in which modes |
 |---|---|---|---|
 | bitrate and buffer | `F rate bitrate=K maxrate=K bufsize=K` | the rate decision of the first frame, in coding order, numbered F or later | bitrate in one-pass ABR; maxrate and bufsize wherever a buffer was set at open, capped CRF included |
-| CRF | `F crf value=X`, 0 < X <= 51 (the CLI's `--crf` range) | the same as a rate change | CRF |
+| CRF | `F crf value=X`, 0 < X <= 51 | the same as a rate change | CRF |
 | QP floor and ceiling | `F qp min=N max=N` | every frame numbered F or later | every mode but constant QP |
 | keyframe | `F key` | frame F is an IDR that starts a closed GOP | every mode but two-pass |
 | zone offset | `F zone last=L offset=X` | every frame F to L, offset (whole QPs) added to the rate control's QP | every mode |
@@ -196,9 +196,9 @@ same checks over a list of events, each as if the ones before it had been
 queued, and queues nothing; it returns the first refusal's code and index. `yah264_encoder_controls_applied()`
 drains the events that took effect, in the order they were applied, each with
 `applied_frame` set. After the flush, an event whose frame never arrived
-comes back with `applied_frame` -1. It returns -1 once if records were lost
-(out of memory, or more undrained than the encoder holds); the events
-themselves still took effect. Both are called between encode calls,
+comes back with `applied_frame` -1. It returns -1 once if records were lost,
+which only an allocation failure causes; the events themselves still took
+effect. Both are called between encode calls,
 from the thread that calls encode.
 
 | code | meaning |

@@ -415,6 +415,14 @@ def main():
         else:
             print("  ok   a 65536-event burst keeps every applied record, and replays")
 
+        # --control-out alone records nothing, so it is refused
+        r = run(enc, base + ["--control-out", os.path.join(d, "alone.ctl"), "-o", os.path.join(d, "alone.264")])
+        if r.returncode != 2 or b"needs --control" not in r.stderr:
+            print("FAIL --control-out without a control source: status %d" % r.returncode)
+            fails += 1
+        else:
+            print("  ok   --control-out without --control or --control-fd is refused")
+
     if fails:
         print("control_check: %d failure(s)" % fails)
         return 1

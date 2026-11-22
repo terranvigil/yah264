@@ -128,10 +128,22 @@ static int q_append(struct ctl_queue *q, const yah264_control_t *ev)
     return 0;
 }
 
+/* a buffer past this many entries is given back as its queue drains */
+#define CTL_Q_KEEP 4096
+
 static void q_pop(struct ctl_queue *q)
 {
     q->head++;
-    if (--q->n == 0) q->head = 0;
+    if (--q->n == 0) {
+        q->head = 0;
+        if (q->cap > CTL_Q_KEEP) { free(q->ev); q->ev = NULL; q->cap = 0; }
+    } else if (q->cap > CTL_Q_KEEP && q->n < q->cap / 4) {
+        /* landed slots stay allocated until the queue is compacted */
+        memmove(q->ev, q->ev + q->head, (size_t)q->n * sizeof *q->ev);
+        q->head = 0;
+        yah264_control_t *a = realloc(q->ev, (size_t)(q->cap / 2) * sizeof *a);
+        if (a) { q->ev = a; q->cap /= 2; }
+    }
 }
 
 /* under mx */
@@ -352,7 +364,7 @@ static int ctl_check(const yah264_encoder_t *e, const struct y264_ctl *c, yah264
         return YAH264_CTL_OK;
     case YAH264_CTL_CRF:
         if (!e->crf_on || e->tp_pass) return YAH264_CTL_EMODE;
-        if (!(v->crf > 0.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;   /* the CLI's --crf range */
+        if (!(v->crf > 0.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;
         return YAH264_CTL_OK;
     case YAH264_CTL_QP_LIMITS:
         if (!e->abr_on && !e->crf_on && !e->tp_pass) return YAH264_CTL_EMODE;   /* constant QP */
@@ -410,10 +422,12 @@ static int q_copy(struct ctl_queue *d, const struct ctl_queue *q)
 {
     memset(d, 0, sizeof *d);
     if (!q->n) return 0;
-    d->ev = malloc((size_t)q->n * sizeof *d->ev);
+    /* room for one more, so the first insert doesn't double it */
+    d->ev = malloc((size_t)(q->n + 1) * sizeof *d->ev);
     if (!d->ev) return -1;
     memcpy(d->ev, q->ev + q->head, (size_t)q->n * sizeof *d->ev);
-    d->n = d->cap = q->n;
+    d->n = q->n;
+    d->cap = q->n + 1;
     return 0;
 }
 
