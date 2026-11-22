@@ -3,17 +3,17 @@ Copyright (c) 2026, the yah264 authors
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-# Cloud runs: estimate against actual
+# Cloud run estimates and actual costs
 
 **Superseded.** The plan below is for GCP and books some sessions on-demand.
-The owner has since ruled that cloud work runs on AWS spot instances only,
-under a price cap and never on-demand. The current rule and the rented-machine
-method are in `docs/simd.md` ("Decisions" and "Measuring on rented
-machines"). The plan stays here as the record of what was estimated.
+Cloud work now runs on AWS spot instances only, under a price cap and never
+on-demand. The [SIMD doc](../../docs/simd.md) has the current rule under
+"Decisions" and the rented-machine method under "Measuring on rented
+machines". The plan stays here as the record of what was estimated.
 
-This is the session table, with a column
-for what each session really cost. After the session, fill in the actual column
-from the instance's own billing page and commit it. An estimate nobody checks
+The session table has a column for what each session really cost. After a
+session, fill in the actual column from the instance's own billing page and
+commit it. An estimate nobody checks
 against a bill is a guess that gets quoted as a budget.
 
 Prices were read on 2026-09-17 and are per-second after a one-minute minimum.
@@ -29,7 +29,7 @@ The operator supplies `BUCKET_URL` in the environment at run time.
 | **total** | | | | **~$40 on-demand ceiling** | | | $0 if the trial credit's vCPU quota admits these shapes |
 
 B runs only after A is clean on both vendors. Never run a timing series on
-spot: a preemption mid-table doesn't announce itself in the numbers.
+spot, because a preemption mid-table doesn't show up in the numbers.
 
 ## What each session's wall budget should be
 
@@ -46,8 +46,8 @@ push. Set it below the hours you're willing to pay for, never at them.
 
 ## The one-time staging cost
 
-The bucket holds the corpus (~12 GB), the JM and openh264 archives and the SDE
-tarball, in the campaign's own region. Ingress is free and the storage costs
+The bucket is in the campaign's own region. It holds the corpus of about
+12 GB, the JM and openh264 archives and the SDE tarball. Ingress is free and the storage costs
 pennies a month. Because the instances read it over the region's internal network,
 the reads are free and much faster than pulling the corpus from its origin
 each session.

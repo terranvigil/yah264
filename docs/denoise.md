@@ -3,12 +3,12 @@
 yah264 has two denoising tools, both off by default. `--nr` takes a learned
 offset off transform coefficients before quantization. `--mcstf` filters the
 source in time before the lookahead sees it. Both exist for grainy and noisy
-sources, and both carry a noise gate so clean content (animation above all)
-comes out byte-identical to an encode without them.
+sources. Each has a noise gate that keeps clean content byte-identical to an
+encode without the tool, and animation is the case that matters most.
 
-Every quality number here is BD-rate on VMAF-NEG of the tool against the
-shipped default on the same binary and CRF ladder (negative is better), scored
-against the original source, never the filtered one.
+The quality numbers here are BD-rate on VMAF-NEG of the tool against the
+shipped default on the same binary and CRF ladder, where negative is better.
+They're scored against the original source, never the filtered one.
 
 ## When to use which
 
@@ -16,45 +16,44 @@ against the original source, never the filtered one.
 |---|---|---|
 | noisy live action, sensor noise (shields, touchdown) | `--mcstf`, or `--nr-inter 100` for a cheaper, smaller gain | off |
 | film grain | `--mcstf` | off |
-| clean digital, animation | neither (both gate themselves off anyway) | off |
+| clean digital, animation | neither, since both gate themselves off anyway | off |
 
 Don't combine them. `--mcstf` plus `--nr-inter 100` reads a median of -1.85 on
 the grain and noise clips against -2.20 for `--mcstf` alone.
 
 ## How it works
 
-### `--nr`: coefficient noise reduction
+### Coefficient noise reduction with `--nr`
 
-`--nr N` sets both block classes; `--nr-intra` and `--nr-inter` set one each
-(0 to 2000, default 0). The encoder keeps a running mean of |coefficient| per
-transform position and per category (intra/inter, luma/chroma, 4x4/8x8) over
-blocks already quantized. Each coefficient is pulled toward zero by
-`strength * w / (mean + 1)`, bounded by that mean. H.264's integer transforms
-aren't orthonormal, so `w` is the position's squared basis gain, measured once
-by pushing impulses through the C transform. One block in four is tallied, and
-the statistics fold in coding order, so `--threads 1` repeats byte for byte.
-The subtraction runs in NEON.
+`--nr N` sets both block classes, and `--nr-intra` and `--nr-inter` set one
+each. Each takes 0 to 2000 and defaults to 0. Over blocks already quantized,
+the encoder keeps a running mean of |coefficient| per transform position and
+per category: intra or inter, luma or chroma, 4x4 or 8x8. Each coefficient is
+pulled toward zero by `strength * w / (mean + 1)`, bounded by that mean.
+Because H.264's integer transforms aren't orthonormal, `w` is the position's
+squared basis gain, which we measured once by pushing impulses through the C
+transform. One block in four is tallied and the statistics fold in coding
+order, so `--threads 1` repeats byte for byte. The subtraction runs in NEON.
 
-A spatial noise gate, always at 0.75 levels, reads a Laplacian
-percentile of each source picture, skipping near-black and near-white blocks.
-Pictures under the bar get zero offsets. The code lives in
-`src/encoder/nr.c`.
+A spatial noise gate, always at 0.75 levels, reads a Laplacian percentile of
+each source picture and skips near-black and near-white blocks. Pictures
+under the bar get zero offsets. The code lives in `src/encoder/nr.c`.
 
-### `--mcstf`: motion-compensated temporal filter
+### Motion-compensated temporal filter with `--mcstf`
 
-A queue in front of the lookahead. Every fourth picture (the anchor
-spacing at the default `--bframes 3`) is replaced by a weighted
-average of itself and its motion-compensated neighbors, `--mcstf-range` per
-side (1 to 4, default 1). Three weights combine: temporal distance, block match
-error, and a per-sample photometric weight (width 6 levels). Everything
-downstream, the lookahead included, sees the filtered picture.
+The filter is a queue in front of the lookahead. Every fourth picture is
+replaced by a weighted average of itself and its motion-compensated neighbors.
+Four is the anchor spacing at the default `--bframes 3`. `--mcstf-range` sets
+how many neighbors it uses per side. It takes 1 to 4 and defaults to 1. The weight
+combines temporal distance, block match error and a per-sample photometric
+weight 6 levels wide. Everything downstream, the lookahead included, sees the
+filtered picture.
 
-The gate reads **temporal** noise: the 25th percentile of the nearest
-neighbors' block match errors, skipping near-black and near-white blocks,
-taken from the quieter side so a cut doesn't trip it. Pictures under 0.5
-levels pass through untouched. Animation reads 0.00-0.25
-and every natural clip in the corpus reads above 0.75. The code lives in
-`src/encoder/mcstf.c`.
+This gate reads temporal noise. It takes the 25th percentile of the nearest
+neighbors' block match errors and skips near-black and near-white blocks. It
+reads from the quieter side so a cut doesn't trip it. Pictures under 0.5
+levels pass through untouched. Animation reads 0.00-0.25. Every natural clip
+in the corpus reads above 0.75. The code lives in `src/encoder/mcstf.c`.
 
 ## What we chose and why
 
@@ -81,9 +80,9 @@ and every natural clip in the corpus reads above 0.75. The code lives in
 
 touchdown's gain is real: 11-24% fewer bits per rung for 0.05-0.34 VMAF-NEG.
 
-Cost in instructions retired, one thread, medium: `--nr` +1.2% to +2.3%,
-`--mcstf` +10% to +13%. With every picture gated out, `--mcstf` still costs
-+5.6%, because the gate's own neighbor searches run.
+In instructions retired at one thread and medium, `--nr` costs +1.2% to +2.3%
+and `--mcstf` costs +10% to +13%. With every picture gated out, `--mcstf` still
+costs +5.6% because the gate's own neighbor searches run.
 
 ## What didn't work
 
@@ -100,16 +99,18 @@ Cost in instructions retired, one thread, medium: `--nr` +1.2% to +2.3%,
 
 ## Open questions
 
-- **A gate that tells grain from detail for `--nr`.** The spatial gate gives up
-  the grain win on lash_a (-1.07 ungated) because the 1924 scan reads clean.
-  Any gate that arms there also has to stay off sintel_720p.
-- **Noise versus untracked motion for `--mcstf`.** foreman's temporal reading
-  (1.7-1.9) sits beside Nocturne's (2.0). The gate needs to separate "the match
-  error is noise" from "the match error is motion the search couldn't follow".
-  Riverbed (water) is the same problem.
-- **`--mcstf` wall share at high thread counts.** The filter runs serially on
-  the driver ahead of the lookahead, so its share of wall grows with threads.
-  It hasn't been measured; read it before putting `--mcstf` in any preset.
+`--nr` needs a gate that tells grain from detail. The spatial gate gives up
+the grain win on lash_a, which reads -1.07 ungated, because the 1924 scan reads
+clean. Any gate that arms there also has to stay off sintel_720p.
+
+`--mcstf` needs to tell noise from untracked motion. foreman's temporal reading
+of 1.7-1.9 sits beside Nocturne's 2.0. The gate has to separate "the match
+error is noise" from "the match error is motion the search couldn't follow".
+Riverbed, which is water, is the same problem.
+
+Nobody has measured the `--mcstf` wall share at high thread counts. The filter
+runs serially on the driver ahead of the lookahead, so its share of wall grows
+with threads. Read it before putting `--mcstf` in any preset.
 
 ## Measuring it
 
@@ -124,6 +125,6 @@ The grain clips are 120-frame excerpts the scripts don't fetch:
 
     ffmpeg -ss <off> -i <mov> -frames:v 120 -vf scale=W:H:flags=lanczos,format=yuv420p
 
-Read `scripts/hd_band.py` with a near-null control arm (`Y264_MBT_DEPFLOOR=16`)
-beside the tool: on the grain clips the control's own spread reaches +0.5,
-which is as large as several of the tool's per-clip readings.
+Run `scripts/hd_band.py` with a near-null control arm, `Y264_MBT_DEPFLOOR=16`,
+beside the tool. On the grain clips the control's own spread reaches +0.5,
+as large as several of the tool's per-clip readings.
