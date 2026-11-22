@@ -1121,8 +1121,9 @@ static int control_fd_open(void)
     return 0;
 }
 
-/* take what the encoder applied since the last call */
-static void control_drain(yah264_encoder_t *enc)
+/* take what the encoder applied since the last call; -1 when a record
+ * --control-out or the echo needed was lost */
+static int control_drain(yah264_encoder_t *enc)
 {
     yah264_control_t done[32];
     int n;
@@ -1130,6 +1131,11 @@ static void control_drain(yah264_encoder_t *enc)
         for (int i = 0; i < 32; i++) yah264_control_init(&done[i], 0);
         n = g_api->controls_applied(enc, done, 32);
         if (n < 0) {                    /* records were lost; what is left still drains */
+            if (g_control_out || g_frame_stats) {
+                fprintf(stderr, "yah264: applied control events were lost, so %s would be incomplete\n",
+                        g_control_out ? "--control-out" : "the --frame-stats echo");
+                return -1;
+            }
             fprintf(stderr, "yah264: warning: some applied control events were not reported\n");
             n = 32;
             continue;
@@ -1141,10 +1147,15 @@ static void control_drain(yah264_encoder_t *enc)
                 control_unlanded_warn(t);
                 continue;
             }
-            ctl_push(&g_ctl_echo, &g_ctl_echo_n, &g_ctl_echo_cap, done[i].applied_frame, t);
-            if (g_control_out) ctl_push(&g_ctl_rec, &g_ctl_rec_n, &g_ctl_rec_cap, done[i].frame, t);
+            if ((g_frame_stats && ctl_push(&g_ctl_echo, &g_ctl_echo_n, &g_ctl_echo_cap,
+                                           done[i].applied_frame, t) < 0)
+                || (g_control_out && ctl_push(&g_ctl_rec, &g_ctl_rec_n, &g_ctl_rec_cap, done[i].frame, t) < 0)) {
+                fprintf(stderr, "yah264: out of memory keeping the applied control events\n");
+                return -1;
+            }
         }
     } while (n == 32);
+    return 0;
 }
 
 static int control_write_out(void)
@@ -7854,7 +7865,7 @@ static int cli_main(int argc, char **argv)
         if (!sfst) fprintf(stderr, "yah264: cannot write --frame-stats %s\n", g_frame_stats);
     }
 #define SERIAL_STATS(nal_, cnt_) do { \
-        control_drain(enc); \
+        if (control_drain(enc) < 0) { rc = 1; goto done; } \
         if (sfst) { \
             if (sst_cap < frame + 1) { \
                 long nc = (frame + 1) * 2; \
@@ -7956,7 +7967,8 @@ static int cli_main(int argc, char **argv)
         }
     }
 #undef SERIAL_STATS
-    control_drain(enc);
+    if (control_drain(enc) < 0)
+        rc = 1;
     control_file_unlanded();
     if (!rc && control_write_out() < 0)
         rc = 1;

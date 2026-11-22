@@ -396,6 +396,25 @@ def main():
         if ok1 and ok2 and ok3 and ok4:
             print("  ok   file and fd events share the queue without a refusal mid-run")
 
+        # a burst that lands in one encode call keeps every applied record:
+        # the log and the echo hold the event before it, and the record replays
+        burst = os.path.join(d, "burst.ctl")
+        with open(burst, "w") as f:
+            f.write("5 crf value=20\n" + "47 key\n" * 65536)
+        bargs = ["--input-y4m", src, "--threads", "1", "--no-progress", "--crf", "23", "--frames", "60"]
+        bo, bl, bf = os.path.join(d, "bu.264"), os.path.join(d, "bu.ctl"), os.path.join(d, "bu.json")
+        r = run(enc, bargs + ["--control", burst, "--control-out", bl, "--frame-stats", bf, "-o", bo])
+        logl = open(bl).read().splitlines() if os.path.exists(bl) else []
+        echo5 = any("5 crf value=20" in l for l in open(bf)) if os.path.exists(bf) else False
+        r2 = run(enc, bargs + ["--control", bl, "-o", os.path.join(d, "bu2.264")])
+        same = r2.returncode == 0 and open(os.path.join(d, "bu2.264"), "rb").read() == open(bo, "rb").read()
+        if r.returncode or len(logl) != 65538 or "5 crf value=20" not in logl or not echo5 or not same:
+            print("FAIL a 65536-event burst: status %d, %d log lines, echo %d, replay same %d, %r"
+                  % (r.returncode, len(logl), echo5, same, r.stderr[-200:]))
+            fails += 1
+        else:
+            print("  ok   a 65536-event burst keeps every applied record, and replays")
+
     if fails:
         print("control_check: %d failure(s)" % fails)
         return 1

@@ -18,7 +18,7 @@ zones and frame stats in [engine-interface.md](engine-interface.md).
 | event | log line | lands on | in which modes |
 |---|---|---|---|
 | bitrate and buffer | `F rate bitrate=K maxrate=K bufsize=K` | the rate decision of the first frame, in coding order, numbered F or later | bitrate in one-pass ABR; maxrate and bufsize wherever a buffer was set at open, capped CRF included |
-| CRF | `F crf value=X` | the same as a rate change | CRF |
+| CRF | `F crf value=X`, 0 < X <= 51 (the CLI's `--crf` range) | the same as a rate change | CRF |
 | QP floor and ceiling | `F qp min=N max=N` | every frame numbered F or later | every mode but constant QP |
 | keyframe | `F key` | frame F is an IDR that starts a closed GOP | every mode but two-pass |
 | zone offset | `F zone last=L offset=X` | every frame F to L, offset (whole QPs) added to the rate control's QP | every mode |
@@ -101,11 +101,12 @@ the new rate outweigh it.
   refused if it doesn't fit there, or if any event already queued after it
   would no longer fit.
 - The encoder holds at most 4096 events naming frames after the next one to
-  be handed in, about a million waiting to land in all, and 65536 applied
-  records waiting to be drained. Events for the next frame count only toward
-  the second bound, so what is due now can always be queued. An event past a
-  bound is refused with `YAH264_CTL_EFULL`; draining
-  `yah264_encoder_controls_applied()` frees the third.
+  be handed in, and at most 1 << 20 events waiting to land and applied
+  records waiting to be drained together. Events for the next frame count
+  only toward the second bound, so what is due now can always be queued, and
+  every queued event has room for its record. An event past a bound is
+  refused with `YAH264_CTL_EFULL`; draining
+  `yah264_encoder_controls_applied()` frees room.
 - The hardware encoder (`--hw`) takes no events.
 
 ## From the command line
@@ -150,7 +151,9 @@ encoder refuses, is skipped with a warning. With `--control` as well, the
 file's events up to a line's frame are queued first, and the line is
 skipped (queue full) if that would take the file more than 1024 events
 ahead; a line that would make one of the file's later events fail is
-skipped too, so the file's events are never refused mid-run. A malformed line, a NUL byte or a
+skipped too, so the file's events are never refused mid-run. That check
+costs each line time in proportion to the file's events of its kind not yet
+queued; checking a log in frame order up front is linear. A malformed line, a NUL byte or a
 descriptor that can't be read stops the encode; one that isn't open or is
 write-only is refused at startup. An unterminated last line counts. The
 descriptor's flags are put back at exit.

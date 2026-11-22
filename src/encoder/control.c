@@ -352,7 +352,7 @@ static int ctl_check(const yah264_encoder_t *e, const struct y264_ctl *c, yah264
         return YAH264_CTL_OK;
     case YAH264_CTL_CRF:
         if (!e->crf_on || e->tp_pass) return YAH264_CTL_EMODE;
-        if (!(v->crf > 0.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;   /* what open takes */
+        if (!(v->crf > 0.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;   /* the CLI's --crf range */
         return YAH264_CTL_OK;
     case YAH264_CTL_QP_LIMITS:
         if (!e->abr_on && !e->crf_on && !e->tp_pass) return YAH264_CTL_EMODE;   /* constant QP */
@@ -539,9 +539,12 @@ static int ctl_future(const struct y264_ctl *c)
     return (c->rq.n - q_slot_for(&c->rq, c->in)) + (c->fq.n - q_slot_for(&c->fq, c->in));
 }
 
+/* undrained records count too, so every queued event has a record slot
+ * waiting for it */
 static int ctl_full(const struct y264_ctl *c, const yah264_control_t *v)
 {
-    return c->rq.n + c->fq.n >= CTL_TOTAL_MAX || (v->frame > c->in && ctl_future(c) >= CTL_QUEUE_MAX);
+    return c->rq.n + c->fq.n + c->done.n >= CTL_DONE_MAX
+        || (v->frame > c->in && ctl_future(c) >= CTL_QUEUE_MAX);
 }
 
 int yah264_encoder_control(yah264_encoder_t *e, yah264_control_t *ev)

@@ -40,13 +40,13 @@ struct ctl_queue {
     int head, n, cap;
 };
 
-/* bounds: events naming a frame after the next one to be handed in, every
- * event waiting to land, and applied records waiting to be drained. Events
+/* bounds: events naming a frame after the next one to be handed in, and
+ * events waiting to land plus applied records waiting to be drained. Events
  * for the next frame count only toward the second, so a caller can always
- * queue what is due now. */
+ * queue what is due now, and a queued event always has a record slot, so a
+ * record is lost only to an allocation failure. */
 #define CTL_QUEUE_MAX 4096
-#define CTL_TOTAL_MAX (1 << 20)
-#define CTL_DONE_MAX  65536
+#define CTL_DONE_MAX  (1 << 20)
 
 struct y264_ctl {
     int              ring;      /* power of two, past the deepest pipeline */

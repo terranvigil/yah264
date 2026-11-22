@@ -1398,7 +1398,17 @@ YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *enc, yah264_rc_share
  * Both structs are versioned by `size`, their first field: fields are only
  * appended, the library reads none past the caller's size and treats them as
  * unset, and a size below the first version's or above the library's is
- * refused. None of this touches yah264_param_t. */
+ * refused. None of this touches yah264_param_t.
+ *
+ * Bounds: at most 4096 queued events may name frames after the next one to be
+ * handed in, and queued events plus applied records not yet drained may number
+ * at most 1 << 20 (events for the next frame count only toward this one); past
+ * either an event is refused with YAH264_CTL_EFULL, so a queued event always
+ * has a record slot. An event is 120 bytes, so the queue and records together
+ * are at most about 126 MB, and yah264_encoder_control_check() copies the
+ * queue while it runs. A RATE
+ * event's submit replays the queued events (O(queued)) under the lock the
+ * encoder's rate decisions also take. */
 typedef struct {
     int     size;               /* sizeof(yah264_control_t); yah264_control_init sets it */
     int     kind;               /* YAH264_CTL_* */
@@ -1407,7 +1417,7 @@ typedef struct {
     int     bitrate_kbps;       /* RATE: 0 = unchanged */
     int     vbv_maxrate_kbps;   /* RATE: 0 = unchanged */
     int     vbv_bufsize_kbit;   /* RATE: 0 = unchanged */
-    double  crf;                /* CRF: above 0, up to 51, as open takes it */
+    double  crf;                /* CRF: 0 < crf <= 51, the CLI's --crf range */
     int     qp_min, qp_max;     /* QP_LIMITS: -1 = unchanged */
     int64_t last;               /* ZONE: last frame, inclusive */
     double  qp_offset;          /* ZONE */
