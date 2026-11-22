@@ -127,9 +127,9 @@ fewer clips. We report them apart from the Apple row. The
 | arm64: AWS Graviton3, 32 vCPU, Linux | SVE (256-bit) + NEON | | | 0.65-0.74 CPU time, one thread | a two-clip profile and not goal 3, which is read at the default thread count |
 | x86-64: AMD EPYC, 32 vCPU, rented | AVX2 | | | 0.86-0.96 CPU time, one thread | a two-clip profile and not goal 3. Slower than x264 at the default thread count on one clip (see below). |
 | x86-64: GitHub runner | AVX2 | | | | output byte-identical to C on every push |
-| x86-64: AMD EPYC, 32 vCPU, rented | AVX-512 | | | 0.84-0.93 CPU time, one thread | pixel comparison kernels, on by default where the chip has them |
+| x86-64: AMD EPYC, 32 vCPU, rented | AVX-512 | | | 0.84-0.93 CPU time, one thread | pixel comparison kernels, on by default where the chip has AVX-512 |
 | x86-64: Intel Xeon, 32 vCPU, rented | AVX2 | | | 0.88-0.99 CPU time, one thread | a two-clip profile and not goal 3. Same binary as the AMD rows. Full-thread profile below. |
-| x86-64: Intel Xeon, 32 vCPU, rented | AVX-512 | | | 0.84-0.97 CPU time, one thread | pixel comparison kernels, on by default where the chip has them |
+| x86-64: Intel Xeon, 32 vCPU, rented | AVX-512 | | | 0.84-0.97 CPU time, one thread | pixel comparison kernels, on by default where the chip has AVX-512 |
 | x86-64 | SSE4.2 | | | | checked under emulation, no timing |
 
 The Apple row gives each goal's range of group medians.
