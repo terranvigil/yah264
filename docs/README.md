@@ -27,7 +27,7 @@ the [results page](https://terranvigil.github.io/yah264/results.html).
 - [shot-based.md](shot-based.md): the shot table, cut-aware keyframes and per-shot CRF.
 - [hardware-mode.md](hardware-mode.md): `--hw videotoolbox`, the Mac's hardware encoder behind our options.
 - [ffmpeg.md](ffmpeg.md): using yah264 from ffmpeg.
-- [live-control.md](live-control.md): the planned per-frame control plane for live encoding.
+- [live-control.md](live-control.md): per-frame control events for live encoding (rate, CRF, QP limits, keyframes, zones), the status call and the replayable control log.
 
 ## Reference
 
