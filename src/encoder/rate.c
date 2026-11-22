@@ -287,8 +287,8 @@ static int rfm_open_miss(const yah264_encoder_t *e, double work, double owed, in
  * follows. past the opening, a ledger more than RFM_REC_QP over the last
  * second's reading is scaled down to sit that far over it; a smaller margin
  * also pulls steady clips off their rate. what it drops is kept, with the
- * ledger qp it first cut from. once the last second reads within
- * RFM_REC_NEAR of that level again (a second of returning noise reads about
+ * ledger qp it first cut from. once the last second reads no more than
+ * RFM_REC_NEAR under that level again (a second of returning noise reads about
  * 4 under it after the decay) and RFM_REC_BACK over the ledger, the costly
  * content has come back: the history is restored, the ledger is followed
  * whole for that decide (the next burst would land at the cheap run's qp

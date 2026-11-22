@@ -157,15 +157,15 @@ would otherwise hold that run's QP for the rest of the encode.
 
 The history set aside is kept, with the ledger's QP before the first cut. The
 restore needs an earlier cut and happens at most once: when the last second
-reads within 6 QP of that level and 2 QP over the ledger, the expensive content
-has come back, so the history is restored, that anchor follows the ledger
-whole (the next one, when that decide is a mid-stream I), and the rule turns
-off for the rest of the encode, since content that alternates is what the
-whole history is for. A scene that is only costlier than the cheap stretch
-reads well under that level and leaves the history alone. Capped VBR keeps
-cutting and never restores, since its buffer already bounds each burst.
-Near-black frames, which the ledger doesn't count, don't count toward either
-time.
+reads no more than 6 QP under that level and 2 QP over the ledger, the
+expensive content has come back, so the history is restored, that anchor
+follows the ledger whole (the next one, when that decide is a mid-stream I),
+and the rule turns off for the rest of the encode, since content that
+alternates is what the whole history is for. A scene that is only costlier
+than the cheap stretch reads well under that level and leaves the history
+alone. Capped VBR keeps cutting and never restores, since its buffer already
+bounds each burst. Near-black frames, which the ledger doesn't count, don't
+count toward either time.
 
 CBR keeps the older fit as its opening, since its buffer already holds the
 rate and the refit's opening ran short CBR buffers a few points over. After an

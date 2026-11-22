@@ -1301,7 +1301,7 @@ typedef struct yah264_rc_state {
     int      vbv_have;                         /* vbv_fill is meaningful (appended 2026-10-03) */
     double   rf_rec_work, rf_rec_owed;         /* the rate factor over about the last second */
     double   rf_rec_lost;                      /* history that rate factor set aside */
-    double   rf_rec_qcut;                      /* the rate factor it was first cut from */
+    double   rf_rec_qcut;                      /* the ledger QP it was first cut from */
     int      rf_rec_state;                     /* 0 not cut yet, 1 cut, 2 restored and off */
 } yah264_rc_state_t;
 
