@@ -35,8 +35,8 @@ applies the preset, maps the options below and opens the encoder.
 | `-mastering-display`, `-cll` | the same as the CLI's options, same syntax | private options for inputs that have no side data. They override it |
 | `-subme`, `-trellis`, `-aq-strength`, `-psy-rd` | the same settings | private options; -1 keeps the preset's value |
 
-The wrapper has no `-tune`, no free-form parameter string and no way to ask
-for the alternative transfer SEI yet.
+The wrapper has no `-tune` and no free-form parameter string yet. It also has
+no way to ask for the alternative transfer SEI.
 
 Because ffmpeg takes an encoder's primaries and transfer from its input frames
 and Y4M has no field for them, tag an untagged input on the frames:

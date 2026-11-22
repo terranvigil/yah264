@@ -32,8 +32,8 @@ redistributed.
 | bbb_720p | 720p | animation (3D CGI) | Big Buck Bunny, Blender, CC BY 3.0. It comes from the 30 fps 1080p remaster, and `scripts/fetch_corpus.sh --review` cuts it. The 450 frames from 9m45s are the window with the most sustained motion that isn't also a night scene |
 | sita_720p | 720p | animation (hand-drawn 2D) | Sita Sings the Blues, Public Domain Mark 1.0, archive.org item `sita-sings-the-blues_202403`. The 140 frames from 35m are the longest cut-free run in a flat-color sequence |
 
-We hold both animation kinds on purpose. Against x264 we lead on CGI and
-trail on hand-drawn. Name the kind when you quote a result, never just
+We hold both animation kinds on purpose because they disagree sharply
+against x264. We lead on CGI and trail on hand-drawn. Name the kind when you quote a result, never just
 "animation" ([animation notes](animation.md)).
 
 samsung_720p appears in older records and the legacy board set. It's vendor
@@ -127,7 +127,7 @@ downloading the whole file. We cut `sita_720p` out of a 16 GB master this way:
 
     ffmpeg -ss <seconds> -i <https-url> -frames:v N -vf scale=1280:720 ...
 
-Pick the window by measuring. Look at the flat-block share and the mean luma.
+Pick the window by measuring, not by eye. Look at the flat-block share and the mean luma.
 Mean luma keeps you out of night scenes. Count scene cuts from frame-to-frame
 luma jumps.
 
@@ -259,7 +259,7 @@ Assessed but not held, in order of usefulness:
 We already hold Netflix Open Content and the Blender films. They're in the
 long-form section above.
 
-The training set has no hand-drawn 2D source at all. This known gap matters
-because hand-drawn is where we measurably lose. Sol Levante, from
-Netflix Open Content under CC BY 4.0, is the only true hand-drawn anime master
-we found. Try it through the path-style endpoint.
+Two gaps are known. The training set has no hand-drawn 2D source at all,
+which matters because hand-drawn is where we measurably lose. The second gap
+is Sol Levante, from Netflix Open Content under CC BY 4.0. It's the only true
+hand-drawn anime master we found. Try it through the path-style endpoint.

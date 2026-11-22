@@ -1,8 +1,8 @@
 # Measuring quality with VMAF v1
 
 yah264 scores quality with VMAF v1. That means libvmaf 3.x and Netflix's
-v1.0.16 models. The BD bands, the long-form ladders and the banding check all
-use it. `VMAF_GATE=VMAF-NEG` remains only to reproduce older numbers.
+v1.0.16 models. Every quality gate uses it: the BD bands, the long-form ladders and
+the banding check. `VMAF_GATE=VMAF-NEG` remains only to reproduce older numbers.
 
 v1 sees three things v0.6.1 couldn't: banding through CAMBI, chroma, and
 blockiness through an additive-impairment term. Its detail feature keeps
@@ -22,7 +22,7 @@ earns nothing under that cap, a separate NEG score would add nothing.
 
 ## Limits
 
-- v1's CAMBI ignores very dark areas. `band_check.py` checks CAMBI without
+- v1's CAMBI ignores very dark areas. `band_check.py` gates on CAMBI without
   that threshold and adds its own dark-area statistics.
 - BD loses resolving power near the top of the scale, above about 98.
   bdcompare flags those clips.

@@ -123,5 +123,5 @@ fitted against a coarser lowres search than the one that ships.
   default by more than 0.30%; otherwise the label is `default`.
 - `Y264_PSY_FLAT_LOG=1` and `Y264_ADME_LOG=1` dump the frame features.
 - Any fitted table has a header naming its training set, labels, features,
-  the ceiling and what it achieved. A `REFIT IF:` line lists the encoder
-  changes that invalidate it.
+  the ceiling and what it achieved, and a `REFIT IF:` line that lists the
+  encoder changes that invalidate it.

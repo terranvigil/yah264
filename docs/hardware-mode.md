@@ -140,8 +140,8 @@ matters more than bits.
 
 - The hardware isn't byte-stable run to run. Its VMAF moved by up to 0.6
   points across five runs on the board. Ours repeated to within about 0.2.
-- `scripts/regress.py` draws `--hw auto` in a quarter of its cells and checks
-  only "encodes, decodes, frame count matches". It doesn't assert determinism there.
+- `scripts/regress.py` draws `--hw auto` in a quarter of its cells and gates
+  only on "encodes, decodes, frame count matches". It doesn't assert determinism there.
 - A raw `.264` from the hardware has no VUI timing. A decoder guesses the
   rate. Align frames by index when scoring, or the PSNR filter pairs the wrong
   frames.

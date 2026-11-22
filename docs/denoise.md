@@ -21,7 +21,7 @@ They're scored against the original source, never the filtered one.
 Don't combine them. `--mcstf` plus `--nr-inter 100` reads a median of -1.85 on
 the grain and noise clips against -2.20 for `--mcstf` alone.
 
-## How the two tools work
+## How it works
 
 ### Coefficient noise reduction with `--nr`
 

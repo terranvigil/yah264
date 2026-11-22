@@ -29,7 +29,7 @@ display, and reads chroma. Both encoders site chroma `left`.
 | decode fidelity | conformance recon-match: ffmpeg's decode of our stream IS our encoder's recon |
 | DC luma bias | ours is +0.22 mean, swinging +-0.6 per frame, against x264's +0.09. The bias is real but bounded. We measured a full +1.0 luma shift at only 0.08 VMAF, so our bias is worth under 0.05 |
 | plain VMAF vs NEG "gaming" | if one encoder's psy tuning gamed plain v0.6.1 harder, a plain-VMAF table would be biased. The measured enhancement gain (plain minus NEG) is 1.39 for ours and 1.34 for x264. That's equal, and if anything we benefit slightly more |
-| rate residual at the "matched" point | dSIZE reads +0.6% in OUR favor on most table rows. We score with about 0.6% MORE bits than x264 at the "matched" point, so the reported dVMAF is slightly flattered, if anything |
+| rate residual at the "matched" point | dSIZE reads +0.6% in OUR favor on most table rows. We score with about 0.6% MORE bits than x264 at the "matched" point, so the reported dVMAF is slightly flattered, not depressed |
 | psy-rd | 1.0 on both sides |
 
 So a dVMAF gap measured this way is real coding efficiency. The measurement

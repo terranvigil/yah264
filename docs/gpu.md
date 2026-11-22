@@ -5,13 +5,13 @@ lookahead's lowres motion search. It's built on a separate compute library
 called nextgpu. The offload is off by default at build time and at run time
 because it doesn't pay: any encode that arms it pays a 12 to 17 ms per-process
 Metal bring-up cost that the work it offloads can't win back. The code stays
-in the tree as an experiment you can re-run.
+in the tree as an experiment you can re-run, not a feature.
 
 This page covers GPU compute inside the software encoder. Apple's
 fixed-function encoder is a separate backend that replaces the core instead of
 offloading part of it. [Hardware mode](hardware-mode.md) covers it.
 
-## Design
+## How it works
 
 ### What the GPU can and can't touch
 
@@ -41,7 +41,7 @@ The offload is 8-bit only. The library takes 8-bit samples and the 10-bit
 library's `pixel` is 16 bits, so `src/encoder/gpu.c` compiles to stubs in the
 10-bit build.
 
-### The offload
+### The offload in `src/encoder/gpu.c`
 
 The offload in `src/encoder/gpu.c` stays off until its runtime knob, default
 0, arms it. It falls back to the CPU search on any failure.
