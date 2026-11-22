@@ -1407,7 +1407,7 @@ typedef struct {
     int     bitrate_kbps;       /* RATE: 0 = unchanged */
     int     vbv_maxrate_kbps;   /* RATE: 0 = unchanged */
     int     vbv_bufsize_kbit;   /* RATE: 0 = unchanged */
-    double  crf;                /* CRF */
+    double  crf;                /* CRF: 1..51 */
     int     qp_min, qp_max;     /* QP_LIMITS: -1 = unchanged */
     int64_t last;               /* ZONE: last frame, inclusive */
     double  qp_offset;          /* ZONE */
@@ -1454,7 +1454,8 @@ YAH264_EXPORT int yah264_encoder_control(yah264_encoder_t *enc, yah264_control_t
  * there is no queue bound. Returns YAH264_CTL_OK, or the first refusal's
  * code with its index in *bad_index. A bad pointer or n < 0 returns
  * YAH264_CTL_EINVAL with *bad_index -1 (not written when bad_index is
- * NULL). Each event's size is checked as yah264_encoder_control checks it. */
+ * NULL). Each event's size is checked as yah264_encoder_control checks it.
+ * Call it between encode calls, from the thread that calls encode. */
 YAH264_EXPORT int yah264_encoder_control_check(yah264_encoder_t *enc, const yah264_control_t *ev,
                                                int n, int *bad_index);
 

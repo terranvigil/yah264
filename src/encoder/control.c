@@ -332,8 +332,8 @@ static int qp_check_queue(const struct y264_ctl *c, const yah264_control_t *v)
     return YAH264_CTL_OK;
 }
 
-/* the checks against the state at the event's frame; RATE's queue replay is
- * left to the caller, which holds mx for it */
+/* the checks against the state at the event's frame (c NULL: the event
+ * alone); RATE's queue replay is left to the caller, which holds mx for it */
 static int ctl_check(const yah264_encoder_t *e, const struct y264_ctl *c, yah264_control_t *v)
 {
     switch (v->kind) {
@@ -352,7 +352,7 @@ static int ctl_check(const yah264_encoder_t *e, const struct y264_ctl *c, yah264
         return YAH264_CTL_OK;
     case YAH264_CTL_CRF:
         if (!e->crf_on || e->tp_pass) return YAH264_CTL_EMODE;
-        if (!(v->crf > 0.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;
+        if (!(v->crf >= 1.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;
         return YAH264_CTL_OK;
     case YAH264_CTL_QP_LIMITS:
         if (!e->abr_on && !e->crf_on && !e->tp_pass) return YAH264_CTL_EMODE;   /* constant QP */
@@ -361,14 +361,14 @@ static int ctl_check(const yah264_encoder_t *e, const struct y264_ctl *c, yah264
         if (v->qp_min < 0 && v->qp_max < 0) return YAH264_CTL_EINVAL;
         /* the buffer may need the QPs above a ceiling, as at open */
         if (e->hrd_on && v->qp_max >= 0 && v->qp_max < 51) return YAH264_CTL_EHRD;
-        return qp_check_queue(c, v);
+        return c ? qp_check_queue(c, v) : YAH264_CTL_OK;
     case YAH264_CTL_KEYFRAME:
         if (e->tp_pass) return YAH264_CTL_EMODE;
         return YAH264_CTL_OK;
     case YAH264_CTL_ZONE:
         if (v->last < v->frame) return YAH264_CTL_EINVAL;
         if (!(v->qp_offset >= -51.0 && v->qp_offset <= 51.0)) return YAH264_CTL_EINVAL;
-        if (zone_overlaps(e, c, v->frame, v->last)) return YAH264_CTL_ECONFLICT;
+        if (c && zone_overlaps(e, c, v->frame, v->last)) return YAH264_CTL_ECONFLICT;
         return YAH264_CTL_OK;
     case 0:
         return YAH264_CTL_EINVAL;
@@ -449,11 +449,52 @@ int yah264_encoder_control_check(yah264_encoder_t *e, const yah264_control_t *ev
         free(sh.rq.ev); free(sh.fq.ev); free(sh.zones);
         return r;
     }
+    /* The state after every queued event of each kind, so an event appended
+     * at the tail (a log in frame order) is checked in constant time; one that
+     * lands among the queued ones replays them. */
+    int tk = sh.a_kbps, tm = sh.a_maxrate, tb = sh.a_bufsize, tlo = sh.qp_min, thi = sh.qp_max;
+    for (int i = 0; i < sh.rq.n; i++)
+        if (q_at(&sh.rq, i)->kind == YAH264_CTL_RATE) rate_apply(q_at(&sh.rq, i), &tk, &tm, &tb);
+    for (int i = 0; i < sh.fq.n; i++) {
+        const yah264_control_t *q = q_at(&sh.fq, i);
+        if (q->kind != YAH264_CTL_QP_LIMITS) continue;
+        if (q->qp_min >= 0) tlo = q->qp_min;
+        if (q->qp_max >= 0) thi = q->qp_max;
+    }
+    int64_t zfirst = -1, zlast = -1;           /* the queued zones' latest start and end */
+    for (int i = 0; i < sh.nz; i++) {
+        if (sh.zones[i].first > zfirst) zfirst = sh.zones[i].first;
+        if (sh.zones[i].last > zlast) zlast = sh.zones[i].last;
+    }
     for (int i = 0; i < n; i++) {
         yah264_control_t v;
         r = ctl_take(&sh, &ev[i], &v);
-        if (r == YAH264_CTL_OK) r = ctl_check(e, &sh, &v);
-        if (r == YAH264_CTL_OK && v.kind == YAH264_CTL_RATE) r = rate_check_queue(e, &sh, &v);
+        int tail = 0;
+        if (r == YAH264_CTL_OK) {
+            struct ctl_queue *q = v.kind == YAH264_CTL_RATE || v.kind == YAH264_CTL_CRF ? &sh.rq : &sh.fq;
+            tail = q_slot_for(q, v.frame) == q->n;
+        }
+        if (r == YAH264_CTL_OK && tail && v.kind == YAH264_CTL_QP_LIMITS) {
+            r = ctl_check(e, NULL, &v);         /* the event alone, then the tail state */
+            int lo = v.qp_min >= 0 ? v.qp_min : tlo, hi = v.qp_max >= 0 ? v.qp_max : thi;
+            if (r == YAH264_CTL_OK && lo > hi) r = YAH264_CTL_EINVAL;
+        } else if (r == YAH264_CTL_OK && tail && v.kind == YAH264_CTL_ZONE && v.frame >= zfirst) {
+            r = ctl_check(e, NULL, &v);
+            if (r == YAH264_CTL_OK && zlast >= v.frame) r = YAH264_CTL_ECONFLICT;
+            for (int z = 0; r == YAH264_CTL_OK && z < e->nzones; z++)
+                if (v.frame <= e->zones[z].last && e->zones[z].first <= v.last) r = YAH264_CTL_ECONFLICT;
+        } else if (r == YAH264_CTL_OK) {
+            r = ctl_check(e, &sh, &v);
+        }
+        if (r == YAH264_CTL_OK && v.kind == YAH264_CTL_RATE) {
+            if (tail) {
+                int k = tk, m = tm, b = tb;
+                rate_apply(&v, &k, &m, &b);
+                r = rate_ok(e, k, m, b);
+            } else {
+                r = rate_check_queue(e, &sh, &v);
+            }
+        }
         if (r == YAH264_CTL_OK) {
             int k = v.kind == YAH264_CTL_RATE || v.kind == YAH264_CTL_CRF
                   ? q_insert(&sh.rq, &v) : q_insert(&sh.fq, &v);
@@ -461,9 +502,46 @@ int yah264_encoder_control_check(yah264_encoder_t *e, const yah264_control_t *ev
             if (k != 0) r = YAH264_CTL_ENOMEM;
         }
         if (r != YAH264_CTL_OK) { *bad_index = i; break; }
+        /* fold it into the tail states */
+        if (v.kind == YAH264_CTL_RATE) {
+            if (tail) {
+                rate_apply(&v, &tk, &tm, &tb);
+            } else {
+                tk = sh.a_kbps; tm = sh.a_maxrate; tb = sh.a_bufsize;
+                for (int j = 0; j < sh.rq.n; j++)
+                    if (q_at(&sh.rq, j)->kind == YAH264_CTL_RATE) rate_apply(q_at(&sh.rq, j), &tk, &tm, &tb);
+            }
+        } else if (v.kind == YAH264_CTL_QP_LIMITS) {
+            if (tail) {
+                if (v.qp_min >= 0) tlo = v.qp_min;
+                if (v.qp_max >= 0) thi = v.qp_max;
+            } else {
+                tlo = sh.qp_min; thi = sh.qp_max;
+                for (int j = 0; j < sh.fq.n; j++) {
+                    const yah264_control_t *q = q_at(&sh.fq, j);
+                    if (q->kind != YAH264_CTL_QP_LIMITS) continue;
+                    if (q->qp_min >= 0) tlo = q->qp_min;
+                    if (q->qp_max >= 0) thi = q->qp_max;
+                }
+            }
+        } else if (v.kind == YAH264_CTL_ZONE) {
+            if (v.frame > zfirst) zfirst = v.frame;
+            if (v.last > zlast) zlast = v.last;
+        }
     }
     free(sh.rq.ev); free(sh.fq.ev); free(sh.zones);
     return r;
+}
+
+/* events in the queues naming a frame after the next one; under mx */
+static int ctl_future(const struct y264_ctl *c)
+{
+    return (c->rq.n - q_slot_for(&c->rq, c->in)) + (c->fq.n - q_slot_for(&c->fq, c->in));
+}
+
+static int ctl_full(const struct y264_ctl *c, const yah264_control_t *v)
+{
+    return c->rq.n + c->fq.n >= CTL_TOTAL_MAX || (v->frame > c->in && ctl_future(c) >= CTL_QUEUE_MAX);
 }
 
 int yah264_encoder_control(yah264_encoder_t *e, yah264_control_t *ev)
@@ -478,7 +556,7 @@ int yah264_encoder_control(yah264_encoder_t *e, yah264_control_t *ev)
     if (r != YAH264_CTL_OK) return r;
     if (v.kind == YAH264_CTL_RATE || v.kind == YAH264_CTL_CRF) {
         pthread_mutex_lock(&c->mx);
-        r = c->fq.n + c->rq.n >= CTL_QUEUE_MAX ? YAH264_CTL_EFULL
+        r = ctl_full(c, &v) ? YAH264_CTL_EFULL
           : v.kind == YAH264_CTL_RATE ? rate_check_queue(e, c, &v) : YAH264_CTL_OK;
         if (r == YAH264_CTL_OK && q_insert(&c->rq, &v) != 0) r = YAH264_CTL_ENOMEM;
         atomic_store_explicit(&c->nrq, c->rq.n, memory_order_release);
@@ -486,7 +564,7 @@ int yah264_encoder_control(yah264_encoder_t *e, yah264_control_t *ev)
         if (r != YAH264_CTL_OK) return r;
     } else {
         pthread_mutex_lock(&c->mx);
-        int full = c->fq.n + c->rq.n >= CTL_QUEUE_MAX;
+        int full = ctl_full(c, &v);
         pthread_mutex_unlock(&c->mx);
         if (full) return YAH264_CTL_EFULL;
         if (v.kind == YAH264_CTL_ZONE && zone_add(c, &v) != 0) return YAH264_CTL_ENOMEM;

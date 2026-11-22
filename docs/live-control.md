@@ -100,10 +100,13 @@ the new rate outweigh it.
   force at its frame once every event queued before it has landed. It's
   refused if it doesn't fit there, or if any event already queued after it
   would no longer fit.
-- The encoder holds at most 4096 events waiting to land and 65536 applied
-  records waiting to be drained. An event past the first bound is refused
-  with `YAH264_CTL_EFULL`; draining `yah264_encoder_controls_applied()` frees
-  the second.
+- The encoder holds at most 4096 events naming frames after the next one to
+  be handed in, about a million waiting to land in all, and 65536 applied
+  records waiting to be drained. Events for the next frame count only toward
+  the second bound, so what is due now can always be queued. An event past a
+  bound is refused with `YAH264_CTL_EFULL`; draining
+  `yah264_encoder_controls_applied()` frees the third.
+- A CRF below 1 is refused.
 - The hardware encoder (`--hw`) takes no events.
 
 ## From the command line
@@ -128,21 +131,27 @@ Frames count from 0 in input order and may not decrease down the file. The
 optional first line names the log's version. A line is `FRAME KIND` and then
 `name=value` arguments; a line whose first character after any spaces is `#`
 is a comment, and a `#` after an event (`5 key # note`) is refused. Numbers
-are plain decimals: no hex, exponent or `inf`, and a sign only on the
-offsets and the CRF. Before the first frame the whole file is parsed and
+are plain decimals: no hex, exponent or `inf`; a sign only on the offsets and
+the CRF, which take at most 8 digits before the point and 6 after. Before the first frame the whole file is parsed and
 every event is checked against the encoder in order, as if all were queued:
 an unknown kind or argument, a bad value, a NUL byte, a frame that goes
 backwards, a file that can't be read, or an event the encoder would refuse
 stops the run with the file name, the line number and the reason, and the
-output is left as it was. The events then reach the encoder as frames go by:
-each before its frame is handed in, and up to 1024 ahead of that. An event
-for a frame the stream never reaches is reported at the end.
+output is left as it was. So does a log the encoder's queue couldn't hold:
+more than 65536 events on one frame, or more than 262144 rate and CRF events
+within 4096 frames. The events then reach the encoder as frames go by: each
+before its frame is handed in, and up to 1024 ahead of that. Events for a
+frame the stream never reaches are reported at the end.
 
 `--control-fd N` reads the same lines from an open descriptor while the
 encode runs, taking up to 64 of the lines that have arrived before each
 frame is handed in. The frame may be `next`, the frame about to be handed in.
 A numbered line for a frame that has already gone in, or an event the
-encoder refuses, is skipped with a warning. A malformed line, a NUL byte or a
+encoder refuses, is skipped with a warning. With `--control` as well, the
+file's events up to a line's frame are queued first, and the line is
+skipped (queue full) if that would take the file more than 1024 events
+ahead; a line that would make one of the file's later events fail is
+skipped too, so the file's events are never refused mid-run. A malformed line, a NUL byte or a
 descriptor that can't be read stops the encode; one that isn't open or is
 write-only is refused at startup. An unterminated last line counts. The
 descriptor's flags are put back at exit.

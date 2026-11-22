@@ -343,6 +343,59 @@ def main():
         if refused == 6:
             print("  ok   per-GOP options are refused with live control")
 
+        # file and fd events sharing the queue: a big burst on one frame runs,
+        # an fd line never drags the file past its window, an fd line that
+        # would break an unfed file event is the one refused, and a log the
+        # queue could never hold is refused before the output is cut
+        ka = os.path.join(d, "ka.ctl")
+        with open(ka, "w") as f:
+            f.write("#livectl 1\n" + "10 key\n" * 4200)
+        r = run(enc, base + ["--frames", "30", "--control", ka, "-o", os.path.join(d, "ka.264")])
+        ok1 = r.returncode == 0 and os.path.getsize(os.path.join(d, "ka.264")) > 1000
+
+        kb = os.path.join(d, "kb.ctl")
+        with open(kb, "w") as f:
+            f.write("".join("%d key\n" % (100 + i) for i in range(5000)))
+        rd, wr = os.pipe()
+        p = subprocess.Popen([enc] + crf + ["--control", kb, "--control-fd", str(rd), "-o", os.path.join(d, "kb.264")],
+                             pass_fds=(rd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rd)
+        os.write(wr, b"4999 qp min=20\n")
+        os.close(wr)
+        _, e2 = p.communicate()
+        ok2 = p.returncode == 0 and b"(frame 4999): skipped" in e2
+
+        kc2 = os.path.join(d, "kc.ctl")
+        with open(kc2, "w") as f:
+            f.write("50 key\n" * 1100 + "60 qp max=30\n")
+        rd, wr = os.pipe()
+        p = subprocess.Popen([enc] + crf + ["--frames", "100", "--control", kc2, "--control-fd", str(rd),
+                                            "-o", os.path.join(d, "kc.264")],
+                             pass_fds=(rd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rd)
+        os.write(wr, b"next qp min=40\n")
+        os.close(wr)
+        _, e3 = p.communicate()
+        ok3 = p.returncode == 0 and b"line 1: skipped" in e3
+
+        kd = os.path.join(d, "kd.ctl")
+        with open(kd, "w") as f:
+            f.write("10 key\n" * 65537)
+        keep3 = os.path.join(d, "keep3.264")
+        with open(keep3, "wb") as f:
+            f.write(b"y" * 100)
+        r4 = run(enc, base + ["--control", kd, "-o", keep3])
+        ok4 = r4.returncode == 2 and open(keep3, "rb").read() == b"y" * 100
+        for ok, what, extra in ((ok1, "4200 events on one frame", r.stderr[-200:]),
+                                (ok2, "an fd line past the file window", e2[-200:]),
+                                (ok3, "an fd line conflicting with an unfed file event", e3[-200:]),
+                                (ok4, "a log the queue cannot hold", r4.stderr[-200:])):
+            if not ok:
+                print("FAIL %s: %r" % (what, extra))
+                fails += 1
+        if ok1 and ok2 and ok3 and ok4:
+            print("  ok   file and fd events share the queue without a refusal mid-run")
+
     if fails:
         print("control_check: %d failure(s)" % fails)
         return 1

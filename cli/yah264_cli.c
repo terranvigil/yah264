@@ -698,7 +698,7 @@ static int g_control_fd = -1;
 static const char *g_control_out;
 static yah264_control_t *g_ctl_file_ev;
 static int *g_ctl_file_line;
-static int g_ctl_file_n;
+static int g_ctl_file_n, g_ctl_file_cap;
 struct ctl_echo { int64_t frame; char text[160]; };
 static struct ctl_echo *g_ctl_echo;       /* applied, not yet on a stats line */
 static int g_ctl_echo_n, g_ctl_echo_cap;
@@ -819,11 +819,15 @@ static int parse_control_file(const char *path)
             free(line); fclose(f); return -1;
         }
         last = ev.frame;
-        yah264_control_t *q = realloc(g_ctl_file_ev, (size_t)(g_ctl_file_n + 1) * sizeof *q);
-        int *ql = realloc(g_ctl_file_line, (size_t)(g_ctl_file_n + 1) * sizeof *ql);
-        if (q) g_ctl_file_ev = q;
-        if (ql) g_ctl_file_line = ql;
-        if (!q || !ql) { free(line); fclose(f); return -1; }
+        if (g_ctl_file_n == g_ctl_file_cap) {
+            int nc = g_ctl_file_cap ? 2 * g_ctl_file_cap : 256;
+            yah264_control_t *q = realloc(g_ctl_file_ev, (size_t)nc * sizeof *q);
+            if (q) g_ctl_file_ev = q;
+            int *ql = q ? realloc(g_ctl_file_line, (size_t)nc * sizeof *ql) : NULL;
+            if (ql) g_ctl_file_line = ql;
+            if (!q || !ql) { free(line); fclose(f); return -1; }
+            g_ctl_file_cap = nc;
+        }
         g_ctl_file_ev[g_ctl_file_n] = ev;
         g_ctl_file_line[g_ctl_file_n++] = ln;
     }
@@ -838,13 +842,26 @@ static int parse_control_file(const char *path)
     return 0;
 }
 
+/* an event whose frame the stream never reached; the first few by name */
+static long g_ctl_unlanded;
+static void control_unlanded_warn(const char *t)
+{
+    if (g_ctl_unlanded++ < 10)
+        fprintf(stderr, "yah264: warning: control \"%s\" never landed: the stream ended first\n", t);
+}
+
 /* --control events wait in the CLI and are fed to the encoder as frames go
- * by: every event for a frame about to be handed in, and up to this many
- * queued beyond that, so a long log never fills the encoder's queue */
+ * by: every event for the frame about to be handed in, then up to this many
+ * queued in all ahead of it, so a long log never fills the encoder's queue */
 #define CTL_FILE_WINDOW 1024
-/* --control-fd lines are refused past this many queued events, which keeps
- * room for the file's */
-#define CTL_FD_QUEUE_MAX 2048
+/* what a --control log may hold so its feed always fits the encoder's queue
+ * (its bounds are 4096 events for later frames and 1 << 20 in all; events
+ * for the next frame count only toward the second): this many on one frame,
+ * and this many rate and CRF events, which wait for their frame's rate
+ * decision, within any span of this many frames */
+#define CTL_FILE_FRAME_MAX 65536
+#define CTL_FILE_RC_MAX    262144
+#define CTL_FILE_RC_SPAN   4096
 static int g_ctl_file_next;
 
 static int64_t control_pending(yah264_encoder_t *enc, int64_t *next)
@@ -857,41 +874,45 @@ static int64_t control_pending(yah264_encoder_t *enc, int64_t *next)
     return st.controls_pending;
 }
 
+/* queue the next file event: 0, or the encoder's refusal */
 static int control_feed_one(yah264_encoder_t *enc)
 {
-    int i = g_ctl_file_next++;
-    yah264_control_t ev = g_ctl_file_ev[i];
+    yah264_control_t ev = g_ctl_file_ev[g_ctl_file_next];
     int r = g_api->control(enc, &ev);
-    if (r != YAH264_CTL_OK) {
-        fprintf(stderr, "yah264: --control %s:%d: refused: %s\n", g_control_file,
-                g_ctl_file_line[i], yah264_control_strerror(r));
-        return -1;
-    }
-    return 0;
+    if (r == YAH264_CTL_OK) g_ctl_file_next++;
+    return r;
 }
 
-/* every file event landing at or before `upto`, whatever the window */
-static int control_feed_upto(yah264_encoder_t *enc, int64_t upto)
+static int control_feed_fail(int r)
 {
-    while (g_ctl_file_next < g_ctl_file_n && g_ctl_file_ev[g_ctl_file_next].frame <= upto)
-        if (control_feed_one(enc) < 0) return -1;
-    return 0;
+    fprintf(stderr, "yah264: --control %s:%d: refused: %s\n", g_control_file,
+            g_ctl_file_line[g_ctl_file_next], yah264_control_strerror(r));
+    return -1;
 }
 
-/* before each hand-in: what lands on the next frame, then the window */
+/* before each hand-in: what lands on the next frame, then the window, which
+ * waits when the queue is full. The log was checked whole up front, so the
+ * encoder refuses none of it. */
 static int control_feed_file(yah264_encoder_t *enc)
 {
     if (g_ctl_file_next >= g_ctl_file_n) return 0;
     int64_t next = 0;
-    control_pending(enc, &next);
-    if (control_feed_upto(enc, next) < 0) return -1;
-    for (int64_t q = control_pending(enc, NULL); g_ctl_file_next < g_ctl_file_n && q < CTL_FILE_WINDOW; q++)
-        if (control_feed_one(enc) < 0) return -1;
+    int64_t q = control_pending(enc, &next);
+    while (g_ctl_file_next < g_ctl_file_n && g_ctl_file_ev[g_ctl_file_next].frame <= next) {
+        int r = control_feed_one(enc);
+        if (r != YAH264_CTL_OK) return control_feed_fail(r);
+        q++;
+    }
+    for (; g_ctl_file_next < g_ctl_file_n && q < CTL_FILE_WINDOW; q++) {
+        int r = control_feed_one(enc);
+        if (r == YAH264_CTL_EFULL) break;
+        if (r != YAH264_CTL_OK) return control_feed_fail(r);
+    }
     return 0;
 }
 
 /* the whole --control log checked against the encoder before the outputs
- * are cut, then the first of it queued */
+ * are cut, and against what its queue can hold, then the first of it queued */
 static int control_start_file(yah264_encoder_t *enc)
 {
     if (!g_ctl_file_n) return 0;
@@ -905,7 +926,51 @@ static int control_start_file(yah264_encoder_t *enc)
             fprintf(stderr, "yah264: --control %s: %s\n", g_control_file, yah264_control_strerror(r));
         return -1;
     }
+    /* frames do not decrease down the file, so both counts are one pass */
+    for (int i = 0, same = 0, rc = 0, lo = 0; i < g_ctl_file_n; i++) {
+        const yah264_control_t *ev = &g_ctl_file_ev[i];
+        same = i && ev->frame == g_ctl_file_ev[i - 1].frame ? same + 1 : 1;
+        if (ev->kind == YAH264_CTL_RATE || ev->kind == YAH264_CTL_CRF) {
+            rc++;
+            while (ev->frame - g_ctl_file_ev[lo].frame >= CTL_FILE_RC_SPAN) {
+                rc -= g_ctl_file_ev[lo].kind == YAH264_CTL_RATE || g_ctl_file_ev[lo].kind == YAH264_CTL_CRF;
+                lo++;
+            }
+        }
+        if (same > CTL_FILE_FRAME_MAX || rc > CTL_FILE_RC_MAX) {
+            fprintf(stderr, "yah264: --control %s:%d: refused: more events %s than the encoder's "
+                    "queue holds (%d on one frame, %d rate and CRF events in %d frames)\n",
+                    g_control_file, g_ctl_file_line[i],
+                    same > CTL_FILE_FRAME_MAX ? "on this frame" : "this close together",
+                    CTL_FILE_FRAME_MAX, CTL_FILE_RC_MAX, CTL_FILE_RC_SPAN);
+            return -1;
+        }
+    }
     return control_feed_file(enc);
+}
+
+/* an fd event against the file events not yet fed, which were checked
+ * without it: refuse it if it would make any of them fail later */
+static int control_fd_conflict(yah264_encoder_t *enc, const yah264_control_t *ev)
+{
+    static yah264_control_t *buf;
+    static int cap;
+    int kind = ev->kind;
+    if (kind != YAH264_CTL_RATE && kind != YAH264_CTL_QP_LIMITS && kind != YAH264_CTL_ZONE)
+        return g_api->control_check(enc, ev, 1, &(int){ 0 });
+    int n = 1;
+    for (int i = g_ctl_file_next; i < g_ctl_file_n; i++)
+        n += g_ctl_file_ev[i].kind == kind;
+    if (n > cap) {
+        yah264_control_t *nb = realloc(buf, (size_t)n * sizeof *nb);
+        if (!nb) return YAH264_CTL_ENOMEM;
+        buf = nb; cap = n;
+    }
+    buf[0] = *ev;
+    for (int i = g_ctl_file_next, k = 1; i < g_ctl_file_n; i++)
+        if (g_ctl_file_ev[i].kind == kind) buf[k++] = g_ctl_file_ev[i];
+    int bad = -1;
+    return g_api->control_check(enc, buf, n, &bad);
 }
 
 /* file events whose frame the stream never reached, said as the encoder's are */
@@ -914,8 +979,10 @@ static void control_file_unlanded(void)
     for (; g_ctl_file_next < g_ctl_file_n; g_ctl_file_next++) {
         char t[160];
         ctl_format(&g_ctl_file_ev[g_ctl_file_next], t, sizeof t);
-        fprintf(stderr, "yah264: warning: control \"%s\" never landed: the stream ended first\n", t);
+        control_unlanded_warn(t);
     }
+    if (g_ctl_unlanded > 10)
+        fprintf(stderr, "yah264: warning: %ld control events in all never landed\n", g_ctl_unlanded);
 }
 
 /* one --control-fd line, NUL-terminated at its end: -1 stops the encode */
@@ -948,9 +1015,19 @@ static int control_fd_line(yah264_encoder_t *enc, const char *ln, size_t len)
     ctl_from_log(&le, &ev);
     int64_t named = ev.frame, next = 0;
     int64_t pending = control_pending(enc, &next);
-    /* the file's events for the same frames go first */
-    if (control_feed_upto(enc, named >= 0 ? named : next) < 0) return -1;
-    int c = pending >= CTL_FD_QUEUE_MAX ? YAH264_CTL_EFULL : g_api->control(enc, &ev);
+    int64_t at = named >= 0 ? named : next;
+    /* the file's events up to its frame go first, if they fit the window;
+     * an fd line never pushes the file past it */
+    int c = YAH264_CTL_OK, k = 0;
+    while (g_ctl_file_next + k < g_ctl_file_n && g_ctl_file_ev[g_ctl_file_next + k].frame <= at) k++;
+    if (k && pending + k > CTL_FILE_WINDOW) c = YAH264_CTL_EFULL;
+    while (c == YAH264_CTL_OK && k-- > 0) {
+        int r = control_feed_one(enc);
+        if (r == YAH264_CTL_EFULL) c = r;
+        else if (r != YAH264_CTL_OK) return control_feed_fail(r);
+    }
+    if (c == YAH264_CTL_OK && g_ctl_file_next < g_ctl_file_n) c = control_fd_conflict(enc, &ev);
+    if (c == YAH264_CTL_OK) c = g_api->control(enc, &ev);
     if (c != YAH264_CTL_OK) {
         if (named >= 0)
             fprintf(stderr, "yah264: warning: --control-fd: line %d (frame %lld): skipped: %s\n",
@@ -1061,7 +1138,7 @@ static void control_drain(yah264_encoder_t *enc)
             char t[160];
             ctl_format(&done[i], t, sizeof t);
             if (done[i].applied_frame < 0) {
-                fprintf(stderr, "yah264: warning: control \"%s\" never landed: the stream ended first\n", t);
+                control_unlanded_warn(t);
                 continue;
             }
             ctl_push(&g_ctl_echo, &g_ctl_echo_n, &g_ctl_echo_cap, done[i].applied_frame, t);

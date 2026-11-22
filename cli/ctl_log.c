@@ -58,18 +58,22 @@ static int parse_i64(const char *s, int64_t lo, int64_t hi, int64_t *out)
     return 0;
 }
 
-/* a decimal real: an optional sign, digits, and an optional point followed by
- * digits; no exponent, hex, inf or nan */
+/* a decimal real: an optional sign, 1 to 8 digits, and an optional point
+ * followed by 1 to 6 digits; no exponent, hex, inf or nan. At most 14
+ * significant digits, so the writer's shortest form always reads back. */
+#define CTL_REAL_INT_DIGITS  8
+#define CTL_REAL_FRAC_DIGITS 6
 static int parse_dbl(const char *s, double *out)
 {
     const char *p = s;
     if (*p == '+' || *p == '-') p++;
-    if (!isdigit((unsigned char)*p)) return -1;
+    const char *d = p;
     while (isdigit((unsigned char)*p)) p++;
+    if (p == d || p - d > CTL_REAL_INT_DIGITS) return -1;
     if (*p == '.') {
-        p++;
-        if (!isdigit((unsigned char)*p)) return -1;
+        d = ++p;
         while (isdigit((unsigned char)*p)) p++;
+        if (p == d || p - d > CTL_REAL_FRAC_DIGITS) return -1;
     }
     if (*p) return -1;
     char *end;
@@ -86,10 +90,11 @@ int ctl_log_header(const char *line)
     if (strncmp(line, "#livectl", 8) != 0 || (line[8] != ' ' && line[8] != '\t')) return 0;
     const char *p = line + 8;
     while (*p == ' ' || *p == '\t') p++;
-    char *end;
-    long v = strtol(p, &end, 10);
-    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
-    if (*end || v <= 0 || v > 1000000) return -1;
+    long v = 0;
+    const char *d = p;
+    while (isdigit((unsigned char)*p) && v <= 1000000) v = v * 10 + (*p++ - '0');
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (p == d || *p || v <= 0 || v > 1000000) return -1;
     return (int)v;
 }
 
@@ -202,10 +207,10 @@ int ctl_log_parse(const char *line, int allow_next, struct ctl_log_event *ev, ch
 }
 
 /* the shortest plain decimal (no exponent, which the grammar refuses) that
- * reads back to the same double */
+ * reads back to the same double; every value parse_dbl accepts has one */
 static void fmt_dbl(char *out, size_t n, double v)
 {
-    for (int p = 0; p <= 30; p++) {
+    for (int p = 0; p <= CTL_REAL_FRAC_DIGITS; p++) {
         snprintf(out, n, "%.*f", p, v);
         if (strtod(out, NULL) == v) return;
     }

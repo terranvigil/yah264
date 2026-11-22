@@ -252,6 +252,8 @@ int main(void)
         CHECK(ev_rate(r.e, 0, 0, 300, 0) == YAH264_CTL_EMODE);           /* no buffer at open */
         yah264_control_init(&ev, YAH264_CTL_CRF); ev.crf = 0;
         CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_EINVAL);
+        ev.crf = 0.5;                                    /* under the floor */
+        CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_EINVAL);
         close_enc(&r);
 
         base_param(&p, YAH264_RC_CRF);
@@ -516,7 +518,8 @@ int main(void)
             "3 zone offset=1", "3 rate bitrate=-5", "3 size width=1",
             "3 zone last=9 offset=0x10", "3 zone last=9 offset=1e1", "3 zone last=9 offset=.5",
             "3 zone last=9 offset=5.", "3 crf value=inf", "3 rate bitrate=+5", "3 rate bitrate=0x10",
-            "5 key # trailing comment",
+            "5 key # trailing comment", "3 zone last=9 offset=0.0000001",
+            "3 crf value=123456789", "3 crf value=1e-40",
         };
         for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
             int rr = ctl_log_parse(bad[i], 1, &le, err, sizeof err);
@@ -524,14 +527,25 @@ int main(void)
             CHECK(rr == -1 && err[0]);
         }
         CHECK(ctl_log_parse("3 zone last=9 offset=+2", 0, &le, err, sizeof err) == 1 && le.qp_offset == 2);
-        le.kind = CTL_KIND_ZONE; le.frame = 3; le.last = 9; le.qp_offset = 0.0000001;
+        le.kind = CTL_KIND_ZONE; le.frame = 3; le.last = 9; le.qp_offset = 0.000001;
         ctl_log_format(&le, buf, sizeof buf);
         CHECK(!strstr(buf, "e-"));
-        CHECK(ctl_log_parse(buf, 0, &le, err, sizeof err) == 1 && le.qp_offset == 0.0000001);
+        CHECK(ctl_log_parse(buf, 0, &le, err, sizeof err) == 1 && le.qp_offset == 0.000001);
         CHECK(ctl_log_header("#livectl 1") == 1);
         CHECK(ctl_log_header("#livectl 2\n") == 2);
         CHECK(ctl_log_header("# livectl 1") == 0);
         CHECK(ctl_log_header("#livectl x") == -1);
+        CHECK(ctl_log_header("#livectl +1") == -1);
+        CHECK(ctl_log_header("#livectl 0x1") == -1);
+        /* every real the grammar takes writes back to the same text's value */
+        for (int i = 0; i < 20000; i++) {
+            char in[40], out2[200];
+            snprintf(in, sizeof in, "3 crf value=%d.%06d", i % 52, (i * 7919) % 1000000);
+            CHECK(ctl_log_parse(in, 0, &le, err, sizeof err) == 1);
+            double v0 = le.crf;
+            ctl_log_format(&le, out2, sizeof out2);
+            CHECK(ctl_log_parse(out2, 0, &le, err, sizeof err) == 1 && le.crf == v0);
+        }
     }
 
     if (fails) { fprintf(stderr, "%d failure(s)\n", fails); return 1; }
