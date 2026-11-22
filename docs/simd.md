@@ -350,7 +350,8 @@ The ranges span sunflower 1080p and crowd_run 4K.
   MHz beside each table and repeats a run that drifts more than 3%.
 - **perf needs to be readable.** A stock Linux kernel ships
   `kernel.perf_event_paranoid` at 2 or higher. At that setting
-  `scripts/instr-ratio.sh` prints `NO-COUNTER`. Set it to 1 or use a privileged container.
+  `scripts/instr-ratio.sh` prints `NO-COUNTER`. Set it to 1 or use a privileged
+  container.
 - **gcc's ThreadSanitizer needs `vm.mmap_rnd_bits=28`** on recent Linux
   kernels. That's machine setup, not a code bug.
 - **GitHub's runner CPUs vary,** and some have AVX-512. A CI job that relies

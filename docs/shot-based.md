@@ -12,13 +12,13 @@ resolution ladder and the quality metric. The contract between the two is the
 
 **The pre-scan.** The shot detector is the lookahead's own scene-cut decision
 run ahead of the encode. Because it replays the same state machine, flash guard
-included, the keyframes it reports are exactly the ones the encode places.
-The scan runs in parallel and codes nothing. From a file it's a pass of its own that
-reads each frame's luma, keeps a byte per frame and drops the picture. The
+included, the keyframes it reports are exactly the ones the encode places. The
+scan runs in parallel and codes nothing. From a file it's a pass of its own
+that reads each frame's luma, keeps a byte per frame and drops the picture. The
 encode then rewinds and streams as usual, so memory stays at what a plain
 encode uses. Because a pipe can't be read twice, the shot modes hold piped
-input in memory up to the limit and refuse past it. Plain encodes stream from
-a pipe without that cost. [The options reference](options.md) has the memory
+input in memory up to the limit and refuse past it. Plain encodes stream from a
+pipe without that cost. [The options reference](options.md) has the memory
 figures.
 
 **The shot table.** For each shot the scan gives the first and last frame, the

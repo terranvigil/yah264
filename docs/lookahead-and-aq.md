@@ -38,13 +38,12 @@ gets its own offset field (`Y264_MBT_BREF`). The walk stops at IDRs.
 
 A block's offset is `-strength * log2(1 + propagated / (intra * AQ weight))`.
 With that offset, a block that much of the future depends on codes at a lower
-QP. The strength
-is `5 * (1 - qcomp) * 0.7`, which is 1.4 at `--qcomp 0.6`. An AC gain of 1.7
-then widens the boost around its frame mean. That spreads the allocation
-without moving the anchor-versus-B balance. The AQ offset is folded into the
-same per-macroblock value. Under CRF and ABR the boost isn't centered on zero.
-mb-tree runs whenever `--bframes` is above 0, or at `--bframes 0` when the
-lookahead window is on. Because constant QP turns it off along with AQ,
+QP. The strength is `5 * (1 - qcomp) * 0.7`, which is 1.4 at `--qcomp 0.6`. An
+AC gain of 1.7 then widens the boost around its frame mean. That spreads the
+allocation without moving the anchor-versus-B balance. The AQ offset is folded
+into the same per-macroblock value. Under CRF and ABR the boost isn't centered
+on zero. mb-tree runs whenever `--bframes` is above 0, or at `--bframes 0` when
+the lookahead window is on. Because constant QP turns it off along with AQ,
 `--qp N` means one QP for every macroblock.
 
 **Variance AQ.** Each macroblock's energy is `l = log2(variance + floor)` on
@@ -54,9 +53,8 @@ rate-controlled mode and 0 at constant QP. The default, `--aq-mode 2`, adds a
 per-frame gain from the spread of `l` across the frame. When a frame's blocks
 all sit near one energy (a dark scene, a fade, a flat cartoon background), its
 gradient eases down to half, because there's little masking to exploit.
-`--aq-mode 1` is
-plain log-variance AQ with gain 1. AQ off is `--aq-strength 0`, since there's
-no mode 0.
+`--aq-mode 1` is plain log-variance AQ with gain 1. AQ off is
+`--aq-strength 0`, since there's no mode 0.
 
 Where the center sits depends on the frame:
 
@@ -93,14 +91,15 @@ first is its luma mean, at full weight at 32 or below and none at 64 on the
 On those blocks the psy-RD weight rises to 5x, because at one QP the RD
 decision would otherwise code faint grain to a flat block.
 
-Those blocks also get a dark cut of up to 6 QP below the variance offset in
-two kinds of frame. The first kind holds bright areas as well. In such a frame the field's
-center sits high. A low `--aq-strength` then leaves the dark side coarse. The
-dark cut there is scaled by the share of macroblocks with a luma mean of 170 or
-more: none at 8% and full at 20%. In the second kind, much of the picture is
-dark grain or gradient. There the dark cut is scaled by the share of dark,
-smooth macroblocks that aren't flat: none at 35% and full at 50%. That share
-is counted over the picture without any letterbox or pillarbox bars.
+Those blocks also get a dark cut of up to 6 QP below the variance offset in two
+kinds of frame. The first kind holds bright areas as well. In such a frame the
+field's center sits high. A low `--aq-strength` then leaves the dark side
+coarse. The dark cut there is scaled by the share of macroblocks with a luma
+mean of 170 or more: none at 8% and full at 20%. In the second kind, much of
+the picture is dark grain or gradient. There the dark cut is scaled by the
+share of dark, smooth macroblocks that aren't flat: none at 35% and full at
+50%. That share is counted over the picture without any letterbox or pillarbox
+bars.
 
 On a frame that's mostly black stage, a lit subject in a flat black field, the
 share also leaves out the flat blocks within four levels of the coded black.
@@ -142,14 +141,13 @@ take up to three eighths of the height or width. Without this, the bars of a
 letterboxed night scene would dilute its share and keep the gate shut.
 
 Film-scan or analog noise over a matte makes its blocks non-flat. Counted as
-grain, those blocks would open the gate on their own. One frame can't tell
-such a matte from a grainy dark wall or night sky. So each frame in the
-lookahead walks an axis with no flat bars a second time, under looser terms.
-That walk lets in blocks up to twice the grain ceiling and needs every line to
-be nearly all matte. It keeps the same pair rule of one color, matched depths
-and no drift.
-The bars must sit within four levels of the coded black (16, or 0 when the
-stream signals full range). They must also frame a picture that isn't a
+grain, those blocks would open the gate on their own. One frame can't tell such
+a matte from a grainy dark wall or night sky. So each frame in the lookahead
+walks an axis with no flat bars a second time, under looser terms. That walk
+lets in blocks up to twice the grain ceiling and needs every line to be nearly
+all matte. It keeps the same pair rule of one color, matched depths and no
+drift. The bars must sit within four levels of the coded black (16, or 0 when
+the stream signals full range). They must also frame a picture that isn't a
 quarter or more of their own level, as grain behind credits is. A frame leaves
 them out only when the frame before and the frame after it found the same
 depths at the same level. With a one-frame window (`--rc-lookahead 1`) a frame
@@ -231,7 +229,7 @@ All BD figures are BD-VMAF-NEG at matched achieved bitrate. Negative is better.
 | A CRF base term from lowres complexity under mb-tree | Either sign hurts some clip: +0.6 costs sintel 10%, -0.6 costs akiyo 1.6%. |
 | Centering the mb-tree boost under CRF | Destroys the cross-frame gain on static content (akiyo). |
 | A magnitude clamp on mb-tree offsets | Refused. |
-| Content-adaptive mb-tree strength from a motion ratio | It belongs to a per-anchor walk. The encoder's whole-window walk doesn't use it. |
+| Content-adaptive mb-tree strength from a motion ratio | It belongs to the per-anchor walk, which runs only as a fallback. The whole-window walk doesn't use it. |
 | A QP-ramped psy-RD weight, or one scaled by the ME lambda | Deep band median +0.24 / +0.44%. The lambda-scaled 4x4-only form also lost. |
 | Psy energy inside the intra-mode SATD loops | BD loss. |
 | Psy-trellis as a residual-energy or dequantized-coefficient reward | Akiyo gains. Foreman and mobile lose 1 to 3% at every strength. Only the reconstruction-spectrum form is clean. |

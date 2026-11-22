@@ -63,8 +63,8 @@ At `--subme 8` and below, a B macroblock goes through these steps in order:
    before intra gets an RD trial.
 8. **Commit.** The winner is re-encoded with RDOQ (`--trellis 1`).
 
-At `--subme 9` and up the full tournament runs, with none of the screens or
-exits above. Each 16x16 mode gets RD. The encoder also searches 16x8 and
+At `--subme 9` and up the full tournament runs, with none of the gates, screens
+or exits above. Each 16x16 mode gets RD. The encoder also searches 16x8 and
 8x16.
 
 ### Direct mode and `--direct auto`
@@ -108,7 +108,7 @@ Each quadrant picks B_Direct_8x8, B_L0_8x8, B_L1_8x8 or B_Bi_8x8. The 8x4,
 the 16x16 winner per list and held to its list-0 reference, because a cold
 search over all references would make the mode unaffordable.
 
-Three checks keep B_8x8 cheap. The quadrant gate (`Y264_B8_QGATE=10`) runs
+Three things keep B_8x8 cheap. The quadrant gate (`Y264_B8_QGATE=10`) runs
 four `satd8x8` on the winning 16x16 prediction to decide whether the eight
 quadrant searches run at all. A split only pays where the quadrants want
 different motion. The gate admits a macroblock when its worst quadrant holds
@@ -190,11 +190,10 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
   low-rate cells. The tournament's cost is still open. The remaining prize is
   making the tournament itself cheaper.
 - Most B_8x8 quadrant searches lose. Past its gate, the RD trial beats the
-  running best in 4.5-11% of trials. A gate that predicts
-  "B_8x8 will win here" better than four `satd8x8` would save searches at
-  equal quality.
-  Measure the predictor's precision on the real population first, because the
-  same argument underdelivered for the skip decision.
+  running best in 4.5-11% of trials. A gate that predicts "B_8x8 will win here"
+  better than four `satd8x8` would save searches at equal quality. Measure the
+  predictor's precision on the real population first, because the same argument
+  underdelivered for the skip decision.
 - The propagation guard reads the wrong quantity. `mbtree_off` is the
   combined AQ and propagation offset. It doesn't isolate the propagation term.
   A guard on `mbtree_off >= 0` is right for the wrong reason. It'll move if

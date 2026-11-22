@@ -33,8 +33,8 @@ explicit request passes through, although the picture still clamps it.
 
 `yah264_frame_thread_cap` depends on the picture alone. For a frame of R
 macroblock rows and C columns, one frame's diagonal retires in `2(R-1)+C`
-macroblock-times. With k frames overlapping `lag` rows apart, the group retires in
-`2(R-1)+C+(k-1)*2*lag`. The cap is `k*R*C` over that, floored at
+macroblock-times. With k frames overlapping `lag` rows apart, the group retires
+in `2(R-1)+C+(k-1)*2*lag`. The cap is `k*R*C` over that, floored at
 `Y264_MT_POOL_MIN` (2). A frame is narrow when its one-frame cap is under 16.
 Narrow frames are sized for k=2, an anchor plus one frame whose rows wait on
 the anchor's. Wider frames are sized for k=1. `frame_thread_cap_k` in
@@ -247,7 +247,7 @@ decoders.
   timing arm.
 - **`/usr/bin/time -l` gives peak footprint.** When a whole-input buffer goes
   away, check for a per-open leak it had been hiding.
-- **Run determinism checks on a loaded box** with spinners. Check the
+- **Run determinism checks on a loaded box** with spinners. Gate the
   non-default modes too (`ARGS=` on `scripts/determ_repeat.sh`). An idle box
   runs the threaded path the same way every time. Count distinct md5s instead
   of reading pass/fail. The [instruments catalog](instruments.md) has the
@@ -256,4 +256,4 @@ decoders.
   limit and can turn a thread-count reading upside down.
 - Daytime speed work is judged by instruction counts and CPU-seconds
   (`scripts/instr-ratio.sh`). `scripts/stress_threads.py` and
-  `scripts/tsan_catch.sh` are the hang and race checks.
+  `scripts/tsan_catch.sh` are the hang and race gates.

@@ -104,16 +104,15 @@ rate factor. Two terms move the anchor base QP.
   and has no gain. It moves at most 0.25 x `--qpstep` per anchor decide.
 - **The feedback.** Bits spent beyond bits owed map to a QP offset bounded at
   +-6. The window is `--ratetol` x 2 seconds of target and widens with the
-  square root of the coded duration. Gains are 16 under and 12 over. CBR uses gains
-  of 10 and 4 over a window a quarter of the buffer long.
+  square root of the coded duration. Gains are 16 under and 12 over. CBR uses
+  gains of 10 and 4 over a window a quarter of the buffer long.
 
 The ledger opens on one frame of prior at a fitted opening QP, clamped to
-15..45:
-`24.63 + 2.42 log2(cme/MB) - 4.12 log2(bits/MB)`.
-It reads the median lowres inter cost of the frames already in the lookahead.
-Because we fitted it on fixed-QP encodes of 32 clips across QP 16-44, its rate
-term is read within each clip. The opening QP is DC-free like the rate factor:
-each frame codes at it plus its own frame DC.
+15..45: `24.63 + 2.42 log2(cme/MB) - 4.12 log2(bits/MB)`. It reads the median
+lowres inter cost of the frames already in the lookahead. Because we fitted it
+on fixed-QP encodes of 32 clips across QP 16-44, its rate term is read within
+each clip. The opening QP is DC-free like the rate factor: each frame codes at
+it plus its own frame DC.
 
 An older fit read near each clip's own operating point,
 `8.69 + 2.92 log2(cme/MB) - 1.32 log2(bits/MB)`, does two jobs beside it.
@@ -126,10 +125,10 @@ the cumulative ledger never forgets its first second.
 
 Unpredictable content opens at the older fit instead. That's a window whose
 median lowres inter cost is over 0.9 of its intra cost and whose opening isn't
-dark. Full-swing noise is one example. A dark fade at 1080p also reads
-near 1. Such content keeps its opening I whole and gets no slew window because
-every frame there costs about what an I does. None of the opening rules below
-apply to it.
+dark. Full-swing noise is one example. A dark fade at 1080p also reads near 1,
+which is why a dark opening doesn't count. Such content keeps its opening I
+whole and gets no slew window because every frame there costs about what an I
+does. None of the opening rules below apply to it.
 
 Two more rules cover the first seconds of an encoder that opened cold instead
 of from a carried ledger. The first is a weight on the opening I. After a
@@ -397,11 +396,10 @@ the decide and pop order, never timing.
   Bursts can then overlap under ABR the way they do under CRF. It's granted
   only where the wide staircase can engage: B-pyramid, no VBV and a pool of at
   least `Y264_MT_POOL_MIN` threads. That minimum is 2. The lag is 0 at
-  `--threads 1`. In-flight
-  frames are predicted from their own complexity instead of their type's mean.
-  On the ABR board at twelve threads it bought 7-10% of wall on 720p and 1080p
-  cells. BD-VMAF-NEG against lag 0 was inside the instrument's +-1.7. It read
-  -1.9 on sintel and +1.4 on stockholm.
+  `--threads 1`. In-flight frames are predicted from their own complexity
+  instead of their type's mean. On the ABR board at twelve threads it bought
+  7-10% of wall on 720p and 1080p cells. BD-VMAF-NEG against lag 0 was inside
+  the instrument's +-1.7. It read -1.9 on sintel and +1.4 on stockholm.
 - **Split anchor drain.** The anchor waits for the predecessor anchor's bits
   because the decide needs them. It leaves that burst's B frames flying. It buys
   1.04-1.11x where it engages. On cut-heavy content at `--ref 3` it costs about

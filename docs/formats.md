@@ -36,7 +36,7 @@ Bitstream bytes, nonzero counts, mode ids and flags stay `uint8_t`.
 Every build directory compiles both libraries. The 10-bit one force-includes
 `src/common/symbols10.h`, which gives every symbol a `_10` suffix. Both
 archives then link into one program without a name resolving into the wrong
-one. `scripts/symbol_check.sh` checks this in `make test`, because a name
+one. `scripts/symbol_check.sh` gates that in `make test`, because a name
 defined in both would resolve by link order and the only symptom would be
 wrong pixels.
 
@@ -124,7 +124,7 @@ puts its costs on the 8-bit scale in five places:
 - **Adaptive quantization.** Every AQ path reads a macroblock's energy as
   `log2(variance + floor)` after dividing the variance by 4 per extra bit.
   The floors, the anchor and B-frame levels and the frame DC then see the
-  values they were fitted on. The flat psy-trellis check's variance limit is
+  values they were fitted on. The flat psy-trellis gate's variance limit is
   raised by the same factor.
 - **Fixed thresholds.** The I_16x16 screen counts a P or B macroblock as flat
   under a variance limit that is raised by the same factor, so 8-bit content
@@ -146,7 +146,7 @@ puts its costs on the 8-bit scale in five places:
 The two-library dispatch costs the 8-bit path +0.3% to 0.6% wall time at one
 thread on foreman CIF and park_joy 720p. That's inside same-binary run-to-run
 spread. Because the cost doesn't scale with the CLI's share of the work,
-binary layout is probably the cause more than the dispatch itself.
+binary layout is a likelier cause than the dispatch itself.
 
 ## What didn't work
 
@@ -217,7 +217,7 @@ work directory stops at once. The options:
   maxrate of 1.5x the target, a buffer of 2x the target and an initial fill
   of 0.9. Each rung prints its rate error and the VBV checker's verdict. A
   rate error outside the parity spec's +-10% bar is flagged.
-- `--encoders x264` runs one side alone, e.g. the reference's CRF ladder that
+- `--encoders x264` runs one side alone, such as the reference's CRF ladder that
   sets the VBR targets.
 - `--yah-lookahead` (at most 64) and `--x264-lookahead` (0 to 250) set each
   side's depth. Every reading prints the depth each side ran with.
