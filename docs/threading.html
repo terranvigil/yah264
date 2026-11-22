@@ -246,9 +246,9 @@
   </nav>
 
   <h2 id="wave"><span class="secnum">1</span>The wavefront</h2>
-  <p>yah264 parallelizes inside a frame. Macroblocks are coded in raster order.
-  Each one needs neighbors finished before it can start. That dependency is what
-  threading has to work around, and it is also what limits it.</p>
+  <p>yah264 parallelizes inside a frame. Macroblocks are coded in raster order,
+  and each one can't start until its neighbors are finished. Threading has to work
+  around that dependency. The dependency is also what limits it.</p>
   <p>A second thread can begin row 1 once row 0 is two macroblocks ahead. A third
   can begin row 2 once row 1 is two ahead of <em>it</em>. The work advances as a
   diagonal wave rolling down the picture.</p>
@@ -258,42 +258,42 @@
       <rect x="0" y="0" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="26" y="0" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="52" y="0" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="78" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="104" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="130" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="156" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="182" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="208" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="234" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="16.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t0</text><rect x="0" y="26" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="26" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="26" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="78" y="26" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="104" y="26" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="130" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="156" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="182" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="208" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="234" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="42.120000000000005" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t1</text><rect x="0" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="52" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="130" y="52" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="156" y="52" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="182" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="208" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="234" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="68.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t2</text><rect x="0" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="78" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="182" y="78" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="208" y="78" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="234" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="94.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t3</text><rect x="0" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="182" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="208" y="104" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="234" y="104" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="260" y="104" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="286" y="104" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="104" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="104" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="120.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t4</text><rect x="0" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="182" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="208" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="234" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="260" y="130" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="286" y="130" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="312" y="130" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="338" y="130" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="146.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t5</text><rect x="0" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="182" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="208" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="234" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="260" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="286" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="312" y="156" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="338" y="156" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><text x="372" y="172.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t6</text>
     </svg>
     <figcaption>Each row starts two macroblocks behind the one above it. The
-    colored band is the work in flight. Everything left of it is done, everything
-    right of it is waiting. Seven threads fit here because the picture is wide
-    enough to hold seven staggered rows at once.</figcaption>
+    colored band is the work in flight. Everything to its left is done, and
+    everything to its right is waiting. Seven threads fit here because the picture
+    is wide enough to hold seven staggered rows at once.</figcaption>
   </figure>
 
-  <p>The width of that wave is what limits it. Threads fill in behind the
-  diagonal, so the useful number of them is set by how many rows the diagonal can
-  span before the first thread runs out of picture. A wide frame has a long
-  diagonal and room for many threads. A narrow one does not.</p>
-  <p>Past that width, the extra threads are still real threads doing real
-  synchronization. They wake each other, they wait, and they do not shorten the
-  critical path they are all queued behind.</p>
+  <p>The width of that wave sets the limit. Threads fill in behind the diagonal.
+  The number that can do useful work is how many rows the diagonal spans before
+  the first thread runs out of picture. A wide frame has a long diagonal with room
+  for many threads, while a narrow one has room for few.</p>
+  <p>Threads past that width still exist and still synchronize. They wake each
+  other and wait. None of that shortens the critical path they're all queued
+  behind.</p>
 
   <h2 id="cap"><span class="secnum">2</span>What a picture can absorb</h2>
-  <p><code>yah264_frame_thread_cap(width, height)</code> returns that limit. It
-  is a property of the picture alone, and no amount of machine changes it. A
-  64-core server encoding CIF gets 12 threads on one frame, because the picture
-  cannot hold more of the wave at once.</p>
+  <p><code>yah264_frame_thread_cap(width, height)</code> returns that limit,
+  which comes from the picture alone. No amount of machine changes it. A 64-core server
+  encoding CIF gets 12 threads on one frame because the picture can't hold more of
+  the wave at once.</p>
 
   <h2 id="ceiling"><span class="secnum">3</span>The ceiling</h2>
-  <p>What a picture can use is not always what an encoder should ask for. Every
-  added thread joins the same dependency chain, so each helps less than the last,
-  and on a machine with efficiency cores a slow thread can make the whole frame
-  take longer.</p>
-  <p>So the automatic budget stops at 16. On an 18-core Apple Silicon machine
-  encoding 1080p that costs nothing. Capped and uncapped finished within a
-  hundredth of a second, while occupancy fell from 13.9 cores to 12.1. Those last
-  cores had been spinning, not working.</p>
-  <div class="callout"><p>The ceiling applies to the automatic budget only. Ask
-  for a specific number and you get it, still clamped by what the picture can
-  keep busy.</p></div>
+  <p>An encoder shouldn't always ask for as many threads as the picture can use.
+  Each added thread joins the same dependency chain and helps less than the one
+  before it. On a machine with efficiency cores, one slow thread can make the
+  whole frame take longer.</p>
+  <p>The automatic budget stops at 16 for that reason. On an 18-core Apple Silicon
+  machine encoding 1080p, the cap costs nothing. Capped and uncapped runs finished
+  within a hundredth of a second of each other, and occupancy fell from 13.9 cores
+  to 12.1. Those last cores had been spinning without doing work.</p>
+  <div class="callout"><p>The ceiling applies to the automatic budget only. If you
+  ask for a specific number you get it, clamped only by what the picture can keep
+  busy.</p></div>
 
   <h2 id="grid"><span class="secnum">4</span>Both together</h2>
   <p>The resolved width is the smaller of what you asked for and what the picture
-  can use, where "what you asked for" defaults to the smaller of your core count
-  and 16.</p>
+  can use. If you don't ask, "what you asked for" defaults to your core count or
+  16, whichever is smaller.</p>
   <div class="tablebox">
   <table class="grid">
     <thead><tr><th>resolution</th><th>cap</th><th>4</th><th>8</th><th>12</th><th>16</th><th>32</th><th>64</th></tr></thead>
@@ -305,41 +305,41 @@
     <span><span class="swatch" style="background:var(--accent)"></span><b>ceiling-limited</b>: the machine could, we choose not to</span>
   </p>
 
-  <p>Read it in two directions. Down a column, small machines use everything they
-  have, since a ceiling of 16 never applies to them. Along a row, small pictures
-  clamp below the ceiling on their own, because the cap is reached first.</p>
-  <p>On Apple Silicon the core count comes from enumerating
-  <code>hw.nperflevels</code> and summing each level. We don't assume a fixed
-  split of performance and efficiency cores.</p>
+  <p>Down a column, small machines use all their cores because a ceiling of 16
+  never reaches them. Along a row, small pictures stop below the ceiling on their
+  own when they hit their cap first.</p>
+  <p>On Apple Silicon we get the core count by enumerating
+  <code>hw.nperflevels</code> and summing the levels. We don't assume a fixed split
+  of performance and efficiency cores.</p>
 
   <h2 id="server"><span class="secnum">5</span>Filling a bigger machine</h2>
-  <p>A 64-core server encoding 1080p will use 16 cores for one encode. The other
-  48 aren't wasted. This layer just doesn't address them.</p>
+  <p>A 64-core server encoding 1080p uses 16 cores for one encode. The other 48
+  aren't wasted. This layer just doesn't address them.</p>
   <p>Frame-level threading is one of two kinds of parallelism an H.264 encoder
-  has. The other is running several encoders at once over different parts of the
-  sequence. That kind scales with the machine, not with the picture. We keep
-  it in the caller: the library hands you one encoder instance and one
-  budget, and an application that wants a whole server busy runs several
-  instances, or simply several jobs. The command-line tool does exactly that, and
-  so would a transcoding farm.</p>
-  <p>We put it there for a measured reason. Splitting one sequence across
-  instances makes every split point a keyframe, and keyframes cost bits. On 1080p
-  a single instance with a wide wavefront finished faster than a split across
-  instances <em>and</em> spent 4.6% fewer bits. The split forced a keyframe the
-  continuous encoder would not have chosen.</p>
+  has. The other kind runs several encoders at once over different parts of the
+  sequence, and it scales with the machine instead of the picture. We leave that
+  kind to the caller. The library hands you one encoder instance and one budget.
+  An application that wants a whole server busy runs several instances, or simply
+  several jobs. The command-line tool does exactly that, as a transcoding farm
+  would.</p>
+  <p>We measured before putting it there. Splitting one sequence across instances
+  makes every split point a keyframe, and keyframes cost bits. On 1080p a single
+  instance with a wide wavefront finished faster than a split across instances
+  <em>and</em> spent 4.6% fewer bits. The split forced a keyframe the continuous
+  encoder wouldn't have chosen.</p>
 
   <h2 id="use"><span class="secnum">6</span>Setting it yourself</h2>
-  <p>Through ffmpeg, <code>-threads N</code> does what it says, and omitting it
-  gets you auto:</p>
+  <p>Through ffmpeg, <code>-threads N</code> does what it says. Leave it out to get
+  the automatic count:</p>
   <pre class="mono-plain"><code>ffmpeg -i in.mp4 -c:v libyah264 -crf 25 out.mp4
 ffmpeg -i in.mp4 -c:v libyah264 -crf 25 -threads 8 out.mp4</code></pre>
   <p>Through the library, <code>param.threads</code> is the budget for one encoder
-  instance: 0 asks it to decide, 1 is serial, N means up to N.
-  <code>yah264_threads_auto()</code> reports what 0 would resolve to, so an
-  application splitting work across instances can size its own budget from the
+  instance. Set it to 0 to let the encoder decide, 1 for serial, or N for up to N.
+  <code>yah264_threads_auto()</code> reports what 0 would resolve to. An
+  application that splits work across instances can size its own budget from the
   same number the library would have used.</p>
-  <p><code>--threads 1</code> is worth knowing for its own sake. At one thread the
-  encoder turns on a quality mode a threaded encode cannot use, so a serial encode
+  <p><code>--threads 1</code> has a benefit of its own. At one thread the encoder
+  turns on a quality mode that a threaded encode can't use, so a serial encode
   spends its bits slightly better.</p>
 
 </div>
