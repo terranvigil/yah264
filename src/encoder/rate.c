@@ -291,7 +291,8 @@ static int rfm_open_miss(const yah264_encoder_t *e, double work, double owed, in
  * come back, so the history is restored, the ledger is followed whole for
  * that decide (the next burst would land at the cheap run's qp otherwise),
  * and the rule stays off: content that alternates is what the whole
- * history is for. */
+ * history is for. a capped encode keeps cutting instead: its buffer already
+ * bounds the burst, and the restored history held it under its rate. */
 #define RFM_REC_QP   4.0
 #define RFM_REC_BACK 2.0
 static double rfm_recent(yah264_encoder_t *e, double work, double owed, int shared)
@@ -303,7 +304,7 @@ static double rfm_recent(yah264_encoder_t *e, double work, double owed, int shar
         return work;
     double rq = 12.0 + 6.0 * log2(e->rfm_rec_work / e->rfm_rec_owed);
     double lq = 12.0 + 6.0 * log2(work / owed);
-    if (e->rfm_rec_state == 1 && rq > lq + RFM_REC_BACK) {
+    if (e->rfm_rec_state == 1 && !e->vbv_on && rq > lq + RFM_REC_BACK) {
         e->rfm_rec_state = 2;
         e->rfm_rec_jump = 1;
         e->rfm_work += e->rfm_rec_lost;

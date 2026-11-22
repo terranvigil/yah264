@@ -156,7 +156,7 @@ otherwise hold that run's QP for the rest of the encode. The history set aside
 is kept: when the last second reads 2 QP over the ledger again, the expensive
 content has come back, so the history is restored, that frame follows the
 ledger whole, and the rule turns off for the rest of the encode, since content
-that alternates is what the whole history is for. Near-black frames, which the
+that alternates is what the whole history is for. Capped VBR keeps cutting, since its buffer already bounds each burst. Near-black frames, which the
 ledger doesn't count, don't count toward either time.
 
 CBR keeps the older fit as its opening, since its buffer already holds the
