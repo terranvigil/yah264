@@ -182,7 +182,7 @@ raised until the prediction fits. `--crf-max` stops that raise at a QP you name.
 The frame is then coded at that QP. Because it doesn't fit, the buffer goes
 negative.
 
-That's the whole option. It's intended. The stream is no longer
+That's the whole option. It's intended, and nothing softens it. The stream is no longer
 VBV-conformant at the declared buffer. A receiver that enforces the model will
 stall on those frames. Don't set it on a stream that has to be conformant. Don't
 set it with `--nal-hrd` either, because the declaration in the stream would then
@@ -318,9 +318,9 @@ same bytes. One suppresses the uncovered leading B frames. Another suppresses
 those and then stops two short of the end of the bitstream. Neither reading
 moves a sample. The checker takes all of them and counts back from the last.
 
-`--open-gop` costs parallelism. The CLI hands a whole GOP to its
-own encoder instance at a GOP boundary. An open GOP has none. The encode is one
-instance from end to end, and `--threads` spends its budget on the row wavefront
+The cost is parallelism, not bits. A GOP boundary is what lets the CLI hand a
+whole GOP to its own encoder instance. Because an open GOP has none, the encode
+is one instance from end to end, and `--threads` spends its budget on the row wavefront
 instead of on parallel GOPs. With `--cut-split` the scene cuts still split,
 because those really are IDRs. When the input's frame count can't be read (a
 pipe), the schedule can't be planned at all and the encode falls back to the
@@ -505,7 +505,7 @@ nothing here suggests moving it from 0.
 
 ### What custom matrices cost
 
-A matrix is a quality choice. The default lists are tuned for neither this
+A matrix is a quality choice, not a speed one. The default lists are tuned for neither this
 encoder's rate control nor VMAF. This is `--cqm jvt` against flat on five board clips,
 120 frames, `--preset medium`, CRF 23-35, one thread, BD-rate on VMAF-NEG
 (negative is better):
@@ -541,7 +541,7 @@ experiments. Don't use them as a quality setting.
 
 ### What `--partitions` gates
 
-There is one name per shape family. Each name gates a search:
+There is one name per shape family. Each name gates a search, not a syntax element:
 
 | Name | What the mode decision may try |
 | --- | --- |
@@ -589,7 +589,7 @@ trials and the subpartitions after it only confirm it. Modes 1 and 2 differ in
 whether reference B slices may use it, because a reference picture's errors
 travel into the pictures that read it.
 
-It's refused for the shape of its bound. A distortion measured in lambdas
+What refuses it is the shape of the bound, not the idea. A distortion measured in lambdas
 widens as lambda grows. Lambda grows as the rate falls, so the gate is most
 generous exactly where a wrong skip costs most. On the band's hardest 1080p clip
 it takes nothing at the top of the ladder and 2.7 VMAF-NEG points at the bottom.
@@ -619,7 +619,8 @@ refine and the subpel diamonds run. Deleting them is worth 3.5% of instructions
 at a threshold of 2 and 1.2% at a threshold of 1. The threshold saturates
 above 2.
 
-At 1 the median is -0.12% and the mean -0.21%. Ten of twelve clips are ahead of
+It is the best band any candidate of this stage or the last one has produced. At
+1 the median is -0.12% and the mean -0.21%. Ten of twelve clips are ahead of
 or level with the default. It still costs +0.51% on one detailed 1080p clip.
 The bar is read per clip, because half a corpus can sit under a median. A
 near-inert control arm reads -0.09% to +0.13% on the same clips, so that +0.51%
@@ -991,8 +992,8 @@ What this release codes:
   interlaced height (480, 576, 1080) already is one. `--fake-interlaced` is
   always named, so there it is always a refusal.
 
-Three speed-side gaps remain, and this section names them without measuring
-them. A field picture runs motion search without the cached half-pel planes,
+Three speed-side gaps remain. This section names them instead of explaining
+them away. A field picture runs motion search without the cached half-pel planes,
 because those are built over the frame and describe no field. The residual RD
 model prices a field block in frame-scan order against the frame context models.
 The two features that overlap a mini-GOP's B frames with their anchor don't run
@@ -1008,8 +1009,8 @@ conformance gate compares.
 
 What it costs was measured before B fields existed. The figures below were
 taken when field coding was I and P only, with a same-parity reference list and
-both fields of an I frame coded intra. Each change since
-then moves the number. Read this as the last reading. The
+both fields of an I frame coded intra. All three have since changed, and each
+of them moves the number. Read it as an old reading, not the current one. The
 re-measurement is a named follow-up in docs/plan.md. On the two synthetic
 interlaced fixtures, at QP 26 with CABAC and the 8x8 transform, field coding cost
 bytes for very little PSNR. On the testsrc2 clip it made 69.1 kB at 45.44 dB Y
@@ -1017,7 +1018,7 @@ against frame coding's 55.3 kB at 45.31 dB. On an interlaced foreman it made
 103.6 kB at 37.43 dB against 91.0 kB at 37.00 dB. Both fixtures are a
 progressive source run through `tinterlace`. Their two fields are adjacent
 frames of a 50 Hz sequence and correlate vertically, which is the content frame
-coding is best at. Field coding should pay off on real interlaced capture, where
+coding is best at. Field coding earns its keep on real interlaced capture, where
 the fields are half a frame apart in time. This project hasn't measured that
 yet. The rate-distortion leg is an interlaced board, scheduled with the B-field
 item. Until then, use `--tff` when the source really
@@ -1172,11 +1173,13 @@ Worth knowing before you A/B anything:
 - The SPS declares the vertical motion-vector bound it is actually held to
   (`log2_max_mv_length_vertical`) instead of a flat 16, which advertised
   +-16384 luma samples at every level. It costs the SPS 0 or 1 byte and moves
-  no picture.
+  no picture. A byte compare against a build that wrote the flat 16 differs
+  only in the SPS NAL. Compare `--dump-recon`, or everything after the first
+  NAL.
 
 ## Threading, and what it does to your output
 
-`--threads N` is a budget. The CLI splits it into `g` GOP workers times `k`
+`--threads N` is a budget, not a worker count. The CLI splits it into `g` GOP workers times `k`
 in-frame row-wavefront threads. It sizes each GOP's share by the frames it
 actually owns and prints what it chose:
 
@@ -1313,8 +1316,8 @@ The cut-aware split needs every cut before the first GOP can be dispatched,
 because the dispatcher schedules on the boundaries it finds. It runs under
 `--cut-split`, `--shot-crf`, and `--plan` or `--qpfile` with a forced IDR. From
 a file it reads the input twice. First a scan pass walks the frames. It hands
-each one's luma to the pre-scan, skips the chroma without reading it, and keeps
-one byte per frame. Then the ordinary windowed encode runs on the GOP table the
+each one's luma to the pre-scan and then drops it. It skips the chroma without
+reading it and keeps one byte per frame. Then the ordinary windowed encode runs on the GOP table the
 scan produced, through the seek reader like any other file. The stream is
 byte-identical to the one the old whole-input read wrote. The table gives peak
 RSS on a ten-minute 1920x818 title (13177 frames, `--crf 23`, default threads,
@@ -1518,7 +1521,7 @@ this before you port anything.
 None of it applies if you use the CLI. The CLI maps each flag onto the values
 below for you.
 
-Zero means the default here. `yah264_param_t` fills itself from
+Zero means the default here, not off. `yah264_param_t` fills itself from
 `yah264_param_default`, and twenty of its fields treat zero as "unset, pick the
 default". That convention is fine until a field's off switch is a value x264
 spells as zero. Three fields are in that position:
@@ -1534,7 +1537,8 @@ memsets the struct, sets `nal_hrd = YAH264_NAL_HRD_CBR` and leaves `filler`
 alone. Reading zero as off would give it CBR headers over an unpadded stream.
 That's a non-conforming stream with no diagnostic.
 
-So `param.scenecut = 0` asks for adaptive keyframes at full strength. Nothing
+So `param.scenecut = 0` does not disable adaptive keyframes but asks
+for them at full strength. Nothing
 errors and the encode succeeds. You find out from the keyframe count and the
 file size. Use the constants:
 
@@ -1621,7 +1625,7 @@ Everything else either agrees with x264 at zero or has no x264 equivalent.
 x264 user expects. `keyint_min` 0 is auto in both. These fields will still
 surprise you:
 
-- `param.threads` is a budget for one encoder instance. 0 asks the library to
+- `param.threads` is a budget for one encoder instance, not a width. 0 asks the library to
   pick the machine's thread count, capped at 16. 1 is serial and N means up to
   N. A library caller who sets `threads = 8` gets a wavefront of 8.
   `frame_threads` is still the explicit low-level width and wins when set.
@@ -1719,7 +1723,7 @@ gets you diagnostics or a known-worse encode. Several change bits.
 `Y264_UNSAFE_NO_REFBWAIT`, `Y264_UNSAFE_NO_PREVPWAIT`, `Y264_UNSAFE_NO_EMIT`,
 `Y264_UNSAFE_NO_NAL`, `Y264_GOP_FORCE_G`, `Y264_GOP_FORCE_K`.
 
-`Y264_SKIP_ORACLE` takes a path.
+`Y264_SKIP_ORACLE` takes a path, not a boolean.
 
 ### Not read by the encoder
 
