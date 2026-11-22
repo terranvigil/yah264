@@ -6828,9 +6828,6 @@ static int cli_main(int argc, char **argv)
         fprintf(stderr, "yah264: cannot open input '%s'\n", in_path);
         return 1;
     }
-    /* the encoder would write its records over the stream, or either over
-     * the input, in whichever order the run reaches them: open, compare,
-     * and only then truncate (see files_clash) */
     if (g_control_out && !g_control_file && g_control_fd < 0) {
         fprintf(stderr, "yah264: --control-out records live control events and needs "
                 "--control or --control-fd\n");
@@ -6853,6 +6850,9 @@ static int cli_main(int argc, char **argv)
         if (control_fd_open() < 0)
             return 2;
     }
+    /* the encoder would write its records over the stream, or either over
+     * the input, in whichever order the run reaches them: open, compare,
+     * and only then truncate (see files_clash) */
     int to_stdout = !strcmp(out_path, "-");
     if (!to_stdout && out_open(&g_of, out_path) < 0) {
         fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);

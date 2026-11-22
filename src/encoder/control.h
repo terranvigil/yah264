@@ -38,6 +38,7 @@ struct ctl_zone { int64_t first, last; double off; };
 struct ctl_queue {
     yah264_control_t *ev;
     int head, n, cap;
+    int shrink_below;   /* after a failed shrink, wait until n is under this; 0 = cap / 4 */
 };
 
 /* bounds: events naming a frame after the next one to be handed in, and

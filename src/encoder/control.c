@@ -136,13 +136,15 @@ static void q_pop(struct ctl_queue *q)
     q->head++;
     if (--q->n == 0) {
         q->head = 0;
+        q->shrink_below = 0;
         if (q->cap > CTL_Q_KEEP) { free(q->ev); q->ev = NULL; q->cap = 0; }
-    } else if (q->cap > CTL_Q_KEEP && q->n < q->cap / 4) {
+    } else if (q->cap > CTL_Q_KEEP && q->n < (q->shrink_below ? q->shrink_below : q->cap / 4)) {
         /* landed slots stay allocated until the queue is compacted */
         memmove(q->ev, q->ev + q->head, (size_t)q->n * sizeof *q->ev);
         q->head = 0;
         yah264_control_t *a = realloc(q->ev, (size_t)(q->cap / 2) * sizeof *a);
-        if (a) { q->ev = a; q->cap /= 2; }
+        if (a) { q->ev = a; q->cap /= 2; q->shrink_below = 0; }
+        else q->shrink_below = q->n / 2 > 0 ? q->n / 2 : 1;    /* don't redo the move every pop */
     }
 }
 

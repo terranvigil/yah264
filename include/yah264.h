@@ -1405,12 +1405,13 @@ YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *enc, yah264_rc_share
  * at most 1 << 20 (events for the next frame count only toward this one); past
  * either an event is refused with YAH264_CTL_EFULL, so a queued event always
  * has a record slot. An event is 120 bytes, so the live queue and records
- * together are at most about 126 MB. Their buffers grow by doubling and give
- * memory back as they drain, so a burst moving from the queue into the
- * records can briefly allocate about twice that (about 250 MB at the bound),
+ * together are at most about 126 MB at the bound. Their buffers grow by
+ * doubling and shrink only once under a quarter full, so what is allocated
+ * can reach about 2.25 times that (about 285 MB) and stays there while
+ * records go undrained; a doubling realloc briefly adds the old block on top,
  * and yah264_encoder_control_check() holds a copy of the queue while it runs.
- * A RATE
- * event's submit replays the queued events (O(queued)) under the lock the
+ * A RATE event's submit replays the queued rate events, and a QP_LIMITS
+ * submit the queued frame events, each O(queued), under the lock the
  * encoder's rate decisions also take. */
 typedef struct {
     int     size;               /* sizeof(yah264_control_t); yah264_control_init sets it */
