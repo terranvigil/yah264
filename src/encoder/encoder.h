@@ -1158,6 +1158,13 @@ struct yah264_encoder {
     int      vbv_joined;        /* capped segment that assumed the handoff occupancy at its start, not a measured one */
     double   vbv_jpk;           /* a joined segment's highest modeled occupancy so far, bits */
     double   rfm_open_ioff;     /* the opening I's offset under the intra fit's level */
+    double   rfm_open_work, rfm_open_owed; /* the ledger once the opening frame is counted; owed < 0 until then */
+    int      rfm_open_left;     /* pictures of the opening frame still to count */
+    double   rfm_rec_work, rfm_rec_owed; /* the ledger decayed over about a second (rfm_recent) */
+    int      rfm_rec_state;     /* rfm_recent: 0 armed, 1 has cut the ledger, 2 off */
+    int      rfm_rec_jump;      /* the next anchor follows the ledger whole */
+    double   rfm_rec_lost;      /* the work rfm_recent has cut, restored when it turns off */
+    double   rfm_rec_qcut;      /* the ledger qp rfm_recent first cut from */
     /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
  * per-GOP instances of one encode (NULL = this instance's own). */
     struct yah264_rc_shared *rc_shared;

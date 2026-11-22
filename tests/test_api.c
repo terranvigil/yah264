@@ -398,6 +398,7 @@ int main(void)
         full.size = (int)sizeof full;
         CHECK(yah264_encoder_rc_state(r.e, &full) == 0);
         CHECK(full.valid == 1 && full.vbv_have == 1 && full.vbv_fill >= 0);
+        CHECK(full.rf_rec_owed > 0 && full.rf_rec_work > 0);
         run_close(&r); free(r.buf);
 
         yah264_encoder_t *e2 = yah264_encoder_open(&ab);
