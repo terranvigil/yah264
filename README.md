@@ -15,11 +15,11 @@ A fast open-source H.264 encoder exists. For 20 years x264 has been the leading 
 
 In the past, when working on formats and codecs, I'd start by pulling up the specs and spend weeks working features for small gains. Today, you can use coding agents to accelerate the iteration over a large number of algorithmic optimizations. Prompt with a long list of ideas to try out and in minutes or hours, you have an answer.
 
-A fun example of this was when we were trying to optimize the skip check for prediction reuse. Beyond brute force, there are some simple methods for this. But after iterating through a number of options, the Cauchy–Schwarz inequality turned out to be a clear winner. We can bound every transform coefficient by the energy of the residual with its mean removed. If every bound is under the quantizer’s threshold, the block must be zero, and we skip the transform. On our “sunflower” test clip, 79% of the skip check’s transforms disappeared.
+A fun example came up when we were optimizing the skip check for prediction reuse. Beyond brute force, there are some simple methods for this. After iterating through a number of options, the Cauchy-Schwarz inequality turned out to be the clear winner. It bounds each transform coefficient by the energy of the residual with its mean removed. If all the bounds are under the quantizer's threshold, the block must be zero and we skip the transform. On our "sunflower" test clip, 79% of the skip check's transforms disappeared.
 
 ## Plan
 
-We use coding agents to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
+We use coding agents to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. Agents generate and implement the alternatives. We benchmark them against an objective metric until we find the best combination:
 
 1. Build a standard H.264 encoder with the same feature set and options as x264.
 2. Capture x264's performance and quality baseline on a fixed test set of clips.
@@ -30,7 +30,7 @@ We use coding agents to assist with design-space exploration. We treat each codi
 
 ## Status
 
-yah264 has met and surpassed speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
+yah264 has met and surpassed speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size and gives the same or better quality. Each figure below is how many times faster yah264 finished than x264, in wall time.
 
 | goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
@@ -42,7 +42,7 @@ NOTE: An Apple M5 is my primary development platform so most of the work was don
 
 ## Details
 
-On 52 rate ladders over real titles, yah264 uses a median 10% fewer bits than x264 for the same VMAF v1 score. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
+On 52 rate ladders over real titles, yah264 uses a median 10% fewer bits than x264 for the same VMAF v1 score. The [results page](https://terranvigil.github.io/yah264/results.html) has all the cells.
 
 On rented cloud machines:
 
@@ -76,14 +76,14 @@ Most video is a sequence of shots. Each shot wants different settings. yah264 ca
 
 `--shot-crf` uses the same scan to give each shot its own quality setting. Hard shots get more bits and easy ones fewer. It's still one encode with no trial encodes. On ten real titles at 1080p it needs a median 1% fewer bits for the same VMAF-NEG score, and 5% fewer for the same PSNR-Y.
 
-Neither option re-encodes anything: the scan reads the source once before the encode starts. It needs a file, not a pipe.
+Neither option re-encodes anything. Because the scan reads the source once before the encode starts, the input has to be a file and can't be a pipe.
 
-For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Each shot starts on its own keyframe, so a shot encoded alone matches the full encode exactly. That's guaranteed at one thread and usual with more. Trials are exact previews. Any shot can be redone later. Both options are off by default. [engine-interface.md](docs/engine-interface.md) has the details.
+For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Because each shot starts on its own keyframe, a shot encoded alone matches the full encode exactly. That's guaranteed at one thread and usual with more. Trials are exact previews. Any shot can be redone later. Both options are off by default. The [engine interface notes](docs/engine-interface.md) have the details.
 
 ## Up next
 
-With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice. The open item is speed with every core busy. There we still trail x264 on some clips ([simd.md](docs/simd.md)).
-Next come the convex-hull stages, in [plan.md](docs/plan.md) and [shot-based.md](docs/shot-based.md).
+With parity reached on Apple silicon, the work moves to speed on cloud servers. The x86-64 kernels are written, verified and tuned twice. What's still open is speed with all cores busy, where we trail x264 on some clips (see the [SIMD notes](docs/simd.md)).
+The convex-hull stages come next. The [plan](docs/plan.md) and the [shot-based encoding notes](docs/shot-based.md) describe them.
 
 ## Documentation
 
@@ -104,8 +104,8 @@ meson setup build && ninja -C build
 meson test -C build
 ```
 
-Read about using yah264 to encode [here](https://terranvigil.github.io/yah264/start.html)
-including as a library inside ffmpeg with `-c:v libyah264`.
+[Getting started](https://terranvigil.github.io/yah264/start.html) covers encoding with
+yah264, including as a library inside ffmpeg with `-c:v libyah264`.
 
 ## Contributing
 
