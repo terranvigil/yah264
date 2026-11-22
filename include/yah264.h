@@ -96,6 +96,7 @@ extern "C" {
 #define yah264_control_init             YAH264_API(yah264_control_init)
 #define yah264_control_strerror         YAH264_API(yah264_control_strerror)
 #define yah264_encoder_control          YAH264_API(yah264_encoder_control)
+#define yah264_encoder_control_check    YAH264_API(yah264_encoder_control_check)
 #define yah264_encoder_controls_applied YAH264_API(yah264_encoder_controls_applied)
 #define yah264_encoder_status           YAH264_API(yah264_encoder_status)
 #endif
@@ -1446,6 +1447,16 @@ YAH264_EXPORT const char *yah264_control_strerror(int err);
  * or a negative YAH264_CTL_* code and nothing queued. Call between encode
  * calls, from the thread that calls encode. */
 YAH264_EXPORT int yah264_encoder_control(yah264_encoder_t *enc, yah264_control_t *ev);
+
+/* Check n events as yah264_encoder_control would take them, in order, each
+ * as if the ones before it and everything already queued were queued too,
+ * against the encoder's current state. Nothing is queued or changed, and
+ * there is no queue bound. Returns YAH264_CTL_OK, or the first refusal's
+ * code with its index in *bad_index. A bad pointer or n < 0 returns
+ * YAH264_CTL_EINVAL with *bad_index -1 (not written when bad_index is
+ * NULL). Each event's size is checked as yah264_encoder_control checks it. */
+YAH264_EXPORT int yah264_encoder_control_check(yah264_encoder_t *enc, const yah264_control_t *ev,
+                                               int n, int *bad_index);
 
 /* Drain the events that took effect since the last call, in the order they
  * were applied, each with applied_frame set. After the flush, an event whose

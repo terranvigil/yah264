@@ -347,6 +347,65 @@ int main(void)
         close_enc(&r);
     }
 
+    /* 1d. control_check agrees with the real queue: one event at a time,
+     * and over a batch it names the first event the queue would refuse */
+    {
+        unsigned rng = 12345;
+#define RND(n) ((int)((rng = rng * 1103515245u + 12345u) >> 16) % (n))
+        base_param(&p, YAH264_RC_ABR);
+        p.rc.bitrate = 800; p.rc.vbv_maxrate = 1200; p.rc.vbv_bufsize = 1200; p.level_idc = 31;
+        CHECK(open_enc(&r, &p) == 0);
+        int bad = 0, agree = 1, ok = 0;
+        CHECK(yah264_encoder_control_check(r.e, NULL, 1, &bad) == YAH264_CTL_EINVAL && bad == -1);
+        CHECK(yah264_encoder_control_check(r.e, NULL, -1, &bad) == YAH264_CTL_EINVAL && bad == -1);
+        CHECK(yah264_encoder_control_check(r.e, NULL, 0, NULL) == YAH264_CTL_EINVAL);
+        CHECK(yah264_encoder_control_check(r.e, NULL, 0, &bad) == YAH264_CTL_OK);
+        for (int it = 0; it < 1500; it++) {
+            yah264_control_t ev;
+            int k = 1 + RND(5);
+            yah264_control_init(&ev, k);
+            ev.frame = r.n + RND(60);
+            if (k == YAH264_CTL_RATE) {
+                int w = RND(3);
+                if (w == 0) ev.bitrate_kbps = 200 + RND(1400);
+                if (w == 1) ev.vbv_maxrate_kbps = 200 + RND(2000);
+                if (w == 2) { ev.bitrate_kbps = 200 + RND(1400); ev.vbv_maxrate_kbps = 200 + RND(2000); }
+                if (RND(2)) ev.vbv_bufsize_kbit = 300 + RND(2000);
+            } else if (k == YAH264_CTL_CRF) {
+                ev.crf = 20;
+            } else if (k == YAH264_CTL_QP_LIMITS) {
+                if (RND(2)) ev.qp_min = RND(52);
+                if (RND(2) || ev.qp_min < 0) ev.qp_max = RND(52);
+            } else if (k == YAH264_CTL_ZONE) {
+                ev.last = ev.frame + RND(5);
+                ev.qp_offset = RND(9) - 4;
+            }
+            int c1 = yah264_encoder_control_check(r.e, &ev, 1, &bad);
+            int c2 = yah264_encoder_control(r.e, &ev);
+            if (c1 != c2) { agree = 0; fprintf(stderr, "check %d, control %d, kind %d\n", c1, c2, k); }
+            ok += c2 == YAH264_CTL_OK;
+            if (it % 20 == 19 && r.n < NF) CHECK(push(&r) == 0);    /* let some land */
+        }
+        CHECK(agree && ok > 100);
+        /* a batch: the first refusal's index matches submitting one by one */
+        yah264_control_t b[40];
+        for (int i = 0; i < 40; i++) {
+            yah264_control_init(&b[i], YAH264_CTL_RATE);
+            b[i].frame = r.n + 100 + i;
+            b[i].vbv_maxrate_kbps = 900 + 10 * i;
+            b[i].bitrate_kbps = i == 25 ? 2000 : 0;         /* past the cap: refused */
+        }
+        int code = yah264_encoder_control_check(r.e, b, 40, &bad);
+        int first = -1, fc = 0;
+        for (int i = 0; i < 40 && first < 0; i++) {
+            int c = yah264_encoder_control(r.e, &b[i]);
+            if (c != YAH264_CTL_OK) { first = i; fc = c; }
+        }
+        CHECK(code != YAH264_CTL_OK && bad == first && code == fc);
+        close_enc(&r);
+#undef RND
+    }
+
     /* 2. landing, with B frames, the lookahead and a cut */
     unsigned char *ref = NULL; long ref_len = 0;
     {
@@ -455,12 +514,20 @@ int main(void)
             "3 rate", "3 rate bitrate=", "3 rate bitrate=abc", "3 rate bitrate=1 bitrate=2",
             "3 rate speed=4", "3 crf", "3 crf value=nan", "3 qp", "3 qp min=52", "3 zone last=9",
             "3 zone offset=1", "3 rate bitrate=-5", "3 size width=1",
+            "3 zone last=9 offset=0x10", "3 zone last=9 offset=1e1", "3 zone last=9 offset=.5",
+            "3 zone last=9 offset=5.", "3 crf value=inf", "3 rate bitrate=+5", "3 rate bitrate=0x10",
+            "5 key # trailing comment",
         };
         for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
             int rr = ctl_log_parse(bad[i], 1, &le, err, sizeof err);
             if (rr != -1) fprintf(stderr, "FAIL accepted '%s'\n", bad[i]);
             CHECK(rr == -1 && err[0]);
         }
+        CHECK(ctl_log_parse("3 zone last=9 offset=+2", 0, &le, err, sizeof err) == 1 && le.qp_offset == 2);
+        le.kind = CTL_KIND_ZONE; le.frame = 3; le.last = 9; le.qp_offset = 0.0000001;
+        ctl_log_format(&le, buf, sizeof buf);
+        CHECK(!strstr(buf, "e-"));
+        CHECK(ctl_log_parse(buf, 0, &le, err, sizeof err) == 1 && le.qp_offset == 0.0000001);
         CHECK(ctl_log_header("#livectl 1") == 1);
         CHECK(ctl_log_header("#livectl 2\n") == 2);
         CHECK(ctl_log_header("# livectl 1") == 0);

@@ -290,6 +290,59 @@ def main():
         else:
             print("  ok   a --control-fd flood is bounded (the queue fills and later lines are skipped)")
 
+        # more events on one future frame than the feeding window: the live
+        # record replays (each lands before its frame goes in)
+        crf = ["--input-y4m", src, "--threads", "1", "--no-progress", "--crf", "26"]
+        big, bigl = os.path.join(d, "big.264"), os.path.join(d, "big.ctl")
+        rd, wr = os.pipe()
+        p = subprocess.Popen([enc] + crf + ["--control-fd", str(rd), "--control-out", bigl, "-o", big],
+                             pass_fds=(rd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rd)
+        os.write(wr, b"".join(b"100 qp min=%d\n" % (20 + (i & 1)) for i in range(2000)))
+        os.close(wr)
+        _, err = p.communicate()
+        nlog = len(open(bigl).read().splitlines()) if os.path.exists(bigl) else 0
+        r = run(enc, crf + ["--control", bigl, "-o", os.path.join(d, "big2.264")])
+        if p.returncode or nlog != 2001 or r.returncode or \
+                open(os.path.join(d, "big2.264"), "rb").read() != open(big, "rb").read():
+            print("FAIL 2000 events on one frame: live %d, %d log lines, replay %d %r"
+                  % (p.returncode, nlog, r.returncode, r.stderr.decode()[-200:]))
+            fails += 1
+        else:
+            print("  ok   2000 events on one frame replay from the 2001-line log")
+
+        # a refusal deep in a long log is found before the output is touched
+        keep2 = os.path.join(d, "keep2.264")
+        with open(keep2, "wb") as f:
+            f.write(b"x" * 4000)
+        deep = os.path.join(d, "deep.ctl")
+        with open(deep, "w") as f:
+            for i in range(1100):
+                f.write("%d qp min=%d\n" % (i // 20, 20 + (i & 1)))
+            f.write("90 rate bitrate=500\n")
+        r = run(enc, crf + ["--control", deep, "-o", keep2])
+        if r.returncode != 2 or open(keep2, "rb").read() != b"x" * 4000 or b"deep.ctl:1101" not in r.stderr:
+            print("FAIL a refusal at line 1101: status %d, %r" % (r.returncode, r.stderr.decode()[-200:]))
+            fails += 1
+        else:
+            print("  ok   a refusal at line 1101 stops the run before the output is touched")
+
+        # options that need the per-GOP encoders are refused, not dropped
+        kc = os.path.join(d, "k.ctl")
+        with open(kc, "w") as f:
+            f.write("10 key\n")
+        refused = 0
+        for extra in (["--segment-out", os.path.join(d, "seg%d.264")], ["--cut-split"], ["--shot-crf"],
+                      ["--shot-table"], ["--gop-threads", "2"], ["--scan-out", os.path.join(d, "s.scan"), "--cut-split"]):
+            r = run(enc, base + ["--control", kc, "-o", os.path.join(d, "g.264")] + extra)
+            if r.returncode != 2:
+                print("FAIL --control with %s was not refused (status %d)" % (extra[0], r.returncode))
+                fails += 1
+            else:
+                refused += 1
+        if refused == 6:
+            print("  ok   per-GOP options are refused with live control")
+
     if fails:
         print("control_check: %d failure(s)" % fails)
         return 1

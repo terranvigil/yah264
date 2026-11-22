@@ -266,6 +266,7 @@ static void rfm_note_coded(yah264_encoder_t *e, double qp, int type)
     e->last_anchor_type = type;
     e->last_ref_qp[1] = e->last_ref_qp[0];
     e->last_ref_qp[0] = qp;
+    if (e->last_ref_n < 2) e->last_ref_n++;
 }
 
 /* The base QP a mid-stream I frame takes from the P track, or -1 when the
@@ -2190,7 +2191,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * becomes the slew reference. */
                 double iq = type == 0 && !first && e->last_anchor_type != 0 ? rfm_itrk_qp(e) : -1.0;
                 double qp;
-                if (iq > 0) {
+                if (e->rt_done ? type == 0 && !first && e->last_anchor_type != 0 && e->rck.itrk_decay > 0.0
+                                 && e->itrk_wt > 0.0 : iq > 0) {
                     qp = iq;
                 } else {
                     double qp_lim = qp_led;
@@ -2299,7 +2301,9 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * while the owed bits grow linearly and the QP goes negative within
  * fourteen frames. Per type, because I, P and B complexities live in
  * different domains here. */
-                double qp_lim = e->slew_ref[type] >= 0 ? rfm_slew_qp(e, qp_eq, e->slew_ref[type], e->rck.pf_slew) : qp_eq;
+                /* after a live retarget the references may be negative and still set */
+                int slew_have = e->rt_done ? e->slew_set[type] : e->slew_ref[type] >= 0;
+                double qp_lim = slew_have ? rfm_slew_qp(e, qp_eq, e->slew_ref[type], e->rck.pf_slew) : qp_eq;
                 e->slew_ref[type] = qp_lim;
                 e->slew_set[type] = 1;
                 qp = qp_lim + fb;
@@ -2307,12 +2311,15 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * decayed P track, B the mean of the last two reference QPs.
  * frame_qp's cascade (I -3, B +1..4) is applied on top, the
  * shape the --ipratio / --pbratio offsets describe. */
-                if (type == 0 && e->last_anchor_type != 0 && e->abr_cum_actual > 0 && rfm_itrk_qp(e) > 0) {
+                int itrk_have = e->rt_done ? e->rck.itrk_decay > 0.0 && e->itrk_wt > 0.0 : rfm_itrk_qp(e) > 0;
+                int ref0 = e->rt_done ? e->last_ref_n > 0 : e->last_ref_qp[0] >= 0;
+                int ref1 = e->rt_done ? e->last_ref_n > 1 : e->last_ref_qp[1] >= 0;
+                if (type == 0 && e->last_anchor_type != 0 && e->abr_cum_actual > 0 && itrk_have) {
                     qp = rfm_itrk_qp(e);
                     anch = 1;
-                } else if (type == 2 && e->last_ref_qp[0] >= 0) {
+                } else if (type == 2 && ref0) {
                     double r0 = e->last_ref_qp[0];
-                    double r1 = e->last_ref_qp[1] >= 0 ? e->last_ref_qp[1] : r0;
+                    double r1 = ref1 ? e->last_ref_qp[1] : r0;
                     qp = (r0 + r1) / 2.0;
                     anch = 1;
                 }
@@ -3336,6 +3343,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
     e->rfm_owed = c->rf_owed_bits + n * e->abr_target_bpf;
     e->itrk_qp = c->ptrack_qp; e->itrk_wt = c->ptrack_norm;
     e->last_ref_qp[0] = c->last_ref_qp[0]; e->last_ref_qp[1] = c->last_ref_qp[1];
+    e->last_ref_n = (e->last_ref_qp[0] >= 0) + (e->last_ref_qp[1] >= 0);
     e->blur_csum = c->st_cplx_total; e->blur_cwt = c->st_cplx_weight;
     e->last_anchor_type = c->last_anchor_type;
     if (RC_STATE_HAS(csz, rf2_kc_cal))
@@ -3453,8 +3461,9 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         for (int t = 0; t < 3; t++)
             if (e->slew_set[t]) e->slew_ref[t] += dq;
         e->itrk_qp += dq * e->itrk_wt;
-        for (int k = 0; k < 2; k++)
-            if (e->last_ref_qp[k] >= 0) e->last_ref_qp[k] += dq;
+        for (int k = 0; k < e->last_ref_n; k++)
+            e->last_ref_qp[k] += dq;
+        e->rt_done = 1;
         e->abr_qp += dq;
         if (e->abr_qp < 1) e->abr_qp = 1;
         if (e->abr_qp > 51) e->abr_qp = 51;

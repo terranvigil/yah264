@@ -126,13 +126,17 @@ yah264 --input-y4m in.y4m --bitrate 3000 --vbv-maxrate 3000 --vbv-bufsize 3000 \
 
 Frames count from 0 in input order and may not decrease down the file. The
 optional first line names the log's version. A line is `FRAME KIND` and then
-`name=value` arguments, and `#` starts a comment. The whole file is parsed
-before the first frame: an unknown kind or argument, a missing or bad value,
-a NUL byte, a frame that goes backwards, or a file that can't be read stops
-the run with the file name, the line number and the reason. Events are fed
-to the encoder up to 1024 at a time, so a refusal among the first ones stops
-the run before the output is touched, and one in a longer log stops it where
-it happens.
+`name=value` arguments; a line whose first character after any spaces is `#`
+is a comment, and a `#` after an event (`5 key # note`) is refused. Numbers
+are plain decimals: no hex, exponent or `inf`, and a sign only on the
+offsets and the CRF. Before the first frame the whole file is parsed and
+every event is checked against the encoder in order, as if all were queued:
+an unknown kind or argument, a bad value, a NUL byte, a frame that goes
+backwards, a file that can't be read, or an event the encoder would refuse
+stops the run with the file name, the line number and the reason, and the
+output is left as it was. The events then reach the encoder as frames go by:
+each before its frame is handed in, and up to 1024 ahead of that. An event
+for a frame the stream never reaches is reported at the end.
 
 `--control-fd N` reads the same lines from an open descriptor while the
 encode runs, taking up to 64 of the lines that have arrived before each
@@ -176,7 +180,9 @@ if (r != YAH264_CTL_OK)
 ```
 
 `yah264_encoder_control()` validates and queues an event, or returns one of
-the codes below and queues nothing. `yah264_encoder_controls_applied()`
+the codes below and queues nothing. `yah264_encoder_control_check()` runs the
+same checks over a list of events, each as if the ones before it had been
+queued, and queues nothing; it returns the first refusal's code and index. `yah264_encoder_controls_applied()`
 drains the events that took effect, in the order they were applied, each with
 `applied_frame` set. After the flush, an event whose frame never arrived
 comes back with `applied_frame` -1. It returns -1 once if records were lost

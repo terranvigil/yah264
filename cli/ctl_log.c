@@ -43,11 +43,13 @@ static int fail(char *err, size_t n, const char *fmt, ...)
     return -1;
 }
 
+/* a decimal integer: an optional minus and digits */
 static int parse_i64(const char *s, int64_t lo, int64_t hi, int64_t *out)
 {
-    if (!*s) return -1;
-    for (const char *p = s; *p; p++)
-        if (!isdigit((unsigned char)*p) && !(p == s && *p == '-')) return -1;
+    const char *d = *s == '-' ? s + 1 : s;
+    if (!*d) return -1;
+    for (const char *p = d; *p; p++)
+        if (!isdigit((unsigned char)*p)) return -1;
     errno = 0;
     char *end;
     long long v = strtoll(s, &end, 10);
@@ -56,9 +58,20 @@ static int parse_i64(const char *s, int64_t lo, int64_t hi, int64_t *out)
     return 0;
 }
 
+/* a decimal real: an optional sign, digits, and an optional point followed by
+ * digits; no exponent, hex, inf or nan */
 static int parse_dbl(const char *s, double *out)
 {
-    if (!*s) return -1;
+    const char *p = s;
+    if (*p == '+' || *p == '-') p++;
+    if (!isdigit((unsigned char)*p)) return -1;
+    while (isdigit((unsigned char)*p)) p++;
+    if (*p == '.') {
+        p++;
+        if (!isdigit((unsigned char)*p)) return -1;
+        while (isdigit((unsigned char)*p)) p++;
+    }
+    if (*p) return -1;
     char *end;
     errno = 0;
     double v = strtod(s, &end);
@@ -188,11 +201,12 @@ int ctl_log_parse(const char *line, int allow_next, struct ctl_log_event *ev, ch
     return 1;
 }
 
-/* the shortest decimal that reads back to the same double */
+/* the shortest plain decimal (no exponent, which the grammar refuses) that
+ * reads back to the same double */
 static void fmt_dbl(char *out, size_t n, double v)
 {
-    for (int p = 6; p <= 17; p++) {
-        snprintf(out, n, "%.*g", p, v);
+    for (int p = 0; p <= 30; p++) {
+        snprintf(out, n, "%.*f", p, v);
         if (strtod(out, NULL) == v) return;
     }
 }

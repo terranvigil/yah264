@@ -275,9 +275,8 @@ const char *yah264_control_strerror(int err)
     }
 }
 
-static int zone_overlaps(const yah264_encoder_t *e, int64_t first, int64_t last)
+static int zone_overlaps(const yah264_encoder_t *e, const struct y264_ctl *c, int64_t first, int64_t last)
 {
-    const struct y264_ctl *c = e->ctl;
     for (int i = 0; i < c->nz; i++)
         if (first <= c->zones[i].last && c->zones[i].first <= last) return 1;
     for (int i = 0; i < e->nzones; i++)
@@ -305,9 +304,8 @@ static void rate_apply(const yah264_control_t *ev, int *k, int *m, int *b)
 /* Replay the applied state and every queued RATE in landing order with v in
  * its place: v must leave a valid state, and so must every later event.
  * Under mx. */
-static int rate_check_queue(const yah264_encoder_t *e, const yah264_control_t *v)
+static int rate_check_queue(const yah264_encoder_t *e, const struct y264_ctl *c, const yah264_control_t *v)
 {
-    const struct y264_ctl *c = e->ctl;
     int k = c->a_kbps, m = c->a_maxrate, b = c->a_bufsize;
     int at = q_slot_for(&c->rq, v->frame), r;
     for (int i = 0; i <= c->rq.n; i++) {
@@ -320,9 +318,8 @@ static int rate_check_queue(const yah264_encoder_t *e, const yah264_control_t *v
 }
 
 /* the same for QP_LIMITS against the queued frame-exact events */
-static int qp_check_queue(const yah264_encoder_t *e, const yah264_control_t *v)
+static int qp_check_queue(const struct y264_ctl *c, const yah264_control_t *v)
 {
-    const struct y264_ctl *c = e->ctl;
     int lo = c->qp_min, hi = c->qp_max;
     int at = q_slot_for(&c->fq, v->frame);
     for (int i = 0; i <= c->fq.n; i++) {
@@ -335,8 +332,9 @@ static int qp_check_queue(const yah264_encoder_t *e, const yah264_control_t *v)
     return YAH264_CTL_OK;
 }
 
-/* what can be judged from the event alone */
-static int ctl_check(yah264_encoder_t *e, yah264_control_t *v)
+/* the checks against the state at the event's frame; RATE's queue replay is
+ * left to the caller, which holds mx for it */
+static int ctl_check(const yah264_encoder_t *e, const struct y264_ctl *c, yah264_control_t *v)
 {
     switch (v->kind) {
     case YAH264_CTL_RATE:
@@ -363,14 +361,14 @@ static int ctl_check(yah264_encoder_t *e, yah264_control_t *v)
         if (v->qp_min < 0 && v->qp_max < 0) return YAH264_CTL_EINVAL;
         /* the buffer may need the QPs above a ceiling, as at open */
         if (e->hrd_on && v->qp_max >= 0 && v->qp_max < 51) return YAH264_CTL_EHRD;
-        return qp_check_queue(e, v);
+        return qp_check_queue(c, v);
     case YAH264_CTL_KEYFRAME:
         if (e->tp_pass) return YAH264_CTL_EMODE;
         return YAH264_CTL_OK;
     case YAH264_CTL_ZONE:
         if (v->last < v->frame) return YAH264_CTL_EINVAL;
         if (!(v->qp_offset >= -51.0 && v->qp_offset <= 51.0)) return YAH264_CTL_EINVAL;
-        if (zone_overlaps(e, v->frame, v->last)) return YAH264_CTL_ECONFLICT;
+        if (zone_overlaps(e, c, v->frame, v->last)) return YAH264_CTL_ECONFLICT;
         return YAH264_CTL_OK;
     case 0:
         return YAH264_CTL_EINVAL;
@@ -379,26 +377,109 @@ static int ctl_check(yah264_encoder_t *e, yah264_control_t *v)
     }
 }
 
+/* the caller's event in this library's layout, its frame resolved */
+static int ctl_take(const struct y264_ctl *c, const yah264_control_t *ev, yah264_control_t *v)
+{
+    if (!ev || ev->size < CTL_V1_SIZE || ev->size > (int)sizeof(yah264_control_t))
+        return YAH264_CTL_EINVAL;
+    yah264_control_init(v, 0);
+    memcpy(v, ev, (size_t)ev->size);
+    v->size = (int)sizeof *v;
+    v->applied_frame = -1;
+    if (v->frame == YAH264_CTL_NEXT) v->frame = c->in;
+    else if (v->frame < 0) return YAH264_CTL_EINVAL;
+    else if (v->frame < c->in) return YAH264_CTL_ELATE;
+    return YAH264_CTL_OK;
+}
+
+static int zone_add(struct y264_ctl *c, const yah264_control_t *v)
+{
+    if (c->nz == c->cz) {
+        int nc = c->cz ? 2 * c->cz : 8;
+        struct ctl_zone *z = realloc(c->zones, (size_t)nc * sizeof *z);
+        if (!z) return -1;
+        c->zones = z;
+        c->cz = nc;
+    }
+    /* whole QPs, as a plan zone's offset is applied */
+    c->zones[c->nz++] = (struct ctl_zone){ v->frame, v->last, (double)lround(v->qp_offset) };
+    return 0;
+}
+
+static int q_copy(struct ctl_queue *d, const struct ctl_queue *q)
+{
+    memset(d, 0, sizeof *d);
+    if (!q->n) return 0;
+    d->ev = malloc((size_t)q->n * sizeof *d->ev);
+    if (!d->ev) return -1;
+    memcpy(d->ev, q->ev + q->head, (size_t)q->n * sizeof *d->ev);
+    d->n = d->cap = q->n;
+    return 0;
+}
+
+int yah264_encoder_control_check(yah264_encoder_t *e, const yah264_control_t *ev, int n, int *bad_index)
+{
+    if (!e || (n > 0 && !ev) || n < 0 || !bad_index) {
+        if (bad_index) *bad_index = -1;
+        return YAH264_CTL_EINVAL;
+    }
+    *bad_index = -1;
+    if (e->hw || !e->ctl) {
+        if (n > 0) *bad_index = 0;
+        return n > 0 ? YAH264_CTL_EUNSUPPORTED : YAH264_CTL_OK;
+    }
+    struct y264_ctl *c = e->ctl;
+    /* a private copy of everything the checks read, which the events fold into */
+    struct y264_ctl sh;
+    memset(&sh, 0, sizeof sh);
+    sh.in = c->in;
+    sh.qp_min = c->qp_min;
+    sh.qp_max = c->qp_max;
+    int r = YAH264_CTL_OK;
+    pthread_mutex_lock(&c->mx);
+    sh.a_kbps = c->a_kbps; sh.a_maxrate = c->a_maxrate; sh.a_bufsize = c->a_bufsize;
+    if (q_copy(&sh.rq, &c->rq) != 0) r = YAH264_CTL_ENOMEM;
+    pthread_mutex_unlock(&c->mx);
+    if (r == YAH264_CTL_OK && q_copy(&sh.fq, &c->fq) != 0) r = YAH264_CTL_ENOMEM;
+    for (int i = 0; r == YAH264_CTL_OK && i < c->nz; i++)
+        if (zone_add(&sh, &(yah264_control_t){ .frame = c->zones[i].first, .last = c->zones[i].last,
+                                               .qp_offset = c->zones[i].off }) != 0)
+            r = YAH264_CTL_ENOMEM;
+    if (r != YAH264_CTL_OK) {
+        free(sh.rq.ev); free(sh.fq.ev); free(sh.zones);
+        return r;
+    }
+    for (int i = 0; i < n; i++) {
+        yah264_control_t v;
+        r = ctl_take(&sh, &ev[i], &v);
+        if (r == YAH264_CTL_OK) r = ctl_check(e, &sh, &v);
+        if (r == YAH264_CTL_OK && v.kind == YAH264_CTL_RATE) r = rate_check_queue(e, &sh, &v);
+        if (r == YAH264_CTL_OK) {
+            int k = v.kind == YAH264_CTL_RATE || v.kind == YAH264_CTL_CRF
+                  ? q_insert(&sh.rq, &v) : q_insert(&sh.fq, &v);
+            if (k == 0 && v.kind == YAH264_CTL_ZONE) k = zone_add(&sh, &v);
+            if (k != 0) r = YAH264_CTL_ENOMEM;
+        }
+        if (r != YAH264_CTL_OK) { *bad_index = i; break; }
+    }
+    free(sh.rq.ev); free(sh.fq.ev); free(sh.zones);
+    return r;
+}
+
 int yah264_encoder_control(yah264_encoder_t *e, yah264_control_t *ev)
 {
-    if (!e || !ev || ev->size < CTL_V1_SIZE || ev->size > (int)sizeof(yah264_control_t))
-        return YAH264_CTL_EINVAL;
+    if (!e || !ev) return YAH264_CTL_EINVAL;
     if (e->hw || !e->ctl) return YAH264_CTL_EUNSUPPORTED;
     struct y264_ctl *c = e->ctl;
     yah264_control_t v;
-    yah264_control_init(&v, 0);
-    memcpy(&v, ev, (size_t)ev->size);
-    v.size = (int)sizeof v;
-    if (v.frame == YAH264_CTL_NEXT) v.frame = c->in;
-    else if (v.frame < 0) return YAH264_CTL_EINVAL;
-    else if (v.frame < c->in) return YAH264_CTL_ELATE;
-    v.applied_frame = -1;
-    int r = ctl_check(e, &v);
+    int r0 = ctl_take(c, ev, &v);
+    if (r0 != YAH264_CTL_OK) return r0;
+    int r = ctl_check(e, c, &v);
     if (r != YAH264_CTL_OK) return r;
     if (v.kind == YAH264_CTL_RATE || v.kind == YAH264_CTL_CRF) {
         pthread_mutex_lock(&c->mx);
         r = c->fq.n + c->rq.n >= CTL_QUEUE_MAX ? YAH264_CTL_EFULL
-          : v.kind == YAH264_CTL_RATE ? rate_check_queue(e, &v) : YAH264_CTL_OK;
+          : v.kind == YAH264_CTL_RATE ? rate_check_queue(e, c, &v) : YAH264_CTL_OK;
         if (r == YAH264_CTL_OK && q_insert(&c->rq, &v) != 0) r = YAH264_CTL_ENOMEM;
         atomic_store_explicit(&c->nrq, c->rq.n, memory_order_release);
         pthread_mutex_unlock(&c->mx);
@@ -408,17 +489,7 @@ int yah264_encoder_control(yah264_encoder_t *e, yah264_control_t *ev)
         int full = c->fq.n + c->rq.n >= CTL_QUEUE_MAX;
         pthread_mutex_unlock(&c->mx);
         if (full) return YAH264_CTL_EFULL;
-        if (v.kind == YAH264_CTL_ZONE) {
-            if (c->nz == c->cz) {
-                int nc = c->cz ? 2 * c->cz : 8;
-                struct ctl_zone *z = realloc(c->zones, (size_t)nc * sizeof *z);
-                if (!z) return YAH264_CTL_ENOMEM;
-                c->zones = z;
-                c->cz = nc;
-            }
-            /* whole QPs, as a plan zone's offset is applied */
-            c->zones[c->nz++] = (struct ctl_zone){ v.frame, v.last, (double)lround(v.qp_offset) };
-        }
+        if (v.kind == YAH264_CTL_ZONE && zone_add(c, &v) != 0) return YAH264_CTL_ENOMEM;
         if (q_insert(&c->fq, &v) != 0) {
             if (v.kind == YAH264_CTL_ZONE) c->nz--;
             return YAH264_CTL_ENOMEM;
