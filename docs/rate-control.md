@@ -247,9 +247,10 @@ whose sections don't hold the records their markers count, or that was cut
 short (a file one encoder wrote, and a threaded pass 1's merged file, end
 in a line that counts its records; the GOP markers count each section's),
 and warns of any pictures it codes past the file's last record. A VBV on one pass and not the
-other is fine: pass 2 splits as pass 1 recorded. A missing stats file isn't
-an error, but pass 2 or 3 warns that it runs without a plan and codes every
-frame at the base QP. One that is there but can't be read is refused.
+other is fine: pass 2 splits as pass 1 recorded. Pass 2 refuses a missing
+stats file. Pass 3 can start one: it warns that it runs without a plan, codes
+every frame at the base QP and writes what it coded. One that is there but
+can't be read is refused.
 
 **With a VBV**, pass 1 codes as capped ABR at the target with its base QP never
 under 26. Frames are then recorded at QPs that say what a finer QP costs.
