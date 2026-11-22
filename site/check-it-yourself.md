@@ -16,13 +16,15 @@ scripts/fetch_corpus.sh --review
 X264_ASM=$(command -v x264) make review
 ```
 
-The first line fetches the four test clips (about 250 MB). The second encodes them twice, once with yah264 and once with x264. Both
-aim at the same bitrate. Then it prints how long each took, how big each file
-came out and how good each looked. `make review-720` and
-`make review-1080` run half of it.
+The first line fetches the four test clips, about 250 MB in all. The second
+encodes each clip twice, once with yah264 and once with x264. Both encoders
+aim at the same bitrate. Then it prints how long each took, how big each file came
+out and how good each looked. `make review-720` and `make review-1080` run
+half of it.
 
-You need `x264` and `ffmpeg` on your path, and a float-enabled libvmaf 3.x
-`vmaf` CLI with Netflix's VMAF v1.0.16 model files. They're looked for at
+You need `x264` and `ffmpeg` on your path. You also need a float-enabled
+libvmaf 3.x `vmaf` CLI with Netflix's VMAF v1.0.16 model files. The script
+looks for them at
 `~/.local/opt/vmaf-v1/bin/vmaf` and `~/.local/share/vmaf/model`, or wherever
 `VMAF_V1_BIN` and `VMAF_V1_MODELS` point. [Getting started](start.md) covers
 the build.
@@ -48,8 +50,8 @@ hundredths. Ignore the second decimal.
 means we took about four fifths of x264's time.
 
 **`VMAF`** is quality: our score minus x264's, on VMAF v1 scored at display
-resolution. v1 doesn't reward free sharpening, and it also sees banding and
-chroma. Positive means ours looks better.
+resolution. v1 doesn't reward free sharpening and does see banding
+and chroma. Positive means ours looks better.
 
 **`size`** is how much bigger our file is than x264's. Negative means ours is
 smaller.
@@ -58,7 +60,7 @@ smaller.
 is that no clip may fall more than 1 dB behind x264.
 
 `perseverance_1080p` can dip just past it and print `PSNR-FLOOR FAIL`. Our file
-there is about 6% smaller at equal VMAF, so the gap is mostly bits we didn't
+there is about 6% smaller at equal VMAF. Most of that gap is bits we didn't
 spend.
 
 ## Reading size and quality together
@@ -97,8 +99,8 @@ well. An encoder measured only on them looks better than it is. Real camera
 footage has sensor noise and real motion.
 
 Big Buck Bunny is an open-source animated film. Perseverance is footage from
-NASA's Mars rover. Each appears at both resolutions, so the 720p and 1080p rows
-differ by resolution and nothing else. Four clips keeps the run to a few
+NASA's Mars rover. Because each appears at both resolutions, the 720p and
+1080p rows differ by resolution and nothing else. Four clips keeps the run to a few
 minutes. The long titles are on the [results](results.md) page.
 
 Don't settle anything on one run. A speed ratio moves by up to about 0.10
