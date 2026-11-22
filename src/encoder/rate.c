@@ -286,15 +286,20 @@ static int rfm_open_miss(const yah264_encoder_t *e, double work, double owed, in
  * content changed, so after a costly run it keeps that run's qp over what
  * follows. past the opening, a ledger more than RFM_REC_QP over the last
  * second's reading is scaled down to sit that far over it; a smaller margin
- * also pulls steady clips off their rate. what it drops is kept: once the
- * last second reads RFM_REC_BACK over the ledger, the costly content has
- * come back, so the history is restored, the ledger is followed whole for
- * that decide (the next burst would land at the cheap run's qp otherwise),
- * and the rule stays off: content that alternates is what the whole
- * history is for. a capped encode keeps cutting instead: its buffer already
- * bounds the burst, and the restored history held it under its rate. */
+ * also pulls steady clips off their rate. what it drops is kept, with the
+ * ledger qp it first cut from. once the last second reads within
+ * RFM_REC_NEAR of that level again (a second of returning noise reads about
+ * 4 under it after the decay) and RFM_REC_BACK over the ledger, the costly
+ * content has come back: the history is restored, the ledger is followed
+ * whole for that decide (the next burst would land at the cheap run's qp
+ * otherwise), and the rule stays off, since content that alternates is what
+ * the whole history is for. a merely costlier scene reads well under that
+ * level and leaves the history alone. a capped encode keeps cutting: its
+ * buffer already bounds the burst, and the restored history held it under
+ * its rate. */
 #define RFM_REC_QP   4.0
 #define RFM_REC_BACK 2.0
+#define RFM_REC_NEAR 6.0
 static double rfm_recent(yah264_encoder_t *e, double work, double owed, int shared)
 {
     double bps = e->abr_target_bpf * rfm_pic_rate(e);
@@ -304,7 +309,8 @@ static double rfm_recent(yah264_encoder_t *e, double work, double owed, int shar
         return work;
     double rq = 12.0 + 6.0 * log2(e->rfm_rec_work / e->rfm_rec_owed);
     double lq = 12.0 + 6.0 * log2(work / owed);
-    if (e->rfm_rec_state == 1 && !e->vbv_on && rq > lq + RFM_REC_BACK) {
+    if (e->rfm_rec_state == 1 && !e->vbv_on && rq > lq + RFM_REC_BACK
+        && rq >= e->rfm_rec_qcut - RFM_REC_NEAR) {
         e->rfm_rec_state = 2;
         e->rfm_rec_jump = 1;
         e->rfm_work += e->rfm_rec_lost;
@@ -314,6 +320,8 @@ static double rfm_recent(yah264_encoder_t *e, double work, double owed, int shar
     if (lq <= rq + RFM_REC_QP)
         return work;
     double cut = owed * pow(2.0, (rq + RFM_REC_QP - 12.0) / 6.0);
+    if (e->rfm_rec_state == 0)
+        e->rfm_rec_qcut = lq;
     e->rfm_rec_state = 1;
     e->rfm_rec_lost += e->rfm_work - cut;
     e->rfm_work = cut;
@@ -3430,6 +3438,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
     }
     if (RC_STATE_HAS(csz, rf_rec_state)) {
         e->rfm_rec_lost = c->rf_rec_lost;
+        e->rfm_rec_qcut = c->rf_rec_qcut;
         e->rfm_rec_state = c->rf_rec_state;
     }
     e->rf2_opened = 1;                  /* the opening belongs to the first instance only */
@@ -3523,7 +3532,8 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
     out->last_anchor_type = e->last_anchor_type;
     for (int t = 0; t < 3; t++) { out->rf2_kc[t] = e->bm_rf2kc.k[t]; out->rf2_kc_cal[t] = e->bm_rf2kc.have[t]; }
     out->rf_rec_work = e->rfm_rec_work; out->rf_rec_owed = e->rfm_rec_owed;
-    out->rf_rec_lost = e->rfm_rec_lost; out->rf_rec_state = e->rfm_rec_state;
+    out->rf_rec_lost = e->rfm_rec_lost; out->rf_rec_qcut = e->rfm_rec_qcut;
+    out->rf_rec_state = e->rfm_rec_state;
     if (e->vbv_on) { out->vbv_fill = e->vbv.fill; out->vbv_have = 1; }
     memcpy(dst, out, dsz);
     return 0;

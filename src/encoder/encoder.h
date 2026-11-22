@@ -1162,6 +1162,7 @@ struct yah264_encoder {
     int      rfm_rec_state;     /* rfm_recent: 0 armed, 1 has cut the ledger, 2 off */
     int      rfm_rec_jump;      /* the next anchor follows the ledger whole */
     double   rfm_rec_lost;      /* the work rfm_recent has cut, restored when it turns off */
+    double   rfm_rec_qcut;      /* the ledger qp rfm_recent first cut from */
     /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
  * per-GOP instances of one encode (NULL = this instance's own). */
     struct yah264_rc_shared *rc_shared;

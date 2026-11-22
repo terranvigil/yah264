@@ -146,18 +146,26 @@ With no lookahead (`--rc-lookahead 0`, B frames on) two more rules apply to
 an encoder with its own ledger, outside CBR and two-pass. In the first 2
 seconds after an intra-fit opening that isn't dark, once 4 frames have been
 coded after the opening I, a ledger whose coded frames alone read more than
-12 QP over the slew reference is followed whole instead of at 0.35 of a step:
-on noise every frame costs what an I does, so the rise isn't the I's. And past
-the first 4 seconds, when the ledger reads more than 4 QP over what the last
-second of frames would read on their own, its history is scaled down to sit
-4 QP over them. Nothing else tells a ledger with no lookahead that the content
-changed, and after an expensive run (noise before a static scene) it would
-otherwise hold that run's QP for the rest of the encode. The history set aside
-is kept: when the last second reads 2 QP over the ledger again, the expensive
-content has come back, so the history is restored, that frame follows the
-ledger whole, and the rule turns off for the rest of the encode, since content
-that alternates is what the whole history is for. Capped VBR keeps cutting, since its buffer already bounds each burst. Near-black frames, which the
-ledger doesn't count, don't count toward either time.
+12 QP over the slew reference is followed whole instead of at the opening's
+slew (0.35 of a step, or 0.25 when the opening I was set under the fit's
+level): on noise every frame costs what an I does, so the rise isn't the I's.
+And past the first 4 seconds, when the ledger reads more than 4 QP over what
+the last second of frames would read on their own, its history is scaled down
+to sit 4 QP over them. Nothing else tells a ledger with no lookahead that the
+content changed, and after an expensive run (noise before a static scene) it
+would otherwise hold that run's QP for the rest of the encode.
+
+The history set aside is kept, with the ledger's QP before the first cut. The
+restore needs an earlier cut and happens at most once: when the last second
+reads within 6 QP of that level and 2 QP over the ledger, the expensive content
+has come back, so the history is restored, that anchor follows the ledger
+whole (the next one, when that decide is a mid-stream I), and the rule turns
+off for the rest of the encode, since content that alternates is what the
+whole history is for. A scene that is only costlier than the cheap stretch
+reads well under that level and leaves the history alone. Capped VBR keeps
+cutting and never restores, since its buffer already bounds each burst.
+Near-black frames, which the ledger doesn't count, don't count toward either
+time.
 
 CBR keeps the older fit as its opening, since its buffer already holds the
 rate and the refit's opening ran short CBR buffers a few points over. After an
