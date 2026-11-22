@@ -2374,8 +2374,10 @@ static void *clean_waiter(void *arg)
      * unlinks and raises anyway, and that one file may be left */
     for (int i = 0; i < 300 && pthread_rwlock_trywrlock(&g_clean_lock) != 0; i++)
         nanosleep(&(struct timespec){ 0, 10 * 1000 * 1000 }, NULL);
-    /* without the lock the slots are read unguarded: safe only because the
-     * one writer is the main thread, and it's the one stuck in the hold */
+    /* without the lock the slots are read unguarded: the one writer is the
+     * main thread, which starts no write once dying is set, and a write
+     * already under way blocks only before naming a file or after dropping
+     * it */
     for (clean_set_t *s = atomic_load(&g_clean); s; s = s->next)
         for (int i = 0; i < s->n; i++)
             if (s->path[i]) unlink(s->path[i]);
@@ -2776,16 +2778,19 @@ static int out_cut(void)
 static void out_unmake(out_file_t *f)
 {
     struct stat a, b;
+    int open_ok = fstat(f->fd, &a) == 0;
     char *real = f->made ? realpath(f->path, NULL) : NULL;
-    /* the waiter's slot goes with the file: left named, a signal after the
-     * unlink could take a new file that reuses the inode */
+    /* the waiter's slot goes with the file, matched by the open file and not
+     * the name: left set, a signal after the close could take a new file
+     * that reuses the inode */
     clean_hold();
-    for (int i = 0; real && i < 2; i++)
-        if (g_clean_out[i].path && strcmp(g_clean_out[i].path, real) == 0) {
+    for (int i = 0; f->made && open_ok && i < 2; i++)
+        if (g_clean_out[i].path && g_clean_out[i].dev == a.st_dev
+            && g_clean_out[i].ino == a.st_ino) {
             free(g_clean_out[i].path);
             g_clean_out[i].path = NULL;
         }
-    if (real && fstat(f->fd, &a) == 0 && stat(real, &b) == 0
+    if (real && open_ok && stat(real, &b) == 0
         && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
         unlink(real);
     clean_release();
