@@ -2374,6 +2374,8 @@ static void *clean_waiter(void *arg)
      * unlinks and raises anyway, and that one file may be left */
     for (int i = 0; i < 300 && pthread_rwlock_trywrlock(&g_clean_lock) != 0; i++)
         nanosleep(&(struct timespec){ 0, 10 * 1000 * 1000 }, NULL);
+    /* without the lock the slots are read unguarded: safe only because the
+     * one writer is the main thread, and it's the one stuck in the hold */
     for (clean_set_t *s = atomic_load(&g_clean); s; s = s->next)
         for (int i = 0; i < s->n; i++)
             if (s->path[i]) unlink(s->path[i]);
@@ -2771,15 +2773,29 @@ static int out_cut(void)
 
 /* undo an out_open: close, and remove the file only if this run made it
  * and the name (through any symlink) still leads to that very file */
-static void out_drop(out_file_t *f)
+static void out_unmake(out_file_t *f)
 {
-    if (f->fd < 0) return;
     struct stat a, b;
     char *real = f->made ? realpath(f->path, NULL) : NULL;
+    /* the waiter's slot goes with the file: left named, a signal after the
+     * unlink could take a new file that reuses the inode */
+    clean_hold();
+    for (int i = 0; real && i < 2; i++)
+        if (g_clean_out[i].path && strcmp(g_clean_out[i].path, real) == 0) {
+            free(g_clean_out[i].path);
+            g_clean_out[i].path = NULL;
+        }
     if (real && fstat(f->fd, &a) == 0 && stat(real, &b) == 0
         && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
         unlink(real);
+    clean_release();
     free(real);
+}
+
+static void out_drop(out_file_t *f)
+{
+    if (f->fd < 0) return;
+    out_unmake(f);
     close(f->fd);
     f->fd = -1;
 }
@@ -2789,12 +2805,7 @@ static void out_drop(out_file_t *f)
 static void out_forget(out_file_t *f, FILE *fp)
 {
     if (f->fd < 0) { if (fp) fclose(fp); return; }
-    struct stat a, b;
-    char *real = f->made ? realpath(f->path, NULL) : NULL;
-    if (real && fstat(f->fd, &a) == 0 && stat(real, &b) == 0
-        && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
-        unlink(real);
-    free(real);
+    out_unmake(f);
     if (fp) fclose(fp); else close(f->fd);
     f->fd = -1;
 }
