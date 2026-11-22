@@ -19,11 +19,11 @@ listed here with the reason. "Refused" is a decision.
 | `--slow-firstpass` | Refused | Pass 1 already runs the full preset. The allocator is the value. |
 | `--psnr` `--ssim` | Refused | The harness scores externally. In-encoder metrics cost wall on every encode. (`--tune psnr` and `--tune ssim` exist.) |
 | `--avcintra-class` | Refused | A heavy, niche broadcast intra-only profile with vendor CQM tables and padding. |
-| `--avcintra-flavor` | Refused | It picks the vendor variant of `--avcintra-class`, which is refused. |
+| `--avcintra-flavor` | Refused | It picks the vendor variant of `--avcintra-class`. That option is refused. |
 | `--output-csp` | Refused | No conversion stage. ffmpeg converts. `--output-depth` is the one exception (docs/formats.md). |
 | `--lookahead-threads` `--mvrange-thread` | Absorbed | One thread budget. The staircase lag is the MV constraint. |
 | `--input-depth` | Automatic | The input's own format tag picks the bit depth (docs/formats.md). |
-| `--bluray-compat` | Refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, access-unit delimiters, picture structure) are each available on their own, except the strict B-pyramid, which is refused. |
+| `--bluray-compat` | Refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, access-unit delimiters, picture structure) are each available on their own. The one exception is the strict B-pyramid, which we refuse. |
 | `--slice-max-size` `--slice-max-mbs` `--slice-min-mbs` `--slices-max` | Refused | Packet-sized slices only matter for RTP-style delivery, which isn't a target. `--slices N` covers the count form. |
 | `--asm` | Refused | `--no-asm` (and `Y264_SIMD_FORCE` in a dev_knobs build) cover testing. Every kernel already matches its C reference. |
 

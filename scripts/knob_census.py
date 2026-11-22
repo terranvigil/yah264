@@ -330,17 +330,19 @@ def generate(knobs, instr_doc):
                 "scripts/knob_census.py OVERRIDES, not this file)\n\n"
                 "Regenerate: `python3 scripts/knob_census.py`. CI check: "
                 "`--check`.\n\nThese are read only in a build configured with "
-                "`-Ddev_knobs=true`; a default build reads just the ones the "
-                "CLI uses to carry its own options (src/common/env.h) and the "
-                "CLI's two memory bounds, `Y264_MAX_INPUT_MB` and "
-                "`Y264_STREAM_WINDOW`; its CLI refuses to encode when any "
+                "`-Ddev_knobs=true`. A default build reads just the ones the "
+                "CLI sets to pass its own options down (src/common/env.h) and "
+                "the CLI's two memory bounds, `Y264_MAX_INPUT_MB` and "
+                "`Y264_STREAM_WINDOW`. Its CLI refuses to encode when any "
                 "other is set.\n\n"
-                "Tier meanings: **default** = shipped behavior, "
-                "the env is its escape; **instrument** = measurement machinery "
-                "(cataloged in docs/instruments.md when it has produced a "
-                "result); **arm** = default-off gate still being priced. "
-                "A refuted arm is removed, with its verdict and the removing "
-                "commit recorded in the local refused index.\n")
+                "The three tiers mean this:\n\n"
+                "- default: shipped behavior. The knob is its escape.\n"
+                "- instrument: measurement machinery. The "
+                "[instruments catalog](instruments.md) lists one once it has "
+                "produced a result.\n"
+                "- arm: a default-off gate still being priced. A refuted arm "
+                "is removed. The local refused index records its verdict and "
+                "the commit that removed it.\n")
         for tier in ("default", "instrument", "arm"):
             f.write(f"\n## {tier} ({len(tiers[tier])})\n\n")
             f.write("| knob | default | reader |\n|---|---|---|\n")
