@@ -363,7 +363,14 @@ int main(void)
         CHECK(yah264_encoder_control_check(r.e, NULL, 1, &bad) == YAH264_CTL_EINVAL && bad == -1);
         CHECK(yah264_encoder_control_check(r.e, NULL, -1, &bad) == YAH264_CTL_EINVAL && bad == -1);
         CHECK(yah264_encoder_control_check(r.e, NULL, 0, NULL) == YAH264_CTL_EINVAL);
-        CHECK(yah264_encoder_control_check(r.e, NULL, 0, &bad) == YAH264_CTL_OK);
+        bad = 7;
+        CHECK(yah264_encoder_control_check(r.e, NULL, 0, &bad) == YAH264_CTL_OK && bad == -1);
+        {
+            yah264_control_t one;
+            yah264_control_init(&one, YAH264_CTL_KEYFRAME);
+            bad = 7;
+            CHECK(yah264_encoder_control_check(r.e, &one, 1, &bad) == YAH264_CTL_OK && bad == -1);
+        }
         for (int it = 0; it < 1500; it++) {
             yah264_control_t ev;
             int k = 1 + RND(5);

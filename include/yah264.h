@@ -1451,8 +1451,8 @@ YAH264_EXPORT int yah264_encoder_control(yah264_encoder_t *enc, yah264_control_t
 /* Check n events as yah264_encoder_control would take them, in order, each
  * as if the ones before it and everything already queued were queued too,
  * against the encoder's current state. Nothing is queued or changed, and
- * there is no queue bound. Returns YAH264_CTL_OK, or the first refusal's
- * code with its index in *bad_index. A bad pointer or n < 0 returns
+ * there is no queue bound. Returns YAH264_CTL_OK with *bad_index set to -1,
+ * or the first refusal's code with its index in *bad_index. A bad pointer or n < 0 returns
  * YAH264_CTL_EINVAL with *bad_index -1 (not written when bad_index is
  * NULL). Each event's size is checked as yah264_encoder_control checks it.
  * Call it between encode calls, from the thread that calls encode. */
