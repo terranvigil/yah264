@@ -61,12 +61,20 @@ with r the new per-frame target over the old one:
   the operating point, so the slew still limits what the content does and not
   the step the caller asked for;
 - a buffer keeps its fill as a fraction of its size and refills at the new
-  maxrate from the next frame.
+  maxrate from the next frame;
+- the balance carried into the new rate, bits owed minus bits spent with the
+  frames already decided counted at their predicted size, is held to at most
+  one second of the new target, and the rest is forgiven.
+
+For two seconds after a change the rate control may move its QP a whole step
+per anchor, as it does after the opening, while the content's cost at the
+new rate is still unproven.
 
 With a buffer of about a second, a step lands on its new rate within the
-first half second. With no buffer, a step down after a stretch that overspent
-repays the overspend at the new rate first, so it settles within a few
-seconds instead.
+first half second. With no buffer, a step down settles more slowly: what the
+rate control learned about the content at the old rate prices it at the new
+one, and that estimate is off by a few QP after a large step until frames at
+the new rate outweigh it.
 
 ### What is refused, and why
 
@@ -86,7 +94,16 @@ seconds instead.
   rate would be padded back with filler. A QP ceiling under 51 is refused
   under either, as it is at open.
 - Two-pass encodes refuse rate, CRF and keyframe events: pass 2 follows its
-  stats file.
+  stats file. The CLI refuses `--control` and `--control-fd` with `--pass`
+  outright.
+- An event is judged against the state it would land in: the settings in
+  force at its frame once every event queued before it has landed. It's
+  refused if it doesn't fit there, or if any event already queued after it
+  would no longer fit.
+- The encoder holds at most 4096 events waiting to land and 65536 applied
+  records waiting to be drained. An event past the first bound is refused
+  with `YAH264_CTL_EFULL`; draining `yah264_encoder_controls_applied()` frees
+  the second.
 - The hardware encoder (`--hw`) takes no events.
 
 ## From the command line
@@ -109,16 +126,22 @@ yah264 --input-y4m in.y4m --bitrate 3000 --vbv-maxrate 3000 --vbv-bufsize 3000 \
 
 Frames count from 0 in input order and may not decrease down the file. The
 optional first line names the log's version. A line is `FRAME KIND` and then
-`name=value` arguments, and `#` starts a comment. The whole file is checked
+`name=value` arguments, and `#` starts a comment. The whole file is parsed
 before the first frame: an unknown kind or argument, a missing or bad value,
-a frame that goes backwards, or an event the encoder refuses stops the run
-with the file name, the line number and the reason.
+a NUL byte, a frame that goes backwards, or a file that can't be read stops
+the run with the file name, the line number and the reason. Events are fed
+to the encoder up to 1024 at a time, so a refusal among the first ones stops
+the run before the output is touched, and one in a longer log stops it where
+it happens.
 
 `--control-fd N` reads the same lines from an open descriptor while the
-encode runs, applying whatever has arrived before each frame is handed in.
-The frame may be `next`, the frame about to be handed in. A numbered line for
-a frame that has already gone in, or an event the encoder refuses, is skipped
-with a warning. A malformed line stops the encode.
+encode runs, taking up to 64 of the lines that have arrived before each
+frame is handed in. The frame may be `next`, the frame about to be handed in.
+A numbered line for a frame that has already gone in, or an event the
+encoder refuses, is skipped with a warning. A malformed line, a NUL byte or a
+descriptor that can't be read stops the encode; one that isn't open or is
+write-only is refused at startup. An unterminated last line counts. The
+descriptor's flags are put back at exit.
 
 `--control-out FILE` writes every event that took effect, with the frame it
 named, as a `--control` log. It's the record of a live run.
@@ -156,7 +179,9 @@ if (r != YAH264_CTL_OK)
 the codes below and queues nothing. `yah264_encoder_controls_applied()`
 drains the events that took effect, in the order they were applied, each with
 `applied_frame` set. After the flush, an event whose frame never arrived
-comes back with `applied_frame` -1. Both are called between encode calls,
+comes back with `applied_frame` -1. It returns -1 once if records were lost
+(out of memory, or more undrained than the encoder holds); the events
+themselves still took effect. Both are called between encode calls,
 from the thread that calls encode.
 
 | code | meaning |
@@ -169,12 +194,15 @@ from the thread that calls encode.
 | `YAH264_CTL_ELEVEL` | it exceeds the declared level |
 | `YAH264_CTL_ECONFLICT` | the zone overlaps one already set |
 | `YAH264_CTL_ENOMEM` | out of memory |
+| `YAH264_CTL_EFULL` | the control queue is full; resend once events have landed |
 
 `yah264_encoder_status()` fills a `yah264_status_t`: pictures in and frames
 out, the queue depth in frames and in stream time, the next frame an event
 can name, the wall time the oldest queued frame has spent inside, the current
-bitrate and buffer, the buffer's fill, the rate ledger's balance (target bits
-minus bits spent) and the bits the next frame may spend. Every field but the
+bitrate and buffer, the buffer's fill after the last frame whose bits the
+rate control has counted (the whole stream once it's flushed), the rate
+ledger's balance (target bits minus bits spent) and the bits the next frame
+may spend. Every field but the
 wall time is a function of the input and the events, so it reads the same on
 a replay at one thread.
 

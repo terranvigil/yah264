@@ -91,6 +91,7 @@ void yah264_rc_shared_free_10(yah264_rc_shared_t *s);
 int yah264_encoder_rc_share_10(yah264_encoder_t *enc, yah264_rc_shared_t *s);
 int yah264_encoder_control_10(yah264_encoder_t *enc, yah264_control_t *ev);
 int yah264_encoder_controls_applied_10(yah264_encoder_t *enc, yah264_control_t *out, int max);
+int yah264_encoder_status_10(yah264_encoder_t *enc, yah264_status_t *st);
 
 typedef struct yah264_api {
     int depth;                  /* the samples this table's library takes */
@@ -134,6 +135,7 @@ typedef struct yah264_api {
     int  (*rc_share)(yah264_encoder_t *, yah264_rc_shared_t *);
     int  (*control)(yah264_encoder_t *, yah264_control_t *);
     int  (*controls_applied)(yah264_encoder_t *, yah264_control_t *, int);
+    int  (*status)(yah264_encoder_t *, yah264_status_t *);
 } yah264_api;
 
 static const yah264_api api8 = {
@@ -154,7 +156,7 @@ static const yah264_api api8 = {
     yah264_encoder_rc_state, yah264_encoder_rc_import,
     yah264_encoder_vbv_handoff,
     yah264_rc_shared_new, yah264_rc_shared_free, yah264_encoder_rc_share,
-    yah264_encoder_control, yah264_encoder_controls_applied,
+    yah264_encoder_control, yah264_encoder_controls_applied, yah264_encoder_status,
 };
 
 static const yah264_api api10 = {
@@ -176,7 +178,7 @@ static const yah264_api api10 = {
     yah264_encoder_rc_state_10, yah264_encoder_rc_import_10,
     yah264_encoder_vbv_handoff_10,
     yah264_rc_shared_new_10, yah264_rc_shared_free_10, yah264_encoder_rc_share_10,
-    yah264_encoder_control_10, yah264_encoder_controls_applied_10,
+    yah264_encoder_control_10, yah264_encoder_controls_applied_10, yah264_encoder_status_10,
 };
 
 /* The selected library, and the width of one sample in its pictures. 8-bit
@@ -701,6 +703,7 @@ static int g_ctl_rec_n, g_ctl_rec_cap;
 static char g_ctl_fd_buf[4096];
 static size_t g_ctl_fd_len;
 static int g_ctl_fd_eof, g_ctl_fd_line, g_ctl_fd_hdr;
+static int g_trunc_deferred;        /* the outputs are cut once the --control log is accepted */
 
 static const int ctl_log_kind_map[][2] = {
     { CTL_KIND_RATE, YAH264_CTL_RATE }, { CTL_KIND_CRF, YAH264_CTL_CRF },
@@ -772,21 +775,27 @@ static int parse_control_file(const char *path)
 {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "yah264: cannot open --control file '%s'\n", path); return -1; }
-    char line[1100], err[160];
+    char *line = NULL, err[160];
+    size_t lcap = 0;
+    ssize_t len;
     int ln = 0, seen = 0;
     int64_t last = -1;
-    while (fgets(line, sizeof line, f)) {
+    while ((len = getline(&line, &lcap, f)) >= 0) {
         ln++;
-        if (!strchr(line, '\n') && !feof(f)) {
+        if ((size_t)len != strlen(line)) {
+            fprintf(stderr, "yah264: --control %s:%d: the line contains a NUL byte\n", path, ln);
+            free(line); fclose(f); return -1;
+        }
+        if (len > 1000) {
             fprintf(stderr, "yah264: --control %s:%d: line too long\n", path, ln);
-            fclose(f); return -1;
+            free(line); fclose(f); return -1;
         }
         if (!seen) {
             int v = ctl_log_header(line);
             if (v < 0 || v > CTL_LOG_VERSION) {
                 fprintf(stderr, "yah264: --control %s:%d: unsupported log version (this build reads %d)\n",
                         path, ln, CTL_LOG_VERSION);
-                fclose(f); return -1;
+                free(line); fclose(f); return -1;
             }
             if (v > 0) { seen = 1; continue; }
         }
@@ -796,33 +805,49 @@ static int parse_control_file(const char *path)
         if (r > 0) ctl_from_log(&le, &ev);
         if (r < 0) {
             fprintf(stderr, "yah264: --control %s:%d: %s\n", path, ln, err);
-            fclose(f); return -1;
+            free(line); fclose(f); return -1;
         }
         if (r == 0) continue;
         seen = 1;
         if (ev.frame < last) {
             fprintf(stderr, "yah264: --control %s:%d: frame %lld is before the line above it (%lld); "
                     "frames must not decrease\n", path, ln, (long long)ev.frame, (long long)last);
-            fclose(f); return -1;
+            free(line); fclose(f); return -1;
         }
         last = ev.frame;
         yah264_control_t *q = realloc(g_ctl_file_ev, (size_t)(g_ctl_file_n + 1) * sizeof *q);
         int *ql = realloc(g_ctl_file_line, (size_t)(g_ctl_file_n + 1) * sizeof *ql);
         if (q) g_ctl_file_ev = q;
         if (ql) g_ctl_file_line = ql;
-        if (!q || !ql) { fclose(f); return -1; }
+        if (!q || !ql) { free(line); fclose(f); return -1; }
         g_ctl_file_ev[g_ctl_file_n] = ev;
         g_ctl_file_line[g_ctl_file_n++] = ln;
     }
+    free(line);
+    int bad = ferror(f);
     fclose(f);
+    if (bad) {
+        fprintf(stderr, "yah264: cannot read --control file '%s'\n", path);
+        return -1;
+    }
     g_control_file = path;
     return 0;
 }
 
-/* queue the file's events before the first frame; any refusal stops the run */
-static int control_submit_file(yah264_encoder_t *enc)
+/* --control events wait in the CLI and are fed to the encoder as frames go
+ * by, at most this many queued at once, so a long log never fills its queue */
+#define CTL_FILE_WINDOW 1024
+static int g_ctl_file_next;
+
+/* queue file events up to the window; a refusal stops the run */
+static int control_feed_file(yah264_encoder_t *enc)
 {
-    for (int i = 0; i < g_ctl_file_n; i++) {
+    yah264_status_t st;
+    memset(&st, 0, sizeof st);
+    st.size = (int)sizeof st;
+    if (g_ctl_file_next >= g_ctl_file_n || g_api->status(enc, &st) < 0) return 0;
+    for (int64_t q = st.controls_pending; g_ctl_file_next < g_ctl_file_n && q < CTL_FILE_WINDOW; q++) {
+        int i = g_ctl_file_next++;
         yah264_control_t ev = g_ctl_file_ev[i];
         int r = g_api->control(enc, &ev);
         if (r != YAH264_CTL_OK) {
@@ -834,63 +859,131 @@ static int control_submit_file(yah264_encoder_t *enc)
     return 0;
 }
 
-/* --control-fd: every complete line available now, without waiting.
- * Returns -1 on a malformed line (the encode stops). */
+static int control_submit_file(yah264_encoder_t *enc)
+{
+    return control_feed_file(enc);
+}
+
+/* one --control-fd line, NUL-terminated at its end: -1 stops the encode */
+static int control_fd_line(yah264_encoder_t *enc, const char *ln, size_t len)
+{
+    g_ctl_fd_line++;
+    if (memchr(ln, 0, len)) {
+        fprintf(stderr, "yah264: --control-fd: line %d contains a NUL byte\n", g_ctl_fd_line);
+        return -1;
+    }
+    char err[160];
+    if (!g_ctl_fd_hdr) {
+        int v = ctl_log_header(ln);
+        if (v < 0 || v > CTL_LOG_VERSION) {
+            fprintf(stderr, "yah264: --control-fd: line %d: unsupported log version "
+                    "(this build reads %d)\n", g_ctl_fd_line, CTL_LOG_VERSION);
+            return -1;
+        }
+        if (v > 0) { g_ctl_fd_hdr = 1; return 0; }
+    }
+    struct ctl_log_event le;
+    int r = ctl_log_parse(ln, 1, &le, err, sizeof err);
+    if (r < 0) {
+        fprintf(stderr, "yah264: --control-fd: line %d: %s\n", g_ctl_fd_line, err);
+        return -1;
+    }
+    if (r == 0) return 0;
+    g_ctl_fd_hdr = 1;
+    yah264_control_t ev;
+    ctl_from_log(&le, &ev);
+    int64_t named = ev.frame;
+    int c = g_api->control(enc, &ev);
+    if (c != YAH264_CTL_OK) {
+        if (named >= 0)
+            fprintf(stderr, "yah264: warning: --control-fd: line %d (frame %lld): skipped: %s\n",
+                    g_ctl_fd_line, (long long)named, yah264_control_strerror(c));
+        else
+            fprintf(stderr, "yah264: warning: --control-fd: line %d: skipped: %s\n",
+                    g_ctl_fd_line, yah264_control_strerror(c));
+    }
+    return 0;
+}
+
+/* lines taken from the descriptor before each frame, so a flood of them
+ * cannot hold the encode up; the rest wait in the pipe */
+#define CTL_FD_LINES_PER_FRAME 64
+
+/* --control-fd: the complete lines available now, without waiting.
+ * Returns -1 on a malformed line or a descriptor that went bad. */
 static int control_poll_fd(yah264_encoder_t *enc)
 {
     if (g_control_fd < 0 || g_ctl_fd_eof) return 0;
+    int taken = 0;
     for (;;) {
-        struct pollfd pf = { g_control_fd, POLLIN, 0 };
-        if (poll(&pf, 1, 0) <= 0 || !(pf.revents & (POLLIN | POLLHUP))) break;
+        char *nl;
+        while (taken < CTL_FD_LINES_PER_FRAME && (nl = memchr(g_ctl_fd_buf, '\n', g_ctl_fd_len))) {
+            *nl = 0;
+            size_t used = (size_t)(nl - g_ctl_fd_buf) + 1;
+            if (control_fd_line(enc, g_ctl_fd_buf, used - 1) < 0) return -1;
+            memmove(g_ctl_fd_buf, nl + 1, g_ctl_fd_len - used);
+            g_ctl_fd_len -= used;
+            taken++;
+        }
+        if (taken >= CTL_FD_LINES_PER_FRAME) return 0;
         if (g_ctl_fd_len == sizeof g_ctl_fd_buf - 1) {
             fprintf(stderr, "yah264: --control-fd: line %d too long\n", g_ctl_fd_line + 1);
             return -1;
         }
-        ssize_t k = read(g_control_fd, g_ctl_fd_buf + g_ctl_fd_len, sizeof g_ctl_fd_buf - 1 - g_ctl_fd_len);
-        if (k < 0 && (errno == EINTR || errno == EAGAIN)) break;
-        if (k <= 0) { g_ctl_fd_eof = 1; break; }
-        g_ctl_fd_len += (size_t)k;
-        char *nl;
-        while ((nl = memchr(g_ctl_fd_buf, '\n', g_ctl_fd_len))) {
-            *nl = 0;
-            g_ctl_fd_line++;
-            char err[160];
-            int handled = 0;
-            if (!g_ctl_fd_hdr) {
-                int v = ctl_log_header(g_ctl_fd_buf);
-                if (v < 0 || v > CTL_LOG_VERSION) {
-                    fprintf(stderr, "yah264: --control-fd: line %d: unsupported log version "
-                            "(this build reads %d)\n", g_ctl_fd_line, CTL_LOG_VERSION);
-                    return -1;
-                }
-                if (v > 0) handled = 1;
-            }
-            struct ctl_log_event le;
-            yah264_control_t ev;
-            int r = handled ? 0 : ctl_log_parse(g_ctl_fd_buf, 1, &le, err, sizeof err);
-            if (r > 0) ctl_from_log(&le, &ev);
-            if (r < 0) {
-                fprintf(stderr, "yah264: --control-fd: line %d: %s\n", g_ctl_fd_line, err);
-                return -1;
-            }
-            if (r > 0 || handled) g_ctl_fd_hdr = 1;
-            if (r > 0) {
-                int64_t named = ev.frame;
-                int c = g_api->control(enc, &ev);
-                if (c != YAH264_CTL_OK) {
-                    if (named >= 0)
-                        fprintf(stderr, "yah264: warning: --control-fd: line %d (frame %lld): skipped: %s\n",
-                                g_ctl_fd_line, (long long)named, yah264_control_strerror(c));
-                    else
-                        fprintf(stderr, "yah264: warning: --control-fd: line %d: skipped: %s\n",
-                                g_ctl_fd_line, yah264_control_strerror(c));
-                }
-            }
-            size_t used = (size_t)(nl - g_ctl_fd_buf) + 1;
-            memmove(g_ctl_fd_buf, nl + 1, g_ctl_fd_len - used);
-            g_ctl_fd_len -= used;
+        struct pollfd pf = { g_control_fd, POLLIN, 0 };
+        int pr = poll(&pf, 1, 0);
+        if (pr < 0 && errno == EINTR) continue;
+        if (pr > 0 && (pf.revents & (POLLNVAL | POLLERR))) {
+            fprintf(stderr, "yah264: --control-fd: descriptor %d is no longer readable\n", g_control_fd);
+            return -1;
         }
+        if (pr <= 0 || !(pf.revents & (POLLIN | POLLHUP))) return 0;
+        ssize_t k = read(g_control_fd, g_ctl_fd_buf + g_ctl_fd_len, sizeof g_ctl_fd_buf - 1 - g_ctl_fd_len);
+        if (k < 0 && (errno == EINTR || errno == EAGAIN)) return 0;
+        if (k < 0) {
+            fprintf(stderr, "yah264: --control-fd: cannot read descriptor %d (%s)\n",
+                    g_control_fd, strerror(errno));
+            return -1;
+        }
+        if (k == 0) {                           /* end of input: an unterminated last line counts */
+            g_ctl_fd_eof = 1;
+            if (g_ctl_fd_len) {
+                g_ctl_fd_buf[g_ctl_fd_len] = 0;
+                size_t n = g_ctl_fd_len;
+                g_ctl_fd_len = 0;
+                if (control_fd_line(enc, g_ctl_fd_buf, n) < 0) return -1;
+            }
+            return 0;
+        }
+        g_ctl_fd_len += (size_t)k;
     }
+}
+
+/* the descriptor's flags as the CLI found them, put back at exit (it may be
+ * a shared stdin) */
+static int g_ctl_fd_flags = -1;
+static void control_fd_restore(void)
+{
+    if (g_control_fd >= 0 && g_ctl_fd_flags >= 0) fcntl(g_control_fd, F_SETFL, g_ctl_fd_flags);
+}
+
+/* --control-fd must name an open descriptor that can be read */
+static int control_fd_open(void)
+{
+    if (g_control_fd < 0) return 0;
+    int fl = fcntl(g_control_fd, F_GETFL);
+    if (fl < 0 || (fl & O_ACCMODE) == O_WRONLY) {
+        fprintf(stderr, "yah264: --control-fd %d: %s\n", g_control_fd,
+                fl < 0 ? "not an open descriptor" : "opened for writing only");
+        return -1;
+    }
+    g_ctl_fd_flags = fl;
+    if (fcntl(g_control_fd, F_SETFL, fl | O_NONBLOCK) < 0) {
+        fprintf(stderr, "yah264: --control-fd %d: cannot make it non-blocking (%s)\n",
+                g_control_fd, strerror(errno));
+        return -1;
+    }
+    atexit(control_fd_restore);
     return 0;
 }
 
@@ -902,6 +995,11 @@ static void control_drain(yah264_encoder_t *enc)
     do {
         for (int i = 0; i < 32; i++) yah264_control_init(&done[i], 0);
         n = g_api->controls_applied(enc, done, 32);
+        if (n < 0) {                    /* records were lost; what is left still drains */
+            fprintf(stderr, "yah264: warning: some applied control events were not reported\n");
+            n = 32;
+            continue;
+        }
         for (int i = 0; i < n; i++) {
             char t[160];
             ctl_format(&done[i], t, sizeof t);
@@ -6587,6 +6685,16 @@ static int cli_main(int argc, char **argv)
     /* the encoder would write its records over the stream, or either over
      * the input, in whichever order the run reaches them: open, compare,
      * and only then truncate (see files_clash) */
+    if (g_control_file || g_control_fd >= 0) {
+        const char *why = hw != YAH264_HW_OFF ? "the hardware encoder (--hw)"
+                        : pass > 0 ? "two-pass (--pass)" : NULL;
+        if (why) {
+            fprintf(stderr, "yah264: --control and --control-fd cannot be combined with %s\n", why);
+            return 2;
+        }
+        if (control_fd_open() < 0)
+            return 2;
+    }
     int to_stdout = !strcmp(out_path, "-");
     if (!to_stdout && out_open(&g_of, out_path) < 0) {
         fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);
@@ -6611,7 +6719,11 @@ static int cli_main(int argc, char **argv)
     }
     if (pass == 3)
         stats_path = g_stats_tmp;
-    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
+    /* a --control log is checked by the encoder before the outputs are cut,
+     * so a refused one leaves them as they were */
+    g_trunc_deferred = g_ctl_file_n > 0;
+    const char *tfail = g_trunc_deferred ? NULL
+                      : g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
                       : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
     if (tfail) {
         fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
@@ -7400,14 +7512,7 @@ static int cli_main(int argc, char **argv)
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
-    /* a per-GOP join starts from an assumed buffer level, and one-frame GOPs
- * under a VBV and a declared HRD have no room for it to be wrong: they run
- * one encoder, its threads on the row wavefront */
     int ctl_on = g_control_file || g_control_fd >= 0;
-    if (ctl_on && hw != YAH264_HW_OFF) {
-        fprintf(stderr, "yah264: --control and --control-fd need the software encoder, not --hw\n");
-        return 2;
-    }
     /* an event names an input frame of the whole stream, and the ledger it
      * retargets is one encoder's: one continuous instance */
     if (ctl_on) {
@@ -7416,6 +7521,9 @@ static int cli_main(int argc, char **argv)
             LOGF(LOG_INFO, "yah264: live control runs one continuous encoder, so the %d threads "
                  "run its row wavefront and lookahead instead of parallel GOPs\n", nthreads);
     }
+    /* a per-GOP join starts from an assumed buffer level, and one-frame GOPs
+ * under a VBV and a declared HRD have no room for it to be wrong: they run
+ * one encoder, its threads on the row wavefront */
     int one_enc = vbv_k1 || nal_hrd;
     if (one_enc) {
         tp_mt = 0;
@@ -7531,10 +7639,18 @@ static int cli_main(int argc, char **argv)
         return 1;
     if (control_submit_file(enc) < 0) {
         g_api->encoder_close(enc);
+        out_drop(&g_of); out_drop(&g_rf);
         return 2;
     }
-    if (g_control_fd >= 0)
-        fcntl(g_control_fd, F_SETFL, fcntl(g_control_fd, F_GETFL) | O_NONBLOCK);
+    if (g_trunc_deferred) {
+        const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
+                          : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
+        if (tfail) {
+            fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
+            g_api->encoder_close(enc);
+            return 1;
+        }
+    }
     if (strcmp(g_api->encoder_backend(enc), "yah264"))
         LOGF(LOG_INFO, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
     else
@@ -7653,7 +7769,7 @@ static int cli_main(int argc, char **argv)
         pic.plane[1] = fu + coff; pic.stride[1] = cstride;
         pic.plane[2] = fv + coff; pic.stride[2] = cstride;
 
-        if (control_poll_fd(enc) < 0) {
+        if (control_feed_file(enc) < 0 || control_poll_fd(enc) < 0) {
             rc = 1;
             goto done;
         }

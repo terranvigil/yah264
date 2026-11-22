@@ -34,6 +34,16 @@ struct ctl_slot {
 
 struct ctl_zone { int64_t first, last; double off; };
 
+/* events sorted by (frame, order handed in), popped from the head */
+struct ctl_queue {
+    yah264_control_t *ev;
+    int head, n, cap;
+};
+
+/* bounds: events waiting to land, and applied records waiting to be drained */
+#define CTL_QUEUE_MAX 4096
+#define CTL_DONE_MAX  65536
+
 struct y264_ctl {
     int              ring;      /* power of two, past the deepest pipeline */
     struct ctl_slot *slot;
@@ -41,26 +51,22 @@ struct y264_ctl {
 
     /* API thread */
     int64_t          in, out, oldest;
-    int64_t          seq;
-    yah264_control_t *fq;       /* frame-exact events, sorted by (frame, seq) */
-    int64_t         *fq_seq;
-    int              nfq, cfq;
+    struct ctl_queue fq;        /* frame-exact events */
     struct ctl_zone *zones;
     int              nz, cz;
     int              qp_min, qp_max;        /* in force at the next hand-in */
-    int              q_kbps, q_maxrate, q_bufsize;  /* after every queued RATE */
     double           fps;
+    int              err_ring;  /* a frame outlived its slot: the encode fails */
 
     /* shared with the decide hook, under mx */
     pthread_mutex_t  mx;
     atomic_int       nrq;       /* pending decision events (lock-free peek) */
-    yah264_control_t *rq;       /* sorted by (frame, seq) */
-    int64_t         *rq_seq;
-    int              crq;
-    yah264_control_t *done;     /* applied, not yet drained */
-    int              ndone, cdone;
+    struct ctl_queue rq;        /* RATE and CRF */
+    struct ctl_queue done;      /* applied, not yet drained */
+    int              err_lost;  /* an applied record was dropped */
     int64_t          applied;
-    double           s_kbps, s_maxrate, s_bufsize, s_fill, s_balance;
+    int              a_kbps, a_maxrate, a_bufsize;   /* after every applied RATE */
+    double           s_fill, s_balance;
     int              s_have_fill, s_have_bal;
 };
 
@@ -69,6 +75,8 @@ void ctl_free(struct y264_ctl *c);
 
 /* API thread, once per picture handed in, before it enters the coding flow */
 void ctl_hand_in(yah264_encoder_t *e);
+/* a frame outlived its slot in the ring (an internal limit): fail the encode */
+int ctl_hand_in_failed(const yah264_encoder_t *e);
 /* API thread, once per coded frame returned */
 void ctl_note_emit(yah264_encoder_t *e, int disp);
 /* API thread, on the flush call that returns nothing */

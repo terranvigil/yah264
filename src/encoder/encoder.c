@@ -5580,7 +5580,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->itrk_qp = 0.0; e->itrk_wt = 0.0;
         e->last_anchor_type = -1;
         e->last_ref_qp[0] = e->last_ref_qp[1] = -1.0;
-        for (int t = 0; t < 3; t++) e->slew_ref[t] = -1.0;
+        for (int t = 0; t < 3; t++) { e->slew_ref[t] = -1.0; e->slew_set[t] = 0; }
         e->blur_csum = 0.0; e->blur_cwt = 0.0;
     }
     e->crf_on = (param->rc.method == YAH264_RC_CRF && param->rc.rf > 0);
@@ -16432,8 +16432,10 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
  * eagerly at t1 (bits available immediately) but not under an
  * in-flight burst -- a thread-count-dependent schedule, the exact
  * thing this design forbids. */
-        if (e->rcp_on && off == 0)
+        if (e->rcp_on && off == 0) {
             rcp_flush_all(e);
+            ctl_rc_snapshot(e);         /* the status reads the final buffer */
+        }
         /* every record is written by now, and this is the last call with a
          * return value: a stats file the disk refused (full, or past the
          * file-size limit) fails the encode here instead of leaving a plan
@@ -16466,6 +16468,10 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
         pic->width != e->width || pic->height != e->height)
         return -1;
     ctl_hand_in(e);                     /* before the picture can reach the lookahead */
+    if (ctl_hand_in_failed(e)) {
+        fprintf(stderr, "yah264: live control: more frames in flight than its ring holds\n");
+        return -1;
+    }
     if (e->mcstf) {
         const pixel *pl[3];
         for (int c = 0; c < 3; c++) pl[c] = (const pixel *)pic->plane[c];

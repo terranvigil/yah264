@@ -64,6 +64,7 @@ struct enc {
     unsigned char *buf; long len, cap;
     yah264_frame_stats_t st[NF];
     int have[NF];
+    long bytes[NF];
     yah264_control_t done[64];
     int ndone;
     sample_t *y, *u, *v;
@@ -72,6 +73,14 @@ struct enc {
 
 static void take(struct enc *r, yah264_nal_t *nal, int cnt)
 {
+    int disp[64], nd = 0, slices = 0;
+    for (int k = 0; k < cnt; k++) slices += nal[k].type == YAH264_NAL_SLICE || nal[k].type == YAH264_NAL_SLICE_IDR;
+    if (slices) nd = yah264_encoder_frame_order(r->e, disp, slices < 64 ? slices : 64);
+    for (int k = 0, j = 0; k < cnt && j < nd; k++)
+        if (nal[k].type == YAH264_NAL_SLICE || nal[k].type == YAH264_NAL_SLICE_IDR) {
+            if (disp[j] >= 0 && disp[j] < NF) r->bytes[disp[j]] += (long)nal[k].size;
+            j++;
+        }
     for (int k = 0; k < cnt; k++) {
         if (r->len + (long)nal[k].size > r->cap) {
             r->cap = (r->len + (long)nal[k].size) * 2 + 4096;
@@ -199,7 +208,7 @@ int main(void)
         yah264_control_init(&ev, 99);
         CHECK(yah264_encoder_control(e, &ev) == YAH264_CTL_EUNSUPPORTED);
         yah264_control_init(&ev, 0);
-        CHECK(yah264_encoder_control(e, &ev) == YAH264_CTL_EUNSUPPORTED);
+        CHECK(yah264_encoder_control(e, &ev) == YAH264_CTL_EINVAL);
         int unsup[] = { YAH264_CTL_FPS, YAH264_CTL_PRESET, YAH264_CTL_RESOLUTION };
         for (int i = 0; i < 3; i++) {
             yah264_control_init(&ev, unsup[i]);
@@ -270,6 +279,71 @@ int main(void)
         p.nal_hrd = YAH264_NAL_HRD_CBR; p.rc.vbv_maxrate = 400;
         CHECK(open_enc(&r, &p) == 0);
         CHECK(ev_rate(r.e, 0, 300, 300, 0) == YAH264_CTL_EHRD);
+        close_enc(&r);
+    }
+
+    /* 1b. events handed in out of frame order are judged against the state at
+     * their own frame, and against every later queued event of their kind */
+    {
+        yah264_control_t ev;
+        base_param(&p, YAH264_RC_ABR);                  /* capped VBR 800 / 1200 */
+        p.rc.bitrate = 800; p.rc.vbv_maxrate = 1200; p.rc.vbv_bufsize = 1200; p.level_idc = 40;
+        CHECK(open_enc(&r, &p) == 0);
+        CHECK(ev_rate(r.e, 60, 300, 0, 0) == YAH264_CTL_OK);
+        CHECK(ev_rate(r.e, 30, 0, 600, 0) == YAH264_CTL_EMODE);   /* 30..59 would cap below 800 */
+        CHECK(ev_rate(r.e, 70, 0, 600, 0) == YAH264_CTL_OK);      /* after the step down it fits */
+        CHECK(ev_rate(r.e, 65, 700, 0, 0) == YAH264_CTL_EMODE);   /* would break the 70 event */
+        close_enc(&r);
+
+        base_param(&p, YAH264_RC_ABR);
+        p.rc.bitrate = 600; p.rc.vbv_maxrate = 900; p.rc.vbv_bufsize = 900; p.level_idc = 40;
+        CHECK(open_enc(&r, &p) == 0);
+        CHECK(ev_rate(r.e, 20, 0, 2000, 0) == YAH264_CTL_OK);
+        CHECK(ev_rate(r.e, 10, 1500, 0, 0) == YAH264_CTL_EMODE);  /* 10..19 under the old cap */
+        close_enc(&r);
+
+        base_param(&p, YAH264_RC_ABR);                  /* CBR 3000 */
+        p.rc.bitrate = 3000; p.rc.vbv_maxrate = 3000; p.rc.vbv_bufsize = 3000; p.level_idc = 40;
+        CHECK(open_enc(&r, &p) == 0);
+        CHECK(ev_rate(r.e, 300, 1000, 0, 0) == YAH264_CTL_OK);
+        CHECK(ev_rate(r.e, 100, 0, 3000, 0) == YAH264_CTL_OK);    /* valid at 100, and 300 still is */
+        close_enc(&r);
+
+        base_param(&p, YAH264_RC_ABR);
+        CHECK(open_enc(&r, &p) == 0);
+        yah264_control_init(&ev, YAH264_CTL_QP_LIMITS); ev.frame = 60; ev.qp_min = 40;
+        CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_OK);
+        yah264_control_init(&ev, YAH264_CTL_QP_LIMITS); ev.frame = 30; ev.qp_max = 30;
+        CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_EINVAL);   /* crosses at 60 */
+        yah264_control_init(&ev, YAH264_CTL_QP_LIMITS); ev.frame = 20; ev.qp_min = 25;
+        CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_OK);
+        yah264_control_init(&ev, YAH264_CTL_QP_LIMITS); ev.frame = 10; ev.qp_max = 24;
+        CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_EINVAL);   /* crosses at 20 */
+        /* every accepted pair holds on every frame, so nothing is clamped */
+        for (int i = 0; i < NF; i++) CHECK(push(&r) == 0);
+        flush(&r);
+        for (int i = 20; i < NF; i++) CHECK(r.st[i].qp >= 25);
+        for (int i = 60; i < NF; i++) CHECK(r.st[i].qp >= 40);
+        close_enc(&r);
+    }
+
+    /* 1c. a step down from a target the encode could not reach lands */
+    {
+        base_param(&p, YAH264_RC_ABR);
+        p.rc.bitrate = 30000; p.rc.vbv_maxrate = 0; p.rc.vbv_bufsize = 0; p.level_idc = 51;
+        p.bframes = 3;
+        CHECK(open_enc(&r, &p) == 0);
+        CHECK(ev_rate(r.e, 30, 100, 0, 0) == YAH264_CTL_OK);
+        for (int i = 0; i < NF; i++) CHECK(push(&r) == 0);
+        flush(&r);
+        /* 100 kbit/s at 25 fps is 500 bytes a frame: from a second after the
+         * step it must be near that, far under what 30 Mbit/s spends */
+        long tail = 0;
+        for (int i = 55; i < NF; i++) tail += r.bytes[i];
+        CHECK(tail / (NF - 55) < 1500);
+        long head = 0;
+        for (int i = 5; i < 30; i++) head += r.bytes[i];
+        CHECK(head / 25 > 4 * (tail / (NF - 55)));
         close_enc(&r);
     }
 

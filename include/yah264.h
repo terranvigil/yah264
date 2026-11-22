@@ -1435,6 +1435,7 @@ typedef struct {
 #define YAH264_CTL_ELEVEL       (-6) /* exceeds the declared level */
 #define YAH264_CTL_ECONFLICT    (-7) /* overlaps a zone already set */
 #define YAH264_CTL_ENOMEM       (-8)
+#define YAH264_CTL_EFULL        (-9) /* the control queue is full: resend once events have landed */
 
 /* Zero the event, set its size and kind, land it on the next frame and leave
  * every field unset. */
@@ -1449,8 +1450,10 @@ YAH264_EXPORT int yah264_encoder_control(yah264_encoder_t *enc, yah264_control_t
 /* Drain the events that took effect since the last call, in the order they
  * were applied, each with applied_frame set. After the flush, an event whose
  * frame never arrived comes back with applied_frame -1. Returns the count, or
- * -1 on bad arguments. The caller's out[] entries must have size set (the
- * library writes no byte past it); yah264_control_init does that. */
+ * -1 on bad arguments or when records were lost since the last call (memory,
+ * or more than the library holds undrained). The caller's out[] entries must
+ * have size set (the library writes no byte past it); yah264_control_init
+ * does that. */
 YAH264_EXPORT int yah264_encoder_controls_applied(yah264_encoder_t *enc, yah264_control_t *out,
                                                   int max);
 
@@ -1469,7 +1472,7 @@ typedef struct {
     double  target_kbps;        /* current bitrate target, 0 if none */
     double  vbv_maxrate_kbps;   /* current buffer, 0 if none */
     double  vbv_bufsize_kbit;
-    double  vbv_fill_bits;      /* buffer occupancy after the last decided frame */
+    double  vbv_fill_bits;      /* buffer occupancy after the last frame whose bits the rate control has counted */
     double  budget_bits;        /* what the next frame may spend: the VBV fill, else the ledger surplus, else 0 */
     double  rate_balance_bits;  /* bitrate mode: target bits minus bits spent (positive = under) */
     int64_t controls_pending;   /* queued, not yet applied */

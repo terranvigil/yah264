@@ -41,6 +41,7 @@
 #define ctl_flush_end                   ctl_flush_end_10
 #define ctl_free                        ctl_free_10
 #define ctl_hand_in                     ctl_hand_in_10
+#define ctl_hand_in_failed              ctl_hand_in_failed_10
 #define ctl_new                         ctl_new_10
 #define ctl_note_emit                   ctl_note_emit_10
 #define ctl_rc_land_slow                ctl_rc_land_slow_10

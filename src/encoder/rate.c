@@ -2211,9 +2211,14 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                                     sl = e->rck.rfm_slew;
                             }
                         }
+                        /* after a live retarget the ledger follows at a whole step
+                         * while the content's cost at the new rate is unproven */
+                        if (e->rt_owed_end > 0 && wanted < e->rt_owed_end && sl < e->rck.rfm_slew_fb)
+                            sl = e->rck.rfm_slew_fb;
                         qp_lim = rfm_slew_qp(e, qp_led, e->slew_ref[1], sl);
                     }
                     e->slew_ref[1] = qp_lim;
+                    e->slew_set[1] = 1;
                     qp = qp_lim + fb;
                 }
                 /* the opening I is coded at the ledger's opening prior plus
@@ -2296,6 +2301,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * different domains here. */
                 double qp_lim = e->slew_ref[type] >= 0 ? rfm_slew_qp(e, qp_eq, e->slew_ref[type], e->rck.pf_slew) : qp_eq;
                 e->slew_ref[type] = qp_lim;
+                e->slew_set[type] = 1;
                 qp = qp_lim + fb;
                 /* I and B do not run the equation at all: I takes the
  * decayed P track, B the mean of the last two reference QPs.
@@ -2315,7 +2321,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * every type: a P frame's first equation reads the opening I's bits
  * against one frame of seed and is as unreliable as the seed. */
                     qp = open_qp;
-                    for (int t = 0; t < 3; t++) e->slew_ref[t] = open_qp;
+                    for (int t = 0; t < 3; t++) { e->slew_ref[t] = open_qp; e->slew_set[t] = 1; }
                 }
             }
             if (!anch && (e->abr_cum_actual > 0 || np > 0)) {  /* swing limit after frame 1 */
@@ -3320,6 +3326,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         e->bm_abr.k[t] = c->scale[t]; e->bm_abr.have[t] = c->inited[t];
         e->bm_abr.meas[t] = c->cal[t]; e->bm_abr.qp[t] = c->calqp[t];
         e->slew_ref[t] = c->type_last_qscale[t];
+        e->slew_set[t] = e->slew_ref[t] >= 0;
     }
     /* The public field names predate the internal ones; the mapping is
  * rf_work_sum = rfm_work, rf_owed_bits = rfm_owed, ptrack = itrk,
@@ -3429,8 +3436,8 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
 }
 
 /* a live rate event: retarget in place (docs/live-control.md). Owed and spent
- * scale by r, so the ledger QP moves to the new target and the error stays the
- * same fraction of the rate; the slew and tracking references move with it. */
+ * scale by r, so the ledger QP moves to the new target; the slew and tracking
+ * references move with it, and the carried balance is capped at one second. */
 void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
 {
     double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
@@ -3444,7 +3451,7 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         e->abr_cum_target *= r;
         e->abr_cum_actual *= r;
         for (int t = 0; t < 3; t++)
-            if (e->slew_ref[t] >= 0) e->slew_ref[t] += dq;
+            if (e->slew_set[t]) e->slew_ref[t] += dq;
         e->itrk_qp += dq * e->itrk_wt;
         for (int k = 0; k < 2; k++)
             if (e->last_ref_qp[k] >= 0) e->last_ref_qp[k] += dq;
@@ -3455,7 +3462,18 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         int q = e->qp + (int)lround(dq);
         e->qp = qp_bound(e, q < 0 ? 0 : q > 51 ? 51 : q);
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+        /* the carried balance is at most one second of the new target; frames
+         * already decided count at their predicted size against the new one */
+        double inflight = 0.0;
+        for (int i = 0; i < e->rcp_n; i++) {
+            const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
+            inflight += (p->filled ? p->bits : p->pred) - nb;
+        }
+        double cap = (double)kbps * 1000.0, bal = e->abr_cum_target - e->abr_cum_actual - inflight;
+        if (bal > cap) e->abr_cum_actual += bal - cap;
+        if (bal < -cap) e->abr_cum_actual += bal + cap;
         e->abr_target_bpf = nb;
+        e->rt_owed_end = e->rfm_owed + e->rck.rfm_fb_t * nb * fps;
         e->param.rc.bitrate = kbps;
     }
     if (maxrate > 0 && e->vbv_on) {

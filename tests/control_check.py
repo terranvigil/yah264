@@ -164,6 +164,132 @@ def main():
         else:
             print("  ok   a malformed --control-fd line stops the encode with its line number")
 
+        # out-of-order live events are judged at their own frame, a refused
+        # one is skipped, and the record still replays
+        oo, ool, oofs = os.path.join(d, "oo.264"), os.path.join(d, "oo.ctl"), os.path.join(d, "oo.json")
+        cap = ["--input-y4m", src, "--threads", "1", "--no-progress", "--level", "4",
+               "--bitrate", "800", "--vbv-maxrate", "1200", "--vbv-bufsize", "1200"]
+        rd, wr = os.pipe()
+        p = subprocess.Popen([enc] + cap + ["--control-fd", str(rd), "--control-out", ool,
+                                            "--frame-stats", oofs, "-o", oo],
+                             pass_fds=(rd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rd)
+        os.write(wr, b"60 rate bitrate=300\n30 rate maxrate=600\n70 rate maxrate=600\n"
+                     b"80 qp min=30\n40 qp max=28\n")
+        os.close(wr)
+        out, err = p.communicate()
+        err = err.decode()
+        if p.returncode != 0 or err.count("skipped") != 2:
+            print("FAIL out-of-order events: status %d, %r" % (p.returncode, err.strip()[-300:]))
+            fails += 1
+        else:
+            r = run(enc, cap + ["--control", ool, "-o", os.path.join(d, "oo2.264"),
+                                "--frame-stats", os.path.join(d, "oo2.json")])
+            if r.returncode != 0 or open(os.path.join(d, "oo2.264"), "rb").read() != open(oo, "rb").read():
+                print("FAIL the out-of-order run's record did not replay: %r" % r.stderr.decode()[-300:])
+                fails += 1
+            else:
+                print("  ok   out-of-order events judged at their own frame; the record replays")
+
+        # descriptors that can't be read, a file that isn't one, a NUL byte
+        r = run(enc, base + ["--control-fd", "97", "-o", os.path.join(d, "x.264")])
+        rdw, wrw = os.pipe()
+        r2 = subprocess.run([enc] + base + ["--control-fd", str(wrw), "-o", os.path.join(d, "x.264")],
+                            pass_fds=(wrw,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rdw); os.close(wrw)
+        r3 = run(enc, base + ["--control", d, "-o", os.path.join(d, "x.264")])
+        nulf = os.path.join(d, "nul.ctl")
+        with open(nulf, "wb") as f:
+            f.write(b"10 key\x00 junk\n")
+        r4 = run(enc, base + ["--control", nulf, "-o", os.path.join(d, "x.264")])
+        rdn, wrn = os.pipe()
+        p = subprocess.Popen([enc] + base + ["--control-fd", str(rdn), "-o", os.path.join(d, "x.264")],
+                             pass_fds=(rdn,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rdn)
+        os.write(wrn, b"next key\x00x\n")
+        os.close(wrn)
+        _, e5 = p.communicate()
+        checks = [(r.returncode == 2, "--control-fd on a closed descriptor"),
+                  (r2.returncode == 2, "--control-fd on a write-only descriptor"),
+                  (r3.returncode == 2, "--control on a directory"),
+                  (r4.returncode == 2 and b"NUL" in r4.stderr, "--control with a NUL byte"),
+                  (p.returncode != 0 and b"NUL" in e5, "--control-fd with a NUL byte")]
+        bad = [w for ok, w in checks if not ok]
+        for w in bad:
+            print("FAIL %s was not refused" % w)
+        fails += len(bad)
+        if not bad:
+            print("  ok   unreadable descriptors, a directory and NUL bytes are refused")
+
+        # an unterminated last line counts, and the descriptor's flags are
+        # put back (it may be a shared stdin)
+        rd, wr = os.pipe()
+        keep = os.dup(rd)
+        ul = os.path.join(d, "ul.ctl")
+        p = subprocess.Popen([enc] + base + ["--control-fd", str(rd), "--control-out", ul,
+                                            "-o", os.path.join(d, "ul.264")],
+                             pass_fds=(rd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rd)
+        os.write(wr, b"50 key")
+        os.close(wr)
+        p.communicate()
+        import fcntl
+        nb = fcntl.fcntl(keep, fcntl.F_GETFL) & os.O_NONBLOCK
+        os.close(keep)
+        got = open(ul).read() if os.path.exists(ul) else ""
+        if p.returncode != 0 or "50 key" not in got or nb:
+            print("FAIL unterminated last line or flag restore: status %d, log %r, nonblock %d"
+                  % (p.returncode, got, nb))
+            fails += 1
+        else:
+            print("  ok   an unterminated last line is applied, and the descriptor's flags restored")
+
+        # a refused log leaves an existing output alone
+        keepme = os.path.join(d, "keep.264")
+        with open(keepme, "wb") as f:
+            f.write(b"precious")
+        bf = os.path.join(d, "refuse.ctl")
+        with open(bf, "w") as f:
+            f.write("10 crf value=20\n")
+        r = run(enc, base + ["--control", bf, "-o", keepme])
+        if r.returncode != 2 or open(keepme, "rb").read() != b"precious":
+            print("FAIL a refused --control log cut the existing output")
+            fails += 1
+        else:
+            print("  ok   a refused --control log leaves the existing output as it was")
+
+        # a flood on the descriptor neither stalls the encode nor grows
+        # without bound: a few lines a frame, the rest refused as a full queue
+        import threading
+        rd, wr = os.pipe()
+        t0 = time.time()
+        p = subprocess.Popen([enc] + base + ["--control-fd", str(rd), "-o", os.path.join(d, "fl.264")],
+                             pass_fds=(rd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rd)
+        stop = [False]
+
+        def flood():
+            line = b"100000000 key\n" * 512
+            try:
+                while not stop[0]:
+                    os.write(wr, line)
+            except OSError:
+                pass
+        th = threading.Thread(target=flood, daemon=True)
+        th.start()
+        _, err = p.communicate(timeout=120)
+        stop[0] = True
+        try:
+            os.close(wr)
+        except OSError:
+            pass
+        dt = time.time() - t0
+        if p.returncode != 0 or b"queue is full" not in err or dt > 60:
+            print("FAIL a --control-fd flood: status %d, %.1f s, %r" % (p.returncode, dt, err[-200:]))
+            fails += 1
+        else:
+            print("  ok   a --control-fd flood is bounded (the queue fills and later lines are skipped)")
+
     if fails:
         print("control_check: %d failure(s)" % fails)
         return 1

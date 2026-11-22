@@ -125,9 +125,10 @@ moved field means the library reads the wrong settings.
 
 ## Open questions
 
-- Does the encoder need a reconfiguration path? ffmpeg can change bitrate
-  mid-stream, and `yah264_encoder_open` takes parameters once. See
-  [live-control.md](live-control.md).
+- The wrapper doesn't map ffmpeg's mid-stream changes onto the encoder's
+  live control ([live-control.md](live-control.md)) yet: a forced I frame
+  would become a keyframe event on that frame, and a change of the bitrate,
+  maxrate or buffer size a rate event on the next frame.
 - Which ffmpeg release to pin the fork to, and when to submit upstream.
 - Whether to expose the recon callback (`yah264_encoder_set_recon_cb`) through
   the wrapper, which would let the recon-match gate run in-process.
