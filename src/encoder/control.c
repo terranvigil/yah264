@@ -352,7 +352,7 @@ static int ctl_check(const yah264_encoder_t *e, const struct y264_ctl *c, yah264
         return YAH264_CTL_OK;
     case YAH264_CTL_CRF:
         if (!e->crf_on || e->tp_pass) return YAH264_CTL_EMODE;
-        if (!(v->crf >= 1.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;
+        if (!(v->crf > 0.0 && v->crf <= 51.0)) return YAH264_CTL_EINVAL;   /* what open takes */
         return YAH264_CTL_OK;
     case YAH264_CTL_QP_LIMITS:
         if (!e->abr_on && !e->crf_on && !e->tp_pass) return YAH264_CTL_EMODE;   /* constant QP */

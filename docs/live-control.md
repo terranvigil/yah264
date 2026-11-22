@@ -106,7 +106,6 @@ the new rate outweigh it.
   the second bound, so what is due now can always be queued. An event past a
   bound is refused with `YAH264_CTL_EFULL`; draining
   `yah264_encoder_controls_applied()` frees the third.
-- A CRF below 1 is refused.
 - The hardware encoder (`--hw`) takes no events.
 
 ## From the command line

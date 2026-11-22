@@ -252,7 +252,9 @@ int main(void)
         CHECK(ev_rate(r.e, 0, 0, 300, 0) == YAH264_CTL_EMODE);           /* no buffer at open */
         yah264_control_init(&ev, YAH264_CTL_CRF); ev.crf = 0;
         CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_EINVAL);
-        ev.crf = 0.5;                                    /* under the floor */
+        ev.crf = 0.1;                                    /* anything open takes */
+        CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_OK);
+        ev.crf = 51.5;
         CHECK(yah264_encoder_control(r.e, &ev) == YAH264_CTL_EINVAL);
         close_enc(&r);
 

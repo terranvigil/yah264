@@ -1407,7 +1407,7 @@ typedef struct {
     int     bitrate_kbps;       /* RATE: 0 = unchanged */
     int     vbv_maxrate_kbps;   /* RATE: 0 = unchanged */
     int     vbv_bufsize_kbit;   /* RATE: 0 = unchanged */
-    double  crf;                /* CRF: 1..51 */
+    double  crf;                /* CRF: above 0, up to 51, as open takes it */
     int     qp_min, qp_max;     /* QP_LIMITS: -1 = unchanged */
     int64_t last;               /* ZONE: last frame, inclusive */
     double  qp_offset;          /* ZONE */
