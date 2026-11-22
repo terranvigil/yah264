@@ -596,7 +596,8 @@ typedef struct {
  * period at every IDR. */
         int hrd_segmented;
         int pass;           /* 2-pass: 1 = analysis (write stats), 2 = final (read) */
-        const char *stats;  /* 2-pass stats file path */
+        const char *stats;  /* 2-pass stats file path: required for YAH264_RC_2PASS,
+                             * on every pass; open refuses NULL */
         /* Pass-2 bit budget for THIS encoder instance, in bits. 0 = derive it
  * from bitrate x (frames in the stats file) / fps, which is right only
  * when the instance codes the whole stream. A GOP-parallel caller hands

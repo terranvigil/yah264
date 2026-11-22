@@ -1,17 +1,17 @@
-# yah264: the plan
+# The yah264 plan
 
-yah264 is an H.264/AVC encoder written from scratch in C11. SIMD kernels are
-intrinsics (NEON and SVE on ARM, SSE4.2, AVX2 and AVX-512 on x86-64), picked at
-run time, and the tree has no hand-written assembly. It's licensed
-GPL-2.0-or-later, with a commercial license for products that can't meet the
-GPL. The CLI keeps x264's flag vocabulary, so it drops into existing
-pipelines, and [what-we-dont-do.md](what-we-dont-do.md) lists the options we
-refuse. Input is Y4M or raw YUV, or frames from ffmpeg through the wrapper
-([ffmpeg.md](ffmpeg.md)). Output is an Annex-B elementary stream.
+yah264 is an H.264/AVC encoder written from scratch in C11. Its SIMD kernels
+are intrinsics that it picks at run time: NEON and SVE on ARM, SSE4.2, AVX2 and
+AVX-512 on x86-64. There's no hand-written assembly. The code is licensed
+GPL-2.0-or-later, and products that can't meet the GPL can use a commercial
+license instead. The CLI keeps x264's flag vocabulary so it drops into existing pipelines.
+The [options we don't support](what-we-dont-do.md) are listed on their own
+page. Input is Y4M or raw YUV, or frames from ffmpeg through the
+[wrapper](ffmpeg.md). Output is an Annex-B elementary stream.
 
 The aim is to be the fastest open-source H.264 encoder at equal or better
-quality. It sits beside two sibling encoders, yah265 (HEVC) and yaav1 (AV1),
-which share its pipeline design, its correctness gate and one parity spec.
+quality. Its sibling encoders are yah265 for HEVC and yaav1 for AV1. All three share
+a pipeline design, a correctness gate and the parity spec.
 
 ## The goals and the bar
 
@@ -33,24 +33,24 @@ black openings and stop before the end credits.
 
 A (class, group, goal) combination passes when:
 
-- the median wall-time ratio, ours over x264, is at or under 1.00, and the
-  worst cell at or under 1.15
-- the median VMAF-NEG difference is no worse than -0.5, and no cell is more
+- the median ratio of our wall time to x264's is at or under 1.00 and the
+  worst cell is at or under 1.15
+- the median VMAF-NEG difference is no worse than -0.5 and no cell is more
   than 1.0 VMAF-NEG or 1.0 dB PSNR-Y behind
 - on real titles, BD-rate on VMAF-NEG over a five-rung ladder (CRF 20 to 32)
   is at or under +1.0%, at CRF and at capped VBR, with lookahead depth swept
   and no shot-based encoding
-- on real titles at VBR, every rung lands within 10% of its target bitrate
+- at VBR on real titles, the bitrate of each rung is within 10% of its target
 
-For the content-type group, quality counts and speed is shown without
-gating. Full parity means every combination passes.
+In the content-type group only quality has to pass. Speed is shown there but
+doesn't block. Full parity means every combination passes.
 
-Correctness gates sit under all of this and never relax. Every encode's
-reconstruction must match an independent decoder (ffmpeg by default, openh264
-and the JM on request), every SIMD kernel must match its C reference bit for
-bit, and two runs at `--threads 1` must be byte-identical. With more threads,
-output may differ between runs and thread counts. The checks for that warn and
-never fail.
+Correctness gates sit under all of this and never relax. An encode's
+reconstruction must match an independent decoder: ffmpeg by default, or
+openh264 and the JM on request. Each SIMD kernel must match its C reference
+bit for bit. Two runs at `--threads 1` must be byte-identical. With more
+threads, output may differ between runs and thread counts. The checks for that
+warn and never fail.
 
 ## Where it stands
 
@@ -58,22 +58,22 @@ yah264 is at full parity with x264 on the Apple M5 Max. Every counted
 combination passes at all three goals, from CIF to 4K and across short clips,
 2-minute segments and 10-minute excerpts. The current tables are on the
 [results page](https://terranvigil.github.io/yah264/results.html). We don't
-copy them here, so they can't go stale.
+copy them here because a copy would go stale.
 
 The core is feature-complete for High profile and beyond: CAVLC and CABAC,
 4x4 and 8x8 transforms, B-pyramid with adaptive placement, weighted
 prediction, trellis quantization, psy-RD, mb-tree, variance AQ, the full rate
-control family (CQP, CRF, ABR, VBV, two-pass), custom quant matrices, 8 and 10
-bit, 4:2:0, 4:2:2 and 4:4:4, PAFF interlaced, slices and intra refresh. Around
-it sit per-shot CRF and the orchestrator hooks
-([shot-based.md](shot-based.md), [engine-interface.md](engine-interface.md)),
-a VideoToolbox hardware mode ([hardware-mode.md](hardware-mode.md)), and the
-ffmpeg wrapper.
+control family (CQP, CRF, ABR, VBV, two-pass) and custom quant matrices. It
+also covers 8 and 10 bit, 4:2:0, 4:2:2 and 4:4:4, PAFF interlaced, slices and
+intra refresh. Around the core sit per-shot CRF and the orchestrator hooks, a
+VideoToolbox hardware mode and the ffmpeg wrapper. The
+[shot-based encoding](shot-based.md), [engine interface](engine-interface.md)
+and [hardware mode](hardware-mode.md) docs describe them.
 
 On x86-64 every kernel family has SSE4.2 and AVX2 versions, and AVX-512
 covers the pixel metrics. One thread retires fewer instructions than x264 on
 both AMD and Intel. An SVE tier serves 256-bit ARM parts such as Graviton3.
-[simd.md](simd.md) has the numbers.
+The [SIMD doc](simd.md) has the numbers.
 
 ## What's open
 
@@ -85,13 +85,13 @@ goes into its subsystem doc's "What didn't work" table.
 
 1. Threading at high core counts on x86-64. At default threads on a 32-vCPU
    Intel machine we're 4% behind x264 on wall time at 1080p and ahead at 4K
-   ([threading.md](threading.md), [simd.md](simd.md)).
+   (see [threading](threading.md) and [SIMD](simd.md)).
 2. The goal board on AMD x86-64. Its first run was stopped by spot reclaims.
 
 ### Rate control ([rate-control.md](rate-control.md))
 
 3. Threaded ABR depends on when GOP workers start. The shared rate factor
-   reacts to start timing, which moves output by up to about 9% BD-rate on two
+   reacts to start timing. That moves output by up to about 9% BD-rate on two
    short clips. CRF and one-thread output aren't affected.
 4. Quality-target rate control: hold a perceptual score instead of a CRF.
 5. Better coded-size prediction: a fitted model of frame bits from lookahead
@@ -108,10 +108,10 @@ goes into its subsystem doc's "What didn't work" table.
 ### Coding tools ([motion-and-modes.md](motion-and-modes.md))
 
 8. Intra refresh on near-static scenes costs about 50% more than keyframes,
-   against 5 to 13% on moving content. The likely lever is having mb-tree
+   against 5 to 13% on moving content. The likely fix is having mb-tree
    treat the refresh column as intra.
 9. Lossless coding. `--crf 0` is refused today.
-10. The 8x8 transform in 4:4:4 ([formats.md](formats.md)).
+10. The 8x8 transform in 4:4:4 (see [formats](formats.md)).
 11. Chroma weights in explicit weighted prediction. Chroma is identity today.
 12. Chroma QP by B-pyramid level, to steady quality across frames.
 13. Saliency-weighted AQ: a cheap heuristic (center weighting, motion against
@@ -125,12 +125,12 @@ goes into its subsystem doc's "What didn't work" table.
     lowres sets and the per-frame decision records are where to shrink it.
 16. `--cut-split` and `--shot-crf` on piped input still hold the input up to
     the memory limit. A bounded version would rate shots against a running
-    average, so its output would differ from a file encode.
+    average. Its output would then differ from a file encode.
 
 ### Shots and ladders ([shot-based.md](shot-based.md))
 
 17. A measured per-shot hull with a resolution ladder. It belongs to the
-    orchestrator, outside this repository, and a prototype has run.
+    orchestrator, which lives outside this repository. A prototype has run.
 18. A predicted hull, trained on the measured one. It starts only after 17.
 19. One analysis for a whole ladder: seed the lower rungs from the top one.
 20. Content-adaptive scaler choice per shot, for the ladder's resizes.
@@ -143,7 +143,7 @@ goes into its subsystem doc's "What didn't work" table.
     Left: frame-rate, preset and resolution events, and the ffmpeg wrapper's
     mapping onto it.
 22. Film grain synthesis via the H.264 film grain SEI, with `--mcstf` as the
-    denoiser ([denoise.md](denoise.md)). yah265 already has one to port.
+    denoiser (see [denoise](denoise.md)). yah265 already has one to port.
 23. Segment output (CMAF/fMP4), then MPEG-TS.
 24. A prefilter trained against this encoder. It's the riskiest item here.
 

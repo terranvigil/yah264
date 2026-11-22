@@ -4723,6 +4723,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (param->rc.method != YAH264_RC_CQP && param->rc.method != YAH264_RC_CRF &&
         param->rc.method != YAH264_RC_ABR && param->rc.method != YAH264_RC_2PASS)
         return NULL;
+    /* every pass of a two-pass reads or writes its records there: with no
+     * path, pass 1 would write nothing and pass 2 or 3 would code planless */
+    if (param->rc.method == YAH264_RC_2PASS && !param->rc.stats) {
+        fprintf(stderr, "yah264: two-pass needs rc.stats, the stats file's path\n");
+        return NULL;
+    }
     if (param->me_method != YAH264_ME_AUTO && param->me_method != YAH264_ME_DIA &&
         param->me_method != YAH264_ME_HEX && param->me_method != YAH264_ME_UMH &&
         param->me_method != YAH264_ME_ESA && param->me_method != YAH264_ME_TESA)
@@ -5961,12 +5967,19 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     yah264_encoder_close(e);
                     return NULL;
                 }
-            } else if (errno == ENOENT) {
-                /* a missing file still encodes, but with no plan the rate
-                 * goes nowhere near the target: say so */
-                fprintf(stderr, "yah264: warning: no stats file '%s': pass %d runs without "
+            } else if (errno == ENOENT && e->tp_pass == 3) {
+                /* pass 3 writes the records it codes, so it can start one;
+                 * with no plan the rate goes nowhere near the target: say so */
+                fprintf(stderr, "yah264: warning: no stats file '%s': pass 3 runs without "
                         "a plan, every frame at the base QP; run pass 1 into it first\n",
-                        param->rc.stats, e->tp_pass);
+                        param->rc.stats);
+            } else if (errno == ENOENT) {
+                /* pass 2 writes nothing, so a run with no plan only misses
+                 * its target */
+                fprintf(stderr, "yah264: no stats file '%s': pass 2 plans from the records "
+                        "pass 1 writes; run pass 1 into it first\n", param->rc.stats);
+                yah264_encoder_close(e);
+                return NULL;
             } else {
                 /* one that is there but can't be read is not a missing plan */
                 fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n",

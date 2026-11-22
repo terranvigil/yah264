@@ -2940,6 +2940,28 @@ void tp_build_plan(yah264_encoder_t *e)
 }
 
 
+/* Field coding: the budget correction may move at most TP_FSLEW QP lower
+ * per field than the last scale it applied; raising it is free. This bounds
+ * the correction, not the QP: the plan under it still steps between field
+ * types. A field is half a frame's worth of plan, so near a section's end the
+ * last few fields' modelled bits are a small divisor, and a few kbit left
+ * over turned into a 6-QP drop on one field. On grain that pass 1 coded
+ * near skip, that drop crosses the point where the grain starts to code:
+ * one field cost 350 kbit against a 1.5 Mbit budget (grain10 at 300 kbit/s,
+ * +24% on 120 frames). */
+#define TP_FSLEW 2.0
+static double tp_field_slew(yah264_encoder_t *e, double s, double lo)
+{
+    double up = pow(2.0, TP_FSLEW / 6.0);
+    if (e->tp_slast > 0.0 && s > e->tp_slast * up)
+        s = e->tp_slast * up;
+    /* a scale left by a hold at another bias may sit under this band */
+    if (s < lo)
+        s = lo;
+    e->tp_slast = s;
+    return s;
+}
+
 double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, const double pend_lo[3])
 {
     double q = e->tp_q[idx];
@@ -3069,7 +3091,15 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, c
             double lo = 0.5 / (k > 1.0 ? (k < 4.0 ? k : 4.0) : 1.0);
             if (s < lo) s = lo;
             if (s > 2.0) s = 2.0;
+            if (e->fields)
+                s = tp_field_slew(e, s, lo);
             q /= s;
+        } else if (e->fields && rem_t <= 1 && k > 0) {
+            /* an overspent ledger holds the fields at the band's top: left
+             * at the plan, the fields after grain that cost many times its
+             * model coded finer than the ones that overspent */
+            double lo = 0.5 / (k > 1.0 ? (k < 4.0 ? k : 4.0) : 1.0);
+            q /= tp_field_slew(e, lo, lo);
         }
         double qlo = tp_qp2qscale(1), qhi = tp_qp2qscale(51);
         if (q < qlo) q = qlo;
