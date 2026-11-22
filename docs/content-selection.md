@@ -4,18 +4,18 @@ Many of yah264's settings are content-split. The same constant helps one clip
 and hurts another by several points. Per-content selection means picking those
 settings from what the encoder can see of the source, before it commits. We
 ship it where a cheap feature separates the winners cleanly and nowhere else.
-A general per-clip selector over the content-split constants has been tried
-and doesn't work with frame-level features; the prize is real but sits in a
-small minority of sequences.
+A general per-clip selector over the content-split constants doesn't work with
+frame-level features. The prize is real, although a small minority of
+sequences holds it.
 
-All numbers are BD-rate on VMAF-NEG (negative is better), against the shipped
-default at matched achieved bitrate unless noted.
+All numbers are BD-rate on VMAF-NEG against the shipped default at matched
+achieved bitrate unless noted. Negative is better.
 
 ## What ships
 
-Every shipped selection is a gate on a source feature the encoder already
-computes, decided per frame or per slice, and deterministic at any thread
-count. None is a per-clip classifier.
+Each shipped selection is a gate on a source feature the encoder already
+computes. The gate decides per frame or per slice and is deterministic at any
+thread count. None is a per-clip classifier.
 
 | gate | feature | what it switches | default |
 |---|---|---|---|
@@ -27,10 +27,10 @@ count. None is a per-clip classifier.
 
 ## What the evidence says
 
-**The ceiling is real but concentrated.** Over two content-split arms that hold
-most of the envelope, `Y264_CRF_CPLX=0` (no complexity term in CRF) and
-`Y264_MBTREE_STRENGTH=2.0` (stronger mb-tree than the shipped 1.4), a perfect
-per-sequence choice is worth:
+The ceiling is real but concentrated. Two content-split arms hold most of the
+envelope. `Y264_CRF_CPLX=0` drops the complexity term from CRF, and
+`Y264_MBTREE_STRENGTH=2.0` runs a stronger mb-tree than the shipped 1.4. Over
+those two arms, a perfect per-sequence choice is worth:
 
 | corpus | mean | median |
 |---|--:|--:|
@@ -40,12 +40,12 @@ per-sequence choice is worth:
 On external content the top 10% of sequences hold 62% of the gain, and 127 of
 239 want the default.
 
-**Deviating blindly is a loss.** Applying either arm everywhere reads +0.52%
-(`CRF_CPLX=0`) and +0.55% (`MBTREE_STRENGTH=2.0`) mean, with single sequences
-losing 17-19%. The default beats both.
+Deviating blindly is a loss. Applying `CRF_CPLX=0` everywhere reads +0.52%
+mean, and `MBTREE_STRENGTH=2.0` reads +0.55%. Single sequences lose 17-19%. The
+default beats both.
 
-**Frame-level source features don't predict the winner.** Rank correlation with
-arm preference over the 239 labeled sequences:
+Frame-level source features don't predict the winner. Here is the rank
+correlation with arm preference over the 239 labeled sequences:
 
 | feature | what it is | correlation |
 |---|---|--:|
@@ -54,18 +54,19 @@ arm preference over the 239 labeled sequences:
 | `motion` | mean lowres MV magnitude | -0.146 |
 | `tdiff` | uncompensated lowres temporal difference per pixel | +0.027 |
 
-`tdiff` ordered the eight arm-winning gate clips perfectly, and that was luck at
-n=8. The best rule from `flat`/`tex` (`flat < 1` picks the stronger mb-tree)
-scores -0.29% held out against a -1.43% ceiling. On the 29 sequences it fires
-on it wins 14 and loses 12, so it's a coin flip with a few big winners. On the
-gate corpus it fires on coastguard and ducks and loses overall (+0.24% mean).
+`tdiff` ordered the eight arm-winning gate clips perfectly. At n=8 that was
+luck. The best rule from `flat`/`tex` picks the stronger mb-tree when
+`flat < 1`. Held out, it scores -0.29% against a -1.43% ceiling. On the 29
+sequences it fires on it wins 14 and loses 12. That's a coin flip with a few
+big winners. On the gate corpus it fires on coastguard and ducks and loses
+overall, by +0.24% mean.
 
-**Other content-split constants** that point the same way, each refused as a
-global default because it's narrow:
+Other content-split constants point the same way. We refused each as a global
+default because it's narrow:
 
 | constant | split |
 |---|---|
-| a larger B-frame QP step (2.0) | sita -2.6%, ducks +10.0%, touchdown +6.1% |
+| a larger B-frame QP step of 2.0 | sita -2.6%, ducks +10.0%, touchdown +6.1% |
 | `--aq-strength 0` | sintel -6.9%, bbb +6.8% |
 | `--aq-strength 0.2` / `0.6` | riverbed -0.84 at 0.2, blue_sky -0.63 at 0.6: opposite directions |
 
@@ -76,48 +77,51 @@ global default because it's narrow:
 | per-clip selection from `tdiff`, `flat`, `tex` or `motion` against the two arms above | no predictive signal on 239 external sequences; don't refit these four |
 | a two-way rule (always pick one arm) | the four clips that want the default lose 1-4.5% each; the abstain decision is most of the problem |
 | fitting a threshold on the gate corpus | it's the test set. The one-shot gate check on the BVI-AOM rule is already spent, so no threshold may be tuned against it |
-| a QP-gated escape for the B-step split | coastguard loses at its own high-QP rungs: the split is content, not rate regime |
-| per-class psy-rd (1.0 or 3.0) | within ±0.3 everywhere; the default holds |
+| a QP-gated escape for the B-step split | coastguard loses at its own high-QP rungs. The split follows content, not rate regime |
+| per-class psy-rd at 1.0 or 3.0 | within ±0.3 everywhere; the default holds |
 
 ## Open questions
 
-- **Which signals do predict?** Two candidates are untested. One is signals
-  taken after some encoding has happened, which the lookahead already produces
-  per frame. The other is the per-shot form, decided at each shot instead of
-  per clip (see [shot-based.md](shot-based.md)). A future selector has to be
-  precise about a small population; being broadly right about a large one
-  won't pay.
-- **The runtime shape.** Per clip or per shot, where in the lookahead the
-  decision is taken, and whether it's a tune or applied silently. None of
-  that is decided.
-- **The model form, if one is fitted.** A small decision tree compiled to an
-  integer C table: no runtime dependency, deterministic at any thread count.
-  Per-macroblock neural nets are out on cost (the budget is 100-300 ns per
-  macroblock).
-- **Related fitted screens** with better-posed labels than content selection:
-  the 4x4/8x8 transform choice (an exact oracle reads -1.58%
-  median against the shipped heuristic's -1.30%), and calibrating the bit
-  estimate against real CABAC bits (P_Skip is priced at a flat 1 bit and the
-  intra mode bonus at a flat 4, both lambda-blind).
-- **Re-sweeping stale constants** comes before any fit, since a model fitted on
-  top of a stale constant inherits it. Candidates include the RDOQ seed, the
-  intra admission margins and the 0.7 mb-tree strength scale, which was fitted
-  against a coarser lowres search than the one that ships.
+We don't know which signals do predict. Two candidates are untested. One is
+signals taken after some encoding has happened, which the lookahead already
+produces per frame. The other is the per-shot form, decided at each shot
+instead of per clip, which [shot-based encoding](shot-based.md) covers. A
+future selector has to be precise about a small population. Being broadly
+right about a large one won't pay.
+
+The runtime design isn't decided either: per clip or per shot, where in the
+lookahead the decision is taken, and whether it's a tune or applied silently.
+
+If we fit a model, it would be a small decision tree compiled to an integer C
+table. That has no runtime dependency and is deterministic at any thread
+count. Per-macroblock neural nets are out on cost, since the budget is 100-300
+ns per macroblock.
+
+Two related fitted screens have better-posed labels than content selection.
+One is the 4x4/8x8 transform choice, where an exact oracle reads -1.58% median
+against the shipped heuristic's -1.30%. The other calibrates the bit estimate
+against real CABAC bits. Today P_Skip is priced at a flat 1 bit and the intra
+mode bonus at a flat 4, and neither looks at lambda.
+
+Re-sweeping stale constants comes before any fit, because a model fitted on
+top of a stale constant inherits it. Candidates include the RDOQ seed, the
+intra admission margins and the 0.7 mb-tree strength scale. That scale was
+fitted against a coarser lowres search than the one that ships.
 
 ## Measuring it
 
 - **Training data never comes from the gate corpus.** Fit on an external set
-  (BVI-AOM's 480x272 tier, `/Volumes/seagate/media/train-corpus/bvi-aom/272p`,
-  239 sequences, 64 frames, no cuts) and read the 12 gate clips once, at the
-  end. `scripts/m4_label.py` takes only a `--src-dir` of external sources and
+  and read the 12 gate clips once, at the end. We use BVI-AOM's 480x272 tier
+  in `/Volumes/seagate/media/train-corpus/bvi-aom/272p`: 239 sequences of 64
+  frames with no scene changes. `scripts/m4_label.py` takes only a `--src-dir` of external sources and
   has no path into `tests/corpus`.
 - **Label at matched achieved rate, never matched CRF.** Both arms move the
-  CRF-to-rate mapping, so a matched-CRF comparison measures ladder placement.
+  CRF-to-rate mapping, so a matched-CRF comparison would measure ladder placement.
   The labeler binary-searches each arm onto the default's byte targets at CRF
   24, 30 and 36.
 - **Three classes, not two.** An arm earns the label only when it beats the
   default by more than 0.30%; otherwise the label is `default`.
 - `Y264_PSY_FLAT_LOG=1` and `Y264_ADME_LOG=1` dump the frame features.
-- Any fitted table carries a header naming its training set, labels, features,
-  the ceiling and what it achieved, and a `REFIT IF:` line listing the encoder
+- Any fitted table has a header naming its training set, labels, features,
+  the ceiling and what it achieved. A `REFIT IF:` line lists the encoder
   changes that invalidate it.
