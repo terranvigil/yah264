@@ -1167,6 +1167,7 @@ static void usage(const char *argv0)
 }
 
 static int read_line(FILE *f, char *buf, int cap);
+static void hdr_fail_report(int len, long frame, int cap);
 static void clean_hold(void);
 static void clean_release(void);
 
@@ -1943,8 +1944,8 @@ static void *y4m_reader(void *arg)
         if (!g_raw_input) {
             len = read_line(r->in, line, sizeof(line));
             if (len == -1) break;                       /* EOF */
-            if (len < 0) {                              /* a cut-off header */
-                read_fail_report(RP_SHORT, 0, n);
+            if (len < 0) {                              /* cut off, or no newline */
+                hdr_fail_report(len, n, sizeof line);
                 reader_fail(j); return NULL;
             }
             if (strncmp(line, "FRAME", 5) != 0) {
@@ -2321,7 +2322,8 @@ static int tp_split_vbv(const yah264_param_t *param)
 /* --- files a signal must not leave behind ----------------------------------
  *
  * Scratch files a two-pass makes beside the user's (pass 3's working copy,
- * the per-GOP stats files of a threaded run) are removed on the way out, and
+ * the per-GOP stats files of a threaded run), and an output or recon this run
+ * made before its encode starts, are removed on the way out, and
  * the signals in g_clean_sigs are a way out too. clean_start, before any
  * thread exists, blocks them in every thread and starts one that waits for
  * them: it takes g_clean_lock for writing, unlinks every registered path and
@@ -2357,6 +2359,12 @@ static atomic_int g_clean_dying;
 /* pushed whole, never freed: the waiter may walk it while a set is added */
 static _Atomic(clean_set_t *) g_clean;
 
+/* the output and recon this run made, until its encode starts (out_open,
+ * out_cut): the waiter removes one only while its name still leads to the
+ * file made, so one renamed away and replaced is left alone. Written under
+ * clean_hold, read by the waiter under the write lock */
+static struct { char *path; dev_t dev; ino_t ino; } g_clean_out[2];
+
 static void *clean_waiter(void *arg)
 {
     (void)arg;
@@ -2369,9 +2377,19 @@ static void *clean_waiter(void *arg)
      * unlinks and raises anyway, and that one file may be left */
     for (int i = 0; i < 300 && pthread_rwlock_trywrlock(&g_clean_lock) != 0; i++)
         nanosleep(&(struct timespec){ 0, 10 * 1000 * 1000 }, NULL);
+    /* without the lock the slots are read unguarded: the one writer is the
+     * main thread, which starts no write once dying is set, and a write
+     * already under way blocks only before naming a file or after dropping
+     * it */
     for (clean_set_t *s = atomic_load(&g_clean); s; s = s->next)
         for (int i = 0; i < s->n; i++)
             if (s->path[i]) unlink(s->path[i]);
+    for (int i = 0; i < 2; i++) {
+        struct stat st;
+        if (g_clean_out[i].path && stat(g_clean_out[i].path, &st) == 0
+            && st.st_dev == g_clean_out[i].dev && st.st_ino == g_clean_out[i].ino)
+            unlink(g_clean_out[i].path);
+    }
     signal(sig, SIG_DFL);
     sigset_t one;
     sigemptyset(&one);
@@ -2381,18 +2399,23 @@ static void *clean_waiter(void *arg)
     _exit(128 + sig);       /* not reached: each of these ends the run by default */
 }
 
-/* only a signal still at its default is taken: one the parent left ignored
+/* writes: the run has scratch files to clean up while it writes (a
+ * two-pass's); without them, a write's own signals are left as they were,
+ * since the only scratch is the output, kept once the encode writes it.
+ * only a signal still at its default is taken: one the parent left ignored
  * (nohup, a background job) or blocked stays that way, and one with a
  * handler already (a profiler's SIGPROF, set up before main) keeps it.
  * without the waiter thread, the signals stay as they were and the cleanup
  * is the normal exit's only */
-static void clean_start(void)
+static void clean_start(int writes)
 {
     sigset_t cur;
     sigemptyset(&g_clean_set);
     pthread_sigmask(SIG_BLOCK, NULL, &cur);
     for (size_t i = 0; i < sizeof g_clean_sigs / sizeof *g_clean_sigs; i++) {
         struct sigaction old;
+        if (!writes && (g_clean_sigs[i] == SIGPIPE || g_clean_sigs[i] == SIGXFSZ))
+            continue;
         if (sigaction(g_clean_sigs[i], NULL, &old) == 0 && old.sa_handler == SIG_DFL
             && !(old.sa_flags & SA_SIGINFO) && !sigismember(&cur, g_clean_sigs[i]))
             sigaddset(&g_clean_set, g_clean_sigs[i]);
@@ -2660,7 +2683,21 @@ static int id_same(file_id_t a, file_id_t b)
 /* a file this run writes, opened but not yet truncated */
 typedef struct { int fd, made, trunc; const char *path; } out_file_t;
 
-static int out_open(out_file_t *f, const char *path)
+/* inside the clean_hold around a create: name the file made for the waiter */
+static void out_clean_add(int slot, const char *path, int fd)
+{
+    struct stat st;
+    char *real = realpath(path, NULL);
+    if (real && fstat(fd, &st) == 0) {
+        g_clean_out[slot].path = real;
+        g_clean_out[slot].dev = st.st_dev;
+        g_clean_out[slot].ino = st.st_ino;
+    } else {
+        free(real);
+    }
+}
+
+static int out_open(out_file_t *f, const char *path, int slot)
 {
     f->path = path; f->made = 0; f->trunc = 0;
     /* a descriptor's file (/dev/stdout however spelled) isn't ours to
@@ -2678,7 +2715,14 @@ static int out_open(out_file_t *f, const char *path)
         f->fd = open(path, O_WRONLY);
         return f->fd;
     }
+    /* a create and its naming for the waiter are one step to a signal; the
+     * plain opens below may block (a FIFO), so they stay outside it */
+    clean_hold();
     f->fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    int err = errno;
+    if (f->fd >= 0) out_clean_add(slot, path, f->fd);
+    clean_release();
+    errno = err;
     if (f->fd >= 0) { f->made = 1; return f->fd; }
     if (errno != EEXIST) return -1;
     f->fd = open(path, O_WRONLY);
@@ -2689,7 +2733,12 @@ static int out_open(out_file_t *f, const char *path)
         snprintf(cur, sizeof cur, "%s", path);
         for (int hop = 0; hop < 40 && follow_link(cur, sizeof cur); hop++)
             ;
+        clean_hold();
         f->fd = open(cur, O_WRONLY | O_CREAT | O_EXCL, 0666);
+        err = errno;
+        if (f->fd >= 0) out_clean_add(slot, cur, f->fd);
+        clean_release();
+        errno = err;
         f->made = f->fd >= 0;
         if (f->fd >= 0 || errno != EEXIST)
             return f->fd;
@@ -2703,18 +2752,58 @@ static int out_open(out_file_t *f, const char *path)
 
 /* the run's output and recon, so a later stop can take back files it made */
 static out_file_t g_of = { -1, 0, 0, NULL }, g_rf = { -1, 0, 0, NULL };
+/* set once the encode may write them: before it, a failed run takes back
+ * the files it made and leaves the others untouched */
+static int g_out_begun;
+
+/* the encode starts: cut a file that was there, and keep what follows */
+static int out_cut(void)
+{
+    if (g_out_begun) return 0;
+    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
+                      : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
+    if (tfail) {
+        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
+        return -1;
+    }
+    clean_hold();
+    for (int i = 0; i < 2; i++) {
+        free(g_clean_out[i].path);
+        g_clean_out[i].path = NULL;
+    }
+    clean_release();
+    g_out_begun = 1;
+    return 0;
+}
 
 /* undo an out_open: close, and remove the file only if this run made it
  * and the name (through any symlink) still leads to that very file */
+static void out_unmake(out_file_t *f)
+{
+    struct stat a, b;
+    int open_ok = fstat(f->fd, &a) == 0;
+    char *real = f->made ? realpath(f->path, NULL) : NULL;
+    /* the waiter's slot goes with the file, matched by the open file and not
+     * the name: left set, a signal after the close could take a new file
+     * that reuses the inode */
+    clean_hold();
+    for (int i = 0; f->made && open_ok && i < 2; i++)
+        if (g_clean_out[i].path && g_clean_out[i].dev == a.st_dev
+            && g_clean_out[i].ino == a.st_ino) {
+            free(g_clean_out[i].path);
+            g_clean_out[i].path = NULL;
+        }
+    if (real && open_ok && stat(real, &b) == 0
+        && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
+        unlink(real);
+    clean_release();
+    free(real);
+}
+
 static void out_drop(out_file_t *f)
 {
     if (f->fd < 0) return;
-    struct stat a, b;
-    char *real = f->made ? realpath(f->path, NULL) : NULL;
-    if (real && fstat(f->fd, &a) == 0 && stat(real, &b) == 0
-        && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
-        unlink(real);
-    free(real);
+    out_unmake(f);
     close(f->fd);
     f->fd = -1;
 }
@@ -2724,12 +2813,7 @@ static void out_drop(out_file_t *f)
 static void out_forget(out_file_t *f, FILE *fp)
 {
     if (f->fd < 0) { if (fp) fclose(fp); return; }
-    struct stat a, b;
-    char *real = f->made ? realpath(f->path, NULL) : NULL;
-    if (real && fstat(f->fd, &a) == 0 && stat(real, &b) == 0
-        && a.st_dev == b.st_dev && a.st_ino == b.st_ino)
-        unlink(real);
-    free(real);
+    out_unmake(f);
     if (fp) fclose(fp); else close(f->fd);
     f->fd = -1;
 }
@@ -3480,7 +3564,7 @@ static int scan_frame_header(FILE *in, int n, int hdr_len)
     int len = read_line(in, line, sizeof line);
     if (len == -1) return 0;
     if (len < 0) {
-        fprintf(stderr, "yah264: short read on frame %ld\n", n + g_seek_frames);
+        hdr_fail_report(len, n, sizeof line);
         return -1;
     }
     if (strncmp(line, "FRAME", 5) != 0) {
@@ -4748,6 +4832,21 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         return stats_clash ? 2 : 1;
     }
     g_api->encoder_close(prime);
+    /* every refusal on this path is behind us, and no worker has written */
+    if (out_cut() != 0) {
+        tp_free_paths(gop_stats, n_gops, 1);
+        free(gop_target);
+        pthread_mutex_lock(&job.lock);
+        job.abort_ = 1;
+        pthread_cond_broadcast(&job.cv_space);
+        pthread_mutex_unlock(&job.lock);
+        if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
+        for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
+        for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
+        job_rc_free(&job); free(job.seg); free(job.gop_start);
+        free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_rd); free(job.gop_cons);
+        return 1;
+    }
 
     job.param = &p;
     /* the seek reader is already running and reads these under the lock;
@@ -4958,8 +5057,11 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
 
 /* Read one newline-terminated header line (Y4M stream or frame header) into buf.
  * Returns line length excluding the newline, -1 on EOF/error before any byte,
- * or -2 when the input ends partway through a line: a frame header cut short
- * is a truncated file, not a clean end. */
+ * -2 when the input ends partway through a line (a frame header cut short is
+ * a truncated file, not a clean end), or -3 when cap - 1 bytes pass with no
+ * newline: a malformed line, and reading on would take the rest of the input.
+ * A CRLF line ends at its '\r' in buf, so a last tag like XCOLORRANGE=FULL
+ * still reads, while the length counts it: the length sizes a frame record. */
 static int read_line(FILE *f, char *buf, int cap)
 {
     int n = 0, any = 0;
@@ -4968,20 +5070,36 @@ static int read_line(FILE *f, char *buf, int cap)
         any = 1;
         if (c == '\n') {
             buf[n] = '\0';
+            if (n > 0 && buf[n - 1] == '\r')
+                buf[n - 1] = '\0';
             return n;
         }
-        if (n < cap - 1)
-            buf[n++] = (char)c;
+        if (n == cap - 1) {
+            buf[n] = '\0';
+            return -3;
+        }
+        buf[n++] = (char)c;
     }
     buf[n] = '\0';
     return any ? -2 : -1;
+}
+
+/* the message for a frame header read_line failed on (-2 or -3) */
+static void hdr_fail_report(int len, long frame, int cap)
+{
+    if (len == -3)
+        fprintf(stderr, "yah264: frame %ld's header has no newline in its first %d bytes: "
+                "the input is malformed\n", frame + g_seek_frames, cap - 1);
+    else
+        fprintf(stderr, "yah264: short read on frame %ld\n", frame + g_seek_frames);
 }
 
 /* --- the serial path's reader ---------------------------------------------
  *
  * One frame of input for the serial path: 1 read, 0 clean EOF, -1 a header
  * that isn't FRAME (left in line for the message), -2 a short read, -3 a
- * sample above the depth's maximum (left in *bad). */
+ * sample above the depth's maximum (left in *bad), -4 a header with no
+ * newline within the line buffer. */
 static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
                              size_t y_size, size_t c_size, char *line, int cap,
                              unsigned *bad)
@@ -4993,6 +5111,7 @@ static int serial_read_frame(FILE *in, uint8_t *y, uint8_t *u, uint8_t *v,
     } else {
         int len = read_line(in, line, cap);
         if (len == -1) return 0;
+        if (len == -3) return -4;
         if (len < 0) return -2;                 /* a cut-off header is a short read */
         if (strncmp(line, "FRAME", 5) != 0) return -1;
     }
@@ -6276,9 +6395,9 @@ static int cli_main(int argc, char **argv)
         fprintf(stderr, "yah264: --zones and --plan both set zones; give one or the other\n");
         return 2;
     }
-    /* before any thread exists, so every one inherits the blocked signals */
-    if (pass > 0)
-        clean_start();
+    /* before any thread exists, so every one inherits the blocked signals.
+     * every run: until the encode starts, the output it made is scratch too */
+    clean_start(pass > 0);
     /* pass 2 and 3 open the stats file more than once (the CLI looks for GOP
      * markers before the encoder reads it), and a FIFO or a device has
      * nothing left for the second open, which blocks for good */
@@ -6287,6 +6406,23 @@ static int cli_main(int argc, char **argv)
         fprintf(stderr, "yah264: --stats '%s' isn't a regular file, and --pass %d reads "
                 "it more than once\n", stats_path, pass);
         return 1;
+    }
+    /* said here, before the thread choice warns about a file that isn't
+     * there or can't be read; pass 3 may start one that isn't there */
+    if (pass >= 2) {
+        FILE *sf = fopen(stats_path, "r");
+        int err = errno;
+        if (sf)
+            fclose(sf);
+        else if (err != ENOENT) {
+            fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n", stats_path,
+                    strerror(err));
+            return 1;
+        } else if (pass == 2) {
+            fprintf(stderr, "yah264: no stats file '%s': pass 2 plans from the records "
+                    "pass 1 writes; run pass 1 into it first\n", stats_path);
+            return 1;
+        }
     }
     /* /dev/stdin and its kin read the descriptor itself, from where it is,
      * as on macOS: a reopen on Linux would start the file over */
@@ -6302,11 +6438,11 @@ static int cli_main(int argc, char **argv)
      * the input, in whichever order the run reaches them: open, compare,
      * and only then truncate (see files_clash) */
     int to_stdout = !strcmp(out_path, "-");
-    if (!to_stdout && out_open(&g_of, out_path) < 0) {
+    if (!to_stdout && out_open(&g_of, out_path, 0) < 0) {
         fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);
         return 1;
     }
-    if (recon_path && out_open(&g_rf, recon_path) < 0) {
+    if (recon_path && out_open(&g_rf, recon_path, 1) < 0) {
         fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
         out_drop(&g_of);
         return 1;
@@ -6325,13 +6461,6 @@ static int cli_main(int argc, char **argv)
     }
     if (pass == 3)
         stats_path = g_stats_tmp;
-    const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
-                      : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
-    if (tfail) {
-        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
-        out_drop(&g_of); out_drop(&g_rf);
-        return 1;
-    }
     FILE *out = to_stdout ? stdout : fdopen(g_of.fd, "wb");
     FILE *recon = recon_path ? fdopen(g_rf.fd, "wb") : NULL;
     if (!out || (recon_path && !recon)) {
@@ -6369,7 +6498,13 @@ static int cli_main(int argc, char **argv)
                 "disagree with it. Use --input-raw, or drop them.\n");
         return 1;
     }
-    if (read_line(in, line, sizeof(line)) < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
+    int hlen = read_line(in, line, sizeof(line));
+    if (hlen == -3 && !strncmp(line, "YUV4MPEG2", 9)) {
+        fprintf(stderr, "yah264: the Y4M stream header has no newline in its first %d "
+                "bytes: the input is malformed\n", (int)sizeof(line) - 1);
+        return 1;
+    }
+    if (hlen < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
         fprintf(stderr, "yah264: input is not a Y4M stream\n");
         return 1;
     }
@@ -6484,8 +6619,12 @@ static int cli_main(int argc, char **argv)
         size_t fc = (size_t)(g_in_w / g_sub_w) * (g_in_h / g_sub_h) * (size_t)g_in_sample_sz;
         for (long k = 0; k < seek_frames; k++) {
             if (!g_raw_input) {
-                if (read_line(in, line, sizeof(line)) < 0 ||
-                    strncmp(line, "FRAME", 5) != 0) {
+                int len = read_line(in, line, sizeof(line));
+                if (len == -3) {
+                    hdr_fail_report(len, k - seek_frames, sizeof line);
+                    return 1;
+                }
+                if (len < 0 || strncmp(line, "FRAME", 5) != 0) {
                     fprintf(stderr, "yah264: --seek %ld is past the end of the input "
                             "(%ld frame(s))\n", seek_frames, k);
                     return 1;
@@ -7179,6 +7318,10 @@ static int cli_main(int argc, char **argv)
         }
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
+    /* the outputs are cut only once the encode starts (out_cut, here on the
+     * serial path and inside encode_threaded on the per-GOP one): a run
+     * refused before that leaves an existing file as it was, and main
+     * removes one it made */
     if (!recon_path && tp_mt) {
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (rc != Y264_GO_SERIAL) {
@@ -7193,7 +7336,12 @@ static int cli_main(int argc, char **argv)
                 rc = 1;
             }
             if (in != stdin) fclose(in);
-            if (rc == 2 && out != stdout) {         /* the stats recheck stopped it */
+            /* a clean end with nothing to code never reached the cut */
+            if (rc == 0 && out_cut() != 0)
+                rc = 1;
+            /* the stats recheck stopped it, or a refusal came before the
+             * cut: only files this run made go */
+            if ((rc == 2 || !g_out_begun) && out != stdout) {
                 out_forget(&g_of, out);
                 return rc;
             }
@@ -7230,6 +7378,10 @@ static int cli_main(int argc, char **argv)
     apply_forces(enc, 0, INT_MAX, 0, NULL);
     if (g_force_reject)
         return 1;
+    if (out_cut() != 0) {
+        g_api->encoder_close(enc);
+        return 1;
+    }
     if (strcmp(g_api->encoder_backend(enc), "yah264"))
         LOGF(LOG_INFO, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
     else
@@ -7318,6 +7470,11 @@ static int cli_main(int argc, char **argv)
         if (s == -1) {
             fprintf(stderr, "yah264: expected FRAME header at frame %ld, got '%s'\n",
                     frame + g_seek_frames, rd_on ? rd.line : line);
+            rc = 1;
+            goto done;
+        }
+        if (s == -4) {
+            hdr_fail_report(-3, frame, sizeof line);
             rc = 1;
             goto done;
         }
@@ -7456,5 +7613,10 @@ done:
 
 int main(int argc, char **argv)
 {
-    return stats_tmp_finish(cli_main(argc, argv));
+    int rc = cli_main(argc, argv);
+    if (rc != 0 && !g_out_begun) {
+        out_drop(&g_of);
+        out_drop(&g_rf);
+    }
+    return stats_tmp_finish(rc);
 }

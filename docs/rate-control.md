@@ -1,18 +1,18 @@
 # Rate control
 
-Rate control picks the base QP of every frame. Everything finer (per-macroblock
-AQ offsets, mb-tree's propagation offsets, the I/P/B cascade) sits on top of
-that base. yah264 has six modes: CRF, CQP, one-pass ABR, ABR under a VBV (CBR
-and capped VBR), capped CRF and two-pass. Each one has to keep working when
-frames are coded out of order on many threads, so most of this doc is about two
-things: the model each mode uses to pick a QP, and when that model gets to see
-the bits it actually spent.
+Rate control picks the base QP of every frame. Per-macroblock AQ offsets,
+mb-tree's propagation offsets and the I/P/B cascade are all finer adjustments
+on top of that base. yah264 has six modes: CRF, CQP, one-pass ABR, ABR under a
+VBV (CBR and capped VBR), capped CRF and two-pass. Each mode has to keep working
+when frames are coded out of order on many threads. Most of this doc is about
+the model each mode uses to pick a QP and when that model gets to see the bits
+it actually spent.
 
-The code lives in `src/encoder/rate.c` (the models, the VBV, the pipelined
-decide and account) and `src/encoder/encoder.c` (mode setup in
-`yah264_encoder_open`, the frame-type cascade in `frame_qp`, the lookahead).
-Flags are in [options.md](options.md). Every `Y264_*` default quoted here is in
-[knobs.md](knobs.md).
+The models, the VBV and the pipelined decide and account live in
+`src/encoder/rate.c`. Mode setup (`yah264_encoder_open`), the frame-type
+cascade (`frame_qp`) and the lookahead are in `src/encoder/encoder.c`.
+[options.md](options.md) lists the flags, and [knobs.md](knobs.md) has each
+`Y264_*` default quoted here.
 
 ## How it works
 
@@ -20,19 +20,19 @@ Flags are in [options.md](options.md). Every `Y264_*` default quoted here is in
 
 | You are delivering to | Mode | Flags |
 | --- | --- | --- |
-| nothing constrains the rate: masters, archives, quality work | CRF | `--crf N` |
-| streaming VOD, ABR ladder rungs | capped CRF | `--crf N --vbv-maxrate M --vbv-bufsize B` |
-| a file-size target, one pass | ABR | `--bitrate N` |
-| a file-size target, whole clip available | two-pass | `--pass 1`, then `--pass 2 --bitrate N` |
-| average rate under a peak ceiling | capped VBR | `--bitrate N --vbv-maxrate M --vbv-bufsize B`, M > N |
+| nothing that constrains the rate (masters, archives, quality work) | CRF | `--crf N` |
+| streaming VOD or ABR ladder rungs | capped CRF | `--crf N --vbv-maxrate M --vbv-bufsize B` |
+| a file-size target in one pass | ABR | `--bitrate N` |
+| a file-size target with the whole clip available | two-pass | `--pass 1`, then `--pass 2 --bitrate N` |
+| an average rate under a peak ceiling | capped VBR | `--bitrate N --vbv-maxrate M --vbv-bufsize B`, M > N |
 | a fixed-bandwidth link | CBR | `--bitrate N --vbv-maxrate N --vbv-bufsize B` |
-| measurement, debugging | CQP | `--qp N` |
+| measurement or debugging | CQP | `--qp N` |
 
-`--qp`, `--bitrate` and `--crf` each name a mode, and the last one on the
-command line wins. A warning on stderr names the flag that lost. `--pass` sits
-outside that contest: it's a mode plus a stats round trip whose target is
-`--bitrate`, and a `--crf` beside it is dropped with a message. A VBV needs both
-`--vbv-maxrate` and `--vbv-bufsize`.
+Each of `--qp`, `--bitrate` and `--crf` names a mode. When more than one is
+given, the last on the command line wins. A warning on stderr names the flag
+that lost. `--pass` stays outside that contest because it's a mode plus a stats
+round trip whose target is `--bitrate`. A `--crf` beside it is dropped with a
+message. A VBV needs both `--vbv-maxrate` and `--vbv-bufsize`.
 
 The base QP each mode picks then goes through `frame_qp`: I frames take
 base - 3, B frames take base plus a depth cascade, and `--qpmin`/`--qpmax`
@@ -41,9 +41,10 @@ bound the coded QP. Two-pass sets the coded QP directly and skips the cascade.
 ### CQP
 
 Every frame gets the QP you named, through the I/P/B cascade and nothing else.
-CQP turns off both AQ (`aq_strength` is forced to 0 in the library, not just the
-CLI) and mb-tree (`mbtree_skip`), so `--qp 26` really is constant QP. It's an
-instrument, not a delivery mode: integer QP can't land closer than about
+CQP turns off both AQ and mb-tree, so `--qp 26` really is constant QP. The
+library forces `aq_strength` to 0 itself, as well as the CLI, and
+`mbtree_skip` switches mb-tree off. CQP is an instrument for measurement. You
+can't deliver to a rate with it because integer QP can't get closer than about
 +-7% of a rate, and real clips miss by more.
 
 ### CRF
@@ -54,20 +55,22 @@ anchor the same base:
 
     qp = crf + level + 2.9 * log2(fps / 30) + frame_dc
 
-`level` (`Y264_CRF_LEVEL`, 2.3) and the fixed fps slope of 2.9 exist because mb-tree's offsets are negative on average: they lend QP to the
-blocks other frames reference, so a flat base at `crf` overspends. The two
-constants put our bytes at `--crf N` on top of x264's at the same `--crf` on
-22 clips from 24 to 60 fps (median miss 5.2%, worst cell 27.7%). Per-frame
-importance comes from the mb-tree field. The frame-level content term is
-`frame_dc`, the frame DC of the AQ field (see
-[the AQ strength table](#frame-level-aq-strength-by-mode)). B frames inherit their
-anchor's base and add the cascade.
+mb-tree's offsets are negative on average because they lend QP to the blocks
+other frames reference. A flat base at `crf` would overspend. That's why
+`level` (`Y264_CRF_LEVEL`, 2.3) and the fixed fps slope of 2.9 exist. The two
+constants put our bytes at `--crf N` on top of x264's at the same `--crf` on 22
+clips from 24 to 60 fps. The median miss is 5.2% and the worst cell 27.7%.
 
-The base is then rounded: `e->qp = (int)lround(qp)`. That's the integer
-staircase. Fractional `--crf` is parsed and stored, but it only matters where it
-crosses a rounding boundary, so reachable rates come in steps of one QP, roughly
-12-13% apart. CRF can't be solved to an arbitrary bitrate. Search on a grid of
-1.0, since a 0.1 grid oscillates between plateaus.
+Per-frame importance comes from the mb-tree field. `frame_dc` is the
+frame-level content term: the frame DC of the AQ field, whose strength by mode
+is in [the AQ strength table](#frame-level-aq-strength-by-mode). B frames
+inherit their anchor's base and add the cascade.
+
+Rounding the base to an integer (`e->qp = (int)lround(qp)`) turns CRF's rates
+into a staircase. Fractional `--crf` is parsed and stored, although it only
+matters where it crosses a rounding boundary. Reachable rates come in steps of
+one QP, roughly 12-13% apart, and CRF can't be solved to an arbitrary bitrate.
+Search on a grid of 1.0 because a 0.1 grid oscillates between plateaus.
 
 Without mb-tree (`--bframes 0 --rc-lookahead 0`), CRF falls back to a
 complexity equation on the ME-compensated lowres cost, `CRF_BASE_CPLX` and a
@@ -75,20 +78,20 @@ capped downward adjustment.
 
 ### Capped CRF
 
-Capped CRF is CRF with a VBV, and the VBV can only take bits away. Where the cap
-is slack the encode is the CRF encode, bit for bit. Where it's tight,
-`vbv_fill_budget` steers the buffer toward half full.
-Above half full a frame may spend its arrival plus the whole surplus, so content
-the cap doesn't need keeps its CRF quality. Below it a frame spends its arrival
-less half the deficit, never less than half an arrival. The budget reads only the declared buffer and rate,
-and the occupancy advances on actual bits, so a misprediction shows up as lower
-fill on the next decide.
+Capped CRF is CRF with a VBV that can only take bits away. Where the cap is
+slack, the encode is the CRF encode bit for bit. Where it's tight,
+`vbv_fill_budget` steers the buffer toward half full. Above half full a frame
+may spend its arrival plus the whole surplus so that content the cap doesn't
+need keeps its CRF quality. Below half full a frame spends its arrival less
+half the deficit. It never spends less than half an arrival. The budget reads
+only the declared buffer and rate. Because the occupancy advances on actual
+bits, a misprediction shows up as lower fill on the next decide.
 
-This budget is what makes the mode work. Without it nothing under CRF looks at
-bits until the fit test fires at a nearly empty buffer, and a rate factor whose
-natural rate sits above the cap drains the buffer unopposed and then runs pinned
-at empty. `--crf-max` bounds how far the buffer may raise a frame's coded QP,
-and the buffer is then allowed to under-run. That's the trade the flag asks for.
+The mode depends on this budget. Without it nothing under CRF looks at bits
+until the fit test fires at a nearly empty buffer. A rate factor whose natural
+rate is above the cap then drains the buffer unopposed and runs pinned at empty.
+`--crf-max` bounds how far the buffer may raise a frame's coded QP. The buffer
+is then allowed to under-run. That's the trade the flag asks for.
 
 ### One-pass ABR
 
@@ -99,61 +102,91 @@ rate factor. Two terms move the anchor base QP.
   one frame of target to an owed sum. The ratio is the qscale at which the
   frames so far would have spent exactly their target. It's self-normalizing
   and has no gain. It moves at most 0.25 x `--qpstep` per anchor decide.
-- **The feedback.** Bits spent beyond bits owed, over a window of `--ratetol`
-  x 2 seconds of target that widens with the square root of the coded
-  duration, map to a QP offset bounded at +-6. Gains are 16 under and 12 over
-  (10 and 4 under CBR, whose window is a quarter of the buffer).
+- **The feedback.** Bits spent beyond bits owed map to a QP offset bounded at
+  +-6. The window is `--ratetol` x 2 seconds of target and widens with the
+  square root of the coded duration. Gains are 16 under and 12 over. CBR uses
+  gains of 10 and 4 over a window a quarter of the buffer long.
 
-The ledger opens on one frame of prior at a fitted opening QP:
-`24.63 + 2.42 log2(cme/MB) - 4.12 log2(bits/MB)`,
-clamped to 15..45, read off the median lowres inter cost of the frames already
-in the lookahead. It's fitted on fixed-QP encodes of 32 clips across QP 16-44,
-so its rate term is read within each clip, and it sits in the rate factor's
-DC-free domain: each frame codes at it plus its own frame DC. An older fit,
-`8.69 + 2.92 log2(cme/MB) - 1.32 log2(bits/MB)`, read near each clip's own
-operating point, does two jobs beside it. The ledger opens at the lower of the
-two, which keeps static content at a low rate where the opening I and the first
-P frames are what the GOP lives on. And where the older fit falls under 15, the
-lowres cost is too small for either fit: flat 4K animation, and dark or black
-openings. The opening then comes from the intra fit, 8 QP lower. The
-cumulative ledger never forgets its first second, so the opening matters.
+The ledger opens on one frame of prior at a fitted opening QP, clamped to
+15..45: `24.63 + 2.42 log2(cme/MB) - 4.12 log2(bits/MB)`. It reads the median
+lowres inter cost of the frames already in the lookahead. Because we fitted it
+on fixed-QP encodes of 32 clips across QP 16-44, its rate term is read within
+each clip. The opening QP is DC-free like the rate factor: each frame codes at
+it plus its own frame DC.
 
-Unpredictable content, where the window's median lowres inter cost is over 0.9
-of its intra cost and the opening isn't dark (full-swing noise; a dark fade at
-1080p reads near 1 too), opens at the older fit instead, keeps its
-opening I whole and gets no slew window: there every frame costs about what an
-I does. None of the opening rules below apply to it.
+An older fit read near each clip's own operating point,
+`8.69 + 2.92 log2(cme/MB) - 1.32 log2(bits/MB)`, does two jobs beside it.
+First, the ledger opens at the lower of the two. That keeps static content at a
+low rate where the opening I and the first P frames are what the GOP lives on.
+Second, where the older fit falls under 15, the lowres cost is too small for
+either fit. Flat 4K animation does this, and so do dark or black openings. The
+opening then comes from the intra fit, 8 QP lower. The opening matters because
+the cumulative ledger never forgets its first second.
 
-Two more rules cover the first seconds of an encoder that opened cold, not
-from a carried ledger. After a lowres-fit opening on an unshared ledger, the
-opening I counts at half its work when it cost up to 10 frames of target,
-rising to its whole work at 16: a cheap I's bits are spent once and a young
-ledger would read them as the cost of every frame to come, while an I that
-cost many frames' target was opened low and a short encode has to repay it.
-Its bits always count in full in the feedback. And for the first 2 seconds the
-ledger may fall a whole `--qpstep` per anchor decide, except on a dark frame
-(mean luma within 16 of coded black, on the 8-bit scale) while predictions are
-in flight: on a fade from black those are priced at the
-near-black frames' cost, so it falls at the normal slew then. It may rise a
-whole step too after a lowres-fit opening on an unshared ledger. A ledger
-shared by GOP workers keeps every I whole, because those recur once a GOP, and
-rises at 0.35 of a step. After an intra-fit opening a rise is mostly the
-opening I's own cost: it rises at 0.35, or at the normal 0.25 when the opening
-I was set under the fit's level. A dark opening I never codes under QP 15,
-frame DC included, whichever route opened it.
+Unpredictable content opens at the older fit instead. That's a window whose
+median lowres inter cost is over 0.9 of its intra cost and whose opening isn't
+dark. Full-swing noise is one example. A dark fade at 1080p also reads near 1,
+which is why a dark opening doesn't count. Such content keeps its opening I
+whole and gets no slew window because every frame there costs about what an I
+does. None of the opening rules below apply to it.
 
-CBR keeps the older fit as its opening, since its buffer already holds the
-rate and the refit's opening ran short CBR buffers a few points over. After an
-intra-fit opening it keeps the first-two-second slew it always had: a full-step
-fall whether or not frames are in flight, and a rise at 0.35 of a step (0.25
-when the opening I was set under the fit's level). None of the other rules
-above apply to CBR: no floor on the coded opening, no weighted I, and no slew
+Two more rules cover the first seconds of an encoder that opened cold instead
+of from a carried ledger. The first is a weight on the opening I. After a
+lowres-fit opening on an unshared ledger, the opening I counts at half its work
+when it cost up to 10 frames of target, rising to its whole work at 16. A cheap
+I's bits are spent once. A young ledger would read them as the cost of every
+frame to come. An I that cost many frames' target was opened low. A short
+encode has to repay it. Its bits always count in full in the feedback.
+
+The second rule is a faster slew. For the first 2 seconds the ledger may fall a
+whole `--qpstep` per anchor decide. The exception is a dark frame (mean luma
+within 16 of coded black, on the 8-bit scale) while predictions are in flight.
+Because a fade from black prices those predictions at the near-black frames'
+cost, the ledger falls at the normal slew then. After a lowres-fit opening on
+an unshared ledger it may also rise a whole step. A ledger shared by GOP
+workers rises at 0.35 of a step. It keeps every I whole because those recur
+once a GOP. After an intra-fit opening a rise is mostly the opening I's own
+cost. The ledger rises at 0.35 there, or at the normal 0.25 when the opening I
+was set under the fit's level. On any opening route a dark opening I never
+codes under QP 15 with its frame DC included.
+
+With no lookahead (`--rc-lookahead 0`, B frames on) two more rules apply to
+an encoder with its own ledger, outside CBR and two-pass. In the first 2
+seconds after an intra-fit opening that isn't dark, once 4 frames have been
+coded after the opening I, a ledger whose coded frames alone read more than
+12 QP over the slew reference is followed whole instead of at the opening's
+slew (0.35 of a step, or 0.25 when the opening I was set under the fit's
+level): on noise every frame costs what an I does, so the rise isn't the I's.
+And past the first 4 seconds, when the ledger reads more than 4 QP over what
+the last second of frames would read on their own, its history is scaled down
+to sit 4 QP over them. Nothing else tells a ledger with no lookahead that the
+content changed, and after an expensive run (noise before a static scene) it
+would otherwise hold that run's QP for the rest of the encode.
+
+The history set aside is kept, with the ledger's QP before the first cut. The
+restore needs an earlier cut and happens at most once: when the last second
+reads no more than 6 QP under that level and 2 QP over the ledger, the
+expensive content has come back, so the history is restored, that anchor
+follows the ledger whole (the next one, when that decide is a mid-stream I),
+and the rule turns off for the rest of the encode, since content that
+alternates is what the whole history is for. A scene that is only costlier
+than the cheap stretch reads well under that level and leaves the history
+alone. Capped VBR keeps cutting and never restores, since its buffer already
+bounds each burst. Near-black frames, which the ledger doesn't count, don't
+count toward either time.
+
+CBR keeps the older fit as its opening because its buffer already holds the
+rate. The refit's opening also ran short CBR buffers a few points over. After
+an intra-fit opening CBR keeps its first-two-second slew: a full-step fall
+whether or not frames are in flight, and a rise at 0.35 of a step (0.25 when
+the opening I was set under the fit's level). None of the other rules above
+apply to CBR. It gets no floor on the coded opening, no weighted I and no slew
 window after a lowres-fit opening.
 
-Mid-stream I frames take a decayed track of the P base QPs
-(decay 0.9). B frames take the anchor's base plus the cascade, as under CRF.
-Frames whose decide complexity per MB is below 4 (a black opening) stay out of
-the ledger but still count in the feedback.
+Mid-stream I frames take a decayed track of the P base QPs (decay 0.9). B
+frames take the anchor's base plus the cascade, as under CRF. Frames whose
+decide complexity per MB is below 4, such as a black opening, stay out of the
+ledger but still count in the feedback.
 
 With no B frames and no lookahead (`--bframes 0 --rc-lookahead 0`), ABR uses a
 per-frame model: QP from
@@ -163,65 +196,70 @@ else it has no effect, `--no-mbtree` included.
 
 ### CBR and capped VBR
 
-Both are ABR plus a VBV, and the encoder calls it CBR when `--vbv-maxrate` is at
-or below `--bitrate`. On top of the ABR decide:
+Both are ABR plus a VBV. The encoder calls it CBR when `--vbv-maxrate` is at or
+below `--bitrate`. On top of the ABR decide:
 
 - **The fit test** (`vbv_limit_at`): a frame must fit in 0.9 of the occupancy it
   is removed from.
 - **The burst plan** (capped VBR only, `Y264_VBV_PLAN` 1): at each anchor the
-  whole burst (anchor plus buffered B frames) is walked through the buffer law at
-  the model's predictions. The base is the lowest QP at or above the rate
-  factor's that keeps every frame inside the fit test and puts the buffer on a
-  trajectory toward half full over 32 frames. A GOP coded in parallel starts
-  from an assumed half-full buffer, so there the target sits half a buffer
-  below the highest occupancy the segment has reached, at least a quarter
-  full and at most half. Without it, a cheap opening banks
-  a surplus, the hard section drains the buffer inside a second, and the encode
-  runs pinned near empty with a +-4 QP sawtooth.
+  plan walks the whole burst (anchor plus buffered B frames) through the buffer
+  law at the model's predictions. The base is the lowest QP at or above the
+  rate factor's that keeps every frame inside the fit test and puts the buffer
+  on a trajectory toward half full over 32 frames. A GOP coded in parallel
+  starts from an assumed half-full buffer. There the target is half a buffer
+  below the highest occupancy the segment has reached, clamped between a
+  quarter full and half full. Without the plan a cheap opening banks a surplus.
+  The hard section then drains the buffer inside a second. From there the
+  encode runs pinned near empty with a +-4 QP sawtooth.
 - **Serial re-coding** for bursts the model can't price (see
   [under frame threading](#rate-control-under-frame-threading)).
 
 The buffer is charged each picture's slice payload plus its NAL framing. The
-payload alone undercounts by about 60 bits a picture, which drifted to 30 kbit
-of phantom occupancy over a few hundred CBR pictures.
+payload alone undercounts by about 60 bits a picture. Over a few hundred CBR
+pictures that drifted to 30 kbit of phantom occupancy.
 
 `--nal-hrd vbr|cbr` writes the buffer model into the stream: `hrd_parameters`
 in the SPS, a `buffering_period` SEI at every IDR, `pic_timing` on every
 picture. `BitRate` and `CpbSize` are `--vbv-maxrate` and `--vbv-bufsize`
 rounded up to the syntax grid. The first buffering period's initial removal
-delay is the occupancy the encoder started from; every later one is the gap
-between the previous picture's final arrival and this one's removal, at most
-a full buffer, as C.3 requires. `cbr` also pads every access unit up to the
-rate with filler.
+delay is the occupancy the encoder started from. Each later one is the gap
+between the previous picture's final arrival and this one's removal. That gap
+is at most a full buffer, as C.3 requires. `cbr` also pads every access unit up
+to the rate with filler.
 
-The declared buffer is held, not only described. Each picture's slices are
-measured against the room left before its removal time on the declared
-schedule, the SEIs and emulation bytes included, and re-coded at a higher QP
-until they fit or the coded QP reaches 51, where it is coded once more without
-its per-macroblock offsets. An inter picture is then coded once more with
-every macroblock that can be skipped skipped when it is still late on the
-declared schedule, or when the reserve below says it would make a coming key
-late and the picture by itself costs over twice what arrives per picture: a
-picture that is all prediction beats one that stalls the decoder. The rate
-control's own buffer model alone never skips a picture. The room left after a
-picture is a reserve for the next key the encoder can see coming (the keyint
-key or a scene cut the lookahead flagged) at what the last intra picture cost
-at QP 51. When the coming key is a scene cut ahead of the keyint key, that
-cost is scaled up by the two keys' lowres intra costs if the cut's is higher
-(at most 16 times, and not under field coding). The reserve is that cost
-less what arrives before the key. Under field coding it also holds room for
-the second field of an intra first field. The rate control never sees these raises, so after a frame is raised by
-`--qpstep` or more, the next frame of its type starts from that QP; a frame
-with room to spare lowers that start, and a key, a cut or a lookahead window
-without use drops it. A key still late at QP 51, or an inter picture still
-late once skipped, is counted, and the encode ends with one warning naming the
-count. The reserve is an estimate, so a key can still arrive late after a cut
-into content far harder than the lookahead's lowres costs show; the warning
-says so when it happens. Pass 1 of a two-pass encode is not held: its stream
-still carries the HRD SEIs but answers to nothing, so send it to `/dev/null`.
-`--crf-max`, `--qpmax` under 51, forced QPs and `--zones q=` are refused,
-since each holds a QP under what the buffer may need.
-`scripts/hrd_check.py` reads the declaration back and simulates Annex C.
+The encoder holds the declared buffer as well as describing it. Each picture's
+slices are measured, SEIs and emulation bytes included, against the room left
+before the picture's removal time on the declared schedule. They're re-coded
+at a higher QP until they fit or the coded QP reaches 51. At 51 the picture is
+coded once more without its per-macroblock offsets.
+
+An inter picture is then coded once more with every macroblock that can be
+skipped skipped when it's still late on the declared schedule, or when the
+reserve below says it would make a coming key late and the picture by itself
+costs over twice what arrives per picture. A picture that's all prediction
+beats one that stalls the decoder. The rate control's own buffer model alone
+never skips a picture.
+
+The room left after a picture is a reserve for the next key the encoder can see
+coming: the keyint key or a scene cut the lookahead flagged. The reserve is
+what the last intra picture cost at QP 51, less what arrives before that key.
+When the coming key is a scene cut ahead of the keyint key, that cost is scaled
+up by the two keys' lowres intra costs if the cut's is higher (at most 16
+times, and not under field coding). Under field coding the reserve also covers
+the second field of an intra first field. Because the rate control never sees
+these raises, a frame raised by `--qpstep` or more makes the next frame of its
+type start from the raised QP. A frame with room to spare lowers that start. A
+key, a cut or a lookahead window without use drops it.
+
+The encoder counts a key still late at QP 51, or an inter picture still late
+once skipped, and ends with one warning naming the count. The reserve is an
+estimate, so a key can still arrive late after a cut into content far harder
+than the lookahead's lowres costs show. The warning says so when that happens.
+Pass 1 of a two-pass encode is not held. Its stream still has the HRD SEIs but
+answers to nothing. Send it to `/dev/null`. Under `--nal-hrd` the encoder
+refuses `--crf-max`, `--qpmax` under 51, forced QPs and `--zones q=` because
+each holds a QP under what the buffer may need. `scripts/hrd_check.py` reads
+the declaration back and simulates Annex C.
 
 ### Two-pass
 
@@ -243,172 +281,184 @@ whose sections don't hold the records their markers count, or that was cut
 short (a file one encoder wrote, and a threaded pass 1's merged file, end
 in a line that counts its records; the GOP markers count each section's),
 and warns of any pictures it codes past the file's last record. A VBV on one pass and not the
-other is fine: pass 2 splits as pass 1 recorded. A missing stats file isn't
-an error, but pass 2 or 3 warns that it runs without a plan and codes every
-frame at the base QP. One that is there but can't be read is refused.
+other is fine: pass 2 splits as pass 1 recorded. Pass 2 refuses a missing
+stats file. Pass 3 can start one: it warns that it runs without a plan, codes
+every frame at the base QP and writes what it coded. One that is there but
+can't be read is refused.
 
-**With a VBV**, pass 1 codes as capped ABR at the target, its base QP never
-under 26, so frames are recorded at QPs that say what a finer QP costs. Each
-of its GOPs starts its rate control afresh, so like GOPs record at like QPs.
-Pass 2 codes one frame at a time, its frame threads on the row wavefront, and
-holds every frame to the buffer by its measured size, as the single-pass
-modes do: a frame that comes out over the fit test, the GOP's exit corridor
-or the whole buffer is re-coded at the QP the overshoot asks for, and at QP 51
-once more without its per-macroblock offsets. A raise of 3 QP or more that
-lands under half its limit steps back, bisecting toward the last QP that
-failed, at most four more builds, and keeps the lowest that fits. A picture
-still underflows where it reaches QP 51, or, with GOPs coded in parallel,
-within a GOP coded beside one that reached QP 51 and left the buffer below
-its planned level, since that GOP plans on the level it assumed. Those
-pictures are counted over the stream the GOPs make together, and named in
-one warning at the end. Each frame also
-leaves the next frames what they cost at QP 51, priced from their pass-1
-records, and the next GOP's key what it costs at its planned QP. The
-splitter caps each GOP's budget at
-what the cap delivers over it plus half the buffer, hands the rest to the
-other GOPs, and, with the cap at or under the target, also floors it at what
-arrives over it less half the buffer, the shares then one water level between
-floor and cap that sums to the whole. It plans the level each GOP joins at: the buffer walked over the
-GOP budgets, and no less than the next key's cost; with the cap at or under
-the target the last GOP is held, by its measured sizes, to the level the
-walk ends at. A GOP coded right after
-its predecessor continues its buffer at the exact occupancy; any other starts
-at the planned level, and the one before it leaves at least that much, held
-to it only where what its remaining frames give back at QP 51 couldn't make
-it up. Every GOP takes over the spend against its budget of the GOP it
-continues from, whichever worker coded it. Under a VBV the split's unit is at
-least 30 frames: GOPs shorter than that go to each encoder several at a time,
-keyframes still at `--keyint`, since every split point costs a join. When the cap is at or under the target, pass 2
-steers to half the next key's planned size, or half the buffer where that
-is less, and a frame the buffer has room for spends it, up to what its
-budget allows. `--nal-hrd` always runs one encoder, and
-under `--nal-hrd cbr` that encoder ends with the buffer where it began.
+**With a VBV**, pass 1 codes as capped ABR at the target with its base QP never
+under 26. Frames are then recorded at QPs that say what a finer QP costs.
+Because each of pass 1's GOPs starts its rate control afresh, like GOPs record
+at like QPs.
+
+Pass 2 codes one frame at a time and puts its frame threads on the row
+wavefront. Like the single-pass modes, it holds every frame to the buffer by
+its measured size. A frame that comes out over the fit test, the GOP's exit
+corridor or the whole buffer is re-coded at the QP the overshoot asks for. At
+QP 51 it's coded once more without its per-macroblock offsets. A raise of 3 QP
+or more that comes out under half its limit steps back. It bisects toward the
+last QP that failed for at most four more builds and keeps the lowest QP that
+fits.
+
+A picture still underflows where it reaches QP 51. With GOPs coded in parallel
+it can also underflow within a GOP coded beside one that reached QP 51 and left
+the buffer below its planned level, because that GOP plans on the level it
+assumed. Those pictures are counted over the stream the GOPs make together and
+named in one warning at the end. Each frame also leaves the next frames what
+they cost at QP 51, priced from their pass-1 records. It leaves the next GOP's
+key what that key costs at its planned QP.
+
+The splitter caps each GOP's budget at what the cap delivers over the GOP plus
+half the buffer and hands the rest to the other GOPs. With the cap at or under
+the target it also floors each budget at what arrives over the GOP less half
+the buffer. The shares are then one water level between floor and cap that
+sums to the whole. The splitter also plans the level each GOP joins at by
+walking the buffer over the GOP budgets, never below the next key's cost. With
+the cap at or under the target, the last GOP is held by its measured sizes to
+the level the walk ends at.
+
+A GOP coded right after its predecessor continues its buffer at the exact
+occupancy. Any other GOP starts at the planned level. The GOP before it leaves
+at least that much but is held to the level only where what its remaining
+frames give back at QP 51 couldn't make it up. A GOP takes over the spend
+against budget of the GOP it continues from, even when a different worker
+coded that GOP. Under a VBV the split's unit is at least 30 frames because
+every split point costs a join. GOPs shorter than that go to each encoder
+several at a time. Their keyframes stay at `--keyint`.
+
+When the cap is at or under the target, pass 2 steers to half the next key's
+planned size, or half the buffer where that is less. A frame the buffer has
+room for spends it, up to what its budget allows. `--nal-hrd` always runs one
+encoder. Under `--nal-hrd cbr` that encoder ends with the buffer where it
+began.
 
 ### Frame-level AQ strength by mode
 
-Per-MB AQ is `--aq-strength` (0.4 in every rate-controlled mode, 0 at CQP)
-times a per-frame gain. Under CRF and ABR the AQ offset is anchored to an
-absolute energy level instead of the frame mean, so the field has a frame DC.
-`crf_frame_dc` carries that DC onto the anchor's base QP at its own strength,
-`Y264_AQ_DC`, weighted per MB by a rate proxy at 0.25 so a mostly
-flat frame doesn't take a base far below what its blocks cost. B frames with no
-mb-tree field get their frame-level term from a pull toward a fixed level
-instead, with strength 1.3 around a level of 6.0.
+Per-MB AQ is `--aq-strength` times a per-frame gain. The strength is 0.4 in
+every rate-controlled mode and 0 at CQP. Because the AQ offset under CRF and
+ABR is anchored to an absolute energy level instead of the frame mean, the
+field has a frame DC. `crf_frame_dc` adds that DC to the anchor's base QP at its
+own strength, `Y264_AQ_DC`. It weights each MB by a rate proxy at 0.25 so that
+a mostly flat frame doesn't take a base far below what its blocks cost. B
+frames with no mb-tree field get their frame-level term from a pull toward a
+fixed level instead. The pull has strength 1.3 around a level of 6.0.
 
 | Mode | Frame DC strength | Where it goes |
 | --- | --- | --- |
 | CRF, no VBV | 1.3 | anchor base QP |
 | capped CRF | 1.04 | anchor base QP |
-| one-pass ABR, capped VBR (mb-tree on) | 1.04 | coded base QP only; the ledger and opening stay DC-free |
+| one-pass ABR, capped VBR (mb-tree on) | 1.04 | coded base QP only, while the ledger and opening stay DC-free |
 | CBR | none | |
-| two-pass | none; non-reference B frames get the pull directly, at 1.3 | |
+| two-pass | none, but non-reference B frames get the pull directly at 1.3 | |
 | CQP | none, AQ off | |
 
-Under one-pass ABR the DC reads a much lower variance floor of 1/256, so a
-black frame reads as black. Capped VBR keeps the field's floor, as CRF does,
-since its cap already bounds a black frame's overshoot.
+Under one-pass ABR the DC reads a much lower variance floor of 1/256 so that a
+black frame reads as black. Capped VBR keeps the field's floor like CRF because
+its cap already bounds a black frame's overshoot.
 
 ### Rate tracking
 
-ABR's accuracy comes from the ledger plus feedback, and it's held to the shared
-parity bar: every rung of a real-title VBR cell lands within +-10% of target
-over the whole cell. CBR tracks to a median 0.52%, worst -2.5%, on the band at
-six threads. Delivered rate barely moves with thread count, even where the
-bitstream does.
+ABR's accuracy comes from the ledger plus feedback. It's held to the shared
+parity bar: every rung of a real-title VBR cell comes in within +-10% of target
+over the whole cell. On the band at six threads, CBR tracks to a median 0.52%
+and a worst of -2.5%. Delivered rate barely moves with thread count, even where
+the bitstream does.
 
-Across GOP workers (the CLI codes GOPs in parallel, one encoder per GOP), ABR
-keeps one rate problem:
+The CLI runs one encoder per GOP and codes the GOPs in parallel. Across those
+GOP workers ABR keeps one rate problem:
 
 - **Carry** (`Y264_RC_CARRY` 1): a GOP opens from its predecessor's exported
-  state, with the GOPs in between credited at target.
-- **Shared ledger**: concurrent ABR GOPs read and write one
-  rate factor. Chained through the carry alone, the first W GOPs each solved
-  their own rate problem cold and every later one read a ledger W GOPs stale:
-  6 parallel GOPs of a 1080p title at 12.5 Mbit/s capped VBR read VMAF-NEG 87.4
-  against 89.8 with one worker. Not used under two-pass (its budget is already
-  per GOP) or `--gop-threads`.
+  state. The GOPs in between are credited at target.
+- **Shared ledger**: concurrent ABR GOPs read and write one rate factor.
+  Chained through the carry alone, the first W GOPs each solved their own rate
+  problem cold. Every later one read a ledger W GOPs stale. On a 1080p title at
+  12.5 Mbit/s capped VBR, 6 parallel GOPs read VMAF-NEG 87.4 against 89.8 with
+  one worker. The shared ledger isn't used under two-pass, whose budget is
+  already per GOP, or under `--gop-threads`.
 - **Two-pass** splits the stats file at the GOP markers a threaded pass 1
-  writes, and each GOP takes the share of the budget its complexity earns. A
-  serial pass 1 writes no markers, so its pass 2 runs serially too. Under a
-  VBV the GOPs join at levels the splitter plans (see [Two-pass](#two-pass)).
+  writes. Each GOP takes the share of the budget its complexity earns. Because
+  a serial pass 1 writes no markers, its pass 2 runs serially too. Under a VBV
+  the GOPs join at levels the splitter plans (see [Two-pass](#two-pass)).
 - **`--keyint 1` with a VBV** runs one encoder: a one-frame GOP has no frame
   of its own to correct the buffer level its segment assumed.
 
 ### What VBV actually guarantees
 
-**Per segment, from the assumed occupancy, the guarantee is strict.** The first
-GOP starts full (or at `--vbv-init`). Every later GOP assumes only the handoff
-level, half the buffer, which is the CRF fill goal's fixed point; a two-pass
-pass 2 assumes the level its GOP split planned instead (see
-[Two-pass](#two-pass)). That's what
-chunked delivery needs: each segment decodes legally on its own.
+**The guarantee is strict per segment, from the assumed occupancy.** The first
+GOP starts full (or at `--vbv-init`). Each later GOP assumes only the handoff
+level of half the buffer, which is the CRF fill goal's fixed point. A two-pass
+pass 2 instead assumes the level its GOP split planned (see
+[Two-pass](#two-pass)). That's what chunked delivery needs: each segment
+decodes legally on its own.
 
 **Capped ABR joins segments explicitly.** A GOP coded right after its
 predecessor by the same worker (every GOP at `--threads 1`) continues that
-buffer at its exact final occupancy, so a one-worker encode is one buffer end to
-end. With more workers, a GOP followed by another's is held to an exit corridor
-(`yah264_encoder_vbv_handoff`) that narrows over its last frames until the final
-one leaves the buffer at the handoff level. Capped CRF needs no corridor because
-its fill budget already returns to that level.
+buffer at its exact final occupancy. A one-worker encode is therefore one
+buffer end to end. With more workers, a GOP followed by another's is held to an
+exit corridor (`yah264_encoder_vbv_handoff`) that narrows over its last frames
+until the final one leaves the buffer at the handoff level. Capped CRF needs no
+corridor because its fill budget already returns to that level.
 
-**Per stream, concatenated end to end, it's designed to hold and measured to
-hold, not proved.** Each segment exiting at or above the handoff rests on the
-rate loop returning to its fixed point, and the loop runs on a predictor whose
-error tail is unbounded (actual over predicted: p50 about 0.85, p99.9 in the
-hundreds). The serial re-coding below closes most of that gap. A cut the buffer
-can't hold at QP 51 still gets through.
+**For the stream concatenated end to end, the guarantee is designed and
+measured to hold but not proved.** Whether each segment exits at or above the
+handoff depends on the rate loop returning to its fixed point. That loop runs
+on a predictor whose error tail is unbounded: actual over predicted bits has a
+p50 about 0.85 and a p99.9 in the hundreds. The serial re-coding below closes
+most of that gap. A cut the buffer can't hold at QP 51 still gets through.
 
 ### Rate control under frame threading
 
-Frames are coded in a staircase: an anchor and its B frames form a burst, and
-bursts overlap (see [threading.md](threading.md)). A QP decided before the
+Frames are coded in a staircase of overlapping bursts. A burst is an anchor and
+its B frames (see [threading.md](threading.md)). A QP decided before the
 previous frames' bits are known is the whole problem.
 
-**CRF and CQP** need no bits, so they decide serially at arrival from signals
-captured on the API thread (the lowres cost, the source for the frame DC) and
-take full pipeline width.
+**CRF and CQP** need no bits. They decide serially at arrival and take full
+pipeline width. Their inputs (the lowres cost and the source for the frame DC)
+are captured on the API thread.
 
-**ABR, two-pass and anything with a VBV** ride the pipelined decide
-(`rcp_decide`). State splits into a committed ledger, advanced only by actual
-bits in coding order, and a FIFO of decided-but-unaccounted frames, each carrying
-its predicted bits. A decide reads the ledger plus the pending predictions. A
-fill stores a frame's actual bits, and a pop moves them into the ledger once a
-later non-B frame has been decided. Decide and pop order is fixed by
-configuration and input, never by timing.
+**ABR, two-pass and anything with a VBV** use the pipelined decide
+(`rcp_decide`). Their state splits into a committed ledger that advances only on
+actual bits in coding order and a FIFO of decided-but-unaccounted frames with
+their predicted bits. A decide reads the ledger plus those pending predictions.
+When a frame is coded, a fill stores its actual bits. A pop moves them into the
+ledger once a later non-B frame has been decided. Configuration and input fix
+the decide and pop order, never timing.
 
 - **Anchors decide at zero lag by default.** Every driver drains prior actuals
   before a non-B decide. Only B frames decide on their own burst's predictions,
   corrected at the next anchor. Burst-lagged anchors doubled the rate deviation.
-- **`Y264_RCP_LAG` 1** lets an anchor decide one burst ahead of its actuals, so
-  bursts can overlap under ABR the way they do under CRF. It's granted only where
-  the wide staircase can engage (B-pyramid, no VBV, a pool of at least
-  `Y264_MT_POOL_MIN`, 2) and is 0 at `--threads 1`. In-flight frames are
-  predicted from their own complexity, not their type's mean. On the ABR board at
-  twelve threads it bought 7-10% of wall on 720p and 1080p cells, with
-  BD-VMAF-NEG against lag 0 inside the instrument's +-1.7 (sintel -1.9,
-  stockholm +1.4).
-- **Split anchor drain.** The anchor waits for the predecessor
-  anchor's bits (which the decide needs) but leaves that burst's B frames
-  flying. It buys 1.04-1.11x where it engages and costs about +1.3% BD-VMAF-NEG
-  at `--ref 3` on cut-heavy content (sintel, over 48 seconds). 8-9 of 12 clips
-  are byte-identical. It engages only when each GOP worker gets a pool of at
-  least `Y264_MT_POOL_MIN` threads.
-- **Warm-up.** The first 12 decides of each encoder run
-  serial-tight so the models calibrate before any lag. P/B scales are seeded in
-  the lowres-cost domain.
+- **`Y264_RCP_LAG` 1** lets an anchor decide one burst ahead of its actuals.
+  Bursts can then overlap under ABR the way they do under CRF. It's granted
+  only where the wide staircase can engage: B-pyramid, no VBV and a pool of at
+  least `Y264_MT_POOL_MIN` threads. That minimum is 2. The lag is 0 at
+  `--threads 1`. In-flight frames are predicted from their own complexity
+  instead of their type's mean. On the ABR board at twelve threads it bought
+  7-10% of wall on 720p and 1080p cells. BD-VMAF-NEG against lag 0 was inside
+  the instrument's +-1.7. It read -1.9 on sintel and +1.4 on stockholm.
+- **Split anchor drain.** The anchor waits for the predecessor anchor's bits
+  because the decide needs them. It leaves that burst's B frames flying. It buys
+  1.04-1.11x where it engages. On cut-heavy content at `--ref 3` it costs about
+  +1.3% BD-VMAF-NEG (sintel, over 48 seconds). Of 12 clips, 8-9 are
+  byte-identical. It engages only when each GOP worker gets a pool of at least
+  `Y264_MT_POOL_MIN` threads.
+- **Warm-up.** The first 12 decides of each encoder run serial-tight so the
+  models calibrate before any lag. P/B scales are seeded in the lowres-cost
+  domain.
 
-Under a VBV the buffer law is the safety-critical part, and the pipeline adds a
-fallback gate. At each anchor's arrival, `rcp_vbv_gate` drains everything in
-flight, then walks the coming burst through the buffer at 2 times
-the predictions, or a decaying shock multiplier of recent overshoot when that's
-larger. If any prefix underflows, the burst takes the serial schedule, where each
-frame is coded, measured and re-coded at a higher QP if it doesn't fit. Under
-capped CRF on a frame pool a burst that passes is walked again at how far
-bounded frames' first builds recently came out over their predictions (by a
-tenth of the buffer or more), which the accounted shock never sees because the
-re-encode re-prices them. A burst only that walk sends serial answers to the
-fit test alone, as it would have pipelined, and not to the fill budget. These
-also go serial:
+Under a VBV the buffer law is the safety-critical part. The pipeline adds a
+fallback gate for it. At each anchor's arrival, `rcp_vbv_gate` drains
+everything in flight. It then walks the coming burst through the buffer at 2
+times the predictions, or at a decaying shock multiplier of recent overshoot
+when that's larger. If any prefix underflows, the burst takes the serial
+schedule, where each frame is coded, measured and re-coded at a higher QP if it
+doesn't fit.
+
+Under capped CRF on a frame pool, a burst that passes is walked a second time.
+That walk uses how far the first builds of bounded frames recently came out
+over their predictions, by a tenth of the buffer or more. The accounted shock
+never sees that overshoot because the re-encode re-prices those frames. A burst
+sent serial only by the second walk answers to the fit test alone, as it would
+have pipelined, and not to the fill budget. These bursts also go serial:
 
 - IDR bursts and the warm phase, always.
 - A content jump past 4x of the calibrated regime, in either
@@ -418,7 +468,7 @@ also go serial:
   (`Y264_VBV_LOW`).
 - Under capped VBR with a buffer shorter than 8 coded pictures at the
   maxrate, or than two B runs plus their anchors (a run is at most 7 B
-  frames), every burst coded on a frame pool: one anchor a few times its
+  frames), every burst coded on a frame pool. One anchor a few times its
   prediction is the whole buffer there. Under PAFF both counts are fields.
 - Under capped CRF, the next two anchors after an intra frame the buffer
   raised 3+ QP over the rate factor.
@@ -426,26 +476,27 @@ also go serial:
   coded on a frame pool.
 - Every frame of a two-pass pass 2, which still decides as one thread does.
 
-Within a pipelined burst, a B may not decide more than 6 QP below
-the QP regime its model was calibrated at. The VBV model runs on
-`max(lowres inter cost, lowres intra / 4)` in one domain for all types, so a
-shock on one type propagates to the others.
+Within a pipelined burst, a B may not decide more than 6 QP below the QP regime
+its model was calibrated at. The VBV model runs on
+`max(lowres inter cost, lowres intra / 4)` in one domain for all types. A shock
+on one type therefore propagates to the others.
 
-**Determinism.** Two runs at `--threads 1` are byte-identical, and the lag is 0
-there, so the serial schedule is exact. Above one thread the output may vary with
-the thread count. Rate accuracy doesn't.
+**Determinism.** Two runs at `--threads 1` are byte-identical. Because the lag
+is 0 there, the serial schedule is exact. Above one thread the output may vary
+with the thread count. Rate accuracy doesn't.
 
 ### The lookahead's role
 
-The lookahead (40 frames at medium) feeds rate control four ways:
+The lookahead is 40 frames at medium. It feeds rate control in four ways:
 
-- **mb-tree** carries per-frame and per-block importance, which is why the CRF
-  and RF2 bases can be flat.
+- **mb-tree** supplies per-frame and per-block importance. The CRF and RF2
+  bases can be flat because of it.
 - **The decide complexity.** P and B frames use the lowres min(intra, inter)
-  cost captured at arrival, never the reconstruction, which may still be in
-  flight. Under ABR it's floored at 0.2 x the VBV metric, because the raw cost
-  collapses on static or noisy content (a 21x step between adjacent samsung
-  frames, about 10 QP of oscillation). I frames use a full-resolution intra SATD.
+  cost captured at arrival. They never read the reconstruction because it may
+  still be in flight. Under ABR the cost is floored at 0.2 x the VBV metric
+  because the raw cost collapses on static or noisy content. Two adjacent
+  samsung frames showed a 21x step, about 10 QP of oscillation. I frames use a
+  full-resolution intra SATD.
 - **The ABR opening QP**, fitted on the frames already in the window.
 - **The VBV burst gate and plan**, which price buffered B frames from their
   lowres costs before they're coded.
@@ -457,61 +508,63 @@ half is there for a future TPL-style consumer.
 ### Sync-lookahead
 
 `--sync-lookahead N` lets the lookahead thread run ahead of the encode. It grows
-the lookahead ring's capacity to `rc-lookahead + N` while every mb-tree and
-scene-cut walk stays capped at the original window, so it changes no bits. The
+the lookahead ring's capacity to `rc-lookahead + N`. Because every mb-tree and
+scene-cut walk stays capped at the original window, it changes no bits. The
 only visible effect is N more `encode` calls returning nothing before the first
 frame comes out. `yah264_lookahead_delay` reports it.
 
-Auto resolves to `bframes + 1` when the frame-thread pool reaches
-2 threads and 0 otherwise. `--sync-lookahead 0` and
-`--tune zerolatency` turn it off, and the lookahead thread follows it: no lead,
-no thread. The ring's array is `Y264_LA_CAP_MAX` (80) entries. With a lead of 4
-at 18 threads, samsung_720p ran 15.2% faster, sintel_720p 12.3% and foreman_cif
-4.2%. park_joy_720p was the one clip where it didn't pay (+0.8%).
+Auto resolves to `bframes + 1` when the frame-thread pool reaches 2 threads and
+0 otherwise. `--sync-lookahead 0` and `--tune zerolatency` turn it off. The
+lookahead thread exists only when there's a lead. The ring's array holds 80
+entries (`Y264_LA_CAP_MAX`).
+
+With a lead of 4 at 18 threads, samsung_720p ran 15.2% faster, sintel_720p
+12.3% and foreman_cif 4.2%. park_joy_720p was the one clip where the lead
+didn't pay, at +0.8%.
 
 The walks are bounded at `la_depth - 2`, not `- 1`. With no lead, the entry at
-`la_depth - 2` is always the frame pushed in the same call and still untyped, so
-it's never folded in. With a lead it's typed by the time it's read, and a `- 1`
-bound would admit it. Byte-identity caught that at every lead on `--bframes 0`
-and `--bframes 3`.
+`la_depth - 2` is always the frame pushed in the same call. Because it's still
+untyped, it's never folded in. With a lead it's typed by the time it's read.
+A `- 1` bound would then admit it. Byte-identity caught that at every lead on
+`--bframes 0` and `--bframes 3`.
 
 ## What we chose and why
 
 | Choice | Why |
 | --- | --- |
-| Flat CRF base under mb-tree, plus level 2.3 and fps slope 2.9 | mb-tree carries the per-frame allocation; the constants match bytes at equal `--crf` against x264 medium to a median 5.2% on 22 clips |
-| Frame DC 1.3 under uncapped CRF | lowest worst clip on the CRF band, and it recovers long multi-shot titles (a 1080p animated feature: -1.81% at 1.04, -5.60% at 1.4); 1.4 starts to cost the static deep-band clip |
-| Frame DC 1.04 under capped CRF and bitrate targets | at 1.3 the capped-VBR compliance gate with CBR HRD read 68/72; 72/72 at 1.04 |
+| Flat CRF base under mb-tree, plus level 2.3 and fps slope 2.9 | mb-tree handles the per-frame allocation. The constants match bytes at equal `--crf` against x264 medium to a median 5.2% on 22 clips |
+| Frame DC 1.3 under uncapped CRF | lowest worst clip on the CRF band. It recovers long multi-shot titles: a 1080p animated feature reads -1.81% at 1.04 and -5.60% at 1.4. At 1.4 the static deep-band clip starts to pay |
+| Frame DC 1.04 under capped CRF and bitrate targets | the capped-VBR compliance gate with CBR HRD read 68/72 at 1.3 and 72/72 at 1.04 |
 | `--aq-strength` 0.4 | a seven-clip VMAF-NEG sweep put the optimum near 0.3 |
-| RF2 ledger for ABR | the CRF path plus a rate factor; every constant was read on the ABR band and the capped-VBR tracking cells |
-| Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27; the fit reads rms 3.2 QP over QP 16-44 on 32 clips |
+| RF2 ledger for ABR | it's the CRF path plus a rate factor. We read each constant on the ABR band and the capped-VBR tracking cells |
+| Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27. The fit reads rms 3.2 QP over QP 16-44 on 32 clips |
 | Half-full handoff for segments | it's the CRF fill budget's fixed point, so segments compose without extra machinery |
 | Zero-lag anchors | burst-lagged anchors doubled the rate deviation |
-| Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads, BD inside the noise |
-| Two-pass offline plan always on | without it the I frame got the highest QP in its GOP (2.7x a B frame's bytes, against 18x with the plan); with it two-pass beats one-pass ABR on all seven corpus clips (-1.61% to -35.66% BD-VMAF-NEG) |
+| Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads with BD inside the noise |
+| Two-pass offline plan always on | without the plan the I frame got the highest QP in its GOP, at 2.7x a B frame's bytes against 18x with it. With the plan two-pass beats one-pass ABR on all seven corpus clips (-1.61% to -35.66% BD-VMAF-NEG) |
 | Shared ABR ledger across GOP workers | 87.4 against 89.8 VMAF-NEG with six workers on a 1080p title |
 | Buffer charged slice payload plus framing | payload alone drifted 30 kbit over a few hundred CBR pictures |
-| CBR dive rule at 2 QP | 3 was the largest with no underflow on sintel's four CBR rungs at four and six threads; 2 keeps a QP of margin |
-| Sync-lookahead as ring capacity | fencing the window instead would change mb-tree's math; capacity is pure latency |
+| CBR dive rule at 2 QP | 3 was the largest with no underflow on sintel's four CBR rungs at four and six threads. 2 keeps a QP of margin |
+| Sync-lookahead as ring capacity | fencing the window instead would change mb-tree's math. Capacity is pure latency |
 
 ## What didn't work
 
 | Idea | Why not |
 | --- | --- |
 | Burst-lagged anchor decides | twice the rate deviation of zero-lag anchors |
-| Lag with in-flight frames predicted at their type's mean | sintel +14.4% BD: a black opening credited each in-flight frame at the mean |
+| Lag with in-flight frames predicted at their type's mean | sintel +14.4% BD because a black opening credited each in-flight frame at the mean |
 | Lag granted at `--ref 3` without width | 7 of 11 clips lose (akiyo +20.66%) and sintel's rate control fails (+212% over target) |
-| Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals; samsung +3.31% for the least speed |
-| A bit-neutral launch split | analysis consumes the QP from its first statement; at most 1.4% of wall is QP-independent |
+| Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals. samsung +3.31% for the least speed |
+| A bit-neutral launch split | analysis consumes the QP from its first statement. At most 1.4% of wall is QP-independent |
 | Lowres intra energy as ABR decide complexity | park_joy -1.67%, akiyo +13.03%: near-zero inter cost on static content is a correct read |
 | Geometric blend of intra and inter cost | akiyo +22.06% |
 | A content term on the flat CRF base | +0.6 costs sintel 10%, -0.6 costs akiyo 1.6% |
 | Dropping the B cascade under CRF | ducks -8.92%, sintel +7.00%, no net |
-| An exit constraint on capped-CRF segments | never bound on 30 of 36 cells; where it did, it cost a compliance cell and spent 600 kbit/s more |
+| An exit constraint on capped-CRF segments | never bound on 30 of 36 cells. Where it did, it cost a compliance cell and spent 600 kbit/s more |
 | Fill horizon 1 for capped CRF | underflows a cell at four threads |
 | `Y264_ABR_QCOMP` 0.7 | +45% BD |
-| Rate-aware lookahead cost consumed by mb-tree | mean +0.08%, foreman +0.91%, akiyo +1.36%; pricing MV rate cuts propagation where mb-tree wants to boost |
-| Lowres SATD candidates in full-res decisions | +0.28% BD; the lookahead feeds frame-level decisions only |
+| Rate-aware lookahead cost consumed by mb-tree | mean +0.08%, foreman +0.91%, akiyo +1.36%. Pricing MV rate cuts propagation where mb-tree wants to boost |
+| Lowres SATD candidates in full-res decisions | +0.28% BD. The lookahead feeds frame-level decisions only |
 | A lookahead thread with no lead | 1.00-1.02x, and +1.5% to +10.6% wall on the clips the lead wins on |
 | Gating the lead on frame size | clips sharing one wavefront knee read -15.2%, -12.3% and +0.8% |
 
@@ -519,11 +572,11 @@ and `--bframes 3`.
 
 - **In-burst B lag.** B frames still decide on their own burst's predictions.
   Letting an early B's actual bits feed a later B's decide needs the burst's B
-  preps privatized, which is a pipeline change, not a rate-control one.
+  preps privatized. That's a pipeline change, not a rate-control one.
 - **The split drain's cost rests on one clip.** Only sintel both moves under
   the split and is long enough to measure over several GOPs.
 - **No cheap first pass.** Pass 1 is close to half of two-pass wall.
-- **Concatenated VBV compliance isn't proved**, only measured, while the
+- **Concatenated VBV compliance is measured but not proved** while the
   predictor's error tail stays unbounded.
 - **A TPL-style consumer** of the stored distortion and rate record hasn't been
   built.
@@ -531,31 +584,35 @@ and `--bframes 3`.
 ## Measuring it
 
 - **Equal CRF isn't a matched operating point.** The two encoders sit at
-  different places on their RD curves. Match on achieved bitrate:
-  `scripts/crf-solve.py` solves yah264 first (it can only reach whole-QP rungs)
-  and then x264 onto that rate. `make parity-status-crf` drives it.
-- **`make parity-modes`** runs the six-mode matrix against x264 (slow;
-  `MODES="cbr 2pass"` restricts it). Read the signed rate error on both sides.
-  x264's ABR converges over a clip, so its error depends on the window length.
-- **`scripts/cvbr_compliance.sh` drives CRF with a cap**, never a bitrate, so it
-  doesn't exercise ABR's VBV. `scripts/vbv_check.py` checks any stream against
-  the encoder's buffer, `scripts/hrd_check.py` against a declared HRD.
+  different places on their RD curves. Match on achieved bitrate instead.
+  `scripts/crf-solve.py` solves yah264 first because yah264 can only reach
+  whole-QP rungs. It then solves x264 onto that rate. `make parity-status-crf`
+  drives it.
+- **`make parity-modes`** runs the six-mode matrix against x264. It's slow, and
+  `MODES="cbr 2pass"` restricts it. Read the signed rate error on both sides.
+  Because x264's ABR converges over a clip, its error depends on the window
+  length.
+- **`scripts/cvbr_compliance.sh` drives CRF with a cap and never a bitrate.**
+  It doesn't exercise ABR's VBV. `scripts/vbv_check.py` checks any stream
+  against the encoder's buffer. `scripts/hrd_check.py` checks it against a
+  declared HRD.
 - **A rate divided by the wrong duration** reads as a large undershoot. Check the
   frame count before believing one.
 - **A clip that ends on credits reads under target over the whole clip.** A
   title card and credits on black code to almost nothing at any QP a one-pass
-  controller reaches (sintel_720p's closing ten seconds included), and the
+  controller reaches. sintel_720p's closing ten seconds are one such case. The
   reference encoder misses the same way. The parity cells stop before the
-  credits; read a corpus clip the same way.
+  credits. Read a corpus clip the same way.
 - **Check engagement before pricing a threading knob.** An unengaged arm is
-  byte-identical and reads as a 0.00% BD. Engagement depends on threads per GOP worker, so a
-  long clip can be inert at 18 threads and engaged at 36.
+  byte-identical and reads as a 0.00% BD. Because engagement depends on threads
+  per GOP worker, a long clip can be inert at 18 threads and engaged at 36.
 - **Short single-GOP windows aren't quality measurements.** sintel's drain-split
   cost read +11.70% at 144 frames and +1.32% over 1152.
 - **`touchdown_420` can't be used in a BD round.** Three in-band ladders of the
   same pair read +4.27%, +61.01% and +1.31%.
-- **Read the VMAF band before believing a BD cell**, and pass `--no-cache` to
-  bdcompare. It keys on the command string, and a rebuild doesn't invalidate it.
+- **Read the VMAF band before believing a BD cell.** Pass `--no-cache` to
+  bdcompare too, because its cache keys on the command string and a rebuild
+  doesn't invalidate it.
 - **`Y264_LA_BUF` overrides downward too.** Print the resolved lead before
   pricing it.
 - **Lag changes need decode gates**: `scripts/recon_thread_gate.sh` and

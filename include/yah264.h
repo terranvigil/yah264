@@ -590,7 +590,8 @@ typedef struct {
  * period at every IDR. */
         int hrd_segmented;
         int pass;           /* 2-pass: 1 = analysis (write stats), 2 = final (read) */
-        const char *stats;  /* 2-pass stats file path */
+        const char *stats;  /* 2-pass stats file path: required for YAH264_RC_2PASS,
+                             * on every pass; open refuses NULL */
         /* Pass-2 bit budget for THIS encoder instance, in bits. 0 = derive it
  * from bitrate x (frames in the stats file) / fps, which is right only
  * when the instance codes the whole stream. A GOP-parallel caller hands
@@ -1299,6 +1300,10 @@ typedef struct yah264_rc_state {
     int      rf2_kc_cal[3];                    /* calibration (appended 2026-09-04) */
     double   vbv_fill;                         /* VBV occupancy at the export, bits */
     int      vbv_have;                         /* vbv_fill is meaningful (appended 2026-10-03) */
+    double   rf_rec_work, rf_rec_owed;         /* the rate factor over about the last second */
+    double   rf_rec_lost;                      /* history that rate factor set aside */
+    double   rf_rec_qcut;                      /* the ledger QP it was first cut from */
+    int      rf_rec_state;                     /* 0 not cut yet, 1 cut, 2 restored and off */
 } yah264_rc_state_t;
 
 /* The smallest size accepted: the struct up to and including last_anchor_type. */

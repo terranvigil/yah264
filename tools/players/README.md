@@ -3,11 +3,11 @@
 Two self-contained, dark-theme browser players for eyeballing yah264 output.
 They're adapted from the veo project's comparison player.
 
-- `compare.html` is a side-by-side slider comparing **two encodings** of the
-  same source (yah264 vs x264, or shot-based vs regular yah264, etc.). Drag the
+- `compare.html` is a side-by-side slider comparing two encodings of the
+  same source, e.g. yah264 against x264 or shot-based against regular yah264. Drag the
   divider to wipe between A and B. The timeline draws both encodings'
-  per-frame VMAF as two curves, plus an A-minus-B delta curve. Quality-dip
-  markers (warning/critical) sit on the timeline. Click one to jump to that
+  per-frame VMAF as two curves, plus an A-minus-B delta curve. The timeline also
+  shows quality-dip markers at warning and critical levels. Click one to jump to that
   frame. A mode switch toggles the markers between "dips in the worse encoding"
   and "frames with the largest A vs B gap".
 - `inspect.html` shows a single encoding. It maps per-frame VMAF onto a big
@@ -21,9 +21,9 @@ that `make_vmaf.py` writes.
 
 ## Workflow
 
-Encode two clips from the same Y4M source. Matched settings keep the
-comparison honest. These are the x264 baseline settings `bench/bench.py`
-uses:
+Encode two clips from the same Y4M source. Use matched settings so
+the comparison is fair. These are the x264 baseline settings that
+`bench/bench.py` uses:
 
 ```sh
 SRC=src.y4m
@@ -83,6 +83,6 @@ dip marker.
 ```
 
 There's one `encodings` entry per `--enc`. `compare.html` needs two.
-`inspect.html` needs one and uses more if present. The player computes dips
-from the `frames` array, so you can retune thresholds without regenerating the
-JSON.
+`inspect.html` needs one and uses more if present. Because the player computes
+dips from the `frames` array, you can retune thresholds without regenerating
+the JSON.
