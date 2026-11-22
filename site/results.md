@@ -153,7 +153,7 @@ times its CPU time. On the Graviton3 yah264 retires 0.67 and 0.62 times x264's
 instructions. Output is byte-identical to the Mac's and conformance passes on all three
 machines.
 
-At the default thread count yah264 is slower than x264 on the AMD machine. On a
+At the default thread count the AMD machine reads differently. On a
 single 60-frame run, sunflower took 0.76 s against x264's 0.53 s and used more
 CPU time. crowd_run took 1.17 s against 1.14 s. That run is short and includes
 tool start-up.

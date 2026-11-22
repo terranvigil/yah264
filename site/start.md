@@ -269,12 +269,12 @@ have the defaults and the differences from x264.
 | field coding | `--tff` and `--bff` code each frame as two field pictures. I, P and B fields are all coded, and `--slices` works with them. |
 | error resilience | `--constrained-intra` keeps intra prediction in P and B slices off inter-coded neighbors. |
 | open GOP | `--open-gop` makes every keyframe after the first a plain I picture with a recovery point instead of an IDR. The B frames before it keep their references. |
-| partitions | `--partitions` picks which partition sizes the mode decision may try, using x264's names: p8x8, p4x4, b8x8, i8x8, i4x4, none, all. |
+| partitions | `--partitions` picks which block shapes the mode decision may try, using x264's names: p8x8, p4x4, b8x8, i8x8, i4x4, none, all. |
 | weighted prediction | `--weightp 0`, `1` or `2`. Mode 1 is the default. Mode 0 turns it off and lets a stream declare Baseline profile. Mode 2 adds a weighted copy of a reference so each block can choose. |
 | shot-aware | `--cut-split` starts every shot on its own keyframe. `--shot-crf` gives each shot its own quality setting from the same scan. `--scan-out` saves that scan, and `--scan-in` reuses it on a later encode of the same input. |
 | intra refresh | `--intra-refresh` replaces keyframes after the first with a column of intra macroblocks that sweeps the picture once every `--keyint` frames. No single picture arrives as a burst. |
 | hardware | `--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine, with our options mapped onto it. |
-| SIMD | NEON on arm64, plus the dot-product and I8MM extensions where the chip has them. SVE kernels on Linux machines with 256-bit vectors, such as AWS Graviton3. SSE4.2, AVX2 and AVX-512 on x86-64, used where the chip has them. `-Davx512=false` builds without AVX-512. The [architectures page](architectures.html) has the details. |
+| SIMD | NEON on arm64, plus the dot-product and I8MM extensions where the chip has them. SVE kernels on Linux machines with 256-bit vectors, such as AWS Graviton3. SSE4.2, AVX2 and AVX-512 on x86-64, each used where the chip has it. `-Davx512=false` builds without AVX-512. The [architectures page](architectures.html) has the details. |
 
 Some things are left out on purpose. Each has a reason written down:
 

@@ -94,7 +94,7 @@ open x86 item. The results page has the details.
 **AVX-512** is built into each x86-64 build by default and runs only on chips
 that report it. `-Davx512=false` leaves it out. It doubles the register width
 again over AVX2. Some chips also lower the clock while it's in use, so a kernel
-can do less work and still take longer. The AVX-512 kernels cover pixel
+can do less work and still take longer. The AVX-512 kernels so far cover pixel
 comparison. On one binary they take about 2% to 4% less CPU time than AVX2 on
 both an AMD EPYC and an Intel Xeon, at one thread and with all cores busy. Motion compensation and the transforms still run on AVX2.
 

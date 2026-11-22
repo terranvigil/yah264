@@ -60,7 +60,7 @@ smaller.
 is that no clip may fall more than 1 dB behind x264.
 
 `perseverance_1080p` can dip just past it and print `PSNR-FLOOR FAIL`. Our file
-there is about 6% smaller at equal VMAF. Most of that gap is bits we didn't
+there is about 6% smaller at equal VMAF. Most of the PSNR gap is bits we didn't
 spend.
 
 ## Reading size and quality together

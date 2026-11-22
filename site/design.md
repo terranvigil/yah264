@@ -14,7 +14,7 @@ An encoder keeps a decoded copy of each frame, called the reconstruction, to
 predict later frames from. The test writes that copy out with `--dump-recon`
 and decodes the output file with ffmpeg's H.264 decoder. The two must match bit
 for bit on every frame of every test clip, across a range of quality settings.
-They only have to match each other, since neither matches the source video.
+Neither matches the source video. They only have to match each other.
 
 `make conformance` runs it locally. CI runs it on every push that touches code.
 
@@ -106,7 +106,7 @@ cover. The two counts aren't one ratio.
 Across shots, the base quantizer under CRF is flat per frame type and moves with
 the frame mean of the per-macroblock offsets. That mean holds the
 macroblock-tree boost and the adaptive quantization's energy term. We apply the
-energy term's frame mean on the anchor frame's base QP. It's scaled by 1.3
+energy term's frame mean on the anchor frame's base QP. That mean is scaled by 1.3
 under uncapped CRF and 1.04 under a VBV cap or a bitrate target. Because B
 frames predict from an earlier and a later picture, they inherit the shift
 through the offsets under the anchor. A busy shot then codes a little cheaper

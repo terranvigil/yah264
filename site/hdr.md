@@ -71,7 +71,7 @@ ffmpeg -i master.y4m \
 The mastering display and light level SEI go in-band ahead of every IDR and,
 under `--open-gop` or `--intra-refresh`, ahead of each recovery point as well.
 A player that starts or seeks at any keyframe finds them. MP4 and
-MPEG-TS files from the wrapper have them in the same places.
+MPEG-TS files from the wrapper carry them the same way.
 
 ## What a player reads
 
