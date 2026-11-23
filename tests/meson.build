@@ -125,6 +125,14 @@ if rc_python.found()
     timeout : 300)
 endif
 
+# --frame-stats against the stream: one line per frame whose bytes cover all
+# of its slices and, under --tff/--bff, both of its fields
+if rc_python.found()
+  test('frame_stats', rc_python,
+    args : [files('frame_stats_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif
+
 # The CLI on damaged or awkward input files: a truncated Y4M, a missing
 # or empty stats file, a FIFO given as one.
 if rc_python.found()

@@ -382,6 +382,7 @@ static const char *g_segment_out;         /* --segment-out PATTERN (printf %d = 
  * parallel GOPs, which is the price of the feature and not a bug to fix. */
 static int g_open_gop;
 static const char *g_frame_stats;         /* --frame-stats FILE (JSON lines) */
+static int g_field_coded;                 /* --tff/--bff took: two coded pictures per frame */
 
 /* --- verbosity ------------------------------------------------------------
  * One dial, four steps, and every informational line on stderr goes through
@@ -1191,25 +1192,99 @@ static void control_echo_tail(FILE *out, int64_t d)
     g_ctl_echo_n = w;
 }
 
+static int is_slice_nal(const yah264_nal_t *n)
+{
+    return n->type == YAH264_NAL_SLICE || n->type == YAH264_NAL_SLICE_IDR;
+}
+
+/* the slice data after a slice NAL's header, past the start code */
+static const uint8_t *slice_data(const yah264_nal_t *n, size_t *left)
+{
+    size_t i = 0;
+    while (i < n->size && n->payload[i] == 0) i++;
+    if (i + 2 >= n->size) { *left = 0; return NULL; }
+    *left = n->size - (i + 2);
+    return n->payload + i + 2;
+}
+
+/* first_mb_in_slice is the slice header's first ue(v), and 0 codes as a lone
+ * 1 bit, so a slice opens a picture exactly when that bit is set */
+static int slice_opens_picture(const yah264_nal_t *n)
+{
+    size_t left;
+    const uint8_t *b = slice_data(n, &left);
+    return b && (b[0] & 0x80);
+}
+
+/* the picture's slice type as I, P or B, from the ue(v) that follows a zero
+ * first_mb_in_slice. Two bytes hold it: the type is at most 9, seven bits,
+ * and the first byte is nonzero, so no emulation byte can sit inside it. */
+static char picture_slice_type(const yah264_nal_t *n)
+{
+    size_t left;
+    const uint8_t *b = slice_data(n, &left);
+    if (!b || left < 2) return '?';
+    unsigned v = ((unsigned)b[0] << 8 | b[1]) << 1 & 0xffff;   /* drop first_mb's bit */
+    int z = 0;
+    while (z < 4 && !(v & 0x8000)) { z++; v <<= 1; }
+    if (z == 4) return '?';
+    unsigned t = (1u << z) - 1 + ((v & 0x7fff) >> (15 - z));
+    return "PBI??"[t % 5];
+}
+
+/* one line per frame, in coding order. The library hands out one record and
+ * one display index per frame, but a sliced picture is several NALs and a
+ * field-coded frame two pictures, so the NALs are grouped by picture start
+ * (two per frame under field coding) and bytes summed over the group: the
+ * lines then total the stream's slice payload. type, idr, ref and qp are
+ * the first field's, since that is the record the library keeps; "fields"
+ * carries each field's own type and bytes, where an I frame's second field
+ * shows as the P field it is. */
 static void frame_stats_emit(FILE *out, yah264_encoder_t *e, const yah264_nal_t *nal, int cnt,
                              yah264_frame_stats_t *st_by, int nst, int base, int gop, int k)
 {
     yah264_frame_stats_t st[128];
     int m = g_api->frame_stats(e, st, 128);
     for (int i = 0; i < m; i++) if (st[i].disp >= 0 && st[i].disp < nst) st_by[st[i].disp] = st[i];
-    int packets = 0;
-    for (int i = 0; i < cnt; i++) packets += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
-    int disp[128]; int got = g_api->frame_order(e, disp, packets < 128 ? packets : 128);
-    int pi = 0;
-    for (int i = 0; i < cnt && pi < got; i++) {
-        if (!(nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR)) continue;
-        int d = disp[pi++];
-        const yah264_frame_stats_t *r = d >= 0 && d < nst ? &st_by[d] : NULL;
-        fprintf(out, "{\"frame\": %d, \"gop\": %d, \"type\": \"%c\", \"idr\": %d, \"ref\": %d, \"qp\": %d, \"bytes\": %d, \"k\": %d",
-                base + d, gop, r ? "IPB"[r->type] : '?', r ? r->is_idr : (nal[i].type == YAH264_NAL_SLICE_IDR),
-                r ? r->is_ref : -1, r ? r->qp : -1, (int)nal[i].size, k);
-        if (g_ctl_echo_n) control_echo_tail(out, base + d);
-        fputs("}\n", out);
+    int ppf = g_field_coded ? 2 : 1;
+    int pics = 0;
+    for (int i = 0; i < cnt; i++) pics += is_slice_nal(&nal[i]) && slice_opens_picture(&nal[i]);
+    int frames = (pics + ppf - 1) / ppf;
+    int disp[128]; int got = g_api->frame_order(e, disp, frames < 128 ? frames : 128);
+    int fi = -1, pic = -1;
+    long bytes = 0, fbytes[2] = { 0, 0 };
+    char ftype[2] = { '?', '?' };
+    int idr_nal = 0;
+    for (int i = 0; i <= cnt; i++) {
+        int opens = i < cnt && is_slice_nal(&nal[i]) && slice_opens_picture(&nal[i]);
+        if ((i == cnt || (opens && (pic + 1) % ppf == 0)) && fi >= 0) {
+            int d = disp[fi];
+            const yah264_frame_stats_t *r = d >= 0 && d < nst ? &st_by[d] : NULL;
+            fprintf(out, "{\"frame\": %d, \"gop\": %d, \"type\": \"%c\", \"idr\": %d, \"ref\": %d, \"qp\": %d, \"bytes\": %ld, \"k\": %d",
+                    base + d, gop, r ? "IPB"[r->type] : '?', r ? r->is_idr : idr_nal,
+                    r ? r->is_ref : -1, r ? r->qp : -1, bytes, k);
+            if (ppf == 2)
+                fprintf(out, ", \"fields\": [{\"type\": \"%c\", \"bytes\": %ld}, {\"type\": \"%c\", \"bytes\": %ld}]",
+                        ftype[0], fbytes[0], ftype[1], fbytes[1]);
+            if (g_ctl_echo_n) control_echo_tail(out, base + d);
+            fputs("}\n", out);
+            fi = -1;
+        }
+        if (i == cnt) break;
+        if (!is_slice_nal(&nal[i])) continue;
+        if (opens) {
+            pic++;
+            if (pic % ppf == 0) {
+                if (pic / ppf >= got) break;
+                fi = pic / ppf;
+                bytes = 0; fbytes[0] = fbytes[1] = 0; ftype[0] = ftype[1] = '?';
+                idr_nal = nal[i].type == YAH264_NAL_SLICE_IDR;
+            }
+            ftype[pic % ppf] = picture_slice_type(&nal[i]);
+        }
+        if (fi < 0) continue;       /* a slice with no picture start in this call */
+        bytes += (long)nal[i].size;
+        fbytes[pic % ppf] += (long)nal[i].size;
     }
 }
 static int g_vs_set, g_y4m_full_range = -1;
@@ -1675,6 +1750,7 @@ static void usage(const char *argv0)
         "                          refused where the encode runs one encoder (--nal-hrd,\n"
         "                          --keyint 1 with a VBV)\n"
         "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k,\n"
+        "                          \"fields\" (each field's type and bytes) under --tff/--bff,\n"
         "                          and \"control\" on a frame where a live control event took effect\n"
         "  --control FILE          live control events, one per line: \"<frame> <kind> [name=value ...]\",\n"
         "                          kinds rate (bitrate= maxrate= bufsize=), crf (value=), qp (min= max=),\n"
@@ -7609,6 +7685,7 @@ static int cli_main(int argc, char **argv)
             param.interlaced = 0;
         }
     }
+    g_field_coded = param.interlaced != 0;
     if (fake_interlaced && !param.interlaced && (param.height % 4)) {
         fprintf(stderr, "y264: --fake-interlaced needs a height that is a "
                 "multiple of 4 (got %d), for the same reason --tff does\n",
