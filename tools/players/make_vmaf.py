@@ -9,9 +9,11 @@ It takes a reference plus one or two encodings, decodes each to raw frames,
 runs the standalone `vmaf` CLI per frame, remuxes/transcodes the videos to MP4
 so a browser can play them, and writes a JSON file the players read.
 
-It scores VMAF v1 only: the built-in "vmaf_v1" model if this libvmaf has it,
-or the model file YAH264_VMAF_MODEL=/path/to/model.json points at. Without
-either it stops rather than scoring an older model.
+It scores VMAF v1 only, with the repo's scorer (scripts/bdcompare.py): the
+libvmaf at VMAF_V1_BIN, the v1.0.16 model from VMAF_V1_MODELS picked by the
+source's size and frame rate, both sides at 10-bit, and a picture smaller
+than 1920x1080 scaled up to fit it. YAH264_VMAF_MODEL=/path/to/model.json
+names a model file instead.
 
 Inputs may be:
   - reference: .y4m, .mp4, .mov, or a raw .264 Annex-B stream
@@ -35,8 +37,12 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "scripts"))
+import bdcompare                                                # noqa: E402
+
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
-VMAF = os.environ.get("VMAF", "vmaf")
+VMAF = bdcompare.V1_BIN
 
 
 def run(cmd, **kw):
@@ -45,7 +51,7 @@ def run(cmd, **kw):
 
 def need(tool):
     if shutil.which(tool) is None and not os.path.exists(tool):
-        sys.exit(f"make_vmaf: '{tool}' not found on PATH (set FFMPEG/VMAF env to override)")
+        sys.exit(f"make_vmaf: '{tool}' not found (set FFMPEG or VMAF_V1_BIN to override)")
 
 
 def probe_fps(path):
@@ -89,50 +95,37 @@ def to_mp4(src, dst):
         sys.exit(f"make_vmaf: failed to build MP4 from {src}\n{p.stderr.decode()}")
 
 
-_model_args = None
-
-
-def vmaf_model_args():
-    """The VMAF v1 model arguments, or an exit when no v1 model is available."""
-    global _model_args
-    if _model_args is not None:
-        return _model_args
-    args = []
+def v1_model_path(ref_y4m):
+    """The v1 model file: YAH264_VMAF_MODEL when set, else the one the repo's
+    scorer picks for this source's size and frame rate."""
     env_path = os.environ.get("YAH264_VMAF_MODEL")
-    if env_path and os.path.exists(env_path):
-        args += ["--model", f"path={env_path}:name=vmaf_v1"]
-    else:
-        with tempfile.TemporaryDirectory() as d:
-            ref = os.path.join(d, "r.y4m")
-            run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i",
-                 "testsrc=size=64x64:rate=1", "-frames:v", "1", "-pix_fmt",
-                 "yuv420p", ref])
-            p = run([VMAF, "-r", ref, "-d", ref, "--model", "version=vmaf_v1",
-                     "-o", os.path.join(d, "o.json"), "--json"])
-            if p.returncode == 0 and b"no such built-in model" not in p.stderr:
-                args += ["--model", "version=vmaf_v1:name=vmaf_v1"]
-    if not args:
-        sys.exit("make_vmaf: this libvmaf has no built-in v1 model; set "
-                 "YAH264_VMAF_MODEL to a v1 model file")
-    _model_args = args
-    return args
+    if env_path:
+        if not os.path.exists(env_path):
+            sys.exit(f"make_vmaf: YAH264_VMAF_MODEL names {env_path}, which doesn't exist")
+        return env_path
+    model = bdcompare.v1_model(ref_y4m)
+    if not os.path.exists(model):
+        sys.exit(f"make_vmaf: no v1 model at {model} (set VMAF_V1_MODELS or YAH264_VMAF_MODEL)")
+    return model
 
 
-def vmaf_per_frame(ref_y4m, dist_y4m, fps):
-    """Run vmaf and return (list of {frame,time,vmaf}, model_name used)."""
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        outp = f.name
-    try:
-        p = run([VMAF, "-r", ref_y4m, "-d", dist_y4m, *vmaf_model_args(),
-                 "--feature", "psnr", "-o", outp, "--json"])
-        if p.returncode != 0:
-            sys.exit(f"make_vmaf: vmaf failed\n{p.stderr.decode()}")
-        data = json.load(open(outp))
-    finally:
-        os.unlink(outp)
-
+def vmaf_per_frame(ref_y4m, enc_path, fps, work):
+    """Score one encoding against the reference on VMAF v1, the way the BD
+    gate does: both sides at 10-bit, a picture below 1920x1080 scaled up to
+    fit it, CAMBI told the coded size and depth. Returns (list of
+    {frame,time,vmaf}, model name)."""
+    model = v1_model_path(ref_y4m)
+    w, h, _ = bdcompare._y4m_geometry(ref_y4m)
+    ebd = bdcompare._enc_bitdepth(enc_path)
+    vf = ["-vf", bdcompare.V1_SCALE_VF] if bdcompare.v1_scaled(w, h) else []
+    js = os.path.join(work, "v1.json")
+    data = bdcompare.v1_pass(enc_path, ref_y4m, work, js,
+                             ["--model", f"path={model}:{bdcompare.v1_model_opts(w, h, ebd)}"],
+                             vf)
+    if data is None:
+        sys.exit(f"make_vmaf: the v1 pass failed for {enc_path} (needs {VMAF} and a "
+                 "stream the same size as the reference)")
     frames = []
-    model_name = "vmaf_v1"
     for fr in data.get("frames", []):
         v = fr.get("metrics", {}).get("vmaf_v1")
         if v is None:
@@ -140,7 +133,7 @@ def vmaf_per_frame(ref_y4m, dist_y4m, fps):
         n = fr.get("frameNum", len(frames))
         frames.append({"frame": n, "time": round(n / fps, 4),
                        "vmaf": round(v, 4)})
-    return frames, model_name
+    return frames, os.path.splitext(os.path.basename(model))[0]
 
 
 def parse_enc(spec):
@@ -183,15 +176,13 @@ def main():
         to_mp4(args.reference, os.path.join(args.out, ref_mp4))
 
     encs = []
-    model_used = "vmaf_v1"
+    model_used = ""
     for i, spec in enumerate(args.enc):
         label, path = parse_enc(spec)
         if not os.path.exists(path):
             sys.exit(f"make_vmaf: encoding not found: {path}")
         tag = chr(ord("A") + i)
-        dist_y4m = os.path.join(work, f"enc{tag}.y4m")
-        to_y4m(path, dist_y4m)
-        frames, model = vmaf_per_frame(ref_y4m, dist_y4m, fps)
+        frames, model = vmaf_per_frame(ref_y4m, path, fps, work)
         model_used = model
         mp4 = f"enc{tag}.mp4"
         if not args.no_video:
