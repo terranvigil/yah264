@@ -1069,8 +1069,12 @@ struct yah264_encoder {
     double   tp_lact3[3], tp_lmod3[3]; /* the same per frame type */
     double  *tp_elo3;           /* [3][n+1] tp_elo per frame type */
     double   tp_lastq[3];       /* per type: last floor-bound qscale decided, 0 = none */
-    double   tp_slast;          /* fields: the last budget scale the plain correction or its
-                                 * overspent hold applied, 0 = none; the floored path leaves it */
+    double   tp_uact, tp_umod;  /* actual / modelled bits of low-evidence frames with content
+                                 * while the floor is off */
+    int      tp_ucnt;           /* such frames landed */
+    int      tp_ufar;           /* their bias has read TP_UFAR or more once warm */
+    double   tp_slast;          /* the last budget scale the plain correction or its overspent
+                                 * hold applied, 0 = none; the floored path leaves it */
     double  *tp_ebits;          /* [n+1] modelled cumulative bits before record i */
     struct tp_stat tp_next[2];  /* pass 2: the next GOP's first records (#next) */
     int      tp_n_next;
