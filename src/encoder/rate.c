@@ -1256,7 +1256,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
                 e->rfm_open_owed = e->rfm_owed;
             }
             if (e->rc_shared && e->abr_rf2)
-                rc_shared_add(e, skip ? 0.0 : contrib, skip ? 0.0 : e->abr_target_bpf, p->bits, e->abr_target_bpf);
+                rc_shared_add(e, skip ? 0.0 : contrib, skip ? 0.0 : e->abr_target_bpf, p->rs * p->bits, e->abr_target_bpf);
             rfm_note_coded(e, p->fqp - p->dcq, p->type);
         }
         /* First measurement per type SNAPS over the open-time seed (a guess);
@@ -1269,7 +1269,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->bm_abr.qp[p->type] = rcbm_ema(e->bm_abr.meas[p->type], e->bm_abr.qp[p->type], p->fqp);
         e->bm_abr.meas[p->type] = 1;
         e->bm_abr.have[p->type] = 1;
-        e->abr_cum_actual += p->bits;
+        e->abr_cum_actual += p->rs * p->bits;
         e->abr_cum_target += e->abr_target_bpf;
     }
     if (e->tp_fp) {        /* pass 1 and pass 3 both record */
@@ -2148,7 +2148,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * same contribution (contrib = bits * qscale / rceq). */
             double c = e->bm_rf2kc.have[p->type] && p->cplx > 0 ? e->bm_rf2kc.k[p->type] * p->cplx : rf2_mean;
             pend_cplxr += c;
-            pend_pred += c * p->rceq / pow(2.0, (p->acc_qp - 12) / 6.0);
+            pend_pred += p->rs * c * p->rceq / pow(2.0, (p->acc_qp - 12) / 6.0);
             pend_cq += p->cq;
             continue;
         }
@@ -2158,7 +2158,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * whole burst earlier. Pure function of (entry, ledger) state --
  * deterministic. ABR only; a 2-pass entry's scaleterm is static. */
         pend_pred += e->abr_on
-                   ? abr_scale_for(e, p->type) * p->rceq
+                   ? p->rs * abr_scale_for(e, p->type) * p->rceq
                      / pow(2.0, (p->fqp - 12) / 6.0)
                    : p->pred;
         if (!e->abr_on && p->tp_rec >= 0 && tp_floor_bound(e, p->tp_rec))
@@ -2168,6 +2168,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     struct rcp_pend en;
     memset(&en, 0, sizeof en);
     en.tp_rec = -1;                             /* 0 is a valid record index */
+    en.rs = 1.0;
     en.type = (int8_t)type;
     en.rc_type = (int8_t)(e->fld_pic && e->fld_rc_type >= 0 ? e->fld_rc_type : type);
     en.is_ref = (int8_t)is_ref;
@@ -3648,6 +3649,13 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         e->rfm_owed *= r;
         e->abr_cum_target *= r;
         e->abr_cum_actual *= r;
+        /* frames decided before this decision, coded or not, were decided at
+         * the old rate: they join the sums at r times their bits, like every
+         * frame before them (rules (a) and (c)). charged whole against the new
+         * target, the frames in flight at a 10x step down came to a second of
+         * debt, repaid by several QP of feedback through the first second */
+        for (int i = 0; i < e->rcp_n; i++)
+            e->rcp[(e->rcp_head + i) % RCP_MAX].rs *= r;
         for (int t = 0; t < 3; t++)
             if (e->slew_set[t]) e->slew_ref[t] += dq;
         e->itrk_qp += dq * e->itrk_wt;
@@ -3661,12 +3669,12 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         int q = e->qp + (int)lround(dq);
         e->qp = qp_bound(e, q < 0 ? 0 : q > 51 ? 51 : q);
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
-        /* the carried balance is at most one second of the new target; frames
-         * already decided count at their predicted size against the new one */
+        /* the carried balance is at most one second of the new target, frames
+         * already decided counted at their size, scaled as above */
         double inflight = 0.0;
         for (int i = 0; i < e->rcp_n; i++) {
             const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
-            inflight += (p->filled ? p->bits : p->pred) - nb;
+            inflight += p->rs * (p->filled ? p->bits : p->pred) - nb;
         }
         double cap = (double)kbps * 1000.0, bal = e->abr_cum_target - e->abr_cum_actual - inflight;
         if (bal > cap) e->abr_cum_actual += bal - cap;

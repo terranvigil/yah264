@@ -1123,6 +1123,11 @@ struct yah264_encoder {
         double  cq;             /* pass 2: complexity^qcomp share */
         int     tp_rec;         /* pass 2 plan: stats record index, -1 if none */
         double  pred;           /* predicted bits at decide */
+        double  rs;             /* the rate scale its bits carry into the ledger:
+ * 1, times r for each live retarget that lands
+ * after its decide (the frame was decided at the
+ * old rate, so its error carries over as a share
+ * of it, as every frame before it does) */
         double  vpred;          /* VBV-model predicted bits at decide (virtual
  * buffer advance; error == VBV model error) */
         double  vcplx;          /* VBV-model complexity (lowres intra sum) */
