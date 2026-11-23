@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import bdcompare                                                # noqa: E402
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 VMAF = bdcompare.V1_BIN
 
 
@@ -51,12 +52,12 @@ def run(cmd, **kw):
 
 def need(tool):
     if shutil.which(tool) is None and not os.path.exists(tool):
-        sys.exit(f"make_vmaf: '{tool}' not found (set FFMPEG or VMAF_V1_BIN to override)")
+        sys.exit(f"make_vmaf: '{tool}' not found (set FFMPEG, FFPROBE or VMAF_V1_BIN to override)")
 
 
 def probe_fps(path):
     """Frames-per-second as a float, from ffprobe. Falls back to 30."""
-    p = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+    p = run([FFPROBE, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=r_frame_rate", "-of",
              "default=nokey=1:noprint_wrappers=1", path])
     txt = p.stdout.decode().strip()
@@ -158,14 +159,21 @@ def main():
 
     if len(args.enc) > 2:
         sys.exit("make_vmaf: at most two --enc encodings are supported")
-    for t in (FFMPEG, "ffprobe", VMAF):
+    for t in (FFMPEG, FFPROBE, VMAF):
         need(t)
     if not os.path.exists(args.reference):
         sys.exit(f"make_vmaf: reference not found: {args.reference}")
 
     os.makedirs(args.out, exist_ok=True)
     work = tempfile.mkdtemp(prefix="y264vmaf_")
+    try:
+        build(args, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
+
+def build(args, work):
+    """Decode, score and write the JSON (and MP4s) into args.out."""
     ref_y4m = os.path.join(work, "ref.y4m")
     to_y4m(args.reference, ref_y4m)
     fps = args.fps or probe_fps(ref_y4m)
