@@ -220,7 +220,7 @@ static double rfm_window(const yah264_encoder_t *e, double owed)
 {
     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
     if (bps <= 0) return HUGE_VAL;
-    double t = owed / bps;
+    double t = (owed + e->rfm_drop) / bps;
     double t0 = e->rck.ovc_t0;
     return e->rck.ovc_win * abr_tol(e) * bps * sqrt(t > t0 ? t : t0);
 }
@@ -274,7 +274,7 @@ static int rfm_open_miss(const yah264_encoder_t *e, double work, double owed, in
         || rf2_dark(e) || e->rfm_open_owed < 0.0 || e->slew_ref[1] < 0.0)
         return 0;
     double bps = e->abr_target_bpf * rfm_pic_rate(e);
-    if (bps <= 0.0 || owed / bps >= e->rck.rfm_fb_t)
+    if (bps <= 0.0 || (owed + e->rfm_drop) / bps >= e->rck.rfm_fb_t)
         return 0;
     double xw = work - e->rfm_open_work;
     double xo = owed - e->rfm_open_owed;
@@ -307,7 +307,7 @@ static double rfm_recent(yah264_encoder_t *e, double work, double owed, int shar
     double bps = e->abr_target_bpf * rfm_pic_rate(e);
     if (shared || e->vbv_cbr || e->tp_pass || e->la_depth > 0 || bps <= 0.0
         || owed <= 0.0 || work <= 0.0 || e->rfm_rec_work <= 0.0 || e->rfm_rec_state == 2
-        || e->rfm_rec_owed < 0.5 * bps || owed / bps < 2.0 * e->rck.rfm_fb_t)
+        || e->rfm_rec_owed < 0.5 * bps || (owed + e->rfm_drop) / bps < 2.0 * e->rck.rfm_fb_t)
         return work;
     double rq = 12.0 + 6.0 * log2(e->rfm_rec_work / e->rfm_rec_owed);
     double lq = 12.0 + 6.0 * log2(work / owed);
@@ -1160,6 +1160,28 @@ static double rcp_vbv_scale_eff(const yah264_encoder_t *e, int type)
 /* refits: the second, from the group after the first, reads the slope
  * nearer the target */
 #define RT_FIT_STAGES 2
+/* after the last refit the ledger runs on a short memory for a while: its
+ * work and owed decay with a time constant of RT_FAST_T seconds for
+ * RT_FAST_LEN seconds, so frames at the new rate outweigh the history coded
+ * at the old one within about a second. what the decay takes out of owed
+ * still counts toward the ledger's age (rfm_drop), so the feedback window is
+ * unchanged */
+#define RT_FAST_T   1.0
+#define RT_FAST_LEN 2.0
+
+static void rc_fast_start(yah264_encoder_t *e)
+{
+    e->rt_fast = (int)lround(RT_FAST_LEN * rfm_pic_rate(e));
+}
+
+static void rc_fast_step(yah264_encoder_t *e)
+{
+    double d = exp(-1.0 / (RT_FAST_T * rfm_pic_rate(e)));
+    e->rfm_drop += (1.0 - d) * e->rfm_owed;
+    e->rfm_work *= d;
+    e->rfm_owed *= d;
+    e->rt_fast--;
+}
 
 /* the next decide is the first at the moved QP. a frame's bits can reach
  * the ledger as many entries from its own as there are frames in flight, so
@@ -1256,8 +1278,13 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->rt_hist[i].type = p->type;
         e->rt_hist[i].fqp = (int16_t)p->fqp;
         e->rt_hist[i].bits = p->bits;
-        if (e->rt_fit)
+        if (e->rt_fast > 0)
+            rc_fast_step(e);
+        if (e->rt_fit) {
             rc_fit_step(e, p);
+            if (!e->rt_fit)
+                rc_fast_start(e);
+        }
     }
     if (e->vbv_on) {
         double qscale = pow(2.0, (p->fqp - 12) / 6.0);
@@ -2316,7 +2343,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * rfm_fb_t seconds of owed frames, degenerate ones not counted); past it
  * the value is stale and unused */
         if (e->abr_rf2 && !e->vbv_cbr && type != 2
-            && (!e->rf2_opened || (e->rf2_cold && e->rfm_owed < e->rck.rfm_fb_t
+            && (!e->rf2_opened || (e->rf2_cold && e->rfm_owed + e->rfm_drop < e->rck.rfm_fb_t
                                    * e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0))))
             e->rf2_luma = RCR_VAL(e->rcr, RCR_RF2LUMA, frame_luma_over_black(e, src));
         int shared = e->rc_shared && e->abr_rf2;
@@ -2386,7 +2413,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * Both widen with the coded duration past rck.abr_vbvov_grow (6)
  * seconds as (t / grow)^rck.abr_vbvov_pow (1). */
                         double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
-                        double t = bps > 0 ? wanted / bps : 0.0;
+                        double t = bps > 0 ? (wanted + e->rfm_drop) / bps : 0.0;
                         double cap = (e->vbv_cbr ? abr_vbvov_frac() : e->rck.abr_vbvov_vbr) * e->vbv.size;
                         double g = e->rck.abr_vbvov_grow;
                         if (!e->vbv_cbr && g > 0 && t > g)
@@ -2424,7 +2451,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                         if ((e->vbv_cbr ? e->rfm_open_fb : e->rf2_cold)
                             && !(rf2_unpredictable(e) && !e->rfm_open_fb)) {
                             double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
-                            if (bps > 0 && wanted / bps < e->rck.rfm_fb_t) {
+                            if (bps > 0 && (wanted + e->rfm_drop) / bps < e->rck.rfm_fb_t) {
                                 open_win = 1;
                                 sl = qp_led < e->slew_ref[1] || (!e->rfm_open_fb && !shared) ? e->rck.rfm_slew_fb
                                    : e->rfm_open_ioff > 0 ? e->rck.rfm_slew : e->rck.rfm_slew_fb_up;
@@ -3777,7 +3804,11 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         for (int i = 0; i < e->rcp_n; i++)
             e->rcp[(e->rcp_head + i) % RCP_MAX].rs *= r;
         double prior = 0.0;
-        if ((r < 1.0 / 3.0 || r > 3.0) && e->abr_rf2 && !e->rc_shared) {
+        e->rfm_drop *= r;
+        /* with a buffer, a step up is left to the buffer, whose fill already
+         * paces it: refit there, bbb's CBR 10x step up ran its first second
+         * 60% over */
+        if ((r < 1.0 / 3.0 || r > 3.0) && e->abr_rf2 && !e->rc_shared && (!e->vbv_on || r < 1.0)) {
             e->rt_fit = 1;
             e->rt_fit_k = RT_FIT_K0 > RT_FIT_KMIN ? RT_FIT_K0 : RT_FIT_KMIN;
             prior = dq / RT_FIT_K0 - dq;

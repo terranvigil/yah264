@@ -77,17 +77,22 @@ where that group would have spent the new target. One more group, nearer
 the target, refits once. A group is one GOP of B frames plus its anchor,
 leaving out I frames; each group stands as many frames from a QP move as
 the encoder has in flight. What the measured frames over- or under-spent is
-forgiven at each refit.
+forgiven at each refit, and for two seconds after the last one the rate
+control's ledger runs on a memory of about a second, so the frames at the
+new rate soon outweigh those coded at the old one. With a buffer, only a
+step down is handled this way; a step up is left to the buffer, whose fill
+already paces it.
 
 For two seconds after a change the rate control may move its QP a whole step
 per anchor, as it does after the opening, while the content's cost at the
 new rate is still unproven.
 
-With a buffer of about a second, or with no buffer after a step of 3x or
-less, a step lands near its new rate within the first second. With no
-buffer, a step of more than 3x lands within the first half second or so,
-and as the ledger catches up with the content over the next second or two
-it can run over its rate by a quarter or more.
+With a buffer of about a second, a step lands near its new rate within the
+first second. With no buffer, a step down lands near its new rate within
+the first second and then follows the content as plain ABR does at a steady
+rate, which on content whose cost moves can be a quarter or more off for a
+second or two. A step up with no buffer can still run a few tens of percent
+over in its first second.
 
 ### What is refused, and why
 
