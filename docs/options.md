@@ -469,11 +469,11 @@ nothing here suggests moving it from 0.
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
 | `-t`, `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
-| `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded. The macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule. See below. |
+| `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. Under rate control at subme 7 (medium), the default on a picture 1920 or more on its longer side drops `p8x8` and `b8x8`, leaving `i4x4` and `i8x8`. A list you give is kept. A shape outside the list is never searched and never coded. The macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule. See below. |
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when three things hold: the 16x16 result already costs less than this many lambdas, the neighborhood is homogeneous, and nothing downstream depends on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
-| `--b-preme-skip` | 0..4 | 0 (off); 2 at medium when the longer side is 1920 or more | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. It's off because the largest speed gain left costs up to 2.3% BD-VMAF-NEG (earlier metric) on a detailed 1080p clip. Under rate control at subme 7 (medium), a picture whose longer side is 1920 or more gets 2 unless the option is given. Inert at `--subme` 9 and above. See below. |
+| `--b-preme-skip` | 0..4 | 0 (off); 2 at medium when the longer side is 1920 or more | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. Below a longer side of 1920, and at any subme other than 7, it's off, because the largest speed gain left costs up to 2.3% BD-VMAF-NEG (earlier metric) on a detailed 1080p clip. Under rate control at subme 7 (medium), a picture whose longer side is 1920 or more runs mode 2 unless the option is given. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
-| `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar, and on at `faster` and below. Under rate control at subme 7 (medium), a picture whose longer side is 3840 or more gets 2 unless the option is given. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
+| `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar, and on at `faster` and below. Under rate control at subme 7 (medium), on a picture whose longer side is 3840 or more, a 0 becomes 2 unless the option is given. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
 | `--b-intra-band` | 16ths | 0 (off) | Skip both the B intra SATD screen and the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. The verdict is per band instead of per macroblock. It's taken once per frame from fields the lookahead already built. Off, with the number below. `--no-b-intra-band` is 0. |
@@ -593,13 +593,18 @@ trials and the subpartitions after it only confirm it. Modes 1 and 2 differ in
 whether reference B slices may use it, because a reference picture's errors
 travel into the pictures that read it.
 
-What refuses it is the shape of the bound, not the idea. A distortion measured in lambdas
-widens as lambda grows. Lambda grows as the rate falls, so the gate is most
-generous exactly where a wrong skip costs most. On the band's hardest 1080p clip
-it takes nothing at the top of the ladder and 2.7 VMAF-NEG points at the bottom.
-Modes 3 and 4 read the same distortion as an absolute bound that can't widen.
-They move the damage between clips without removing it. Both stay reachable
-with their numbers recorded.
+What keeps it off elsewhere is the shape of the bound, not the idea. A
+distortion measured in lambdas widens as lambda grows. Lambda grows as the rate
+falls, so the gate is most generous exactly where a wrong skip costs most. On
+the band's hardest 1080p clip it takes nothing at the top of the ladder and 2.7
+VMAF-NEG points at the bottom. Modes 3 and 4 read the same distortion as an
+absolute bound that can't widen. They move the damage between clips without
+removing it. Both stay reachable with their numbers recorded.
+
+Medium runs mode 2 anyway on pictures 1920 or more on the longer side, together
+with the partition default that drops the 8x8 inter sub-partitions there. On a
+1440-frame window of a 1080p title, those two together cost 0.8% at CRF and
+1.0% at capped VBR in BD-VMAF-NEG (earlier metric).
 
 `--rd-surv-rank` is off too. It RDs only the top-ranked candidates of each B set
 instead of everything the score threshold admits, at a cost of +0.63% at the
@@ -1112,8 +1117,13 @@ against a bar. Presets at medium and above use none of these arms and keep the
 +0.2%-per-clip bar the parity claim is read on. The presets below medium are
 allowed +0.5% per clip. `superfast` and `ultrafast` run no lookahead window. The
 value they name changes no byte there. It's written so the column never turns
-back on as the ladder gets faster. At medium, a picture 3840 or more on its
-longer side gets 2 under rate control. An explicit value wins.
+back on as the ladder gets faster.
+
+Medium, meaning subme 7 under rate control, has four more defaults that follow
+the picture size. From a longer side of 1920, AUTO partitions drop `p8x8` and
+`b8x8` and `--b-preme-skip` runs mode 2. From 3840, `--ref` 3 becomes 2 and an
+lr-settle of 0 becomes 2. An explicit value wins, and for partitions that means
+any list you give.
 
 subpel 2 is a capped diamond. -1 is an 8-neighbor square
 iterated to convergence. subme at or below 8 uses the fast SATD partition path,

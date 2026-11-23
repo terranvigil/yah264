@@ -182,7 +182,7 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
 | Commit B_Skip before motion search on a motion signal (lowres-static, mb-tree leaf, neighbor-skip) | every such gate also admits 10-95% of macroblocks whose searches then win by 8-25% SATD |
 | Staged skip decision (neighbor admission, graded probe, commit after the ref-0 search) | built in full. It commits 6-16% of B macroblocks. The wall is a wash against a +3% bar |
 | Propagation-guarded mid-exit for reference B's (`Y264_B_SKIP_EXIT=3`) | quality-neutral (worst +0.07%) but buys only 0.3-0.5% of wall |
-| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls, which lost 2.7 VMAF-NEG points on sunflower's bottom rung. The absolute form moves the damage between clips |
+| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls, which lost 2.7 VMAF-NEG points on sunflower's bottom rung. The absolute form moves the damage between clips. Medium still runs mode 2 on pictures 1920 or more on the longer side |
 | `--rd-surv-rank` (RD only the top-ranked survivors) | +0.63% band median |
 | Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. The B_8x8 gain drops from -1.27% to -0.81% |
 
