@@ -991,12 +991,13 @@ struct yah264_encoder {
     int      rt_fast;            /* frames left on the short-memory ledger after a large step */
     double   rfm_drop;           /* owed bits the short memory took out of rfm_owed: the ledger's age still counts them */
     int      rt_fit_skip;        /* entries left between a QP move and the group measured after it */
-    struct { unsigned seq; int disp; int8_t type, f2, cut, intra, base, qlo, qhi; int16_t fqp; double bits; } rt_hist[256];
+    struct { unsigned seq; int disp; int8_t type, f2, cut, intra, pin; int16_t fqp; double bits; } rt_hist[256];
     int      rcp_last_disp;      /* the frame of the last rate decision (field pairs share one) */
     /* frames whose rate-control entry was committed on an earlier-coded
      * frame's bits, waiting for their own (rate.c, rcp_fill) */
-    struct rt_own { int disp; unsigned seq; int8_t type, f2, cut, intra, qlo, qhi; int fqp, base; double rs, pred; } rt_own[64];
+    struct rt_own { int disp; unsigned seq; int8_t type, f2, cut, intra, pin; int fqp; double rs, pred; } rt_own[64];
     int      rt_own_n;
+    int      rt_pin_base;        /* the last anchor's rate-control QP was clamped to [1, 51] */
     double   rt_shadow;          /* every coded frame's bits at its rate scale, kept apart from the
                                   * ledger: cum_actual plus the uncommitted slots' bits equals it */
     unsigned rt_fit_b0, rt_fit_b1, rt_fit_lo;   /* group B's first frame and end; the older point's first frame */
@@ -1149,6 +1150,7 @@ struct yah264_encoder {
         int8_t  f2;             /* the second field of a frame */
         int8_t  own_filled;     /* this frame's own bits are in */
         int8_t  qlo, qhi;       /* the QP bounds in force on it */
+        int8_t  pin;            /* its coded QP sits on a bound, or its base was clamped */
         double  rs;             /* the rate scale its bits carry into the ledger:
  * 1, times r for each live retarget that lands
  * after its decide (the frame was decided at the

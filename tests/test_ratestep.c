@@ -31,10 +31,18 @@ static int fails;
 static sample_t y[W * H], u[W * H / 4], v[W * H / 4];
 
 static int cut_at = -1;     /* from this frame on, a different picture */
-static int flat;
+static int flat, bright;
 
 static void fill(sample_t *p, int w, int h, int n, int plane)
 {
+    if (bright) {                   /* busy and bright */
+        for (int r = 0; r < h; r++)
+            for (int c = 0; c < w; c++) {
+                unsigned x = (unsigned)((c * 7 + r * 13 + n) * 2654435761u) >> 26;
+                p[(size_t)r * w + c] = (sample_t)(plane ? 128 : 200 + (x & 0x37));
+            }
+        return;
+    }
     if (flat) {                     /* a near-flat picture: next to nothing to code */
         for (int i = 0; i < w * h; i++)
             p[i] = (sample_t)(plane ? 128 : 60 + ((i / w + n) & 1));
@@ -320,11 +328,16 @@ int main(void)
     /* a run held at a QP bound is missing: a flat clip at a high rate sits on
      * --qpmin, and a busy one at a very low rate on 51, and neither refits,
      * on a 10x step either way */
-    for (int c = 0; c < 4; c++) {
-        int floor_case = c < 2, down = !(c & 1);
+    for (int c = 0; c < 6; c++) {
+        /* 0-1 flat on --qpmin 20, 2-3 busy on 51, 4 flat on the rate
+         * control's own floor (QP 1 before the frame's DC term, no
+         * --qpmin), 5 bright and busy on 51 (a DC term below zero) */
+        int floor_case = c < 2 || c == 4, down = c < 4 ? !(c & 1) : 0;
         flat = floor_case;
-        qpmin = floor_case ? 20 : 0;
+        bright = c == 5;
+        qpmin = c < 2 ? 20 : 0;
         int k0 = floor_case ? (down ? 4000 : 400) : (down ? 20 : 2);
+        if (c == 4) k0 = 4000;
         yah264_encoder_t *e = open_abr(k0, 0);
         qpmin = 0;
         CHECK(e != NULL);
@@ -344,6 +357,7 @@ int main(void)
         yah264_encoder_close(e);
     }
     flat = 0;
+    bright = 0;
 
     if (fails) { fprintf(stderr, "ratestep: %d failure(s)\n", fails); return 1; }
     printf("ratestep: all checks passed\n");

@@ -82,7 +82,9 @@ nearer the target, refits once. The means use the frame QP the rate control
 chose, before the adaptive-quantization and mb-tree offsets, and leave out
 I frames. Each run stands as many frames from a QP move as the encoder has
 in flight, and a scene cut in a run or between the two stops the refit,
-leaving the moves already made. For two seconds after refitting ends, the
+leaving the moves already made. So does a run whose frames are mostly held
+at a QP bound (`--qpmin`, `--qpmax`, a live QP-limit event, or the rate
+control's own range): its bits answer the clamp, not the content. For two seconds after refitting ends, the
 rate control's ledger runs on a memory of about a second, so the frames at
 the new rate soon outweigh those coded at the old one. Any later rate
 change, a buffer-only one included, ends a refit in progress. With a

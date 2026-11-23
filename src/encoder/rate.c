@@ -1154,8 +1154,6 @@ static double rcp_vbv_scale_eff(const yah264_encoder_t *e, int type)
  * and QPs only, each frame's own (rcp_fill), so a replay refits the same
  * way. */
 #define RT_HIST 256
-/* a run whose mean base QP is this close to a QP bound is held by it */
-#define RT_FIT_PIN 0.5
 #define RT_OWN_MAX 64
 /* the least a measured run spans, in seconds: a quarter second already
  * spans two groups at 30 fps; half a second read worse on every clip */
@@ -1235,10 +1233,10 @@ static void rc_fit_shift(yah264_encoder_t *e, double shift)
  * quantization and mb-tree offsets inside it) of those that aren't intra, and whether a scene cut is among them.
  * 0 when one has left the history or every one is intra */
 static int rc_fit_span(const yah264_encoder_t *e, unsigned lo, unsigned hi,
-                       double *bits, double *qp, int *cut)
+                       double *bits, double *qp, int *cut, int pins)
 {
-    double b = 0.0, q = 0.0, bq = 0.0, ql = 0.0, qh = 0.0;
-    int n = 0, seen = 0;
+    double b = 0.0, q = 0.0;
+    int n = 0, seen = 0, pinned = 0;
     int have = e->rt_hn < RT_HIST ? e->rt_hn : RT_HIST;
     *cut = 0;
     for (int i = 0; i < have; i++) {
@@ -1248,15 +1246,13 @@ static int rc_fit_span(const yah264_encoder_t *e, unsigned lo, unsigned hi,
         if (e->rt_hist[i].intra) continue;
         b += e->rt_hist[i].bits;
         q += e->rt_hist[i].fqp;
-        bq += e->rt_hist[i].base;
-        ql += e->rt_hist[i].qlo;
-        qh += e->rt_hist[i].qhi;
+        pinned += e->rt_hist[i].pin;
         n++;
     }
     if (seen != (int)(hi - lo) || n == 0) return 0;
     /* a run held at a QP bound says nothing about the content's slope: its
      * bits answer the clamp, and a refit read off it moves without limit */
-    if (bq / n <= ql / n + RT_FIT_PIN || bq / n >= qh / n - RT_FIT_PIN) return 0;
+    if (pins && 2 * pinned > n) return 0;
     *bits = b / n;
     *qp = q / n;
     return 1;
@@ -1356,13 +1352,13 @@ static void rc_fit_step(yah264_encoder_t *e, unsigned cur)
         return;                         /* B's bits aren't all in yet */
     if (e->rt_fit == 1) {
         if (!rc_fit_groups_before(e, e->rt_fit_seq - (unsigned)e->rt_fit_skip, n, &lo, &ahi)
-            || !rc_fit_span(e, lo, ahi, &ba, &qa, &cut)) {
+            || !rc_fit_span(e, lo, ahi, &ba, &qa, &cut, 1)) {
             rc_fit_end(e);
             return;
         }
     }
-    if (!rc_fit_span(e, b0, b1, &bb, &qb, &cx) || !(ba > 0.0) || !(bb > 0.0)
-        || !rc_fit_span(e, lo, b1, &bx, &qx, &cut) || cut) {
+    if (!rc_fit_span(e, b0, b1, &bb, &qb, &cx, 1) || !(ba > 0.0) || !(bb > 0.0)
+        || !rc_fit_span(e, lo, b1, &bx, &qx, &cut, 0) || cut) {
         rc_fit_end(e);
         return;
     }
@@ -1399,7 +1395,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         struct rt_own *o = &e->rt_own[e->rt_own_n++];
         o->disp = p->disp; o->seq = p->seq; o->type = p->type; o->f2 = p->f2;
         o->cut = p->cut; o->intra = p->rc_type == 0; o->fqp = p->fqp; o->rs = p->rs;
-        o->pred = p->pred; o->base = p->base_qp; o->qlo = p->qlo; o->qhi = p->qhi;
+        o->pred = p->pred; o->pin = p->pin;
     }
     if (e->abr_rf2) {
         if (e->rt_fast > 0)
@@ -1679,7 +1675,7 @@ static int rc_own_find(yah264_encoder_t *e, int disp, struct rt_own *o)
             p->own_filled = 1;
             o->disp = p->disp; o->seq = p->seq; o->type = p->type; o->f2 = p->f2;
             o->cut = p->cut; o->intra = p->rc_type == 0; o->fqp = p->fqp; o->rs = p->rs;
-            o->pred = p->pred; o->base = p->base_qp; o->qlo = p->qlo; o->qhi = p->qhi;
+            o->pred = p->pred; o->pin = p->pin;
             return 1;
         }
     }
@@ -1728,9 +1724,7 @@ void rcp_fill(yah264_encoder_t *e, double bits, int disp)
             e->rt_hist[i].bits = bits;
             e->rt_hist[i].cut = o.cut;
             e->rt_hist[i].intra = o.intra;
-            e->rt_hist[i].base = (int8_t)o.base;
-            e->rt_hist[i].qlo = o.qlo;
-            e->rt_hist[i].qhi = o.qhi;
+            e->rt_hist[i].pin = o.pin;
         }
     } else if (e->abr_on) {
         e->rt_shadow += bits;       /* no record: counted at its arrival slot */
@@ -1772,10 +1766,18 @@ void rcp_drop(yah264_encoder_t *e, int disp)
 {
     if (e->tp_fp)
         e->tp_drop = 1;                     /* its record is never written */
+    /* the dropped frame's own slot when it's still open, else the first open
+     * one, as a fill would take. today a drop only happens on the serial
+     * emit, where they're the same slot; marking the frame's own keeps a
+     * drop from shifting the slots of frames coded out of order */
+    struct rcp_pend *d = NULL;
     for (int i = 0; i < e->rcp_n; i++) {
         struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
-        if (!p->filled) { p->filled = 1; p->dropped = 1; p->bits = 0; break; }
+        if (p->filled) continue;
+        if (!d) d = p;
+        if (p->disp == disp) { d = p; break; }
     }
+    if (d) { d->filled = 1; d->dropped = 1; d->bits = 0; }
     /* the dropped frame itself comes to nothing: no bits will follow it */
     rc_own_take(e, disp);
     rcp_pop_ready(e);
@@ -2684,6 +2686,9 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 /* the opening I is coded at the ledger's opening prior plus
  * its own DC; frame_qp takes 3 off every I, so hand it the opening plus 3. */
                 if (type == 0 && first) qp += 3.0 - (e->rfm_open_fb ? e->rfm_open_ioff : 0.0);
+                /* held at the rate control's own QP bounds: this anchor and
+                 * the B frames coded on its base (the refit's runs) */
+                e->rt_pin_base = qp < 1 || qp > 51;
                 if (qp < 1) qp = 1;
                 if (qp > 51) qp = 51;
                 e->abr_qp = qp;
@@ -2893,6 +2898,10 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * non-VBV modes nothing ran between: identical values to the pre-VBV
  * ordering). */
     en.fqp = frame_qp(e, type, is_ref);
+    /* pinned: the coded QP sits on a bound, the encode's or a live event's,
+     * after every offset (zone, B cascade), or the base it came from was
+     * clamped */
+    en.pin = (int8_t)(e->rt_pin_base || en.fqp <= en.qlo || en.fqp >= en.qhi);
     if (e->abr_on)
         en.pred = abr_scale_used * en.rceq / pow(2.0, (en.fqp - 12) / 6.0);
     else if (en.tp_rec >= 0)
@@ -4062,7 +4071,8 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
             const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
             /* the bits filled into the entries still pending, and the frames
              * not coded yet at their scaled prediction */
-            inflight += (p->filled ? p->bits : 0.0) + (p->own_filled ? 0.0 : p->rs * p->pred) - nb;
+            inflight += (p->filled ? p->bits : 0.0) + (p->own_filled ? 0.0 : p->rs * p->pred)
+                      - (p->dropped ? 0.0 : nb);   /* a dropped slot accrues no target */
         }
         for (int i = 0; i < e->rt_own_n; i++)
             inflight += e->rt_own[i].rs * e->rt_own[i].pred;
