@@ -7750,6 +7750,10 @@ static int cli_main(int argc, char **argv)
  * are answered by seeing the resolved preset, mode and geometry rather than
  * by more output during the encode. */
     char partbuf[32];
+    /* the values the software encoder runs with, size defaults applied */
+    yah264_param_t shown = param;
+    if (hw == YAH264_HW_OFF)
+        yah264_param_size_defaults(&shown);
     LOGF(LOG_DEBUG,
          "yah264: resolved: %dx%d %s in, %dx%d coded%s, %d/%d fps, preset %s%s%s, "
          "subme %d ref %d bframes %d %s, partitions %s, %s, keyint %d, threads %d\n",
@@ -7759,9 +7763,9 @@ static int cli_main(int argc, char **argv)
          (g_crop_l | g_crop_t | g_crop_r | g_crop_b) ? " (cropped)" : "",
          param.timebase.fps_num, param.timebase.fps_den, preset,
          tune ? " tune " : "", tune ? tune : "",
-         param.subme > 0 ? param.subme : 10, param.ref, param.bframes,
+         param.subme > 0 ? param.subme : 10, shown.ref, param.bframes,
          param.cabac ? "cabac" : "cavlc",
-         part_str(yah264_partitions_resolved(&param), partbuf, sizeof partbuf),
+         part_str(yah264_partitions_resolved(&shown), partbuf, sizeof partbuf),
          param.rc.method == YAH264_RC_CRF   ? "crf"
        : param.rc.method == YAH264_RC_ABR   ? "abr"
        : param.rc.method == YAH264_RC_2PASS ? "multi-pass" : "cqp",

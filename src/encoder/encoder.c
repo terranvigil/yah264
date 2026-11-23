@@ -4553,22 +4553,6 @@ static int psy4k_on(const yah264_param_t *p)
         return 0;
     return 1;
 }
-static void size_trades(yah264_param_t *p)
-{
-    if (p->subme != 7 || p->rc.method == YAH264_RC_CQP)
-        return;
-    int cls = y264_size_class(p->width, p->height);
-    if (cls < 2)
-        return;
-    if (p->partitions == YAH264_PART_AUTO)
-        p->partitions = YAH264_PART_I4X4 | (p->transform8x8 ? YAH264_PART_I8X8 : 0);
-    unsigned set = p->explicit_set;
-    if (!(set & YAH264_SET_B_PREME_SKIP) && p->b_preme_skip == 0) p->b_preme_skip = 2;
-    if (cls < 3)
-        return;                                 /* the 1080p set ends here */
-    if (!(set & YAH264_SET_REF) && p->ref == 3) p->ref = 2;
-    if (!(set & YAH264_SET_LR_SETTLE) && p->lr_settle == 0) p->lr_settle = 2;
-}
 
 /* Defaults that follow the picture size (y264_size_class: the longer side
  * below 1280, below 1920, or larger). An explicit value always wins.
@@ -18324,7 +18308,7 @@ yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
         fprintf(stderr, "yah264: hardware encoder unavailable (%s); using the software encoder\n", why);
     }
     yah264_param_t sized = *param;
-    size_trades(&sized);
+    yah264_param_size_defaults(&sized);
     return encoder_open_sw(&sized);
 }
 
