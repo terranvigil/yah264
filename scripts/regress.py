@@ -42,7 +42,7 @@ frame count checked. Optional -- ffmpeg is the always-on decoder.
 import argparse, hashlib, json, os, random, re, resource, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-YAH264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
+YAH264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "y264"))
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 JM = os.environ.get("JM_DECODER", "")
 

@@ -5,8 +5,8 @@
 # identity_ab.sh - do two encoders produce the same bitstreams?
 #
 #   scripts/identity_ab.sh OLD_BIN NEW_BIN
-#   MATRIX=quick scripts/identity_ab.sh build-old/cli/yah264 build/cli/yah264
-#   ARM_B='Y264_FOO=0' scripts/identity_ab.sh build/cli/yah264 build/cli/yah264
+#   MATRIX=quick scripts/identity_ab.sh build-old/cli/y264 build/cli/y264
+#   ARM_B='Y264_FOO=0' scripts/identity_ab.sh build/cli/y264 build/cli/y264
 #   ONLY='cavlc|422' scripts/identity_ab.sh A B
 #
 # Encodes every cell of a config matrix with both binaries and compares the

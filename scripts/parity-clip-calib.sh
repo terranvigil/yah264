@@ -44,7 +44,7 @@ src="$root/tests/corpus/$clip.y4m"
 
 SECONDS_PER="${SECONDS_PER:-6}"
 PRESET="${PRESET:-medium}"
-YAH264="${YAH264:-$root/build/cli/yah264}"
+YAH264="${YAH264:-$root/build/cli/y264}"
 # ../x264 relative to the repo root, which is wrong inside a git worktree
 # (.claude/worktrees/<x>/..) -- fall back to the sibling of the main checkout.
 X264="${X264:-$root/../x264/x264-asm}"

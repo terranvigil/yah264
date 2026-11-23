@@ -24,7 +24,7 @@
  *
  * Honesty check built in: with --lag 0 (clamp off) and -t 1 the output is
  * byte-identical to
- * yah264 --qp Q --bframes 0 --ref 1 --rc-lookahead 0 --no-scenecut --no-sei
+ * y264 --qp Q --bframes 0 --ref 1 --rc-lookahead 0 --no-scenecut --no-sei
  * minus the per-frame lowres analysis the real encoder still runs.
  *
  * Build (not wired into meson, on purpose):

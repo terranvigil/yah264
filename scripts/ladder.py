@@ -18,7 +18,7 @@ ratio is published per tier -- this is the project's headline claim.
 
 Reproduce:  scripts/ladder.py [--presets a,b,..] [--class NAME | --clips a,b]
             [--ref x264|x265] [--frames N] [--points q,q,..] [--out report.md]
-Everything is from-source and pinned: yah264 = build/cli/yah264, x264 =
+Everything is from-source and pinned: yah264 = build/cli/y264, x264 =
 ../x264/x264-asm (NEON) unless X264 overrides, x265 = `x265` on PATH.
 """
 import argparse
@@ -33,7 +33,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BDCMP = os.path.join(ROOT, "scripts", "bdcompare.py")
 CORPUS = os.path.join(ROOT, "tests", "corpus")
 
-YAH264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
+YAH264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "y264"))
 X264 = os.environ.get("X264", os.path.join(ROOT, "..", "x264", "x264-asm"))
 X265 = os.environ.get("X265", "x265")
 

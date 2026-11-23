@@ -489,13 +489,13 @@ st_oracles() {
 # 5. The correctness battery, before any measurement is taken.
 
 st_test() {
-    [ -x "$C_B8/cli/yah264" ] || { c_skip "no 8-bit build"; return; }
-    ( cd "$C_SRC" && make test BUILD="$C_B8" YAH264="$C_B8/cli/yah264" ) || return 1
+    [ -x "$C_B8/cli/y264" ] || { c_skip "no 8-bit build"; return; }
+    ( cd "$C_SRC" && make test BUILD="$C_B8" YAH264="$C_B8/cli/y264" ) || return 1
     return 0
 }
 
 st_conformance() {
-    [ -x "$C_B8/cli/yah264" ] || { c_skip "no 8-bit build"; return; }
+    [ -x "$C_B8/cli/y264" ] || { c_skip "no 8-bit build"; return; }
     local args=()
     # Full on the rented box; --fast under the rehearsal, where the box is
     # shared, the emulator is several times slower than native, and the leg is
@@ -507,7 +507,7 @@ st_conformance() {
     fi
     ( cd "$C_SRC" && YAH264_CONF_JOBS="$JOBS" \
         YAH264_CONF_DECODERS="${YAH264_CONF_DECODERS:-ffmpeg}" \
-        ./scripts/conformance.sh ${args[@]+"${args[@]}"} "$C_B8/cli/yah264" ) || return 1
+        ./scripts/conformance.sh ${args[@]+"${args[@]}"} "$C_B8/cli/y264" ) || return 1
     return 0
 }
 

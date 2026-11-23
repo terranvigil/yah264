@@ -1411,7 +1411,7 @@ for a in "$@"; do
     esac
 done
 : "${YAH264_CONF_FAST:=0}"
-enc="${enc:-$root/build/cli/yah264}"
+enc="${enc:-$root/build/cli/y264}"
 compute_config
 JOBS="${YAH264_CONF_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 8)}"
 
@@ -1682,6 +1682,16 @@ S="$fixdir"      # shorthand for job specs below
 
 # --- build the job list --------------------------------------------------
 jobs=(); jobn=0
+# the cells that need tests/corpus; a run without it says so at the end, since
+# a green count that silently left them out reads like full coverage
+corpus_skipped=()
+# note a part skipped for a missing corpus clip, unless YAH264_CONF_ONLY left
+# its section out anyway
+skip_corpus() {   # skip_corpus <section> <label>
+    if [ -n "${YAH264_CONF_ONLY:-}" ] && [[ "$1" != *"$YAH264_CONF_ONLY"* ]]; then return; fi
+    corpus_skipped+=("$2")
+}
+
 add() {     # add <section> <fn> [args...]
     local res cmd a
     # YAH264_CONF_ONLY: run only the sections whose name contains it
@@ -1934,6 +1944,8 @@ add "lookahead lead" check_same_lead la3_b0_t4 "$S/syn_motion.y4m" 4 "--crf 23 -
 if [ -f "$root/tests/corpus/foreman_cif.y4m" ]; then
     add "lookahead lead" check_same_lead ladef_b3 "$root/tests/corpus/foreman_cif.y4m" 1 \
         "--crf 23 --bframes 3 --frames 60" "3 9"
+else
+    skip_corpus "lookahead lead" "lookahead lead (foreman_cif)"
 fi
 
 add "adaptive quantization (per-MB QP)" check_clip aq_p       "$S/syn_motion.y4m"  "--aq-strength 1.0"
@@ -2020,6 +2032,8 @@ add "rate-control bounds" check_ratetol ratetol "$S/syn_rc.y4m" 400 48 0
 # and 600 kbit/s the opening now lands both within 7% and 1.5 points apart)
 if [ -f "$root/tests/corpus/bus_cif.y4m" ]; then
     add "rate-control bounds" check_ratetol ratetol_bus "$root/tests/corpus/bus_cif.y4m" 1200 150 1
+else
+    skip_corpus "rate-control bounds" "rate-control bounds (bus_cif)"
 fi
 add "rate-control bounds" check_rc qpfile_types "$S/syn_rc.y4m" \
     "--crf 26 --bframes 3 --qpfile $S/qpfile_types.txt"
@@ -2374,6 +2388,8 @@ if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then
             add "corpus clips" check_clip "$base" "$use" "" "$qp"
         done
     done
+else
+    skip_corpus "corpus clips" "corpus clips"
 fi
 
 # --- run the pool --------------------------------------------------------
@@ -2423,6 +2439,10 @@ fi
 
 warns=$(cat "$resdir"/* 2>/dev/null | grep -c '^  WARN ' || true)
 echo "conformance: $((tests - fails))/$tests passed"
+if [ "${#corpus_skipped[@]}" -gt 0 ]; then
+    list=$(printf '%s, ' "${corpus_skipped[@]}"); list=${list%, }
+    echo "conformance: skipped ${#corpus_skipped[@]} part(s) whose clips are not in tests/corpus (scripts/fetch_corpus.sh fetches them): $list"
+fi
 if [ "$YAH264_CONF_DEV" = 0 ]; then
     set -- $(cat "$resdir"/* 2>/dev/null | awk '$1 == "SKIPPED" { c += $2; i += $3 } END { print c+0, i+0 }')
     echo "conformance: release build: $1 check(s) and $2 informational comparison(s) skipped, they need -Ddev_knobs=true"

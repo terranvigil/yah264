@@ -53,7 +53,7 @@
 # has moved the rate control -- point it at a main build when it has).
 #
 # Usage: scripts/cvbr_compliance.sh
-#        HRD=1 YAH264_BASE=scratch/build-main/cli/yah264 scripts/cvbr_compliance.sh
+#        HRD=1 YAH264_BASE=scratch/build-main/cli/y264 scripts/cvbr_compliance.sh
 # Env:   CLIPS CVBR_SECONDS FRACS ARMS THREADS PRESET YAH264 YAH264_BASE X264 HRD
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -61,7 +61,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 # ${SECONDS:-6} would silently read however long this shell had been alive.
 SECONDS_PER="${CVBR_SECONDS:-6}"
 THREADS="${THREADS:-18}"
-YAH264="${YAH264:-$root/build/cli/yah264}"
+YAH264="${YAH264:-$root/build/cli/y264}"
 # The build whose VBV verdict PARTITIONS the HRD leg. Defaults to the binary
 # under test, which is the right answer only when the change under test did not
 # touch the rate control; when it might have, point this at a main build so the

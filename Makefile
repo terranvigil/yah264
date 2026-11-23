@@ -56,7 +56,7 @@
 # else, and because one is synthetic and one is a real sensor.
 
 BUILD    ?= build
-CLI      := $(BUILD)/cli/yah264
+CLI      := $(BUILD)/cli/y264
 NINJA    := ninja -C $(BUILD)
 CORPUS   := tests/corpus
 GOLDEN   := tests/.golden
@@ -161,7 +161,7 @@ test: build
 	@python3 scripts/env_gate_audit.py
 	@TEST_WRAP='$(TEST_WRAP)' scripts/pipe_window_check.sh $(BUILD)
 	@if command -v ffmpeg >/dev/null; then \
-	    YAH264='$(if $(TEST_WRAP),$(TEST_WRAP) )$(BUILD)/cli/yah264' python3 scripts/regress.py --seed 264; \
+	    YAH264='$(if $(TEST_WRAP),$(TEST_WRAP) )$(BUILD)/cli/y264' python3 scripts/regress.py --seed 264; \
 	else \
 	    echo ">> regress smoke skipped (no ffmpeg)"; \
 	fi

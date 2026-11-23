@@ -130,7 +130,7 @@ for m in $MODES; do
         # X264_CRF override it on the crf and cvbr rows, and no other row reads
         # it at all.
         out=$(RC_MODE="$m" RUNS="$RUNS" THREADS="$THREADS" \
-              YAH264="${YAH264:-$root/build/cli/yah264}" \
+              YAH264="${YAH264:-$root/build/cli/y264}" \
               Y264_MBTREE_OFF="$mbt" \
               YAH264_ARGS="$NA" X264_ARGS="$XA" \
               bash "$script" "$path" "$ncrf" "$SECONDS_PER" 2>&1)

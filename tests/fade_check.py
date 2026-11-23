@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """fade_check.py - the dark-cut gate's fade test reads the same at 8 and 10 bits.
 
-    python3 tests/fade_check.py path/to/cli/yah264
+    python3 tests/fade_check.py path/to/cli/y264
 
 Writes a synthetic QCIF fade from black (faint grain on a slow ramp, the
 mean rising half a level a frame), holds it, then cuts upward, and encodes

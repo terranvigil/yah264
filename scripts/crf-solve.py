@@ -301,7 +301,7 @@ def main():
     # solve's keys are unchanged: its point does not depend on the metric.
     mode_key = mode if mode == "kbps" else "vmaf_v1"
 
-    yah264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
+    yah264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "y264"))
     # Solve with the ASM x264 regardless of the tier being timed: see the header
     # -- it costs ~0.023% of rate and is several times faster to converge with.
     x264 = os.environ.get("X264_ASM", os.path.join(ROOT, "..", "x264", "x264-asm"))

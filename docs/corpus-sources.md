@@ -231,7 +231,7 @@ These recipes are fixed so results reproduce.
   `?prefix=Meridian/` to it lists the folder.
 - To decode a frame-accurate window from a Y4M or MP4:
   `ffmpeg -v error -ss <s> -i <src> -frames:v <n> -vf format=yuv420p -f yuv4mpegpipe out.y4m`.
-  Stream the xz Y4Ms: `xz -dc big_buck_bunny_720p24.y4m.xz | yah264 --input-y4m - ...`.
+  Stream the xz Y4Ms: `xz -dc big_buck_bunny_720p24.y4m.xz | y264 --input-y4m - ...`.
 - Tone-map the Netflix HDR masters to 8-bit BT.709. It's the only lossy step,
   and it's identical for everyone. The MP4s are 8-bit H.264 with a PQ signal and
   NO color tags, so declare the tags first. Without them zimg reports
@@ -243,7 +243,7 @@ These recipes are fixed so results reproduce.
   window at 2:00 encodes to a 5-shot table at CRF 26. For the visual check, use
   the frame at 2:08. It shows a lit office where the window highlights hold and
   skin tones stay neutral.
-- For shot boundaries, run `yah264 --shot-table` on the window. It prints the
+- For shot boundaries, run `y264 --shot-table` on the window. It prints the
   shot boundaries the encoder itself will use. `scripts/multishot_bd.py` takes any `.cuts`
   file.
 

@@ -33,7 +33,7 @@ import bdcompare as bd
 
 bd.SUBSAMPLE = 1
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.path.join(ROOT, "build/cli/yah264")
+BIN = os.path.join(ROOT, "build/cli/y264")
 
 # The arms the re-derived ceiling table says carry the per-content split.
 # Baseline is the shipped default path, and it is also the abstain choice: an

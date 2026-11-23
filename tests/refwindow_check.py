@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """refwindow_check.py - the reference window at --ref 15 and 16 without a pyramid.
 
-    python3 tests/refwindow_check.py path/to/cli/yah264
+    python3 tests/refwindow_check.py path/to/cli/y264
 
 The SPS declares at most 15 reference frames. With flat B frames (--bframes 1,
 or --b-pyramid none) the B frames are not references, so a P frame is decoded

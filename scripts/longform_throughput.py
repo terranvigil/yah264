@@ -138,7 +138,7 @@ MEDIA   = os.environ.get("LF_MEDIA", "/Volumes/seagate/media")
 # copy when present and the same size (see USB_MBPS).
 MASTERS = os.environ.get("LF_MASTERS", os.path.join(_ROOT, "scratch", "masters"))
 FEED    = os.path.join(_ROOT, "scripts", "lf_feed.py")
-YAH264  = os.environ.get("YAH264", os.path.join(_ROOT, "build-rel", "cli", "yah264"))
+YAH264  = os.environ.get("YAH264", os.path.join(_ROOT, "build-rel", "cli", "y264"))
 # THE TWO REFERENCE BINARIES, PINNED. The SIMD arm is the installed CLI,
 # 0.165.3222 b35605a. The pure-C arm is the same commit built with
 # --disable-asm and -fno-tree-vectorize stripped from config.mak (the fair

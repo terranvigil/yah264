@@ -28,7 +28,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 . scripts/parity-clips.sh
 
-Y=${YAH264:-build/cli/yah264}
+Y=${YAH264:-build/cli/y264}
 X=${X264:-x264}
 THREADS=${THREADS:-4}
 D=${CLIPS_P10_DIR:-/Volumes/seagate/media/_p10}

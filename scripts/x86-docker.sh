@@ -411,7 +411,7 @@ if has_leg test; then build_dir "$b10" 10 || build10ok=0; fi
 # conformance.sh takes the encoder as a single path, so the QEMU legs give it this
 cat > "$out/qcli" <<QEOF
 #!/bin/sh
-exec $qrun_path /work/$b8/cli/yah264 "\$@"
+exec $qrun_path /work/$b8/cli/y264 "\$@"
 QEOF
 chmod +x "$out/qcli"
 
@@ -509,7 +509,7 @@ for BACKEND in $BACKENDS; do
         [ "$tierok" = 1 ] || break
         if has_leg test; then
             # YAH264= as well as BUILD=: `make test` hands regress.py no path
-            # and regress.py defaults to build/cli/yah264, which in here is a
+            # and regress.py defaults to build/cli/y264, which in here is a
             # macOS build directory or nothing at all.
             run_case "$BACKEND" "$tier" "make test" "$out/$BACKEND-$tier-test.log" \
                 "Y264_SIMD_FORCE=$tier" "QEMU_CPU=$(cpu_for "$tier")" \
@@ -531,7 +531,7 @@ for BACKEND in $BACKENDS; do
             # cores the run was allowed.
             run_case "$BACKEND" "$tier" "conformance --fast" "$out/$BACKEND-$tier-conf.log" \
                 "Y264_SIMD_FORCE=$tier" "QEMU_CPU=$(cpu_for "$tier")" "YAH264_CONF_FAST=1" "YAH264_CONF_JOBS=$CPUS" \
-                -- "enc=$b8/cli/yah264; [ -n \"\$QR\" ] && enc=scratch/x86-docker/qcli
+                -- "enc=$b8/cli/y264; [ -n \"\$QR\" ] && enc=scratch/x86-docker/qcli
                     scripts/conformance.sh --fast \$enc"
         fi
     done
@@ -558,7 +558,7 @@ for spec in $CLIPS; do
         for mode in '--crf 23' '--qp 26' \"--bitrate \$rate\"; do
             o=$idir/x.264
             rm -f \"\$o\"
-            \$QR $b8/cli/yah264 --input-y4m \"\$src\" --frames $FRAMES \$mode \\
+            \$QR $b8/cli/y264 --input-y4m \"\$src\" --frames $FRAMES \$mode \\
                 --threads \$t -o \"\$o\" > /dev/null 2> $idir/err \\
                 || { echo \"ENCODE FAILED \$clip t\$t \$mode: \$(head -1 $idir/err)\"; exit 1; }
             [ -s \"\$o\" ] || { echo \"EMPTY OUTPUT \$clip t\$t \$mode\"; exit 1; }
@@ -613,7 +613,7 @@ for spec in foreman_cif:yuv420p10le bus_cif:yuv422p10le mobile_cif:yuv444p10le; 
     for mode in '--crf 23' '--qp 26' '--preset slow --crf 30'; do
         o=$idir/x.264
         rm -f \"\$o\"
-        \$QR $b8/cli/yah264 --input-y4m \"\$dst\" --frames $FRAMES \$mode --threads 1 \\
+        \$QR $b8/cli/y264 --input-y4m \"\$dst\" --frames $FRAMES \$mode --threads 1 \\
             -o \"\$o\" > /dev/null 2> $idir/err \\
             || { echo \"ENCODE FAILED \$clip \$fmt \$mode: \$(head -1 $idir/err)\"; exit 1; }
         [ -s \"\$o\" ] || { echo \"EMPTY OUTPUT \$clip \$fmt \$mode\"; exit 1; }

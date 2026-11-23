@@ -23,7 +23,7 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
+BIN = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "y264"))
 CORPUS = os.path.join(ROOT, "tests", "corpus")
 CLIPS = ["stefan_cif", "bus_cif", "mobile_cif", "coastguard_cif"]
 CRFS = [32, 38, 44]

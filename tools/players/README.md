@@ -27,7 +27,7 @@ the comparison is fair. These are the x264 baseline settings that
 
 ```sh
 SRC=src.y4m
-build/cli/yah264 --input-y4m $SRC --qp 32 -o yah264.264
+build/cli/y264 --input-y4m $SRC --qp 32 -o yah264.264
 x264 --qp 32 --keyint infinite --no-scenecut --ref 1 --bframes 0 \
      --no-cabac --profile baseline --preset medium \
      --demuxer y4m --input-csp i420 -o x264.264 $SRC

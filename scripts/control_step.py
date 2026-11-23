@@ -4,7 +4,7 @@
 """How fast a live bitrate step lands: one encode with a --control log of
 RATE steps, read back from --frame-stats.
 
-usage: scripts/control_step.py --bin build/cli/yah264 --clip CLIP.y4m
+usage: scripts/control_step.py --bin build/cli/y264 --clip CLIP.y4m
            --steps 3000@0,1000@150,3000@300 [--vbv cbr|capped|none]
            [--frames N] [--threads 1] [--keep DIR] [--check SECONDS]
 

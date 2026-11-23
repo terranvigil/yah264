@@ -6,7 +6,7 @@
 # Netflix Open Content, a CRF ladder at 1080p and 4K, each encode scored with
 # HDR-VMAF v1.1.8 (and its PQ CAMBI).
 #
-#   YAH264=build-rel/cli/yah264 \
+#   YAH264=build-rel/cli/y264 \
 #   VMAF_HDR_BIN=/path/to/vmaf VMAF_HDR_MODELS=/path/to/vmaf/model \
 #   WORK=/scratch/hdr scripts/hdr_check.sh
 #
@@ -20,7 +20,7 @@
 # ffmpeg on PATH), into MP4 and MPEG-TS, plus a leg where the HDR metadata
 # comes from the input's own VUI and SEI instead of from options.
 #
-#   YAH264=build/cli/yah264 X264=x264 FF=/path/to/ffmpeg \
+#   YAH264=build/cli/y264 X264=x264 FF=/path/to/ffmpeg \
 #   WORK=/scratch/hdr scripts/hdr_check.sh meta
 #
 # It exits 1 when a field that matters differs (marked !!). Level and
@@ -48,7 +48,7 @@ unset CDPATH
 abs() { case $1 in /*) echo "$1" ;; */*) echo "$PWD/$1" ;; *) [ -e "$1" ] && echo "$PWD/$1" || command -v "$1" || echo "$1" ;; esac; }
 MODE=${1:-quality}
 case $MODE in quality|meta) ;; *) echo "usage: hdr_check.sh [meta]" >&2; exit 2 ;; esac
-Y=$(abs "${YAH264:-build-rel/cli/yah264}")
+Y=$(abs "${YAH264:-build-rel/cli/y264}")
 if [ $MODE = quality ]; then
   VMAF=$(abs "${VMAF_HDR_BIN:?set VMAF_HDR_BIN to a zimg-enabled libvmaf vmaf tool}")
   M=$(abs "${VMAF_HDR_MODELS:?set VMAF_HDR_MODELS to libvmaf model/ directory}")

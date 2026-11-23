@@ -8,7 +8,7 @@ rate controller alone, and check the replay against the recording.
     CLIP=tests/corpus/pedestrian_1080p.y4m FRAMES=60 python3 scripts/rc_replay.py
     ONLY='abr|vbv' python3 scripts/rc_replay.py
     # a controller change, replayed against the default's recording:
-    PLAY_BIN=../other/build-rel/cli/yah264 python3 scripts/rc_replay.py
+    PLAY_BIN=../other/build-rel/cli/y264 python3 scripts/rc_replay.py
     PLAY_ENV='Y264_ABR_VBVOV=0.5' ONLY=abr_vbv python3 scripts/rc_replay.py
     KEEP=dir python3 scripts/rc_replay.py             # keep the recordings in dir
 
@@ -27,7 +27,7 @@ exponent), so its bits are an estimate, and the row says how many slices were
 modelled. The VBV columns are a leaky-bucket estimate over the slice sizes,
 not the Annex C gate; run scripts/hrd_check.py on a real encode for that.
 
-Environment: BIN (default build-rel/cli/yah264), CLIP, FRAMES (default 120),
+Environment: BIN (default build-rel/cli/y264), CLIP, FRAMES (default 120),
 YAH264_WRAP (a command each encode runs under),
 ONLY (regex on config names), PLAY_BIN, PLAY_ENV (NAME=VALUE words),
 KEEP (directory to keep recordings in).
@@ -35,7 +35,7 @@ KEEP (directory to keep recordings in).
 import os, re, shlex, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.environ.get("BIN", os.path.join(ROOT, "build-rel/cli/yah264"))
+BIN = os.environ.get("BIN", os.path.join(ROOT, "build-rel/cli/y264"))
 PLAY_BIN = os.environ.get("PLAY_BIN", BIN)
 # YAH264_WRAP: a command the encoder runs under (the x86 kit's explicit QEMU)
 WRAP = " ".join(shlex.quote(w) for w in shlex.split(os.environ.get("YAH264_WRAP", "")))

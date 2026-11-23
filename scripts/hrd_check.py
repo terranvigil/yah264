@@ -627,7 +627,7 @@ def main():
     ap.add_argument("--self-test", action="store_true",
                     help="run the fixture battery, negative controls included")
     ap.add_argument("--enc", default=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "build", "cli", "yah264"),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "build", "cli", "y264"),
         help="yah264 binary for --self-test")
     ap.add_argument("--sched", default="0",
                     help="SchedSelIdx to check, or 'all' (default 0)")

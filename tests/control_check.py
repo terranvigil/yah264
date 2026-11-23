@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """control_check.py - the CLI's live control (docs/live-control.md).
 
-    python3 tests/control_check.py path/to/cli/yah264
+    python3 tests/control_check.py path/to/cli/y264
 
 On a synthetic 176x144 clip, no corpus and no ffmpeg needed:
 

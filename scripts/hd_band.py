@@ -47,7 +47,7 @@ document it.
     PRESET=fast ARMS='c1=--b-preme-skip 1' python3 scripts/hd_band.py
     SOLVE=1 ARMS='c1=--b-preme-skip 1' python3 scripts/hd_band.py
     ARMS='q6=Y264_B8_QGATE=6 --psy-rd 1.5' python3 scripts/hd_band.py
-    YAH264=/base/build-rel/cli/yah264 ARMS='int=@/int/build-rel/cli/yah264' EARLY_STOP=0 python3 scripts/hd_band.py
+    YAH264=/base/build-rel/cli/y264 ARMS='int=@/int/build-rel/cli/y264' EARLY_STOP=0 python3 scripts/hd_band.py
 """
 import hashlib, json, math, os, shlex, statistics, subprocess, sys, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -76,7 +76,7 @@ BAND = ["bbb_720p", "perseverance_720p", "park_joy_720p",
 RUNGS = [float(x) for x in os.environ.get("RUNGS", "23,26,29,32,35").split(",")]
 FRAMES = int(os.environ.get("FRAMES", "120"))
 JOBS = int(os.environ.get("JOBS", "4"))
-N = os.environ.get("YAH264", "build/cli/yah264")
+N = os.environ.get("YAH264", "build/cli/y264")
 WIN = float(os.environ.get("WINDOW", "1.5"))
 ITERS = int(os.environ.get("ITERS", "7"))
 

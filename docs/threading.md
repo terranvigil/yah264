@@ -110,7 +110,7 @@ The CLI splits `--threads N` into g GOP workers times k wavefront threads and
 prints the split:
 
 ```
-yah264: encoded 250 frame(s) in 2 GOP(s) on 2 GOP-worker(s) x 4 frame-thread(s)
+y264: encoded 250 frame(s) in 2 GOP(s) on 2 GOP-worker(s) x 4 frame-thread(s)
 ```
 
 The split sets `g = min(N, GOP count)` and `k = ceil(N / g)`, and caps each

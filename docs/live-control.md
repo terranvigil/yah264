@@ -112,7 +112,7 @@ the new rate outweigh it.
 ## From the command line
 
 ```
-yah264 --input-y4m in.y4m --bitrate 3000 --vbv-maxrate 3000 --vbv-bufsize 3000 \
+y264 --input-y4m in.y4m --bitrate 3000 --vbv-maxrate 3000 --vbv-bufsize 3000 \
        --control steps.ctl --frame-stats stats.jsonl -o out.264
 ```
 

@@ -28,7 +28,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ENC="${ENC:-$ROOT/build/cli/yah264}"
+ENC="${ENC:-$ROOT/build/cli/y264}"
 FIX="${FIX:-$ROOT/tests/.fixtures/v1}"
 . "$ROOT/scripts/scratch.sh"
 WORK="${WORK:-}"

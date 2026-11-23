@@ -103,7 +103,7 @@ fi
 C_SRC="${Y264_SRC:-$C_TREE}"
 C_B8="${Y264_BUILD8:-$C_SRC/build-rel}"
 CK="$C_B8/tools/checkasm/checkasm"
-Y264="$C_B8/cli/yah264"
+Y264="$C_B8/cli/y264"
 
 c_detect_emulator
 
@@ -505,7 +505,7 @@ st_instr_ratio() {
 # are 10-bit Y4M the operator stages in CLIPS10_DIR; the box fetches none.
 
 C_B10="${Y264_BUILD10:-$C_SRC/build-rel10}"
-Y264_10="$C_B10/cli/yah264"
+Y264_10="$C_B10/cli/y264"
 CLIPS10_DIR="${CLIPS10_DIR:-$CLOUD_WORK/clips10}"
 FRAMES10="${FRAMES10:-$(c_shape 60 6)}"
 

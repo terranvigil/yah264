@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """gop_drop_check.py - a GOP-parallel encode from a file codes every frame.
 
-    python3 tests/gop_drop_check.py path/to/cli/yah264 [corpus-dir]
+    python3 tests/gop_drop_check.py path/to/cli/y264 [corpus-dir]
 
 The seek reader starts before the GOP schedule is published, and it must
 not lose its place when the schedule replaces display order with the

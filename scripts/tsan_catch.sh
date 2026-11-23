@@ -7,7 +7,7 @@
 # on a report and looks exactly like a deadlock.
 set -o pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${BIN:-/tmp/y264tsan/cli/yah264}"
+BIN="${BIN:-/tmp/y264tsan/cli/y264}"
 CLIP="${CLIP:-park_joy_720p}"
 OUT="${OUT:-/tmp/tsan_catch.txt}"
 # The default BIN is a path under /tmp that nothing in this tree creates, so the
@@ -31,7 +31,7 @@ for r in $(seq 1 "${REPS:-12}"); do
   rc=$?
   if grep -q "WARNING: ThreadSanitizer" "$OUT"; then
     echo "caught on rep $r -> $OUT"
-    grep -oE 'yah264:arm64\+0x[0-9a-f]+' "$OUT" | sort -u | \
+    grep -oE 'y264:arm64\+0x[0-9a-f]+' "$OUT" | sort -u | \
       sed 's/.*+//' | while read -r a; do
         printf '%s  ' "$a"; atos -o "$BIN" -l 0x100000000 "$a" 2>/dev/null || echo
       done

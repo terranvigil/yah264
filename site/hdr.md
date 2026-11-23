@@ -34,7 +34,7 @@ pipes it in:
 
 ```
 ffmpeg -i master.mov -pix_fmt yuv420p10le -strict -1 -f yuv4mpegpipe - |
-  yah264 --input-y4m - -o out.264 --crf 22 \
+  y264 --input-y4m - -o out.264 --crf 22 \
     --colorprim bt2020 --transfer smpte2084 --colormatrix bt2020nc --range limited \
     --mastering-display 'G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)' \
     --cll 1000,400
