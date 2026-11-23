@@ -4566,7 +4566,7 @@ static void size_trades(yah264_param_t *p)
     if (cls < 3)
         return;                                 /* the 1080p set ends here */
     if (p->ref == 3) p->ref = 2;
-    if (p->lr_settle == 0) p->lr_settle = 2;
+    if (p->lr_settle == 0) p->lr_settle = 2;    /* unset only; off is negative */
 }
 
 /* Defaults that follow the picture size (y264_size_class: the longer side

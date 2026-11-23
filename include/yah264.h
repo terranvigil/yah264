@@ -463,7 +463,9 @@ typedef struct {
  * candidate inside the score threshold) */
     int lr_settle;          /* end the lowres block search at its predictor
  * when that leaves under this much SAD per lowres
- * pixel (0 = off) */
+ * pixel (0 = unset: off, except 2 at subme 7 under
+ * rate control on a picture 3840 or more on its
+ * longer side; negative = off everywhere) */
     int lr_subgate;         /* skip the lowres subpel refine when the
  * whole-pel winner is under this much SATD per
  * lowres pixel (0 = off) */

@@ -7245,7 +7245,9 @@ static int cli_main(int argc, char **argv)
     if (b_preme_skip >= 0) param.b_preme_skip = b_preme_skip;
     if (p_part_gate >= 0) param.p_part_gate = p_part_gate;
     if (rd_surv_rank >= 0) param.rd_surv_rank = rd_surv_rank;
-    if (lr_settle >= 0) param.lr_settle = lr_settle;
+    /* an explicit 0 is passed as the negative off, so the 2160p size default
+ * (which raises an unset 0) can't override it */
+    if (lr_settle >= 0) param.lr_settle = lr_settle > 0 ? lr_settle : -1;
     if (lr_subgate >= 0) param.lr_subgate = lr_subgate;
     if (mbt_depfloor >= 0) param.mbt_depfloor = mbt_depfloor;
     if (b_intra_band >= 0) param.b_intra_band = b_intra_band;
