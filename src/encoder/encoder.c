@@ -12108,14 +12108,14 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
     if (size == 0) {
         slice_overflow_warn();
         if (e->rcp_on)
-            rcp_drop(e);                /* pending entry retired without accounting */
+            rcp_drop(e, p->disp);       /* pending entry retired without accounting */
         return;                         /* overflow: drop (mirrors serial ret 0) */
     }
     int r; TPROF(TP_NAL, r = append_picture_nals(e, off, p->ref_idc, p->nal_type,
                                                 p->rbsp, &p->sm, p->disp, p->rp));
     if (r < 0) {
         if (e->rcp_on)
-            rcp_drop(e);                /* retire the entry, or every later fill lands one frame late */
+            rcp_drop(e, p->disp);       /* retire the entry, or every later fill lands one frame late */
         return;
     }
     if (e->rcp_on)                      /* stage the actuals; the schedule pops */

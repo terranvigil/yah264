@@ -10,6 +10,7 @@
 // the history the no-lookahead rule set aside.
 #include "../src/encoder/rate.h"
 #include <yah264.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +50,7 @@ static void fill(sample_t *p, int w, int h, int n, int plane)
         }
 }
 
-static int la_off;
+static int la_off, open_gop, interlaced, no_b;
 
 static int threads = 1;
 
@@ -65,6 +66,9 @@ static yah264_encoder_t *open_abr(int kbps, int vbv)
     p.rc.bitrate = kbps;
     if (vbv) { p.rc.vbv_maxrate = kbps; p.rc.vbv_bufsize = kbps; }
     if (la_off) p.rc.lookahead = 0;
+    if (open_gop) { p.open_gop = 1; p.keyint = 24; }
+    if (no_b) p.bframes = 0;
+    if (interlaced) { p.interlaced = 1; p.bframes = 0; }
     yah264_encoder_t *e = yah264_encoder_open(&p);
     yah264_nal_t *nal; int cnt;
     if (e) yah264_encoder_headers(e, &nal, &cnt);
@@ -270,6 +274,38 @@ int main(void)
         CHECK(n > 64);
         if (off) fprintf(stderr, "%d of %d history frames carry another frame's bits\n", off, n);
         CHECK(off == 0);
+        yah264_encoder_close(e);
+    }
+
+    /* the ledger books bits in the order they come, rescaling what it holds
+     * at each step; a shadow books each frame's own bits at its own rate
+     * scale. they agree once the ledger's uncommitted slots are counted, at
+     * every frame, above one thread, under every frame structure */
+    for (int c = 0; c < 6; c++) {
+        threads = c == 5 ? 1 : 3;
+        open_gop = c == 1; no_b = c == 2; interlaced = c == 3; la_off = c == 4;
+        yah264_encoder_t *e = open_abr(400, 0);
+        threads = 1; open_gop = no_b = interlaced = la_off = 0;
+        CHECK(e != NULL);
+        if (!e) continue;
+        CHECK(rate(e, 30, 40, 0, 0) == YAH264_CTL_OK);
+        CHECK(rate(e, 34, 400, 0, 0) == YAH264_CTL_OK);
+        CHECK(rate(e, 70, 120, 0, 0) == YAH264_CTL_OK);
+        double worst = 0.0;
+        for (int i = 0; i <= NF; i++) {
+            if (i < NF) CHECK(push(e, i) == 0);
+            else flush(e);
+            double held = 0.0;
+            for (int k = 0; k < e->rcp_n; k++) {
+                const struct rcp_pend *q = &e->rcp[(e->rcp_head + k) % RCP_MAX];
+                if (q->filled && !q->dropped) held += q->bits;
+            }
+            double d = fabs(e->abr_cum_actual + held - e->rt_shadow);
+            double tol = 1.0 + 1e-9 * fabs(e->rt_shadow);
+            if (d - tol > worst) worst = d - tol;
+        }
+        if (worst > 0.0) fprintf(stderr, "case %d: the ledger is %.0f bits off its shadow\n", c, worst);
+        CHECK(worst <= 0.0);
         yah264_encoder_close(e);
     }
 
