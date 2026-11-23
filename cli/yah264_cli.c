@@ -7242,12 +7242,16 @@ static int cli_main(int argc, char **argv)
  * other tool flag here. The derived default is left alone when it is not
  * given, so a preset keeps searching exactly what it searched before. */
     if (partitions != YAH264_PART_AUTO) param.partitions = partitions;
-    if (b_preme_skip >= 0) param.b_preme_skip = b_preme_skip;
+    if (b_preme_skip >= 0) {
+        param.b_preme_skip = b_preme_skip;
+        param.explicit_set |= YAH264_SET_B_PREME_SKIP;
+    }
     if (p_part_gate >= 0) param.p_part_gate = p_part_gate;
     if (rd_surv_rank >= 0) param.rd_surv_rank = rd_surv_rank;
-    /* an explicit 0 is passed as the negative off, so the 2160p size default
- * (which raises an unset 0) can't override it */
-    if (lr_settle >= 0) param.lr_settle = lr_settle > 0 ? lr_settle : -1;
+    if (lr_settle >= 0) {
+        param.lr_settle = lr_settle;
+        param.explicit_set |= YAH264_SET_LR_SETTLE;
+    }
     if (lr_subgate >= 0) param.lr_subgate = lr_subgate;
     if (mbt_depfloor >= 0) param.mbt_depfloor = mbt_depfloor;
     if (b_intra_band >= 0) param.b_intra_band = b_intra_band;
@@ -7262,8 +7266,10 @@ static int cli_main(int argc, char **argv)
         param.scenecut = scenecut;
     if (bframes >= 0)
         param.bframes = bframes;
-    if (nref >= 1)
+    if (nref >= 1) {
         param.ref = nref;
+        param.explicit_set |= YAH264_SET_REF;
+    }
     if (me_method >= 0)                             /* --me overrides the preset's ME gate */
         param.me_method = me_method;
     param.no_mixed_refs = no_mixed_refs;

@@ -463,9 +463,7 @@ typedef struct {
  * candidate inside the score threshold) */
     int lr_settle;          /* end the lowres block search at its predictor
  * when that leaves under this much SAD per lowres
- * pixel (0 = unset: off, except 2 at subme 7 under
- * rate control on a picture 3840 or more on its
- * longer side; negative = off everywhere) */
+ * pixel (0 = off; see explicit_set) */
     int lr_subgate;         /* skip the lowres subpel refine when the
  * whole-pel winner is under this much SATD per
  * lowres pixel (0 = off) */
@@ -865,7 +863,18 @@ typedef struct {
  * segments gives a segment that follows an IDR a base whose first id
  * differs from the id the previous segment ended on. 0 = the default. */
     int idr_pic_id_base;
+
+    /* The fields among YAH264_SET_* that the caller chose on purpose. At
+ * subme 7 under rate control, a few defaults follow the picture size: from
+ * a longer side of 1920, b_preme_skip 0 becomes 2, and from 3840, ref 3
+ * becomes 2 and lr_settle 0 becomes 2. A field whose bit is set keeps the
+ * value given. 0 = none, so every size default applies. */
+    unsigned explicit_set;
 } yah264_param_t;
+
+#define YAH264_SET_REF           (1u << 0)
+#define YAH264_SET_B_PREME_SKIP  (1u << 1)
+#define YAH264_SET_LR_SETTLE     (1u << 2)
 
 /* param.weightp: 0 is unset (= 1), so off needs a value of its own. */
 #define YAH264_WEIGHTP_OFF         (-1)

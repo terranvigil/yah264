@@ -4562,11 +4562,12 @@ static void size_trades(yah264_param_t *p)
         return;
     if (p->partitions == YAH264_PART_AUTO)
         p->partitions = YAH264_PART_I4X4 | (p->transform8x8 ? YAH264_PART_I8X8 : 0);
-    if (p->b_preme_skip == 0) p->b_preme_skip = 2;
+    unsigned set = p->explicit_set;
+    if (!(set & YAH264_SET_B_PREME_SKIP) && p->b_preme_skip == 0) p->b_preme_skip = 2;
     if (cls < 3)
         return;                                 /* the 1080p set ends here */
-    if (p->ref == 3) p->ref = 2;
-    if (p->lr_settle == 0) p->lr_settle = 2;    /* unset only; off is negative */
+    if (!(set & YAH264_SET_REF) && p->ref == 3) p->ref = 2;
+    if (!(set & YAH264_SET_LR_SETTLE) && p->lr_settle == 0) p->lr_settle = 2;
 }
 
 /* Defaults that follow the picture size (y264_size_class: the longer side
