@@ -48,7 +48,7 @@ void rc_head_serial(yah264_encoder_t *e, int type, int is_ref, pixel *const src[
 void rc_knobs_resolve(yah264_encoder_t *e);
 void rcp_decide(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3]);
 void rcp_drop(yah264_encoder_t *e);
-void rcp_fill(yah264_encoder_t *e, double bits);
+void rcp_fill(yah264_encoder_t *e, double bits, int disp);   /* disp: the coded frame's input number */
 void rcp_flush_all(yah264_encoder_t *e);
 void rcp_head(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3]);
 void rcp_reqp(yah264_encoder_t *e, int type, int is_ref);

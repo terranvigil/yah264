@@ -12119,7 +12119,7 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
         return;
     }
     if (e->rcp_on)                      /* stage the actuals; the schedule pops */
-        rcp_fill(e, 8.0 * (double)size);
+        rcp_fill(e, 8.0 * (double)size, p->disp);
     /* CQP and pure CRF have no rate-control tail. */
 }
 
@@ -12603,7 +12603,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         e->recon_cb(e->recon_ud, &rp, e->cur_disp, Y264_BIT_DEPTH);
     }
     if (r >= 0 && e->rcp_on) {
-        rcp_fill(e, 8.0 * (double)rbsp_size);   /* lagged: schedule pops later */
+        rcp_fill(e, 8.0 * (double)rbsp_size, e->cur_disp);   /* lagged: schedule pops later */
         return r;
     }
     return r;
@@ -13333,7 +13333,7 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
         if (r < 0)
             return -1;
         if (e->rcp_on)
-            rcp_fill(e, 8.0 * (double)L->size);
+            rcp_fill(e, 8.0 * (double)L->size, L->disp);
         for (int c = 0; c < 3; c++) e->rec_out[c] = L->rec[c];
         y264_note_emit(e, L->disp);
         if (e->recon_cb) {
@@ -14565,7 +14565,7 @@ static int stair_drain_anchor(yah264_encoder_t *e, size_t *off,
     }
     g_ew_site = 4;
     w2_flush(e, off);                       /* keeps the ledger in fill order */
-    rcp_fill(e, 8.0 * (double)B->size);
+    rcp_fill(e, 8.0 * (double)B->size, B->disp);
     B->anchor_billed = 1;
     return 0;
 }
@@ -14603,7 +14603,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     if (r < 0)
         return -1;
     if (e->rcp_on && !B->anchor_billed)     /* else stair_drain_anchor billed it */
-        rcp_fill(e, 8.0 * (double)B->size); /* anchor actuals, coding order */
+        rcp_fill(e, 8.0 * (double)B->size, B->disp); /* anchor actuals, coding order */
     for (int k = 0; k < B->stash_n; k++) {
         TPROF(TP_NAL, r = append_slice_nal(e, off, B->stash_item[k].ref_idc,
                                            YAH264_NAL_SLICE,
@@ -14614,7 +14614,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
         if (r < 0)
             return -1;
         if (e->rcp_on)
-            rcp_fill(e, 8.0 * (double)B->stash_item[k].len);
+            rcp_fill(e, 8.0 * (double)B->stash_item[k].len, B->stash_item[k].disp);
     }
     B->stash_n = 0;
     B->stash_len = 0;

@@ -51,6 +51,8 @@ static void fill(sample_t *p, int w, int h, int n, int plane)
 
 static int la_off;
 
+static int threads = 1;
+
 static yah264_encoder_t *open_abr(int kbps, int vbv)
 {
     yah264_param_t p;
@@ -58,7 +60,7 @@ static yah264_encoder_t *open_abr(int kbps, int vbv)
     yah264_param_default(&p);
     p.width = W; p.height = H; p.csp = YAH264_CSP_I420;
     p.timebase.fps_num = 25; p.timebase.fps_den = 1;
-    p.threads = 1; p.keyint = 250; p.bframes = 3;
+    p.threads = threads; p.keyint = 250; p.bframes = 3;
     p.rc.method = YAH264_RC_ABR;
     p.rc.bitrate = kbps;
     if (vbv) { p.rc.vbv_maxrate = kbps; p.rc.vbv_bufsize = kbps; }
@@ -69,6 +71,21 @@ static yah264_encoder_t *open_abr(int kbps, int vbv)
     return e;
 }
 
+/* the coded size of each input frame, from its slice NALs */
+static long fbytes[NF];
+
+static void take(yah264_encoder_t *e, yah264_nal_t *nal, int cnt)
+{
+    int disp[64], nd = 0, slices = 0;
+    for (int k = 0; k < cnt; k++) slices += nal[k].type == YAH264_NAL_SLICE || nal[k].type == YAH264_NAL_SLICE_IDR;
+    if (slices) nd = yah264_encoder_frame_order(e, disp, slices < 64 ? slices : 64);
+    for (int k = 0, j = 0; k < cnt && j < nd; k++)
+        if (nal[k].type == YAH264_NAL_SLICE || nal[k].type == YAH264_NAL_SLICE_IDR) {
+            if (disp[j] >= 0 && disp[j] < NF) fbytes[disp[j]] += (long)nal[k].size;
+            j++;
+        }
+}
+
 static int push(yah264_encoder_t *e, int n)
 {
     fill(y, W, H, n, 0); fill(u, W / 2, H / 2, n, 1); fill(v, W / 2, H / 2, n, 2);
@@ -77,7 +94,9 @@ static int push(yah264_encoder_t *e, int n)
     pic.plane[0] = y; pic.plane[1] = u; pic.plane[2] = v;
     pic.stride[0] = W; pic.stride[1] = W / 2; pic.stride[2] = W / 2;
     yah264_nal_t *nal; int cnt;
-    return yah264_encoder_encode(e, &nal, &cnt, &pic) < 0 ? -1 : 0;
+    if (yah264_encoder_encode(e, &nal, &cnt, &pic) < 0) return -1;
+    take(e, nal, cnt);
+    return 0;
 }
 
 static void flush(yah264_encoder_t *e)
@@ -86,6 +105,7 @@ static void flush(yah264_encoder_t *e)
     for (int g = 0; g < 400; g++) {
         int b = yah264_encoder_encode(e, &nal, &cnt, NULL);
         if (b < 0 || (b == 0 && cnt == 0)) break;
+        take(e, nal, cnt);
     }
 }
 
@@ -223,6 +243,33 @@ int main(void)
         }
         flush(e);
         CHECK(checked);
+        yah264_encoder_close(e);
+    }
+
+    /* above one thread an anchor can be coded before the B frames decided
+     * ahead of it, so the ledger's bits come in a different order from its
+     * entries; the large-step history still pairs each frame with its own
+     * bits */
+    {
+        threads = 3;
+        memset(fbytes, 0, sizeof fbytes);
+        yah264_encoder_t *e = open_abr(400, 0);
+        threads = 1;
+        CHECK(e != NULL);
+        CHECK(rate(e, 40, 40, 0, 0) == YAH264_CTL_OK);
+        for (int i = 0; i < NF; i++) CHECK(push(e, i) == 0);
+        flush(e);
+        int n = 0, off = 0;
+        for (int i = 0; i < 128 && i < (int)e->rt_hn; i++) {
+            int d = e->rt_hist[i].disp;
+            if (d < 0 || d >= NF) continue;
+            n++;
+            double want = 8.0 * (double)fbytes[d];
+            if (e->rt_hist[i].bits > want || e->rt_hist[i].bits < want - 400.0) off++;
+        }
+        CHECK(n > 64);
+        if (off) fprintf(stderr, "%d of %d history frames carry another frame's bits\n", off, n);
+        CHECK(off == 0);
         yah264_encoder_close(e);
     }
 

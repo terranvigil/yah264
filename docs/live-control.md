@@ -67,27 +67,29 @@ with r the new per-frame target over the old one:
   to at most one second of the new target, and the rest is forgiven.
 
 In the rate-factor model (B frames or a lookahead on, the default), a step
-of more than 3x either way lands differently, because on real
-content a frame's bits fall faster than 1/qscale: a tenth of the bits is
-often 9 to 12 QP away, not 20. Such a step moves the operating point by
+of more than 3x either way lands differently, because on real content a
+frame's bits fall faster than 1/qscale: a tenth of the bits is often 9 to
+12 QP away, not 20. Such a step moves the operating point by
 6 log2(1/r) / 1.5 QP, and then reads the content's own slope off the frames
-it codes: the mean bits and QP of a group of frames coded before the step
-and of the first group coded after it give the exponent a in bits ~
-qscale^-a, held to between 1 and 3, and the operating point moves again to
-where that group would have spent the new target. One more group, nearer
-the target, refits once. A group is an anchor and the B frames coded
-against it; its mean QP is the frame QP the rate control chose, before the
-adaptive-quantization and mb-tree offsets, and I frames are left out of it.
-Each group stands as many frames from a QP move as the encoder has in
-flight, and a scene cut in a group or between the two stops the refit,
-leaving the moves already made. What the measured frames over- or under-spent is
-forgiven at each refit, and for two seconds after the last one the rate
-control's ledger runs on a memory of about a second, so the frames at the
-new rate soon outweigh those coded at the old one. Any later rate change,
-a buffer-only one included, ends a refit in progress. With a buffer, only a step down is handled this
-way; a step up is left to the buffer, whose fill already paces it. The
-per-frame model (`--tune zerolatency`, or `--bframes 0` with no lookahead)
-moves straight by 6 log2(1/r) and never refits.
+it codes. Each measured point is a run of whole groups (an anchor and the
+B frames coded against it, a frame's two fields together) holding at least
+a quarter second of frames: one run coded before the step and the first
+run coded after it give the exponent a in bits ~ qscale^-a, and the
+operating point moves again to where that run would have spent the new
+target. A slope outside 1 to 3 means the content changed between the two
+runs, and the last slope (1.5 at first) is used instead. One more run,
+nearer the target, refits once. The means use the frame QP the rate control
+chose, before the adaptive-quantization and mb-tree offsets, and leave out
+I frames. Each run stands as many frames from a QP move as the encoder has
+in flight, and a scene cut in a run or between the two stops the refit,
+leaving the moves already made. For two seconds after refitting ends, the
+rate control's ledger runs on a memory of about a second, so the frames at
+the new rate soon outweigh those coded at the old one. Any later rate
+change, a buffer-only one included, ends a refit in progress. With a
+buffer, only a step down is handled this way; a step up is left to the
+buffer, whose fill already paces it. The per-frame model
+(`--tune zerolatency`, or `--bframes 0` with no lookahead) moves straight
+by 6 log2(1/r) and never refits.
 
 For two seconds after a change the rate control may move its QP a whole step
 per anchor, as it does after the opening, while the content's cost at the
