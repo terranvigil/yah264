@@ -274,7 +274,11 @@ runtime correction tracks the actual spend. Frames pass 1 coded at almost no
 bits (grain or texture under its quantiser) say nothing about what a finer QP
 costs, so when enough of them would be planned far under pass 1 the plan holds
 them at most 15 QP under it, and the runtime prices them at their own measured
-cost as they land. `--pass 3` reads the records and writes them back from a
+cost as they land. When the floor stays off, the first two such frames code no
+finer than 4 QP under pass 1, and once they cost 4 times the model or more the
+correction's band widens by what they cost. The correction lowers the QP by at
+most 2 a frame, and an overspent budget holds frames at the top of its band.
+`--pass 3` reads the records and writes them back from a
 real encode, so a further pass refines against it. Pass 2 needs the same
 `--frames`, `--keyint` and `--tff`/`--bff` as pass 1. It refuses a file from
 the other field mode, from another `--keyint`, with a malformed record, or
