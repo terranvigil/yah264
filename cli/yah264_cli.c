@@ -1250,10 +1250,17 @@ struct fst_carry {
     struct fst_frame open;
     struct fst_frame *done; int ndone, done_cap;
     int *dq; int nq, dq_cap;
+    int lost;                   /* frames dropped from the join: no memory, a call not seen */
 };
 
+/* anything left here at the end of an encode is a frame whose line was never
+ * written or was written against the wrong index: say so rather than leave a
+ * stats file that reads right and is shifted */
 static void fst_carry_free(struct fst_carry *c)
 {
+    int n = c->ndone + c->nq + (c->pic != 0) + c->lost;
+    if (n)
+        fprintf(stderr, "y264: --frame-stats: %d frame(s) unmatched; the stats file may be shifted\n", n);
     free(c->done);
     free(c->dq);
     memset(c, 0, sizeof *c);
@@ -1264,7 +1271,7 @@ static void fst_close(struct fst_carry *c)
     if (c->ndone == c->done_cap) {
         int nc = c->done_cap ? 2 * c->done_cap : 16;
         struct fst_frame *q = realloc(c->done, (size_t)nc * sizeof *q);
-        if (!q) { c->pic = 0; return; }
+        if (!q) { c->pic = 0; c->lost++; return; }
         c->done = q; c->done_cap = nc;
     }
     c->done[c->ndone++] = c->open;
@@ -8171,6 +8178,8 @@ static int cli_main(int argc, char **argv)
             if (sst_cap >= frame + 1) \
                 frame_stats_emit(sfst, enc, &sst_carry, (nal_), (cnt_), sst_by, (int)sst_cap, 0, 0, \
                                  param.frame_threads > 0 ? param.frame_threads : nthreads); \
+            else \
+                sst_carry.lost++; \
         } \
     } while (0)
     while (max_frames == 0 || frame < max_frames) {

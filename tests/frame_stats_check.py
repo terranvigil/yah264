@@ -3,18 +3,19 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """frame_stats_check.py - --frame-stats against the stream it describes.
 
-    python3 tests/frame_stats_check.py path/to/cli/yah264
+    python3 tests/frame_stats_check.py path/to/cli/y264
 
 On a synthetic CIF clip, no corpus and no ffmpeg needed, for frame
 pictures, a sliced encode and --tff/--bff field coding, on the GOP-parallel
 path and the one-instance path (--dump-recon):
 
 - one line per input frame, every frame named once;
-- line n matches the stream's n-th coded frame: its bytes are all of that
-  frame's slice NALs, start codes included, so a sliced or field-coded frame
-  counts all of its pictures, and a field-coded line's "fields" give each
-  field's slice type and bytes as the stream has them. A frame-coded line
-  carries no "fields" key.
+- line n matches the stream's n-th coded frame: its frame is that frame's
+  display index (read from the POCs), its type is the first picture's slice
+  type, its bytes are all of the frame's slice NALs, start codes included,
+  so a sliced or field-coded frame counts all of its pictures, and a
+  field-coded line's "fields" give each field's slice type and bytes as the
+  stream has them. A frame-coded line carries no "fields" key.
 
 Cells cover frame threads inside one instance (--threads 3 on one GOP, the
 one-instance path at 3 threads, a two-pass) as well as the GOP-parallel
@@ -42,24 +43,65 @@ def clip(path, interlace=b"Ip"):
             f.write(bytes([128 - (n & 15)]) * (W * H // 4))
 
 
-def _ue(data, pos):
-    """(value, next bit position) of the ue(v) at bit pos."""
-    z = 0
-    while not data[pos >> 3] >> (7 - (pos & 7)) & 1:
-        z += 1
-        pos += 1
-    pos += 1
-    v = 0
-    for _ in range(z):
-        v = v << 1 | (data[pos >> 3] >> (7 - (pos & 7)) & 1)
-        pos += 1
-    return (1 << z) - 1 + v, pos
+class _Bits:
+    """An Exp-Golomb reader over a NAL's payload, emulation bytes removed."""
+
+    def __init__(self, ebsp):
+        self.b = bytes(ebsp).replace(b"\x00\x00\x03", b"\x00\x00")
+        self.p = 0
+
+    def u(self, n):
+        v = 0
+        for _ in range(n):
+            v = v << 1 | (self.b[self.p >> 3] >> (7 - (self.p & 7)) & 1)
+            self.p += 1
+        return v
+
+    def ue(self):
+        z = 0
+        while not self.u(1):
+            z += 1
+        return (1 << z) - 1 + self.u(z)
+
+    def se(self):
+        k = self.ue()
+        return (k + 1) // 2 if k & 1 else -(k // 2)
+
+
+def _sps(b):
+    """The SPS fields a slice header and the POC need."""
+    prof = b.u(8)
+    b.u(16)
+    sid = b.ue()
+    sep = 0
+    if prof in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        cf = b.ue()
+        if cf == 3:
+            sep = b.u(1)
+        b.ue(); b.ue(); b.u(1)
+        if b.u(1):
+            for i in range(12 if cf == 3 else 8):
+                if b.u(1):
+                    last = nxt = 8
+                    for _ in range(16 if i < 6 else 64):
+                        if nxt:
+                            nxt = (last + b.se() + 256) % 256
+                        last = nxt or last
+    sps = {"sep": sep, "lmfn": b.ue() + 4, "poc": b.ue()}
+    if sps["poc"] != 0:
+        raise ValueError(f"POC type {sps['poc']}: only type 0 is read here")
+    sps["lpoc"] = b.ue() + 4
+    b.ue(); b.u(1); b.ue(); b.ue()
+    sps["fmo"] = b.u(1)
+    return sid, sps
 
 
 def stream_frames(path, ppf):
-    """The stream's frames in coding order, each [bytes, [(type, bytes) per
-    picture]]: slice NALs from their start code to the next, a new picture at
-    every first_mb_in_slice 0, ppf pictures to a frame."""
+    """The stream's frames in coding order, each {bytes, pics: [(type, bytes)
+    per picture], disp}: slice NALs from their start code to the next, a new
+    picture at every first_mb_in_slice 0, ppf pictures to a frame. disp is the
+    frame's display index, from its first picture's POC (type 0, MSB carried
+    from the last reference picture) ranked inside its IDR period."""
     data = open(path, "rb").read()
     starts, i = [], 0
     while True:
@@ -68,21 +110,55 @@ def stream_frames(path, ppf):
             break
         starts.append(i - 1 if i > 0 and data[i - 1] == 0 else i)
         i += 3
-    pics = []
+    sps, pps, pics = {}, {}, []
+    prev_msb = prev_lsb = 0
     for k, s in enumerate(starts):
         end = starts[k + 1] if k + 1 < len(starts) else len(data)
         h = s + (4 if data[s + 2] == 0 else 3)
-        if data[h] & 0x1F not in (1, 5):
+        t, ref_idc = data[h] & 0x1F, data[h] >> 5 & 3
+        if t == 7:
+            sid, v = _sps(_Bits(data[h + 1:end]))
+            sps[sid] = v
+        elif t == 8:
+            b = _Bits(data[h + 1:end])
+            pid, sid = b.ue(), b.ue()
+            pps[pid] = sid
+        if t not in (1, 5):
             continue
-        first_mb, pos = _ue(data[h + 1:h + 8], 0)
-        if first_mb == 0:
-            st, _ = _ue(data[h + 1:h + 8], pos)
-            pics.append(["PBI??"[st % 5], 0])
+        b = _Bits(data[h + 1:h + 32])
+        if b.ue() == 0:                             # first_mb_in_slice
+            st = b.ue()
+            q = sps[pps[b.ue()]]
+            if q["sep"]:
+                b.u(2)
+            b.u(q["lmfn"])
+            if not q["fmo"] and b.u(1):
+                b.u(1)
+            if t == 5:
+                b.ue()
+                prev_msb = prev_lsb = 0
+            lsb, half = b.u(q["lpoc"]), 1 << (q["lpoc"] - 1)
+            msb = prev_msb
+            if lsb < prev_lsb and prev_lsb - lsb >= half:
+                msb += 2 * half
+            elif lsb > prev_lsb and lsb - prev_lsb > half:
+                msb -= 2 * half
+            if ref_idc:
+                prev_msb, prev_lsb = msb, lsb
+            pics.append(["PBI??"[st % 5], 0, msb + lsb, t == 5])
         pics[-1][1] += end - s
     frames = []
     for j in range(0, len(pics), ppf):
         group = pics[j:j + ppf]
-        frames.append([sum(p[1] for p in group), [tuple(p) for p in group]])
+        frames.append({"bytes": sum(p[1] for p in group), "pics": [(p[0], p[1]) for p in group],
+                       "poc": group[0][2], "idr": group[0][3]})
+    period = []
+    for n, f in enumerate(frames + [{"idr": True}]):
+        if f["idr"] and period:
+            for rank, m in enumerate(sorted(period, key=lambda m: frames[m]["poc"])):
+                frames[m]["disp"] = period[0] + rank
+            period = []
+        period.append(n)
     return frames
 
 
@@ -94,12 +170,14 @@ def check(lines, frames, field):
         bad.append(f"{len(lines)} lines naming {names[:8]}..., want frames 0..{NF - 1}")
     if len(frames) != len(lines):
         bad.append(f"{len(lines)} lines for {len(frames)} coded frames")
-    for n, (l, (fb, pics)) in enumerate(zip(lines, frames)):
+    for n, (l, f) in enumerate(zip(lines, frames)):
         fl = l.get("fields")
-        want = None if not field else [{"type": t, "bytes": b} for t, b in pics]
-        if l["bytes"] != fb or fl != want or (field and l["type"] != pics[0][0]):
-            bad.append(f"line {n} (frame {l['frame']}): bytes {l['bytes']} type {l['type']} fields {fl}, "
-                       f"the stream's frame {n} holds {fb} in {pics}")
+        want = None if not field else [{"type": t, "bytes": b} for t, b in f["pics"]]
+        if (l["bytes"] != f["bytes"] or fl != want or l["type"] != f["pics"][0][0]
+                or l["frame"] != f["disp"]):
+            bad.append(f"line {n}: frame {l['frame']} bytes {l['bytes']} type {l['type']} fields {fl}; "
+                       f"the stream's coded frame {n} is display frame {f['disp']} with {f['bytes']} "
+                       f"bytes in {f['pics']}")
             break
     return bad
 

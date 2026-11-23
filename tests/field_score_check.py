@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """field_score_check.py - scripts/bdcompare.py on field-coded streams.
 
-    python3 tests/field_score_check.py path/to/cli/yah264
+    python3 tests/field_score_check.py path/to/cli/y264
 
 On a synthetic CIF clip, coded as frames and with --tff and --bff:
 
