@@ -68,7 +68,34 @@ CONFIGS = [
     ("paff",       "--crf 23 --tff"),
     ("cavlc",      "--bitrate 500 --cavlc"),
     ("fast",       "--preset fast --bitrate 500 --vbv-maxrate 750 --vbv-bufsize 750"),
+    # a live 10x step whose refit a scene cut stops: the clip's second half
+    # has its luma inverted, and the step lands eight frames before the cut,
+    # so its second refit would span the cut
+    ("ctl_cut",    "--bitrate 3000 --level 5.1 CTLCUT"),
 ]
+
+
+def cut_clip(src, dst, frames):
+    """src's first frames // 2 frames, then as many with their luma inverted."""
+    with open(src, "rb") as f:
+        hdr = f.readline()
+        w = h = 0
+        for t in hdr.split():
+            if t.startswith(b"W"): w = int(t[1:])
+            if t.startswith(b"H"): h = int(t[1:])
+        if b" C" in hdr and not any(t in hdr for t in (b"C420", b"C420jpeg", b"C420mpeg2", b"C420paldv")):
+            sys.exit("rc_replay: ctl_cut needs a 4:2:0 clip")
+        ysz, fsz = w * h, w * h * 3 // 2
+        with open(dst, "wb") as o:
+            o.write(hdr)
+            for n in range(frames):
+                if f.readline() == b"":
+                    break
+                fr = bytearray(f.read(fsz))
+                if n >= frames // 2:
+                    fr[:ysz] = bytes(255 - v for v in fr[:ysz])
+                o.write(b"FRAME\n")
+                o.write(fr)
 
 
 def run(cmd, env_extra):
@@ -112,8 +139,16 @@ def main():
             continue
         log = os.path.join(work, f"{name}.rcr")
         stats = os.path.join(work, f"{name}.stats")
-        base = f"{WRAP}{{bin}} --input-y4m {shlex.quote(CLIP)} --frames {FRAMES} --threads 1 --no-progress"
-        a = args.replace("PASS2", "").strip()
+        clip = CLIP
+        a = args.replace("PASS2", "").replace("CTLCUT", "").strip()
+        if "CTLCUT" in args:
+            clip = os.path.join(work, f"{name}.y4m")
+            cut_clip(CLIP, clip, FRAMES)
+            ctl = os.path.join(work, f"{name}.ctl")
+            with open(ctl, "w") as f:
+                f.write(f"{FRAMES // 2 - 8} rate bitrate=300\n")
+            a += f" --control {shlex.quote(ctl)}"
+        base = f"{WRAP}{{bin}} --input-y4m {shlex.quote(clip)} --frames {FRAMES} --threads 1 --no-progress"
         if "PASS2" in args:
             _, p = run(base.format(bin=shlex.quote(BIN)) + f" {a} --pass 1 --stats {stats} -o /dev/null", {})
             if p.returncode:

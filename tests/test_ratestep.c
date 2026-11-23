@@ -3,9 +3,11 @@
 //
 // The rate control's handling of a large live bitrate step, read from the
 // inside: the refit and its short memory end when a later step replaces the
-// move they were measuring, a buffered step up never refits, and the
-// whole-step slew window after a step closes once the ledger has aged two
-// seconds past it, however much of its history the short memory dropped.
+// move they were measuring, a buffered step up never refits, the whole-step
+// slew window after a step closes once the ledger has aged two seconds past
+// it, however much of its history the short memory dropped, a scene cut
+// between the measured groups stops the refit, and the short memory decays
+// the history the no-lookahead rule set aside.
 #include "../src/encoder/rate.h"
 #include <yah264.h>
 #include <stdio.h>
@@ -27,8 +29,18 @@ static int fails;
 
 static sample_t y[W * H], u[W * H / 4], v[W * H / 4];
 
+static int cut_at = -1;     /* from this frame on, a different picture */
+
 static void fill(sample_t *p, int w, int h, int n, int plane)
 {
+    if (cut_at >= 0 && n >= cut_at) {
+        for (int r = 0; r < h; r++)
+            for (int c = 0; c < w; c++) {
+                unsigned x = (unsigned)((c / 8 + r / 8 + n) * 2654435761u) >> 24;
+                p[(size_t)r * w + c] = (sample_t)(plane ? 128 : (x & 0xff));
+            }
+        return;
+    }
     for (int r = 0; r < h; r++)
         for (int c = 0; c < w; c++) {
             unsigned x = (unsigned)((c + n) * 7 + (r + n / 2) * 13 + plane * 50);
@@ -36,6 +48,8 @@ static void fill(sample_t *p, int w, int h, int n, int plane)
             p[(size_t)r * w + c] = (sample_t)(x & 0xff);
         }
 }
+
+static int la_off;
 
 static yah264_encoder_t *open_abr(int kbps, int vbv)
 {
@@ -48,6 +62,7 @@ static yah264_encoder_t *open_abr(int kbps, int vbv)
     p.rc.method = YAH264_RC_ABR;
     p.rc.bitrate = kbps;
     if (vbv) { p.rc.vbv_maxrate = kbps; p.rc.vbv_bufsize = kbps; }
+    if (la_off) p.rc.lookahead = 0;
     yah264_encoder_t *e = yah264_encoder_open(&p);
     yah264_nal_t *nal; int cnt;
     if (e) yah264_encoder_headers(e, &nal, &cnt);
@@ -155,6 +170,59 @@ int main(void)
         /* ...where owed alone, without what the short memory dropped, still
          * reads open: the case the window has to get right */
         CHECK(e->rfm_owed < e->rt_owed_end);
+        yah264_encoder_close(e);
+    }
+
+    /* a scene cut the detector finds between the groups stops refitting: a
+     * 10x step eight frames before a cut refits once and stops at the cut,
+     * where the same step on content without one refits twice */
+    for (int c = 0; c < 2; c++) {
+        cut_at = c ? 60 : -1;
+        yah264_encoder_t *e = open_abr(400, 0);
+        CHECK(e != NULL);
+        CHECK(rate(e, 52, 40, 0, 0) == YAH264_CTL_OK);
+        int base = landed(e), refits = 0, seen_cut = 0;
+        unsigned lo = e->rt_fit_lo;
+        for (int i = 0; i <= NF; i++) {
+            if (i < NF) CHECK(push(e, i) == 0);
+            else flush(e);
+            if (landed(e) > base && e->rt_fit_lo != lo) {   /* each refit moves it */
+                refits++;
+                lo = e->rt_fit_lo;
+            }
+        }
+        for (int i = 0; i < 128; i++) seen_cut |= e->rt_hist[i].cut;
+        CHECK(seen_cut == c);
+        if (refits != (c ? 1 : 2))
+            fprintf(stderr, "cut %d: %d refits\n", c, refits);
+        CHECK(refits == (c ? 1 : 2));
+        yah264_encoder_close(e);
+    }
+    cut_at = -1;
+
+    /* with no lookahead the recent-reading rule may set history aside; the
+     * short memory decays that with the ledger, so a later restore doesn't
+     * bring it back at full weight */
+    {
+        la_off = 1;
+        yah264_encoder_t *e = open_abr(400, 0);
+        la_off = 0;
+        CHECK(e && e->abr_rf2 && e->la_depth == 0);
+        CHECK(rate(e, 30, 40, 0, 0) == YAH264_CTL_OK);
+        int checked = 0, armed = -1;
+        for (int i = 0; i < NF; i++) {
+            if (armed < 0 && e->rt_fast > 8 && e->rfm_rec_state != 2) {
+                e->rfm_rec_lost = 1e6;
+                armed = e->rt_fast;
+            }
+            CHECK(push(e, i) == 0);
+            if (armed >= 0 && !checked && e->rt_fast < armed) {
+                CHECK(e->rfm_rec_lost < 1e6);
+                checked = 1;
+            }
+        }
+        flush(e);
+        CHECK(checked);
         yah264_encoder_close(e);
     }
 

@@ -16800,8 +16800,8 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                         detect_scenecut(e, e->since_idr))));
     /* the content's own cut, before a live keyframe request; the lookahead
      * kept it apart from the keys a zone, force or request asked for */
-    int det_cut = rcr_flags < 0 && is_cut
-                && (have_flags ? e->cur_la_en && e->cur_la_en->det_cut : !sc.off);
+    int det_cut = rcr_flags >= 0 ? (rcr_flags >> 2) & 1
+                : is_cut && (have_flags ? e->cur_la_en && e->cur_la_en->det_cut : !sc.off);
     if (rcr_flags < 0 && ctl_key_at(e, (int)e->frame_count))
         is_cut = 1;                             /* a live keyframe request, whatever the detector */
     if (is_cut)
@@ -16842,7 +16842,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     if (rcr_flags >= 0)
         is_anchor = rcr_flags & 1;
     else if (e->rcr)
-        rcr_put(e->rcr, RCR_FLAGS, (double)(is_cut * 2 + (is_anchor ? 1 : 0)));
+        rcr_put(e->rcr, RCR_FLAGS, (double)(det_cut * 4 + is_cut * 2 + (is_anchor ? 1 : 0)));
     /* POC follows display order, counted from the last IDR rather than the last
  * key, so it runs unbroken across an open one. Identical to since_idr * 2
  * whenever every key is an IDR, which is every default encode -- poc_base

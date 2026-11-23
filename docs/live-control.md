@@ -83,8 +83,8 @@ flight, and a scene cut in a group or between the two stops the refit,
 leaving the moves already made. What the measured frames over- or under-spent is
 forgiven at each refit, and for two seconds after the last one the rate
 control's ledger runs on a memory of about a second, so the frames at the
-new rate soon outweigh those coded at the old one. Any later rate change
-ends a refit in progress. With a buffer, only a step down is handled this
+new rate soon outweigh those coded at the old one. Any later rate change,
+a buffer-only one included, ends a refit in progress. With a buffer, only a step down is handled this
 way; a step up is left to the buffer, whose fill already paces it. The
 per-frame model (`--tune zerolatency`, or `--bframes 0` with no lookahead)
 moves straight by 6 log2(1/r) and never refits.
@@ -97,8 +97,8 @@ With a buffer of about a second, a step lands near its new rate within the
 first second. With no buffer, a step down lands near its new rate within
 the first second and then follows the content as plain ABR does at a steady
 rate, which on content whose cost moves can be a quarter or more off for a
-second or two. A step up with no buffer can still run a few tens of percent
-over in its first second.
+second or two. A step up with no buffer can still land well off its target,
+over or under, in its first second.
 
 ### What is refused, and why
 

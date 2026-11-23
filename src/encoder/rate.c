@@ -1154,6 +1154,7 @@ static double rcp_vbv_scale_eff(const yah264_encoder_t *e, int type)
  * between the groups stops the refit. Coded bits and QPs only, so a replay
  * refits the same way. */
 #define RT_HIST 128
+#define RT_FIT_SKIP_MAX 40
 #define RT_FIT_KMIN 1.0
 #define RT_FIT_KMAX 3.0
 /* the slope a landing assumes before any frame at the new rate is coded;
@@ -1190,19 +1191,20 @@ static void rc_fast_step(yah264_encoder_t *e)
  * the ledger as many entries from its own as there are frames in flight, so
  * the group measured after a move stands that far, and at least a group,
  * from it (and the group before the step as far before it) */
-static void rc_fit_mark(yah264_encoder_t *e)
+static void rc_fit_mark(yah264_encoder_t *e, unsigned first)
 {
     int g = e->param.bframes + 1 > 16 ? 16 : e->param.bframes + 1;
-    e->rt_fit_seq = atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1;
-    e->rt_fit_skip = e->rcp_n > g ? (e->rcp_n > 40 ? 40 : e->rcp_n) : g;
+    e->rt_fit_seq = first;
+    e->rt_fit_skip = e->rcp_n > g ? (e->rcp_n > RT_FIT_SKIP_MAX ? RT_FIT_SKIP_MAX : e->rcp_n) : g;
     e->rt_fit_bset = 0;
+    e->rt_fit_b1set = 0;
 }
 
-/* the ledger and its references only: the base QP follows at the next
- * anchor's decision. above one thread a refit can land mid-burst, and moving
- * the base there put the burst's remaining B frames on a different base from
- * their own anchor; on bbb's 10x step up that ran the first second 62% over
- * against 18% when they keep it */
+/* the ledger and its references only: a refit runs inside an anchor's rate
+ * decision, which sets the base QP from them right after, and B frames code
+ * on their own anchor's base. (moving the base when a refit could land
+ * mid-burst put the rest of the burst on a different base from its anchor,
+ * and ran bbb's 10x step up 62% over) */
 static void rc_fit_shift(yah264_encoder_t *e, double shift)
 {
     double f = pow(2.0, shift / 6.0);
@@ -1236,7 +1238,7 @@ static int rc_fit_span(const yah264_encoder_t *e, unsigned lo, unsigned hi,
         if ((int)(e->rt_hist[i].seq - lo) < 0 || (int)(e->rt_hist[i].seq - hi) >= 0) continue;
         seen++;
         *cut |= e->rt_hist[i].cut;
-        if (e->rt_hist[i].type == 0) continue;
+        if (e->rt_hist[i].intra) continue;
         b += e->rt_hist[i].bits;
         q += e->rt_hist[i].fqp;
         n++;
@@ -1245,6 +1247,23 @@ static int rc_fit_span(const yah264_encoder_t *e, unsigned lo, unsigned hi,
     *bits = b / n;
     *qp = q / n;
     return 1;
+}
+
+/* every frame of decide sequence [lo, hi) has been counted into the history */
+static int rc_fit_counted(const yah264_encoder_t *e, unsigned lo, unsigned hi)
+{
+    unsigned have = e->rt_hn < RT_HIST ? e->rt_hn : RT_HIST, seen = 0;
+    for (unsigned i = 0; i < have; i++)
+        if ((int)(e->rt_hist[i].seq - lo) >= 0 && (int)(e->rt_hist[i].seq - hi) < 0)
+            seen++;
+    return seen == hi - lo;
+}
+
+/* refitting is over, by its last stage or a stop: the short memory runs */
+static void rc_fit_end(yah264_encoder_t *e)
+{
+    e->rt_fit = 0;
+    rc_fast_start(e);
 }
 
 /* the last whole group (an anchor and the frames decided after it, up to the
@@ -1273,36 +1292,45 @@ static int rc_fit_last_group(const yah264_encoder_t *e, unsigned lim, unsigned *
     return 1;
 }
 
-/* runs as each anchor's frame is accounted: the anchor that follows group B
- * closes it, so the refit lands at the first decision after B's last frame
- * is in. B is the first group whose anchor is decided rt_fit_skip or more
- * frames after the move. A group with a scene cut in it, or a cut between
- * the two groups, stops the refit, as a missing group does, and the moves
- * made stand */
-static void rc_fit_step(yah264_encoder_t *e, const struct rcp_pend *p)
+/* runs at each anchor's rate decision, after the frames whose bits are in
+ * have been committed, with cur the decision's own sequence number. Group B
+ * is the first group whose anchor is decided rt_fit_skip or more frames
+ * after the move; it ends at the next anchor (cur, when that anchor is
+ * decided), and the refit lands at the first anchor decision at which every
+ * frame of B has been counted: this one at one thread, a later one when the
+ * pipeline still holds some. A group with a scene cut in it, or a cut
+ * between the two groups, stops the refit, as a missing group does, and the
+ * moves made stand */
+static void rc_fit_step(yah264_encoder_t *e, unsigned cur)
 {
-    if (p->type == 2)
-        return;
     if (!e->rt_fit_bset) {
-        if ((int)(p->seq - (e->rt_fit_seq + (unsigned)e->rt_fit_skip)) >= 0) {
-            e->rt_fit_b0 = p->seq;
+        if ((int)(cur - (e->rt_fit_seq + (unsigned)e->rt_fit_skip)) >= 0) {
+            e->rt_fit_b0 = cur;
             e->rt_fit_bset = 1;
         }
         return;
     }
-    unsigned b0 = e->rt_fit_b0, b1 = p->seq, lo = e->rt_fit_lo, ahi;
+    if (!e->rt_fit_b1set) {
+        if (cur == e->rt_fit_b0)
+            return;
+        e->rt_fit_b1 = cur;
+        e->rt_fit_b1set = 1;
+    }
+    unsigned b0 = e->rt_fit_b0, b1 = e->rt_fit_b1, lo = e->rt_fit_lo, ahi;
     double qa = e->rt_fit_qa, ba = e->rt_fit_ba, qb, bb, qx, bx;
     int cut = 0, cx = 0;
+    if (!rc_fit_counted(e, b0, b1))
+        return;                         /* B's bits aren't all in yet */
     if (e->rt_fit == 1) {
         if (!rc_fit_last_group(e, e->rt_fit_seq - (unsigned)e->rt_fit_skip, &lo, &ahi)
             || !rc_fit_span(e, lo, ahi, &ba, &qa, &cut)) {
-            e->rt_fit = 0;
+            rc_fit_end(e);
             return;
         }
     }
     if (!rc_fit_span(e, b0, b1, &bb, &qb, &cx) || !(ba > 0.0) || !(bb > 0.0)
         || !rc_fit_span(e, lo, b1, &bx, &qx, &cut) || cut) {
-        e->rt_fit = 0;
+        rc_fit_end(e);
         return;
     }
     /* the slope between the two newest points; a few QP apart, frame-to-frame
@@ -1324,9 +1352,9 @@ static void rc_fit_step(yah264_encoder_t *e, const struct rcp_pend *p)
     e->rt_fit_ba = bb;
     e->rt_fit_lo = b0;
     if (e->rt_fit++ >= RT_FIT_STAGES)
-        e->rt_fit = 0;
+        rc_fit_end(e);
     else
-        rc_fit_mark(e);
+        rc_fit_mark(e, cur);
 }
 
 /* Commit one popped entry's actuals into the committed ledger. */
@@ -1339,13 +1367,9 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->rt_hist[i].fqp = (int16_t)p->fqp;
         e->rt_hist[i].bits = p->bits;
         e->rt_hist[i].cut = p->cut;
+        e->rt_hist[i].intra = p->rc_type == 0;
         if (e->rt_fast > 0)
             rc_fast_step(e);
-        if (e->rt_fit) {
-            rc_fit_step(e, p);
-            if (!e->rt_fit)
-                rc_fast_start(e);
-        }
     }
     if (e->vbv_on) {
         double qscale = pow(2.0, (p->fqp - 12) / 6.0);
@@ -2334,6 +2358,8 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * The seq bound in rcp_pop_ready carries the lag instead, on every path. */
     if (type != 2 && e->rcp_lag == 0)
         rcp_commit_filled(e);
+    if (type != 2 && e->rt_fit)
+        rc_fit_step(e, atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1);
     double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0, pend_lo[3] = { 0.0, 0.0, 0.0 };
     int np = e->rcp_n;
     /* A5b (always on): under the rate-factor controller
@@ -3855,6 +3881,12 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
     double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
                ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 25.0;
     double fdiv = e->fields ? 2.0 : 1.0;
+    if (kbps <= 0) {
+        /* a buffer-only change still ends a refit: it moves what the
+         * groups measure against */
+        e->rt_fit = 0;
+        e->rt_fast = 0;
+    }
     if (kbps > 0 && e->abr_on && e->abr_target_bpf > 0) {
         double nb = (double)kbps * 1000.0 / fps / fdiv;
         double r = nb / e->abr_target_bpf;
@@ -3874,9 +3906,9 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         /* with a buffer, a step up is left to the buffer, whose fill already
          * paces it: refit there, bbb's CBR 10x step up ran its first second
          * 60% over */
-        e->rt_fit_bal *= r;
         if ((r < 1.0 / 3.0 || r > 3.0) && e->abr_rf2 && !e->rc_shared && (!e->vbv_on || r < 1.0)) {
             e->rt_fit = 1;
+            e->rt_fast = 0;     /* a new large step restarts, short memory included */
             e->rt_fit_k = RT_FIT_K0 > RT_FIT_KMIN ? RT_FIT_K0 : RT_FIT_KMIN;
             prior = dq / RT_FIT_K0 - dq;
         } else {
@@ -3886,7 +3918,7 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
             e->rt_fast = 0;
         }
         if (e->rt_fit)
-            rc_fit_mark(e);
+            rc_fit_mark(e, atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1);
         for (int t = 0; t < 3; t++)
             if (e->slew_set[t]) e->slew_ref[t] += dq;
         e->itrk_qp += dq * e->itrk_wt;
