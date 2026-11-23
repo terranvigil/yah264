@@ -27,7 +27,7 @@ FRAMES = int(os.environ.get("FRAMES", "120"))
 # YAH264=<path> points the gate at a different build -- needed for anything
 # behind a build option rather than an env knob (the -Dgpu builds live outside
 # build/, so the default binary cannot exercise them).
-N = os.environ.get("YAH264", "build/cli/yah264")
+N = os.environ.get("YAH264", "build/cli/y264")
 # the score bdcompare gates on (and names in its BD line); same default as bdcompare
 GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
 

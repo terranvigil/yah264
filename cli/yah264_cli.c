@@ -255,11 +255,11 @@ static void read_fail_report(int rp, unsigned bad, long frame)
 {
     long f = frame + g_seek_frames;
     if (rp == RP_RANGE)
-        fprintf(stderr, "yah264: input sample %u on frame %ld is above %u, the %d-bit "
+        fprintf(stderr, "y264: input sample %u on frame %ld is above %u, the %d-bit "
                 "maximum: the input is not %d-bit video\n", bad, f,
                 (1u << g_api->depth) - 1, g_api->depth, g_api->depth);
     else
-        fprintf(stderr, "yah264: short read on frame %ld\n", f);
+        fprintf(stderr, "y264: short read on frame %ld\n", f);
 }
 
 /* Read one plane of `n` samples into a buffer of n * g_enc_sample_sz bytes.
@@ -420,9 +420,9 @@ static void progress(long done, long total)
     double el = t - g_prog_t0;
     double fps = el > 0 ? done / el : 0;
     if (total > 0)
-        fprintf(stderr, "\ryah264: %ld/%ld frames, %.1f fps   ", done, total, fps);
+        fprintf(stderr, "\ry264: %ld/%ld frames, %.1f fps   ", done, total, fps);
     else
-        fprintf(stderr, "\ryah264: %ld frames, %.1f fps   ", done, fps);
+        fprintf(stderr, "\ry264: %ld frames, %.1f fps   ", done, fps);
     fflush(stderr);
 }
 
@@ -446,7 +446,7 @@ static int g_crop_l, g_crop_t, g_crop_r, g_crop_b;
 static int parse_plan(const char *path)
 {
     FILE *f = fopen(path, "r");
-    if (!f) { fprintf(stderr, "yah264: cannot read plan %s\n", path); return -1; }
+    if (!f) { fprintf(stderr, "y264: cannot read plan %s\n", path); return -1; }
     char line[256];
     while (fgets(line, sizeof line, f)) {
         char *h = strchr(line, '#'); if (h) *h = 0;
@@ -458,7 +458,7 @@ static int parse_plan(const char *path)
         for (char *tok = strtok(line + nread, " \t\r\n"); tok; tok = strtok(NULL, " \t\r\n")) {
             if (!strcmp(tok, "idr")) { z->flags |= YAH264_ZONE_IDR; g_plan_idr = 1; }
             else if (!strncmp(tok, "qp", 2)) z->qp_offset = atof(tok + 2);
-            else { fprintf(stderr, "yah264: plan %s: unknown token '%s'\n", path, tok); fclose(f); return -1; }
+            else { fprintf(stderr, "y264: plan %s: unknown token '%s'\n", path, tok); fclose(f); return -1; }
         }
     }
     fclose(f);
@@ -481,16 +481,16 @@ static int parse_zones_arg(const char *arg)
         n++;
         int first, last, nread = 0;
         if (sscanf(zs, "%d,%d,%n", &first, &last, &nread) < 2 || !nread) {
-            fprintf(stderr, "yah264: --zones: zone %d '%s' is not start,end,option\n", n, zs);
+            fprintf(stderr, "y264: --zones: zone %d '%s' is not start,end,option\n", n, zs);
             rc = -1; break;
         }
         const char *opt = zs + nread;
         if (first < 0 || last < first) {
-            fprintf(stderr, "yah264: --zones: zone %d '%s' needs 0 <= start <= end\n", n, zs);
+            fprintf(stderr, "y264: --zones: zone %d '%s' needs 0 <= start <= end\n", n, zs);
             rc = -1; break;
         }
         if (strchr(opt, ',')) {
-            fprintf(stderr, "yah264: --zones: zone %d '%s' gives more than one option; "
+            fprintf(stderr, "y264: --zones: zone %d '%s' gives more than one option; "
                             "a zone takes one, q=<int> or b=<float>\n", n, zs);
             rc = -1; break;
         }
@@ -499,7 +499,7 @@ static int parse_zones_arg(const char *arg)
         if (!strncmp(opt, "q=", 2)) {
             long q = strtol(opt + 2, &end, 10);
             if (end == opt + 2 || *end || q < 0 || q > 51) {
-                fprintf(stderr, "yah264: --zones: zone %d '%s': q= takes a whole QP 0..51\n", n, zs);
+                fprintf(stderr, "y264: --zones: zone %d '%s': q= takes a whole QP 0..51\n", n, zs);
                 rc = -1; break;
             }
             z.flags = YAH264_ZONE_QP;
@@ -507,19 +507,19 @@ static int parse_zones_arg(const char *arg)
         } else if (!strncmp(opt, "b=", 2)) {
             double b = strtod(opt + 2, &end);
             if (end == opt + 2 || *end || !isfinite(b) || b <= 0.0) {
-                fprintf(stderr, "yah264: --zones: zone %d '%s': b= takes a multiplier above 0\n", n, zs);
+                fprintf(stderr, "y264: --zones: zone %d '%s': b= takes a multiplier above 0\n", n, zs);
                 rc = -1; break;
             }
             z.qp_offset = -6.0 * log2(b);
         } else {
-            fprintf(stderr, "yah264: --zones: zone %d '%s': '%s' is not supported; "
+            fprintf(stderr, "y264: --zones: zone %d '%s': '%s' is not supported; "
                             "a zone takes q=<int> (a fixed QP) or b=<float> (a bitrate multiplier)\n",
                     n, zs, opt);
             rc = -1; break;
         }
         for (int k = 0; k < g_nzones; k++)
             if (first <= g_zones[k].last && g_zones[k].first <= last) {
-                fprintf(stderr, "yah264: --zones: zone %d (%d..%d) overlaps frames %d..%d\n",
+                fprintf(stderr, "y264: --zones: zone %d (%d..%d) overlaps frames %d..%d\n",
                         n, first, last, g_zones[k].first, g_zones[k].last);
                 rc = -1; break;
             }
@@ -527,7 +527,7 @@ static int parse_zones_arg(const char *arg)
         g_zones = realloc(g_zones, (size_t)(g_nzones + 1) * sizeof *g_zones);
         g_zones[g_nzones++] = z;
     }
-    if (!rc && !n) { fprintf(stderr, "yah264: --zones: no zones in '%s'\n", arg); rc = -1; }
+    if (!rc && !n) { fprintf(stderr, "y264: --zones: no zones in '%s'\n", arg); rc = -1; }
     free(buf);
     return rc;
 }
@@ -544,7 +544,7 @@ static int parse_zones_arg(const char *arg)
 static int parse_qpfile(const char *path)
 {
     FILE *f = fopen(path, "r");
-    if (!f) { fprintf(stderr, "yah264: cannot read qpfile %s\n", path); return -1; }
+    if (!f) { fprintf(stderr, "y264: cannot read qpfile %s\n", path); return -1; }
     char line[256]; int cap = 0, lineno = 0;
     while (fgets(line, sizeof line, f)) {
         lineno++;
@@ -553,16 +553,16 @@ static int parse_qpfile(const char *path)
         int nf = sscanf(line, "%d %15s %d", &frame, ty, &qp);
         if (nf <= 0) continue;
         if (nf < 3) {
-            fprintf(stderr, "yah264: qpfile %s:%d: expected \"<frame> <type> <qp>\"\n", path, lineno);
+            fprintf(stderr, "y264: qpfile %s:%d: expected \"<frame> <type> <qp>\"\n", path, lineno);
             fclose(f); return -1;
         }
         if (frame < 0) {
-            fprintf(stderr, "yah264: qpfile %s:%d: frame %d is before the start of the stream\n",
+            fprintf(stderr, "y264: qpfile %s:%d: frame %d is before the start of the stream\n",
                     path, lineno, frame);
             fclose(f); return -1;
         }
         if (qp < -1 || qp > 51) {
-            fprintf(stderr, "yah264: qpfile %s:%d: QP %d is outside 0..51 (-1 = the rate control decides)\n",
+            fprintf(stderr, "y264: qpfile %s:%d: QP %d is outside 0..51 (-1 = the rate control decides)\n",
                     path, lineno, qp);
             fclose(f); return -1;
         }
@@ -574,7 +574,7 @@ static int parse_qpfile(const char *path)
             case 'B': case 'b': type = YAH264_FORCE_B;   break;
             case '-':           type = YAH264_FORCE_NONE; break;
             case 'i':
-                fprintf(stderr, "yah264: qpfile %s:%d: frame %d asks for a non-IDR I frame, "
+                fprintf(stderr, "y264: qpfile %s:%d: frame %d asks for a non-IDR I frame, "
                                 "and a forced non-IDR I isn't supported: use I or K for an "
                                 "IDR (under --open-gop the encoder makes the other keyframes "
                                 "non-IDR itself)\n", path, lineno, frame);
@@ -582,18 +582,18 @@ static int parse_qpfile(const char *path)
             default: type = -1;
         }
         if (type < 0) {
-            fprintf(stderr, "yah264: qpfile %s:%d: unknown frame type '%s' (I K i P B b, or - for none)\n",
+            fprintf(stderr, "y264: qpfile %s:%d: unknown frame type '%s' (I K i P B b, or - for none)\n",
                     path, lineno, ty);
             fclose(f); return -1;
         }
         if (frame == 0 && type == YAH264_FORCE_B) {
-            fprintf(stderr, "yah264: qpfile %s:%d: frame 0 cannot be a B frame, it opens the stream\n",
+            fprintf(stderr, "y264: qpfile %s:%d: frame 0 cannot be a B frame, it opens the stream\n",
                     path, lineno);
             fclose(f); return -1;
         }
         for (int i = 0; i < g_nforces; i++)
             if (g_forces[i].disp == frame) {
-                fprintf(stderr, "yah264: qpfile %s:%d: frame %d is named twice\n", path, lineno, frame);
+                fprintf(stderr, "y264: qpfile %s:%d: frame %d is named twice\n", path, lineno, frame);
                 fclose(f); return -1;
             }
         if (g_nforces == cap) { cap = cap ? cap * 2 : 64; g_forces = realloc(g_forces, (size_t)cap * sizeof *g_forces); }
@@ -628,7 +628,7 @@ static void apply_forces(yah264_encoder_t *e, int start, int end, int grid,
  * one force a key frame cannot absorb, so it is refused by frame
  * number rather than quietly coded as an I. */
             if (f[m].type == YAH264_FORCE_B) {
-                fprintf(stderr, "yah264: frame %d cannot be coded as a B frame "
+                fprintf(stderr, "y264: frame %d cannot be coded as a B frame "
                                 "(a key frame is placed here)\n", d);
                 g_force_reject = 1;
                 free(f);
@@ -647,7 +647,7 @@ static void apply_forces(yah264_encoder_t *e, int start, int end, int grid,
             /* a key frame the GOP split would have placed here: as at a GOP's
              * first frame, a B can't be one */
             if (f[k].type == YAH264_FORCE_B) {
-                fprintf(stderr, "yah264: frame %d cannot be coded as a B frame "
+                fprintf(stderr, "y264: frame %d cannot be coded as a B frame "
                                 "(a key frame is placed here)\n", d);
                 g_force_reject = 1;
                 free(f);
@@ -658,7 +658,7 @@ static void apply_forces(yah264_encoder_t *e, int start, int end, int grid,
             f[m++] = (yah264_frame_force_t){ d - start, YAH264_FORCE_IDR, -1 };
     }
     if (m && g_api->set_frame_forces(e, f, m) < 0) {
-        fprintf(stderr, "yah264: qpfile rejected on the GOP at %d\n", start);
+        fprintf(stderr, "y264: qpfile rejected on the GOP at %d\n", start);
         g_force_reject = 1;
     }
     free(f);
@@ -680,7 +680,7 @@ static void apply_zones(yah264_encoder_t *e, int start, int end)
         if (a <= start) z[m].flags &= ~YAH264_ZONE_IDR;
         m++;
     }
-    if (m && g_api->set_zones(e, z, m) < 0) fprintf(stderr, "yah264: zones rejected on GOP at %d\n", start);
+    if (m && g_api->set_zones(e, z, m) < 0) fprintf(stderr, "y264: zones rejected on GOP at %d\n", start);
     free(z);
 }
 
@@ -777,7 +777,7 @@ static int ctl_push(struct ctl_echo **a, int *n, int *cap, int64_t frame, const 
 static int parse_control_file(const char *path)
 {
     FILE *f = fopen(path, "r");
-    if (!f) { fprintf(stderr, "yah264: cannot open --control file '%s'\n", path); return -1; }
+    if (!f) { fprintf(stderr, "y264: cannot open --control file '%s'\n", path); return -1; }
     char *line = NULL, err[160];
     size_t lcap = 0;
     ssize_t len;
@@ -786,17 +786,17 @@ static int parse_control_file(const char *path)
     while ((len = getline(&line, &lcap, f)) >= 0) {
         ln++;
         if ((size_t)len != strlen(line)) {
-            fprintf(stderr, "yah264: --control %s:%d: the line contains a NUL byte\n", path, ln);
+            fprintf(stderr, "y264: --control %s:%d: the line contains a NUL byte\n", path, ln);
             free(line); fclose(f); return -1;
         }
         if (len > 1000) {
-            fprintf(stderr, "yah264: --control %s:%d: line too long\n", path, ln);
+            fprintf(stderr, "y264: --control %s:%d: line too long\n", path, ln);
             free(line); fclose(f); return -1;
         }
         if (!seen) {
             int v = ctl_log_header(line);
             if (v < 0 || v > CTL_LOG_VERSION) {
-                fprintf(stderr, "yah264: --control %s:%d: unsupported log version (this build reads %d)\n",
+                fprintf(stderr, "y264: --control %s:%d: unsupported log version (this build reads %d)\n",
                         path, ln, CTL_LOG_VERSION);
                 free(line); fclose(f); return -1;
             }
@@ -807,13 +807,13 @@ static int parse_control_file(const char *path)
         int r = ctl_log_parse(line, 0, &le, err, sizeof err);
         if (r > 0) ctl_from_log(&le, &ev);
         if (r < 0) {
-            fprintf(stderr, "yah264: --control %s:%d: %s\n", path, ln, err);
+            fprintf(stderr, "y264: --control %s:%d: %s\n", path, ln, err);
             free(line); fclose(f); return -1;
         }
         if (r == 0) continue;
         seen = 1;
         if (ev.frame < last) {
-            fprintf(stderr, "yah264: --control %s:%d: frame %lld is before the line above it (%lld); "
+            fprintf(stderr, "y264: --control %s:%d: frame %lld is before the line above it (%lld); "
                     "frames must not decrease\n", path, ln, (long long)ev.frame, (long long)last);
             free(line); fclose(f); return -1;
         }
@@ -834,7 +834,7 @@ static int parse_control_file(const char *path)
     int bad = ferror(f);
     fclose(f);
     if (bad) {
-        fprintf(stderr, "yah264: cannot read --control file '%s'\n", path);
+        fprintf(stderr, "y264: cannot read --control file '%s'\n", path);
         return -1;
     }
     g_control_file = path;
@@ -846,7 +846,7 @@ static long g_ctl_unlanded;
 static void control_unlanded_warn(const char *t)
 {
     if (g_ctl_unlanded++ < 10)
-        fprintf(stderr, "yah264: warning: control \"%s\" never landed: the stream ended first\n", t);
+        fprintf(stderr, "y264: warning: control \"%s\" never landed: the stream ended first\n", t);
 }
 
 /* --control events wait in the CLI and are fed to the encoder as frames go
@@ -884,7 +884,7 @@ static int control_feed_one(yah264_encoder_t *enc)
 
 static int control_feed_fail(int r)
 {
-    fprintf(stderr, "yah264: --control %s:%d: refused: %s\n", g_control_file,
+    fprintf(stderr, "y264: --control %s:%d: refused: %s\n", g_control_file,
             g_ctl_file_line[g_ctl_file_next], yah264_control_strerror(r));
     return -1;
 }
@@ -919,10 +919,10 @@ static int control_start_file(yah264_encoder_t *enc)
     int r = g_api->control_check(enc, g_ctl_file_ev, g_ctl_file_n, &bad);
     if (r != YAH264_CTL_OK) {
         if (bad >= 0)
-            fprintf(stderr, "yah264: --control %s:%d: refused: %s\n", g_control_file,
+            fprintf(stderr, "y264: --control %s:%d: refused: %s\n", g_control_file,
                     g_ctl_file_line[bad], yah264_control_strerror(r));
         else
-            fprintf(stderr, "yah264: --control %s: %s\n", g_control_file, yah264_control_strerror(r));
+            fprintf(stderr, "y264: --control %s: %s\n", g_control_file, yah264_control_strerror(r));
         return -1;
     }
     /* frames do not decrease down the file, so both counts are one pass */
@@ -937,7 +937,7 @@ static int control_start_file(yah264_encoder_t *enc)
             }
         }
         if (same > CTL_FILE_FRAME_MAX || rc > CTL_FILE_RC_MAX) {
-            fprintf(stderr, "yah264: --control %s:%d: refused: more events %s than the encoder's "
+            fprintf(stderr, "y264: --control %s:%d: refused: more events %s than the encoder's "
                     "queue holds (%d on one frame, %d rate and CRF events in %d frames)\n",
                     g_control_file, g_ctl_file_line[i],
                     same > CTL_FILE_FRAME_MAX ? "on this frame" : "this close together",
@@ -981,7 +981,7 @@ static void control_file_unlanded(void)
         control_unlanded_warn(t);
     }
     if (g_ctl_unlanded > 10)
-        fprintf(stderr, "yah264: warning: %ld control events in all never landed\n", g_ctl_unlanded);
+        fprintf(stderr, "y264: warning: %ld control events in all never landed\n", g_ctl_unlanded);
 }
 
 /* one --control-fd line, NUL-terminated at its end: -1 stops the encode */
@@ -989,14 +989,14 @@ static int control_fd_line(yah264_encoder_t *enc, const char *ln, size_t len)
 {
     g_ctl_fd_line++;
     if (memchr(ln, 0, len)) {
-        fprintf(stderr, "yah264: --control-fd: line %d contains a NUL byte\n", g_ctl_fd_line);
+        fprintf(stderr, "y264: --control-fd: line %d contains a NUL byte\n", g_ctl_fd_line);
         return -1;
     }
     char err[160];
     if (!g_ctl_fd_hdr) {
         int v = ctl_log_header(ln);
         if (v < 0 || v > CTL_LOG_VERSION) {
-            fprintf(stderr, "yah264: --control-fd: line %d: unsupported log version "
+            fprintf(stderr, "y264: --control-fd: line %d: unsupported log version "
                     "(this build reads %d)\n", g_ctl_fd_line, CTL_LOG_VERSION);
             return -1;
         }
@@ -1005,7 +1005,7 @@ static int control_fd_line(yah264_encoder_t *enc, const char *ln, size_t len)
     struct ctl_log_event le;
     int r = ctl_log_parse(ln, 1, &le, err, sizeof err);
     if (r < 0) {
-        fprintf(stderr, "yah264: --control-fd: line %d: %s\n", g_ctl_fd_line, err);
+        fprintf(stderr, "y264: --control-fd: line %d: %s\n", g_ctl_fd_line, err);
         return -1;
     }
     if (r == 0) return 0;
@@ -1029,10 +1029,10 @@ static int control_fd_line(yah264_encoder_t *enc, const char *ln, size_t len)
     if (c == YAH264_CTL_OK) c = g_api->control(enc, &ev);
     if (c != YAH264_CTL_OK) {
         if (named >= 0)
-            fprintf(stderr, "yah264: warning: --control-fd: line %d (frame %lld): skipped: %s\n",
+            fprintf(stderr, "y264: warning: --control-fd: line %d (frame %lld): skipped: %s\n",
                     g_ctl_fd_line, (long long)named, yah264_control_strerror(c));
         else
-            fprintf(stderr, "yah264: warning: --control-fd: line %d: skipped: %s\n",
+            fprintf(stderr, "y264: warning: --control-fd: line %d: skipped: %s\n",
                     g_ctl_fd_line, yah264_control_strerror(c));
     }
     return 0;
@@ -1060,21 +1060,21 @@ static int control_poll_fd(yah264_encoder_t *enc)
         }
         if (taken >= CTL_FD_LINES_PER_FRAME) return 0;
         if (g_ctl_fd_len == sizeof g_ctl_fd_buf - 1) {
-            fprintf(stderr, "yah264: --control-fd: line %d too long\n", g_ctl_fd_line + 1);
+            fprintf(stderr, "y264: --control-fd: line %d too long\n", g_ctl_fd_line + 1);
             return -1;
         }
         struct pollfd pf = { g_control_fd, POLLIN, 0 };
         int pr = poll(&pf, 1, 0);
         if (pr < 0 && errno == EINTR) continue;
         if (pr > 0 && (pf.revents & (POLLNVAL | POLLERR))) {
-            fprintf(stderr, "yah264: --control-fd: descriptor %d is no longer readable\n", g_control_fd);
+            fprintf(stderr, "y264: --control-fd: descriptor %d is no longer readable\n", g_control_fd);
             return -1;
         }
         if (pr <= 0 || !(pf.revents & (POLLIN | POLLHUP))) return 0;
         ssize_t k = read(g_control_fd, g_ctl_fd_buf + g_ctl_fd_len, sizeof g_ctl_fd_buf - 1 - g_ctl_fd_len);
         if (k < 0 && (errno == EINTR || errno == EAGAIN)) return 0;
         if (k < 0) {
-            fprintf(stderr, "yah264: --control-fd: cannot read descriptor %d (%s)\n",
+            fprintf(stderr, "y264: --control-fd: cannot read descriptor %d (%s)\n",
                     g_control_fd, strerror(errno));
             return -1;
         }
@@ -1106,13 +1106,13 @@ static int control_fd_open(void)
     if (g_control_fd < 0) return 0;
     int fl = fcntl(g_control_fd, F_GETFL);
     if (fl < 0 || (fl & O_ACCMODE) == O_WRONLY) {
-        fprintf(stderr, "yah264: --control-fd %d: %s\n", g_control_fd,
+        fprintf(stderr, "y264: --control-fd %d: %s\n", g_control_fd,
                 fl < 0 ? "not an open descriptor" : "opened for writing only");
         return -1;
     }
     g_ctl_fd_flags = fl;
     if (fcntl(g_control_fd, F_SETFL, fl | O_NONBLOCK) < 0) {
-        fprintf(stderr, "yah264: --control-fd %d: cannot make it non-blocking (%s)\n",
+        fprintf(stderr, "y264: --control-fd %d: cannot make it non-blocking (%s)\n",
                 g_control_fd, strerror(errno));
         return -1;
     }
@@ -1131,11 +1131,11 @@ static int control_drain(yah264_encoder_t *enc)
         n = g_api->controls_applied(enc, done, 32);
         if (n < 0) {                    /* records were lost; what is left still drains */
             if (g_control_out || g_frame_stats) {
-                fprintf(stderr, "yah264: applied control events were lost, so %s would be incomplete\n",
+                fprintf(stderr, "y264: applied control events were lost, so %s would be incomplete\n",
                         g_control_out ? "--control-out" : "the --frame-stats echo");
                 return -1;
             }
-            fprintf(stderr, "yah264: warning: some applied control events were not reported\n");
+            fprintf(stderr, "y264: warning: some applied control events were not reported\n");
             n = 32;
             continue;
         }
@@ -1149,7 +1149,7 @@ static int control_drain(yah264_encoder_t *enc)
             if ((g_frame_stats && ctl_push(&g_ctl_echo, &g_ctl_echo_n, &g_ctl_echo_cap,
                                            done[i].applied_frame, t) < 0)
                 || (g_control_out && ctl_push(&g_ctl_rec, &g_ctl_rec_n, &g_ctl_rec_cap, done[i].frame, t) < 0)) {
-                fprintf(stderr, "yah264: out of memory keeping the applied control events\n");
+                fprintf(stderr, "y264: out of memory keeping the applied control events\n");
                 return -1;
             }
         }
@@ -1169,12 +1169,12 @@ static int control_write_out(void)
             __typeof__(v[0]) t = v[k]; v[k] = v[k - 1]; v[k - 1] = t;
         }
     FILE *f = fopen(g_control_out, "w");
-    if (!f) { free(v); fprintf(stderr, "yah264: cannot write --control-out '%s'\n", g_control_out); return -1; }
+    if (!f) { free(v); fprintf(stderr, "y264: cannot write --control-out '%s'\n", g_control_out); return -1; }
     fprintf(f, "#livectl %d\n", CTL_LOG_VERSION);
     for (int i = 0; i < g_ctl_rec_n; i++) fprintf(f, "%s\n", v[i].e.text);
     free(v);
     int bad = ferror(f) | (fclose(f) != 0);
-    if (bad) fprintf(stderr, "yah264: error writing --control-out '%s'\n", g_control_out);
+    if (bad) fprintf(stderr, "y264: error writing --control-out '%s'\n", g_control_out);
     return bad ? -1 : 0;
 }
 
@@ -1277,7 +1277,7 @@ static void colour_reserved_warn(const char *opt, int code)
          : tr ? code == 0 || code > 18
          : code > 17);
     if (reserved)
-        fprintf(stderr, "yah264: warning: %s %d is reserved in H.273; written as %d\n",
+        fprintf(stderr, "y264: warning: %s %d is reserved in H.273; written as %d\n",
                 opt, code, (prim || tr) && code == 0 ? 2 : code);
 }
 
@@ -1294,7 +1294,7 @@ static void apply_video_signal(yah264_encoder_t *e)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "yah264 %s - H.264/AVC encoder\n"
+        "y264 (yah264) %s - H.264/AVC encoder\n"
         "usage: %s --input-y4m <in.y4m|-> [-o <out.264|->] [options]\n"
         "  --input-y4m PATH   Y4M input, '-' for stdin\n"
         "  --input-raw PATH   headerless planar YUV, '-' for stdin. Needs\n"
@@ -1314,7 +1314,7 @@ static void usage(const char *argv0)
         "  --no-progress      no progress line (it only appears on a terminal)\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
         "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"   /* x264-ok */
-        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `yah264 --input-y4m\n"
+        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `y264 --input-y4m\n"
         "   in.y4m` is directly comparable to `x264 in.y4m`.)\n"   /* x264-ok */
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme +\n"
         "                     subpel tier. Default = medium (x264-match). Omit for\n"   /* x264-ok */
@@ -2333,7 +2333,7 @@ static void *gop_worker(void *arg)
              * read is an error there, so this frame was skipped: coding on
              * would drop the GOP's tail and still exit 0 */
             if (!have && !j->abort_ && j->seek_rd) {
-                fprintf(stderr, "yah264: internal error: input frame %ld of GOP %d was "
+                fprintf(stderr, "y264: internal error: input frame %ld of GOP %d was "
                         "never read; the output is incomplete\n", i + g_seek_frames, g);
                 j->lost = 1; j->abort_ = 1;
                 pthread_cond_broadcast(&j->cv_ready);
@@ -2478,7 +2478,7 @@ static void *y4m_reader(void *arg)
                 reader_fail(j); return NULL;
             }
             if (strncmp(line, "FRAME", 5) != 0) {
-                fprintf(stderr, "yah264: expected FRAME header at frame %ld\n",
+                fprintf(stderr, "y264: expected FRAME header at frame %ld\n",
                         n + g_seek_frames);
                 reader_fail(j); return NULL;
             }
@@ -2490,13 +2490,13 @@ static void *y4m_reader(void *arg)
             ungetc(c, r->in);
         }
         if (r->max_hold > 0 && n >= r->max_hold) {
-            fprintf(stderr, "yah264: the cut-split pre-scan cannot read a pipe twice, so it "
+            fprintf(stderr, "y264: the cut-split pre-scan cannot read a pipe twice, so it "
                     "holds the input, and %d frame(s) reach the memory limit; encode "
                     "from a file\n", n);
             reader_fail(j); return NULL;
         }
         if (!g_raw_input && r->hdr_len >= 0 && len != r->hdr_len) {
-            fprintf(stderr, "yah264: frame %ld has a %d-byte FRAME header where "
+            fprintf(stderr, "y264: frame %ld has a %d-byte FRAME header where "
                     "frame %ld had %d -- per-frame parameters make the frame count "
                     "unreadable from the file length\n", n + g_seek_frames, len,
                     g_seek_frames, r->hdr_len);
@@ -2510,7 +2510,7 @@ static void *y4m_reader(void *arg)
         frame_t *slot = stop ? NULL : fs_slot(j, n);
         pthread_mutex_unlock(&j->lock);
         if (stop) break;
-        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %ld\n", n + g_seek_frames);
+        if (!slot) { fprintf(stderr, "y264: out of memory at frame %ld\n", n + g_seek_frames);
                      reader_fail(j); return NULL; }
 
         frame_t f;
@@ -2518,7 +2518,7 @@ static void *y4m_reader(void *arg)
         f.u = malloc(r->cs * (size_t)g_enc_sample_sz);
         f.v = malloc(r->cs * (size_t)g_enc_sample_sz);
         if (!f.y || !f.u || !f.v) {
-            fprintf(stderr, "yah264: out of memory at frame %ld\n", n + g_seek_frames);
+            fprintf(stderr, "y264: out of memory at frame %ld\n", n + g_seek_frames);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
         unsigned bad = 0;
@@ -2546,7 +2546,7 @@ static void *y4m_reader(void *arg)
         int more = g_raw_input ? (fgetc(r->in) != EOF)
                                : (read_line(r->in, line, sizeof(line)) != -1);
         if (more) {
-            fprintf(stderr, "yah264: input has more frames than its length implied "
+            fprintf(stderr, "y264: input has more frames than its length implied "
                     "(read through frame %ld)\n", n - 1 + g_seek_frames);
             reader_fail(j); return NULL;
         }
@@ -2637,7 +2637,7 @@ static void *y4m_reader_seek(void *arg)
         }
         if (stuck >= 0) {
             pthread_mutex_unlock(&j->lock);
-            fprintf(stderr, "yah264: internal error: input frame %ld is waited on and the "
+            fprintf(stderr, "y264: internal error: input frame %ld is waited on and the "
                     "reader will never read it; stopping instead of hanging\n",
                     stuck + g_seek_frames);
             reader_fail(j);
@@ -2653,17 +2653,17 @@ static void *y4m_reader_seek(void *arg)
         int i = j->gop_rd[g];
         frame_t *slot = fs_slot(j, i);
         pthread_mutex_unlock(&j->lock);
-        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %ld\n", i + g_seek_frames);
+        if (!slot) { fprintf(stderr, "y264: out of memory at frame %ld\n", i + g_seek_frames);
                      reader_fail(j); return NULL; }
 
         if (fseeko(r->in, r->base + (off_t)((uint64_t)i * r->rec), SEEK_SET) != 0) {
-            fprintf(stderr, "yah264: cannot seek to frame %ld\n", i + g_seek_frames);
+            fprintf(stderr, "y264: cannot seek to frame %ld\n", i + g_seek_frames);
             reader_fail(j); return NULL;
         }
         if (!g_raw_input) {
             int len = read_line(r->in, line, sizeof(line));
             if (len != r->hdr_len || strncmp(line, "FRAME", 5) != 0) {
-                fprintf(stderr, "yah264: frame %ld has no %d-byte FRAME header where "
+                fprintf(stderr, "y264: frame %ld has no %d-byte FRAME header where "
                         "the file length put one -- per-frame parameters make the "
                         "frame count unreadable from the file length\n", i + g_seek_frames,
                         r->hdr_len);
@@ -2675,7 +2675,7 @@ static void *y4m_reader_seek(void *arg)
         f.u = malloc(r->cs * (size_t)g_enc_sample_sz);
         f.v = malloc(r->cs * (size_t)g_enc_sample_sz);
         if (!f.y || !f.u || !f.v) {
-            fprintf(stderr, "yah264: out of memory at frame %ld\n", i + g_seek_frames);
+            fprintf(stderr, "y264: out of memory at frame %ld\n", i + g_seek_frames);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
         unsigned bad = 0;
@@ -2701,7 +2701,7 @@ static void *y4m_reader_seek(void *arg)
                    (g_raw_input ? (fgetc(r->in) != EOF)
                                 : (read_line(r->in, line, sizeof(line)) != -1));
         if (more) {
-            fprintf(stderr, "yah264: input has more frames than its length implied "
+            fprintf(stderr, "y264: input has more frames than its length implied "
                     "(read through frame %ld)\n", r->stop_at - 1 + g_seek_frames);
             reader_fail(j); return NULL;
         }
@@ -3024,14 +3024,14 @@ static int stats_tmp_open(const char *path)
     char *final = realpath(path, NULL);
     int existed = final != NULL;
     if (!final && errno != ENOENT) {
-        fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n", path, strerror(errno));
+        fprintf(stderr, "y264: cannot read stats file '%s' (%s)\n", path, strerror(errno));
         return -1;
     }
     if (!final && !(final = strdup(path))) return -1;
     FILE *in = NULL;
     struct stat sst;
     if (existed && (!(in = fopen(final, "rb")) || fstat(fileno(in), &sst) != 0)) {
-        fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n", path, strerror(errno));
+        fprintf(stderr, "y264: cannot read stats file '%s' (%s)\n", path, strerror(errno));
         if (in) fclose(in);
         free(final);
         return -1;
@@ -3047,7 +3047,7 @@ static int stats_tmp_open(const char *path)
     if (fd >= 0) clean_register(&tmp, 1);
     clean_release();
     if (fd < 0) {
-        fprintf(stderr, "yah264: cannot make pass 3's working copy of '%s' beside it (%s)\n",
+        fprintf(stderr, "y264: cannot make pass 3's working copy of '%s' beside it (%s)\n",
                 path, strerror(err));
         if (in) fclose(in);
         free(final); free(tmp);
@@ -3060,7 +3060,7 @@ static int stats_tmp_open(const char *path)
          * its warning names the copy, so say whose it is */
         close(fd);
         unlink(tmp);
-        fprintf(stderr, "yah264: no stats file '%s': pass 3 writes it through the working "
+        fprintf(stderr, "y264: no stats file '%s': pass 3 writes it through the working "
                 "copy '%s' the warning below names\n", path, tmp);
     } else {
         /* the file that replaces the stats file keeps its permissions */
@@ -3077,7 +3077,7 @@ static int stats_tmp_open(const char *path)
         fclose(in);
     }
     if (!ok) {
-        fprintf(stderr, "yah264: cannot copy '%s' to pass 3's working copy '%s' (%s)\n",
+        fprintf(stderr, "y264: cannot copy '%s' to pass 3's working copy '%s' (%s)\n",
                 path, tmp, strerror(err));
         unlink(tmp);
         free(final); free(tmp);
@@ -3292,7 +3292,7 @@ static int out_cut(void)
     const char *tfail = g_of.trunc && ftruncate(g_of.fd, 0) != 0 ? "the output"
                       : g_rf.trunc && ftruncate(g_rf.fd, 0) != 0 ? "the recon" : NULL;
     if (tfail) {
-        fprintf(stderr, "yah264: cannot truncate %s (%s)\n", tfail, strerror(errno));
+        fprintf(stderr, "y264: cannot truncate %s (%s)\n", tfail, strerror(errno));
         return -1;
     }
     clean_hold();
@@ -3362,7 +3362,7 @@ static int stats_now_clash(const char *stats)
     file_id_t st = file_id(sfd, sfd >= 0 ? NULL : stats);
     for (int i = 0; i < 3; i++)
         if (id_same(st, g_run_files[i])) {
-            fprintf(stderr, "yah264: --stats '%s' became the same file as %s; stopping before "
+            fprintf(stderr, "y264: --stats '%s' became the same file as %s; stopping before "
                     "a frame is written\n", stats_shown(stats),
                     i == 0 ? "the input" : i == 1 ? "the output" : "the recon");
             return 1;
@@ -3400,7 +3400,7 @@ static int stats_tmp_finish(int rc)
         int moved = rename(g_stats_tmp, g_stats_final) == 0, err = errno;
         clean_release();
         if (!moved) {
-            fprintf(stderr, "yah264: cannot move pass 3's working copy '%s' over '%s' (%s)\n",
+            fprintf(stderr, "y264: cannot move pass 3's working copy '%s' over '%s' (%s)\n",
                     g_stats_tmp, g_stats_shown, strerror(err));
             rc = 1;
         }
@@ -3409,10 +3409,10 @@ static int stats_tmp_finish(int rc)
         unlink(g_stats_tmp);
         /* the messages above may name the copy, which is gone now */
         if (g_stats_existed)
-            fprintf(stderr, "yah264: pass 3 worked on a copy of '%s' ('%s'); '%s' is "
+            fprintf(stderr, "y264: pass 3 worked on a copy of '%s' ('%s'); '%s' is "
                     "unchanged\n", g_stats_shown, g_stats_tmp, g_stats_shown);
         else
-            fprintf(stderr, "yah264: pass 3 worked on '%s' for '%s'; no '%s' was made\n",
+            fprintf(stderr, "y264: pass 3 worked on '%s' for '%s'; no '%s' was made\n",
                     g_stats_tmp, g_stats_shown, g_stats_shown);
     }
     free(g_stats_tmp); free(g_stats_final); free(g_stats_shown);
@@ -3493,7 +3493,7 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
         }
         if (in) fclose(in);
         if (!in || cut || nrec != want) {
-            fprintf(stderr, "yah264: GOP %d's stats hold %ld whole record(s) for %ld picture(s)%s, "
+            fprintf(stderr, "y264: GOP %d's stats hold %ld whole record(s) for %ld picture(s)%s, "
                     "so '%s' isn't written\n", g, nrec, want, cut ? " and one cut short" : "",
                     out_path);
             return -1;
@@ -3508,7 +3508,7 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
     FILE *out = fopen(out_file, "w");
     if (scratch) clean_release();
     if (!out) {
-        fprintf(stderr, "yah264: cannot write stats file '%s'\n", out_path);
+        fprintf(stderr, "y264: cannot write stats file '%s'\n", out_path);
         return -1;
     }
     /* one thread codes with tools more threads don't, so pass 2 checks
@@ -3525,7 +3525,7 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
         FILE *in = gop_stats[g] ? fopen(gop_stats[g], "r") : NULL;
         char ln[256];
         if (!in) {                              /* read above; gone since */
-            fprintf(stderr, "yah264: cannot read '%s' (%s)\n", gop_stats[g], strerror(errno));
+            fprintf(stderr, "y264: cannot read '%s' (%s)\n", gop_stats[g], strerror(errno));
             fclose(out);
             return -1;
         }
@@ -3540,7 +3540,7 @@ static int tp_merge_pass1(const char *out_file, char *const *gop_stats,
     /* a write that failed early can leave a later flush, and fclose, clean */
     int werr = fflush(out) != 0 || ferror(out);
     if (fclose(out) != 0 || werr) {
-        fprintf(stderr, "yah264: error writing stats file '%s'\n", out_path);
+        fprintf(stderr, "y264: error writing stats file '%s'\n", out_path);
         return -1;
     }
     return 0;
@@ -3694,7 +3694,7 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
     const char *in_path = stats_shown(in_file);
     FILE *in = fopen(in_file, "r");
     if (!in) {
-        fprintf(stderr, "yah264: cannot read stats file '%s'\n", in_path);
+        fprintf(stderr, "y264: cannot read stats file '%s'\n", in_path);
         return -1;
     }
     double *w = calloc((size_t)n_gops, sizeof(double));
@@ -3706,7 +3706,7 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
     if (!w || !cw || !rec || !want || !out || !first) {
         free(w); free(cw); free(rec); free(want); free(out); free(first);
         fclose(in);
-        fprintf(stderr, "yah264: out of memory splitting '%s'\n", in_path);
+        fprintf(stderr, "y264: out of memory splitting '%s'\n", in_path);
         return -2;
     }
     long total_rec = 0;
@@ -3722,13 +3722,13 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
             continue;
         int ki;
         if (!strncmp(ln, "#keyint", 7) && sscanf(ln, "#keyint %d", &ki) != 1) {
-            fprintf(stderr, "yah264: stats file '%s' has a malformed #keyint line\n", in_path);
+            fprintf(stderr, "y264: stats file '%s' has a malformed #keyint line\n", in_path);
             bad = 1; break;
         }
         if (sscanf(ln, "#keyint %d", &ki) == 1) {
             /* two keyints can cut the same split, so the markers alone don't say */
             if (ki != param->keyint) {
-                fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 at --keyint %d, "
+                fprintf(stderr, "y264: stats file '%s' comes from a pass 1 at --keyint %d, "
                         "and this pass runs at --keyint %d\n", in_path, ki, param->keyint);
                 bad = 1; break;
             }
@@ -3738,30 +3738,30 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
             int g, s, e;
             long nr;
             if (sscanf(ln + strlen(TP_MARKER), "%d %d %d %ld", &g, &s, &e, &nr) != 4) {
-                fprintf(stderr, "yah264: malformed GOP marker in '%s'\n", in_path);
+                fprintf(stderr, "y264: malformed GOP marker in '%s'\n", in_path);
                 bad = 1; break;
             }
             /* a record a picture, two a frame under field coding: more than
              * one a frame is a field-coded pass 1, and no more is a frame one */
             if (nr > 0 && e > s && (nr > e - s) != (param->interlaced != 0)) {
-                fprintf(stderr, "yah264: stats file '%s' comes from a pass 1 %s --tff/--bff, and "
+                fprintf(stderr, "y264: stats file '%s' comes from a pass 1 %s --tff/--bff, and "
                         "this pass runs %s; run both passes with the same field order\n", in_path,
                         nr > e - s ? "with" : "without", param->interlaced ? "with" : "without");
                 bad = 1; break;
             }
             if (nr <= 0 || e <= s || nr > (long)(e - s) * (param->interlaced ? 2 : 1)) {
-                fprintf(stderr, "yah264: GOP marker %d in '%s' counts %ld records for "
+                fprintf(stderr, "y264: GOP marker %d in '%s' counts %ld records for "
                         "frames %d..%d\n", g, in_path, nr, s, e);
                 bad = 1; break;
             }
             /* in order, each once: a repeated one would reopen its file */
             if (g != cur + 1) {
-                fprintf(stderr, "yah264: stats file '%s' has GOP marker %d out of order\n",
+                fprintf(stderr, "y264: stats file '%s' has GOP marker %d out of order\n",
                         in_path, g);
                 bad = 1; break;
             }
             if (g < 0 || g >= n_gops || s != gstart[g] || e != gstart[g + 1]) {
-                fprintf(stderr, "yah264: stats file '%s' describes a different GOP "
+                fprintf(stderr, "y264: stats file '%s' describes a different GOP "
                         "split than this pass (marker %d = frames %d..%d)%s\n",
                         in_path, g, s, e,
                         g >= 0 && g < n_gops ? "" : " -- GOP count differs");
@@ -3773,7 +3773,7 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
             out[g] = fopen(gop_stats[g], "w");
             clean_release();
             if (!out[g]) {
-                fprintf(stderr, "yah264: cannot write '%s'\n", gop_stats[g]);
+                fprintf(stderr, "y264: cannot write '%s'\n", gop_stats[g]);
                 bad = 1; break;
             }
             /* the encoder reads #next, #join, #exit and #key only under this */
@@ -3783,7 +3783,7 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
         if (cur < 0 && ln[0] == '#')            /* a line this reader doesn't know */
             continue;
         if (cur < 0) {                          /* records before any marker */
-            fprintf(stderr, "yah264: stats file '%s' has records outside any GOP\n",
+            fprintf(stderr, "y264: stats file '%s' has records outside any GOP\n",
                     in_path);
             bad = 1; break;
         }
@@ -3796,7 +3796,7 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
          * would code something else without a word */
         if (!tp_parse_record(ln, &type, &cplx, &bits, &qp)
             || !tp_record_ok(type, cplx, bits, qp, tp_pic_bits(param), tp_pic_cplx(param))) {
-            fprintf(stderr, "yah264: stats file '%s' has a malformed record in GOP %d\n",
+            fprintf(stderr, "y264: stats file '%s' has a malformed record in GOP %d\n",
                     in_path, cur);
             bad = 1; break;
         }
@@ -3820,11 +3820,11 @@ static int tp_split_pass2(const char *in_file, char **gop_stats, double *gop_tar
     if (!bad) {
         for (int g = 0; g < n_gops; g++) {
             if (!rec[g]) {
-                fprintf(stderr, "yah264: stats file '%s' has no records for GOP %d "
+                fprintf(stderr, "y264: stats file '%s' has no records for GOP %d "
                         "(frames %d..%d)\n", in_path, g, gstart[g], gstart[g + 1]);
                 bad = 1;
             } else if (rec[g] != want[g]) {
-                fprintf(stderr, "yah264: stats file '%s' holds %ld records for GOP %d, "
+                fprintf(stderr, "y264: stats file '%s' holds %ld records for GOP %d, "
                         "its marker says %ld\n", in_path, rec[g], g, want[g]);
                 bad = 1;
             }
@@ -3964,17 +3964,17 @@ static void y264_mem_advice(uint64_t budget, int from_env, uint64_t per_frame,
     y264_hsize(lim, sizeof lim, budget);
     y264_hsize(ph, sizeof ph, y264_phys_mem());
     if (from_env)
-        fprintf(stderr, "yah264:   limit %s (Y264_MAX_INPUT_MB), "
+        fprintf(stderr, "y264:   limit %s (Y264_MAX_INPUT_MB), "
                 "%.2f MiB resident per %dx%d frame, so %llu frame(s) fit\n", lim,
                 (double)per_frame / 1048576.0, W, H,
                 (unsigned long long)(budget / per_frame));
     else
-        fprintf(stderr, "yah264:   limit %s (%.0f%% of %s physical), "
+        fprintf(stderr, "y264:   limit %s (%.0f%% of %s physical), "
                 "%.2f MiB resident per %dx%d frame, so %llu frame(s) fit\n", lim,
                 Y264_INPUT_MEM_SHARE * 100.0, ph,
                 (double)per_frame / 1048576.0, W, H,
                 (unsigned long long)(budget / per_frame));
-    fprintf(stderr, "yah264:   encode a segment with --frames, split the input, "
+    fprintf(stderr, "y264:   encode a segment with --frames, split the input, "
             "or raise Y264_MAX_INPUT_MB\n");
 }
 
@@ -4097,11 +4097,11 @@ static int scan_frame_header(FILE *in, int n, int hdr_len)
         return -1;
     }
     if (strncmp(line, "FRAME", 5) != 0) {
-        fprintf(stderr, "yah264: expected FRAME header at frame %ld\n", n + g_seek_frames);
+        fprintf(stderr, "y264: expected FRAME header at frame %ld\n", n + g_seek_frames);
         return -1;
     }
     if (hdr_len >= 0 && len != hdr_len) {
-        fprintf(stderr, "yah264: frame %ld has a %d-byte FRAME header where frame %ld "
+        fprintf(stderr, "y264: frame %ld has a %d-byte FRAME header where frame %ld "
                 "had %d\n", n + g_seek_frames, len, g_seek_frames, hdr_len);
         return -1;
     }
@@ -4199,7 +4199,7 @@ static int scan_pass(const yah264_param_t *param, FILE *in, long max_frames, int
     int rc = ss && buf && lp && ls ? 0 : -1;
     for (int i = 0; !rc && i < batch; i++)
         if (!(buf[i] = malloc(ys * (size_t)g_enc_sample_sz))) rc = -1;
-    if (rc) fprintf(stderr, "yah264: cannot start the pre-scan (out of memory)\n");
+    if (rc) fprintf(stderr, "y264: cannot start the pre-scan (out of memory)\n");
     int n = 0, k = 0;
     while (!rc && (max_frames <= 0 || n < max_frames)) {
         int h = scan_frame_header(in, n, hdr_len);
@@ -4229,7 +4229,7 @@ static int scan_pass(const yah264_param_t *param, FILE *in, long max_frames, int
             (plan->ns = g_api->shotscan_shots(ss, NULL, 0)) <= 0 ||
             !(plan->shots = malloc((size_t)plan->ns * sizeof *plan->shots)) ||
             g_api->shotscan_shots(ss, plan->shots, plan->ns) != plan->ns) {
-            fprintf(stderr, "yah264: the pre-scan failed\n");
+            fprintf(stderr, "y264: the pre-scan failed\n");
             rc = -1;
         }
     }
@@ -4270,7 +4270,7 @@ static int scan_write(const char *path, const yah264_param_t *param,
     char input[256], scan[1024];
     if (scan_identity(param, input, sizeof input, scan, sizeof scan) != 0) return -1;
     FILE *f = fopen(path, "w");
-    if (!f) { fprintf(stderr, "yah264: cannot write scan file '%s'\n", path); return -1; }
+    if (!f) { fprintf(stderr, "y264: cannot write scan file '%s'\n", path); return -1; }
     int nidr = 0;
     for (int i = 0; i < p->n; i++) nidr += p->idr[i];
     fprintf(f, "%s %d\nframes %d\ninput %s\nscan %s\nfingerprint %016llx\nidr %d\n",
@@ -4288,7 +4288,7 @@ static int scan_write(const char *path, const yah264_param_t *param,
     }
     fprintf(f, "end\n");
     if (fclose(f) != 0) {
-        fprintf(stderr, "yah264: error writing scan file '%s'\n", path);
+        fprintf(stderr, "y264: error writing scan file '%s'\n", path);
         return -1;
     }
     return 0;
@@ -4314,49 +4314,49 @@ static int scan_read(const char *path, const yah264_param_t *param, FILE *in, of
 {
     memset(p, 0, sizeof *p);
     FILE *f = fopen(path, "r");
-    if (!f) { fprintf(stderr, "yah264: cannot read scan file '%s'\n", path); return -1; }
+    if (!f) { fprintf(stderr, "y264: cannot read scan file '%s'\n", path); return -1; }
     char v[2048], input[256], scan[1024];
     int rc = -1;
     if (scan_identity(param, input, sizeof input, scan, sizeof scan) != 0) goto out;
     char magic[64]; int ver = 0;
     if (!fgets(v, sizeof v, f) || sscanf(v, "%63s %d", magic, &ver) != 2 ||
         strcmp(magic, SCAN_FILE_MAGIC) != 0) {
-        fprintf(stderr, "yah264: --scan-in: '%s' is not a yah264 scan file\n", path);
+        fprintf(stderr, "y264: --scan-in: '%s' is not a yah264 scan file\n", path);
         goto out;
     }
     if (ver != SCAN_FILE_VERSION) {
-        fprintf(stderr, "yah264: --scan-in: '%s' is scan file version %d; this build reads "
+        fprintf(stderr, "y264: --scan-in: '%s' is scan file version %d; this build reads "
                 "version %d. Rescan with --scan-out\n", path, ver, SCAN_FILE_VERSION);
         goto out;
     }
     if (scan_line(f, "frames", v, sizeof v) != 0) goto bad;
     if (atoi(v) != n) {
-        fprintf(stderr, "yah264: --scan-in: the scan covers %d frame(s) and this encode "
+        fprintf(stderr, "y264: --scan-in: the scan covers %d frame(s) and this encode "
                 "has %d; refusing it. Rescan with --scan-out\n", atoi(v), n);
         goto out;
     }
     if (scan_line(f, "input", v, sizeof v) != 0) goto bad;
     if (strcmp(v, input) != 0) {
-        fprintf(stderr, "yah264: --scan-in: the scan was made from a different input "
-                "shape; refusing it\nyah264:   scan file: %s\nyah264:   this input: %s\n",
+        fprintf(stderr, "y264: --scan-in: the scan was made from a different input "
+                "shape; refusing it\ny264:   scan file: %s\ny264:   this input: %s\n",
                 v, input);
         goto out;
     }
     if (scan_line(f, "scan", v, sizeof v) != 0) goto bad;
     if (strcmp(v, scan) != 0) {
-        fprintf(stderr, "yah264: --scan-in: the scan was made with different scan "
-                "settings; refusing it\nyah264:   scan file:   %s\nyah264:   this encode: %s\n",
+        fprintf(stderr, "y264: --scan-in: the scan was made with different scan "
+                "settings; refusing it\ny264:   scan file:   %s\ny264:   this encode: %s\n",
                 v, scan);
         goto out;
     }
     if (scan_line(f, "fingerprint", v, sizeof v) != 0) goto bad;
     uint64_t want = strtoull(v, NULL, 16), got = 0;
     if (scan_fingerprint(in, pos0, n, hdr_len, payload, &got) != 0) {
-        fprintf(stderr, "yah264: --scan-in: cannot read the input to check it against the scan\n");
+        fprintf(stderr, "y264: --scan-in: cannot read the input to check it against the scan\n");
         goto out;
     }
     if (got != want) {
-        fprintf(stderr, "yah264: --scan-in: the input's pictures do not match the ones the "
+        fprintf(stderr, "y264: --scan-in: the input's pictures do not match the ones the "
                 "scan was made from (fingerprint %016llx, scan file %016llx); refusing it\n",
                 (unsigned long long)got, (unsigned long long)want);
         goto out;
@@ -4386,7 +4386,7 @@ static int scan_read(const char *path, const yah264_param_t *param, FILE *in, of
     rc = 0;
     goto out;
 bad:
-    fprintf(stderr, "yah264: --scan-in: '%s' is malformed or truncated\n", path);
+    fprintf(stderr, "y264: --scan-in: '%s' is malformed or truncated\n", path);
 out:
     fclose(f);
     if (rc) scan_plan_free(p);
@@ -4427,7 +4427,7 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
         for (int k = 0; k < ns; k++)
             for (int f = shots[k].first; f <= shots[k].last; f++) job->gop_rf[f] = crf0 + soff[k];
         if (g_shot_table)
-            for (int k = 0; k < ns; k++) fprintf(stderr, "yah264: shot %d frames %d-%d: CRF %+.2f -> %.2f\n", k, shots[k].first, shots[k].last, soff[k], crf0 + soff[k]);
+            for (int k = 0; k < ns; k++) fprintf(stderr, "y264: shot %d frames %d-%d: CRF %+.2f -> %.2f\n", k, shots[k].first, shots[k].last, soff[k], crf0 + soff[k]);
         free(soff);
     }
     if (ns >= 0 && g_open_gop) {
@@ -4439,7 +4439,7 @@ static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
         nidr = ns;
     }
     if (ns >= 0 && g_shot_table) {
-        fprintf(stderr, "yah264: shot table (%d shots): [\n", ns);
+        fprintf(stderr, "y264: shot table (%d shots): [\n", ns);
         for (int k = 0; k < ns; k++)
             fprintf(stderr, "  {\"shot\": %d, \"first\": %d, \"last\": %d, \"frames\": %d, \"icost_mean\": %.0f, \"icost_peak\": %.0f, \"pcost_mean\": %.0f, \"ratio\": %.3f}%s\n",
                     k, shots[k].first, shots[k].last, shots[k].last - shots[k].first + 1,
@@ -4608,7 +4608,7 @@ static void gop_emit(gop_job_t *job, FILE *out, int idx, uint8_t *buf, size_t sz
     if (job->vw_on && buf && sz)
         vbv_walk(job, buf, sz);
     if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
-        fprintf(stderr, "yah264: error writing the output stream\n");
+        fprintf(stderr, "y264: error writing the output stream\n");
         *wr_err = 1;
     }
     if (g_segment_out && buf && sz) {               /* one file per GOP, the segment-aligned output */
@@ -4616,7 +4616,7 @@ static void gop_emit(gop_job_t *job, FILE *out, int idx, uint8_t *buf, size_t sz
         if (pc) snprintf(path, sizeof path, "%.*s%d%s", (int)(pc - g_segment_out), g_segment_out, idx, pc + 2);
         else    snprintf(path, sizeof path, "%s.%d", g_segment_out, idx);
         FILE *sf = fopen(path, "wb");
-        if (!sf || fwrite(buf, 1, sz, sf) != sz) { fprintf(stderr, "yah264: cannot write segment %s\n", path); *wr_err = 1; }
+        if (!sf || fwrite(buf, 1, sz, sf) != sz) { fprintf(stderr, "y264: cannot write segment %s\n", path); *wr_err = 1; }
         if (sf) fclose(sf);
     }
     if (job->gop_fst && job->gop_fst[idx]) {
@@ -4671,12 +4671,12 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
      * streams; only a pipe still reads the input whole. */
     int whole = cut_split && !y264_seekable(in);
     if ((g_scan_in || g_scan_out) && !cut_split) {
-        fprintf(stderr, "yah264: --scan-in and --scan-out go with --cut-split or "
+        fprintf(stderr, "y264: --scan-in and --scan-out go with --cut-split or "
                 "--shot-crf (and a --keyint above 1)\n");
         return 1;
     }
     if ((g_scan_in || g_scan_out) && whole) {
-        fprintf(stderr, "yah264: --scan-in and --scan-out need the input to be a "
+        fprintf(stderr, "y264: --scan-in and --scan-out need the input to be a "
                 "file, not a pipe\n");
         return 1;
     }
@@ -4694,10 +4694,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
      * or hand-made file) would wrap in them */
     if (nknown > INT_MAX) {
         if (max_frames > 0)
-            fprintf(stderr, "yah264: --frames %ld is more than the %d frames one encode "
+            fprintf(stderr, "y264: --frames %ld is more than the %d frames one encode "
                     "takes\n", (long)max_frames, INT_MAX);
         else
-            fprintf(stderr, "yah264: the input's length implies %ld frames, more than the %d "
+            fprintf(stderr, "y264: the input's length implies %ld frames, more than the %d "
                     "one encode takes; give --frames\n", nknown, INT_MAX);
         return 1;
     }
@@ -4714,7 +4714,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     /* Named here rather than at the call, so the handover above does not print
  * it twice -- once for the path it declined and once for the serial path
  * that takes over. Nothing has been printed before this point. */
-    LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
+    LOGF(LOG_INFO, "y264: cpu features: %s\n", g_api->cpu_features());
     g_gop_trace = y264_env("Y264_GOP_TRACE") && atoi(y264_env("Y264_GOP_TRACE"));
     if (g_gop_trace) clock_gettime(CLOCK_MONOTONIC, &g_gop_trace_t0);
 
@@ -4728,7 +4728,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         if (g_scan_in) {
             long nin = nknown >= 0 ? nknown : scan_count_frames(in, pos0, max_frames, payload);
             if (nin < 0) {
-                fprintf(stderr, "yah264: --scan-in: cannot count the input's frames\n");
+                fprintf(stderr, "y264: --scan-in: cannot count the input's frames\n");
                 return 1;
             }
             if (scan_read(g_scan_in, param, in, pos0, (int)nin, hl, payload, &plan) != 0)
@@ -4824,16 +4824,16 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             hold = max_frames;
         if (hold > 0 && (uint64_t)hold * per_frame > budget) {
             char nd[32], lim[32];
-            fprintf(stderr, "yah264: this encode needs %s of memory and the "
+            fprintf(stderr, "y264: this encode needs %s of memory and the "
                     "limit is %s\n",
                     y264_hsize(nd, sizeof nd, (uint64_t)hold * per_frame),
                     y264_hsize(lim, sizeof lim, budget));
             if (whole)
-                fprintf(stderr, "yah264:   the cut-split pre-scan cannot read a pipe "
+                fprintf(stderr, "y264:   the cut-split pre-scan cannot read a pipe "
                         "twice, so all %ld frame(s) are resident at once; encode "
                         "from a file\n", hold);
             else
-                fprintf(stderr, "yah264:   the threaded path streams, but its "
+                fprintf(stderr, "y264:   the threaded path streams, but its "
                         "window is (--threads + 1) x --keyint = %ld frame(s); "
                         "lower either, or set Y264_STREAM_WINDOW\n", hold);
             y264_mem_advice(budget, budget_from_env, per_frame, W, H);
@@ -4853,7 +4853,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.store_cap = store_cap;
     job.want_fst = g_frame_stats != NULL;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
-    if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); scan_plan_free(&plan); return 1; }
+    if (!job.seg) { fprintf(stderr, "y264: out of memory\n"); scan_plan_free(&plan); return 1; }
     pthread_mutex_init(&job.lock, NULL);
     pthread_cond_init(&job.cv_space, NULL);
     pthread_cond_init(&job.cv_ready, NULL);
@@ -4909,7 +4909,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.gop_rd = malloc((size_t)n_gops * sizeof(int));
         job.gop_cons = malloc((size_t)n_gops * sizeof(int));
         if (!job.gop_rd || !job.gop_cons) {
-            fprintf(stderr, "yah264: out of memory\n");
+            fprintf(stderr, "y264: out of memory\n");
             free(job.gop_rd); free(job.gop_cons);
             job_rc_free(&job); free(job.seg); free(job.gop_start);
             free(job.gop_data); free(job.gop_size); free(job.gop_done);
@@ -4940,7 +4940,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * run. One flag, every join site guarded. */
     int rd_joined = 0;
     if (pthread_create(&rtid, NULL, job.seek_rd ? y4m_reader_seek : y4m_reader, &ra) != 0) {
-        fprintf(stderr, "yah264: cannot start the input reader\n");
+        fprintf(stderr, "y264: cannot start the input reader\n");
         job_rc_free(&job); free(job.seg); free(job.gop_start);
         return 1;
     }
@@ -5061,7 +5061,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         /* Both halves of the round-trip are indexed by the GOP split, so a split
  * that is still being discovered has nothing to hand out. Two-pass needs
  * to read the input twice anyway, which a pipe cannot do. */
-        fprintf(stderr, "yah264: two-pass needs a seekable input on the threaded "
+        fprintf(stderr, "y264: two-pass needs a seekable input on the threaded "
                 "path (the GOP split has to be known before pass 1 writes its "
                 "per-GOP stats); encode from a file, or add --threads 1\n");
         pthread_mutex_lock(&job.lock);
@@ -5095,7 +5095,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                                     (double)fn / fd * (param->interlaced ? 2 : 1), param);
             if (sr != 0) {
                 if (sr == -1)       /* -2 is out of memory, already said */
-                    fprintf(stderr, "yah264: pass %d cannot use '%s' (the line above says "
+                    fprintf(stderr, "y264: pass %d cannot use '%s' (the line above says "
                             "why): it was damaged, or a pass 1 with other options wrote it\n",
                             param->rc.pass, stats_shown(param->rc.stats));
                 tp_free_paths(gop_stats, n_gops, 1);
@@ -5170,7 +5170,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             char e[32], b[32];
             mem_g = g;
             k = (nthreads + g - 1) / g;
-            LOGF(LOG_INFO, "yah264: %d GOP worker(s) instead of %d to stay inside the "
+            LOGF(LOG_INFO, "y264: %d GOP worker(s) instead of %d to stay inside the "
                     "memory budget (about %s of %s; --max-memory sets it)\n", g, g0,
                     y264_hsize(e, sizeof e, est), y264_hsize(b, sizeof b, mem_budget));
         }
@@ -5323,7 +5323,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             int fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
             double fps = (double)fn / fd;
-            LOGF(LOG_INFO, "yah264: lookahead lead %d frame(s) buffered "
+            LOGF(LOG_INFO, "y264: lookahead lead %d frame(s) buffered "
                     "(+%.1f ms of latency at %.4g fps); --sync-lookahead 0 or "
                     "--tune zerolatency for none\n", lead, lead * 1000.0 / fps, fps);
         }
@@ -5346,7 +5346,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
     if (!prime) {
         if (!stats_clash)
-            fprintf(stderr, "yah264: encoder_open failed -- these parameters were refused\n");
+            fprintf(stderr, "y264: encoder_open failed -- these parameters were refused\n");
         tp_free_paths(gop_stats, n_gops, 1);
         free(gop_target);
         pthread_mutex_lock(&job.lock);
@@ -5531,7 +5531,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     if (job.vw_on && job.vw_vcl)
         vbv_walk_au(&job);                      /* the stream's last picture */
     if (job.vw_under)
-        fprintf(stderr, "yah264: warning: %ld picture(s) underflowed the VBV buffer\n",
+        fprintf(stderr, "y264: warning: %ld picture(s) underflowed the VBV buffer\n",
                 job.vw_under);
     if (g_gop_trace) {
         double pc, pi;
@@ -5558,7 +5558,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     tp_free_paths(gop_stats, n_gops, 1);
     free(gop_target);
 
-    LOGF(LOG_INFO, "yah264: encoded %d frame(s) in %d GOP(s) on %d GOP-worker(s)"
+    LOGF(LOG_INFO, "y264: encoded %d frame(s) in %d GOP(s) on %d GOP-worker(s)"
             " x %d frame-thread(s)%s, window %d frame(s)\n", n, n_gops, g, k,
             uneven ? " (frame-weighted)" :
             queued ? " (longest-first, per-GOP)" :
@@ -5617,10 +5617,10 @@ static int read_line(FILE *f, char *buf, int cap)
 static void hdr_fail_report(int len, long frame, int cap)
 {
     if (len == -3)
-        fprintf(stderr, "yah264: frame %ld's header has no newline in its first %d bytes: "
+        fprintf(stderr, "y264: frame %ld's header has no newline in its first %d bytes: "
                 "the input is malformed\n", frame + g_seek_frames, cap - 1);
     else
-        fprintf(stderr, "yah264: short read on frame %ld\n", frame + g_seek_frames);
+        fprintf(stderr, "y264: short read on frame %ld\n", frame + g_seek_frames);
 }
 
 /* --- the serial path's reader ---------------------------------------------
@@ -5823,12 +5823,12 @@ static double opt_num(const char *flag, const char *val, double lo, double hi)
  * typo rather than a limit. An open-ended range is clearer stated as
  * one. */
         if (hi >= (double)INT_MAX && lo <= (double)INT_MIN)
-            fprintf(stderr, "yah264: %s expects a number (got '%s')\n", flag, val);
+            fprintf(stderr, "y264: %s expects a number (got '%s')\n", flag, val);
         else if (hi >= (double)INT_MAX)
-            fprintf(stderr, "yah264: %s expects %g or more (got '%s')\n",
+            fprintf(stderr, "y264: %s expects %g or more (got '%s')\n",
                     flag, lo, val);
         else
-            fprintf(stderr, "yah264: %s expects %g..%g (got '%s')\n",
+            fprintf(stderr, "y264: %s expects %g..%g (got '%s')\n",
                     flag, lo, hi, val);
         exit(2);
     }
@@ -5849,7 +5849,7 @@ static long opt_int(const char *flag, const char *val, long lo, long hi)
 {
     double v = opt_num(flag, val, (double)lo, (double)hi);
     if (v != (double)(long)v) {
-        fprintf(stderr, "yah264: %s expects a whole number %ld..%ld (got '%s')\n",
+        fprintf(stderr, "y264: %s expects a whole number %ld..%ld (got '%s')\n",
                 flag, lo, hi, val);
         exit(2);
     }
@@ -5881,7 +5881,7 @@ static int cqm_parse_weights(const char *s, uint8_t *out, int n, const char *wha
         char *end;
         long v = strtol(s, &end, 10);
         if (end == s || v < 1 || v > 255) {
-            fprintf(stderr, "yah264: %s: weights are whole numbers 1..255 (at '%.12s')\n",
+            fprintf(stderr, "y264: %s: weights are whole numbers 1..255 (at '%.12s')\n",
                     what, s);
             return -1;
         }
@@ -5911,7 +5911,7 @@ static int cqm_apply_opt(struct cqm_cli *m, const char *opt, const char *val)
         int k = cqm_parse_weights(val, w, T[t].size, what);
         if (k < 0) return -1;
         if (k != T[t].size) {
-            fprintf(stderr, "yah264: %s takes %d comma-separated weights (got %d)\n",
+            fprintf(stderr, "y264: %s takes %d comma-separated weights (got %d)\n",
                     what, T[t].size, k);
             return -1;
         }
@@ -5942,7 +5942,7 @@ static int cqm_read_file(struct cqm_cli *m, const char *path)
         { "INTRA8X8_CHROMAV", 64, -1 }, { "INTER8X8_CHROMAV", 64, -1 },
     };
     FILE *f = fopen(path, "r");
-    if (!f) { fprintf(stderr, "yah264: cannot read --cqmfile %s\n", path); return -1; }
+    if (!f) { fprintf(stderr, "y264: cannot read --cqmfile %s\n", path); return -1; }
     size_t cap = 4096, len = 0;
     char *buf = malloc(cap);
     int ch;
@@ -5955,7 +5955,7 @@ static int cqm_read_file(struct cqm_cli *m, const char *path)
         buf[len++] = (char)ch;
     }
     fclose(f);
-    if (!buf) { fprintf(stderr, "yah264: --cqmfile %s: out of memory\n", path); return -1; }
+    if (!buf) { fprintf(stderr, "y264: --cqmfile %s: out of memory\n", path); return -1; }
     buf[len] = 0;
     memset(m, 0, sizeof *m);
     memset(m->w4, 16, sizeof m->w4);
@@ -5965,7 +5965,7 @@ static int cqm_read_file(struct cqm_cli *m, const char *path)
     while (*p) {
         while (*p && !(isalpha((unsigned char)*p) || *p == '_')) {
             if (isdigit((unsigned char)*p)) {
-                fprintf(stderr, "yah264: --cqmfile %s: weights before any list name\n", path);
+                fprintf(stderr, "y264: --cqmfile %s: weights before any list name\n", path);
                 rc = -1; goto out;
             }
             p++;
@@ -5978,12 +5978,12 @@ static int cqm_read_file(struct cqm_cli *m, const char *path)
         for (size_t t = 0; t < sizeof K / sizeof *K; t++)
             if (strlen(K[t].key) == kl && !strncmp(K[t].key, k0, kl)) ki = (int)t;
         if (ki < 0) {
-            fprintf(stderr, "yah264: --cqmfile %s: unknown list '%.*s'\n", path, (int)kl, k0);
+            fprintf(stderr, "y264: --cqmfile %s: unknown list '%.*s'\n", path, (int)kl, k0);
             rc = -1; goto out;
         }
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
         if (*p != '=') {
-            fprintf(stderr, "yah264: --cqmfile %s: '%s' needs '='\n", path, K[ki].key);
+            fprintf(stderr, "y264: --cqmfile %s: '%s' needs '='\n", path, K[ki].key);
             rc = -1; goto out;
         }
         p++;
@@ -5999,7 +5999,7 @@ static int cqm_read_file(struct cqm_cli *m, const char *path)
         *p = save;
         if (n < 0) { rc = -1; goto out; }
         if (n != K[ki].size) {
-            fprintf(stderr, "yah264: %s: needs %d weights (got %d)\n", what, K[ki].size, n);
+            fprintf(stderr, "y264: %s: needs %d weights (got %d)\n", what, K[ki].size, n);
             rc = -1; goto out;
         }
         if (K[ki].slot < 0) continue;
@@ -6048,7 +6048,7 @@ static int opt_partitions(const char *val)
     int mask = YAH264_PART_NONE;
     const char *p = val;
     if (!*p) {
-        fprintf(stderr, "yah264: --partitions takes a list, not an empty string; "
+        fprintf(stderr, "y264: --partitions takes a list, not an empty string; "
                         "'none' is how you ask for no splits at all\n");
         exit(2);
     }
@@ -6064,7 +6064,7 @@ static int opt_partitions(const char *val)
                 hit = 1;
             }
         if (!hit) {
-            fprintf(stderr, "yah264: --partitions: unknown shape '%.*s'; the list is "
+            fprintf(stderr, "y264: --partitions: unknown shape '%.*s'; the list is "
                             "p8x8, p4x4, b8x8, i8x8, i4x4, plus none and all\n",
                     (int)n, p);
             exit(2);
@@ -6111,7 +6111,7 @@ static void opt_env(const char *var, const char *flag, const char *flagval,
 {
     const char *cur = y264_env(var);
     if (cur && strcmp(cur, envval)) {
-        LOGF(LOG_WARN, "yah264: warning: %s=%s in the environment overrides "
+        LOGF(LOG_WARN, "y264: warning: %s=%s in the environment overrides "
                 "%s %s\n", var, cur, flag, flagval);
         return;
     }
@@ -6151,14 +6151,14 @@ static int refuse_ignored_knobs(void)
                 continue;
             if (!y264_env(name) && strcmp(name, "Y264_MAX_INPUT_MB") &&
                 strcmp(name, "Y264_STREAM_WINDOW")) {
-                fprintf(stderr, "yah264: %s is set, and this build ignores it\n", name);
+                fprintf(stderr, "y264: %s is set, and this build ignores it\n", name);
                 n++;
             }
             break;
         }
     }
     if (n)
-        fprintf(stderr, "yah264: unset %s, or use a -Ddev_knobs=true build\n",
+        fprintf(stderr, "y264: unset %s, or use a -Ddev_knobs=true build\n",
                 n > 1 ? "them" : "it");
     return n;
 }
@@ -6171,7 +6171,7 @@ static int close_out(FILE *out, int rc)
     int bad = ferror(out);
     bad |= out == stdout ? fflush(out) != 0 : fclose(out) != 0;
     if (bad && !rc) {
-        fprintf(stderr, "yah264: error writing the output stream\n");
+        fprintf(stderr, "y264: error writing the output stream\n");
         rc = 1;
     }
     return rc;
@@ -6276,7 +6276,7 @@ static int cli_main(int argc, char **argv)
             const char *v = argv[++i];
             if (!strcasecmp(v, "full") || !strcasecmp(v, "pc") || !strcasecmp(v, "jpeg")) g_vs.full_range = 1;
             else if (!strcasecmp(v, "limited") || !strcasecmp(v, "tv") || !strcasecmp(v, "mpeg")) g_vs.full_range = 0;
-            else { fprintf(stderr, "yah264: --range expects full or limited\n"); return 2; }
+            else { fprintf(stderr, "y264: --range expects full or limited\n"); return 2; }
             g_vs_set = 1;
         }
         else if ((!strcmp(argv[i], "--colorprim") || !strcmp(argv[i], "--transfer") ||
@@ -6284,7 +6284,7 @@ static int cli_main(int argc, char **argv)
             const char *opt = argv[i], *v = argv[++i];
             int code = colour_code(opt, v);
             if (code < 0) {
-                fprintf(stderr, "yah264: %s: unknown value '%s' (an H.273 code 0..255, or a name "
+                fprintf(stderr, "y264: %s: unknown value '%s' (an H.273 code 0..255, or a name "
                         "such as bt709, bt2020, %s; see docs/options.md)\n", opt, v,
                         !strcmp(opt, "--transfer") ? "smpte2084, arib-std-b67"
                         : !strcmp(opt, "--colormatrix") ? "bt2020nc, bt2020c" : "smpte432");
@@ -6362,7 +6362,7 @@ static int cli_main(int argc, char **argv)
             if (!strcmp(v, "off")) hw = YAH264_HW_OFF;
             else if (!strcmp(v, "auto")) hw = YAH264_HW_AUTO;
             else if (!strcmp(v, "videotoolbox") || !strcmp(v, "vt")) hw = YAH264_HW_VIDEOTOOLBOX;
-            else { fprintf(stderr, "yah264: unknown --hw '%s' (off, auto, videotoolbox)\n", v); return 2; }
+            else { fprintf(stderr, "y264: unknown --hw '%s' (off, auto, videotoolbox)\n", v); return 2; }
         }
         else if (!strcmp(argv[i], "--hw-strict")) hw_strict = 1;
         else if (!strcmp(argv[i], "--bframes") && i + 1 < argc)
@@ -6424,7 +6424,7 @@ static int cli_main(int argc, char **argv)
             long a = strtol(v, &sep, 10);
             long b = (sep && *sep == ':') ? strtol(sep + 1, &sep, 10) : a;
             if (v == sep || (sep && *sep) || a < -6 || a > 6 || b < -6 || b > 6) {
-                fprintf(stderr, "yah264: --deblock expects A:B, each -6..6 (got '%s')\n", v);
+                fprintf(stderr, "y264: --deblock expects A:B, each -6..6 (got '%s')\n", v);
                 return 2;
             }
             deblock_on = 1; deblock_a = (int)a; deblock_b = (int)b; deblock_set = 1;
@@ -6436,11 +6436,11 @@ static int cli_main(int argc, char **argv)
             if (!strcmp(v, "none")) b_pyramid = 0;
             else if (!strcmp(v, "normal")) b_pyramid = 1;
             else if (!strcmp(v, "strict")) {
-                fprintf(stderr, "yah264: --b-pyramid strict is not implemented "
+                fprintf(stderr, "y264: --b-pyramid strict is not implemented "
                         "(none, normal)\n");
                 return 2;
             } else {
-                fprintf(stderr, "yah264: unknown --b-pyramid '%s' (none, normal)\n", v);
+                fprintf(stderr, "y264: unknown --b-pyramid '%s' (none, normal)\n", v);
                 return 2;
             }
         }
@@ -6495,7 +6495,7 @@ static int cli_main(int argc, char **argv)
             else if (!strcmp(v, "vbr")) nal_hrd = YAH264_NAL_HRD_VBR;
             else if (!strcmp(v, "cbr")) nal_hrd = YAH264_NAL_HRD_CBR;
             else {
-                fprintf(stderr, "yah264: --nal-hrd expects none, vbr or cbr\n");
+                fprintf(stderr, "y264: --nal-hrd expects none, vbr or cbr\n");
                 return 2;
             }
         }
@@ -6519,7 +6519,7 @@ static int cli_main(int argc, char **argv)
             for (int k = 1; k < 5; k++) if (!strcmp(v, L[k])) lv = k;
             if (lv < 0 && v[0] >= '1' && v[0] <= '4' && !v[1]) lv = v[0] - '0';
             if (lv < 0) {
-                fprintf(stderr, "yah264: --log-level expects error, warning, info "
+                fprintf(stderr, "y264: --log-level expects error, warning, info "
                         "or debug (or 1..4)\n");
                 return 2;
             }
@@ -6534,7 +6534,7 @@ static int cli_main(int argc, char **argv)
             long w = strtol(v, &sep, 10);
             long h = (sep && (*sep == 'x' || *sep == 'X')) ? strtol(sep + 1, &sep, 10) : 0;
             if (w <= 0 || h <= 0 || (sep && *sep)) {
-                fprintf(stderr, "yah264: --input-res expects WxH (e.g. 352x288)\n");
+                fprintf(stderr, "y264: --input-res expects WxH (e.g. 352x288)\n");
                 return 2;
             }
             raw_w = (int)w; raw_h = (int)h;
@@ -6551,13 +6551,13 @@ static int cli_main(int argc, char **argv)
             else if (!strncmp(v, "422", 3)) raw_csp = YAH264_CSP_I422;
             else if (!strncmp(v, "444", 3)) raw_csp = YAH264_CSP_I444;
             else {
-                fprintf(stderr, "yah264: --input-csp expects i420, i422 or i444, "
+                fprintf(stderr, "y264: --input-csp expects i420, i422 or i444, "
                         "each optionally with a p10 suffix (got '%s')\n", v);
                 return 2;
             }
             raw_depth = suf ? atoi(suf + 1) : 8;
             if (raw_depth != 8 && raw_depth != 10) {
-                fprintf(stderr, "yah264: --input-csp: only 8-bit and p10 are built "
+                fprintf(stderr, "y264: --input-csp: only 8-bit and p10 are built "
                         "(got %d-bit)\n", raw_depth);
                 return 2;
             }
@@ -6566,7 +6566,7 @@ static int cli_main(int argc, char **argv)
             const char *v = argv[++i];
             if (!strcasecmp(v, "full") || !strcasecmp(v, "pc")) { g_vs.full_range = 1; g_vs_set = 1; }
             else if (!strcasecmp(v, "limited") || !strcasecmp(v, "tv")) { g_vs.full_range = 0; g_vs_set = 1; }
-            else { fprintf(stderr, "yah264: --input-range expects full or limited\n"); return 2; }
+            else { fprintf(stderr, "y264: --input-range expects full or limited\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--fps") && i + 1 < argc) {
             const char *v = argv[++i]; char *sep = NULL;
@@ -6578,7 +6578,7 @@ static int cli_main(int argc, char **argv)
                 n = lround(f * 1000.0); d = 1000; sep = NULL;
             }
             if (n <= 0 || d <= 0 || (sep && *sep)) {
-                fprintf(stderr, "yah264: --fps expects N, N/D or a decimal (got '%s')\n", v);
+                fprintf(stderr, "y264: --fps expects N, N/D or a decimal (got '%s')\n", v);
                 return 2;
             }
             raw_fps_n = (int)n; raw_fps_d = (int)d;
@@ -6594,7 +6594,7 @@ static int cli_main(int argc, char **argv)
             char tail;
             if (sscanf(v, "%d,%d,%d,%d%c", &l, &t, &r, &b, &tail) != 4 ||
                 l < 0 || t < 0 || r < 0 || b < 0) {
-                fprintf(stderr, "yah264: --crop-rect expects left,top,right,bottom "
+                fprintf(stderr, "y264: --crop-rect expects left,top,right,bottom "
                         "in luma samples (got '%s')\n", v);
                 return 2;
             }
@@ -6608,7 +6608,7 @@ static int cli_main(int argc, char **argv)
              * not an SEI that says "unspecified" */
             int code = !strcasecmp(v, "undef") ? 0 : colour_code("--transfer", v);
             if (code < 0) {
-                fprintf(stderr, "yah264: --alternative-transfer: unknown value '%s' "
+                fprintf(stderr, "y264: --alternative-transfer: unknown value '%s' "
                         "(an H.273 code, or the names --transfer takes)\n", v);
                 return 2;
             }
@@ -6619,7 +6619,7 @@ static int cli_main(int argc, char **argv)
             if (!strcmp(v, "undef")) overscan = 0;
             else if (!strcmp(v, "show")) overscan = 1;
             else if (!strcmp(v, "crop")) overscan = 2;
-            else { fprintf(stderr, "yah264: --overscan expects undef, show or crop\n"); return 2; }
+            else { fprintf(stderr, "y264: --overscan expects undef, show or crop\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--videoformat") && i + 1 < argc) {
             static const char *VF[] = { "component", "pal", "ntsc", "secam", "mac", "undef" };
@@ -6627,7 +6627,7 @@ static int cli_main(int argc, char **argv)
             video_format = -1;
             for (int k = 0; k < 6; k++) if (!strcmp(v, VF[k])) video_format = k;
             if (video_format < 0) {
-                fprintf(stderr, "yah264: --videoformat expects component, pal, ntsc, "
+                fprintf(stderr, "y264: --videoformat expects component, pal, ntsc, "
                         "secam, mac or undef\n");
                 return 2;
             }
@@ -6643,11 +6643,11 @@ static int cli_main(int argc, char **argv)
             int r = !strcmp(opt, "--cll") ? yah264_param_parse_cll(&t, v, why, sizeof why)
                                           : yah264_param_parse_mastering(&t, v, why, sizeof why);
             if (r < 0) {
-                fprintf(stderr, "yah264: %s %s\n", opt, why);
+                fprintf(stderr, "y264: %s %s\n", opt, why);
                 return 2;
             }
             if (r > 0)
-                fprintf(stderr, "yah264: warning: %s %s\n", opt, why);
+                fprintf(stderr, "y264: warning: %s %s\n", opt, why);
             if (!strcmp(opt, "--cll")) {
                 cll_max = t.cll_max; cll_avg = t.cll_avg;
             } else {
@@ -6661,7 +6661,7 @@ static int cli_main(int argc, char **argv)
             const char *v = argv[++i];
             if (!strcmp(v, "jvt")) cqm = 1;
             else if (!strcmp(v, "flat")) cqm = 0;
-            else { fprintf(stderr, "yah264: --cqm expects flat|jvt\n"); return 2; }
+            else { fprintf(stderr, "y264: --cqm expects flat|jvt\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--cqmfile") && i + 1 < argc)
             cqmfile = argv[++i];
@@ -6669,7 +6669,7 @@ static int cli_main(int argc, char **argv)
             int r = cqm_apply_opt(&cqmc, argv[i] + 2, argv[i + 1]);
             if (r < 0) return 2;
             if (r == 0) {
-                fprintf(stderr, "yah264: unknown option %s (--cqm4, --cqm8, --cqm4i, --cqm4p, "
+                fprintf(stderr, "y264: unknown option %s (--cqm4, --cqm8, --cqm4i, --cqm4p, "
                         "--cqm8i, --cqm8p, --cqm4iy, --cqm4ic, --cqm4py, --cqm4pc, "
                         "--cqm8iy, --cqm8py)\n", argv[i]);
                 return 2;
@@ -6682,7 +6682,7 @@ static int cli_main(int argc, char **argv)
  * scripts; it is not advertised. */
             if (!strcmp(m, "rf") || !strcmp(m, "x264")) abr_model = 1;   /* x264-ok */
             else if (!strcmp(m, "default")) abr_model = 0;
-            else { fprintf(stderr, "yah264: --abr-model expects 'default' or 'rf'\n"); return 2; }
+            else { fprintf(stderr, "y264: --abr-model expects 'default' or 'rf'\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--aq-strength") && i + 1 < argc)
             aq_strength = (float)opt_num("--aq-strength", argv[++i], 0.0, 100.0);
@@ -6741,7 +6741,7 @@ static int cli_main(int argc, char **argv)
             else if (!strcmp(v, "temporal")) direct = YAH264_DIRECT_TEMPORAL;
             else if (!strcmp(v, "auto")) direct = YAH264_DIRECT_AUTO;
             else {
-                fprintf(stderr, "yah264: unknown --direct '%s' (spatial, temporal, auto)\n", v);
+                fprintf(stderr, "y264: unknown --direct '%s' (spatial, temporal, auto)\n", v);
                 return 2;
             }
         }
@@ -6752,7 +6752,7 @@ static int cli_main(int argc, char **argv)
             else if (!strcmp(v, "umh")) me_method = YAH264_ME_UMH;
             else if (!strcmp(v, "esa")) me_method = YAH264_ME_ESA;
             else if (!strcmp(v, "tesa")) me_method = YAH264_ME_TESA;
-            else { fprintf(stderr, "yah264: unknown --me '%s' (dia, hex, umh, esa, tesa)\n", v); return 2; }
+            else { fprintf(stderr, "y264: unknown --me '%s' (dia, hex, umh, esa, tesa)\n", v); return 2; }
         }
         else if (!strcmp(argv[i], "--no-mixed-refs"))
             no_mixed_refs = 1;
@@ -6770,7 +6770,7 @@ static int cli_main(int argc, char **argv)
  * asked. */
         else if (!strcmp(argv[i], "--subme") && i + 1 < argc) {
             if (!strcmp(argv[i + 1], "0")) {
-                fprintf(stderr, "yah264: --subme 0 is x264's fastest mode but this "   /* x264-ok */
+                fprintf(stderr, "y264: --subme 0 is x264's fastest mode but this "   /* x264-ok */
                         "library's \"unset\" (= the slowest, 10); ask for 1\n");
                 return 2;
             }
@@ -6796,7 +6796,7 @@ static int cli_main(int argc, char **argv)
  * spelled --aq-strength 0 here and always has been. */
         else if (!strcmp(argv[i], "--aq-mode") && i + 1 < argc) {
             if (!strcmp(argv[i + 1], "0")) {
-                fprintf(stderr, "yah264: --aq-mode 0 is x264's \"AQ off\"; here the mode is a "   /* x264-ok */
+                fprintf(stderr, "y264: --aq-mode 0 is x264's \"AQ off\"; here the mode is a "   /* x264-ok */
                         "metric selector and 0 encodes as 1. Spell it --aq-strength 0\n");
                 return 2;
             }
@@ -6831,7 +6831,7 @@ static int cli_main(int argc, char **argv)
  * after the complexity blur measured no gain on the two-pass band, so
  * the planner has none. */
             opt_num("--qblur", argv[i + 1], 0.0, 999.0);
-            LOGF(LOG_WARN, "yah264: warning: --qblur is accepted and ignored "
+            LOGF(LOG_WARN, "y264: warning: --qblur is accepted and ignored "
                  "(the two-pass planner has no quantiser blur)\n");
             i++;
         }
@@ -6878,11 +6878,11 @@ static int cli_main(int argc, char **argv)
             for (size_t k = 0; k < sizeof levels / sizeof levels[0]; k++)
                 known |= levels[k] == level_idc;
             if (!strcasecmp(v, "1b")) {
-                fprintf(stderr, "yah264: --level 1b isn't supported; 1.1 is the next level up\n");
+                fprintf(stderr, "y264: --level 1b isn't supported; 1.1 is the next level up\n");
                 return 2;
             }
             if (!known) {
-                fprintf(stderr, "yah264: --level '%s' is not an H.264 level (1.0 1.1 1.2 1.3 "
+                fprintf(stderr, "y264: --level '%s' is not an H.264 level (1.0 1.1 1.2 1.3 "
                         "2.0 2.1 2.2 3.0 3.1 3.2 4.0 4.1 4.2 5.0 5.1 5.2 6.0 6.1 6.2)\n", v);
                 return 2;
             }
@@ -6892,7 +6892,7 @@ static int cli_main(int argc, char **argv)
             long w = strtol(v, &sep, 10);
             long h = (sep && (*sep == ':' || *sep == '/')) ? strtol(sep + 1, NULL, 10) : 0;
             if (w > 0 && h > 0) { sar_num = (int)w; sar_den = (int)h; }
-            else { fprintf(stderr, "yah264: --sar expects W:H (e.g. 16:11)\n"); return 2; }
+            else { fprintf(stderr, "y264: --sar expects W:H (e.g. 16:11)\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             max_frames = opt_int("--frames", argv[++i], 0, LONG_MAX);
@@ -6901,14 +6901,14 @@ static int cli_main(int argc, char **argv)
         else if (!strcmp(argv[i], "--output-depth") && i + 1 < argc)
             out_depth = opt_int("--output-depth", argv[++i], 8, 10);
         else if (!strcmp(argv[i], "--version")) {
-            printf("yah264 %s%s\n", yah264_version(), Y264_DEV_KNOBS ? " (dev knobs)" : "");
+            printf("y264 (yah264) %s%s\n", yah264_version(), Y264_DEV_KNOBS ? " (dev knobs)" : "");
             return 0;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") ||
                    !strcmp(argv[i], "--longhelp") || !strcmp(argv[i], "--fullhelp")) {
             usage(argv[0]);
             return 0;
         } else {
-            fprintf(stderr, "yah264: unknown argument '%s'\n", argv[i]);
+            fprintf(stderr, "y264: unknown argument '%s'\n", argv[i]);
             usage(argv[0]);
             return 2;
         }
@@ -6924,7 +6924,7 @@ static int cli_main(int argc, char **argv)
     /* Both write the one zone list, and which of two overlapping sources should
      * win has no answer worth guessing. */
     if (g_zones_cli && g_plan_cli) {
-        fprintf(stderr, "yah264: --zones and --plan both set zones; give one or the other\n");
+        fprintf(stderr, "y264: --zones and --plan both set zones; give one or the other\n");
         return 2;
     }
     /* before any thread exists, so every one inherits the blocked signals.
@@ -6935,7 +6935,7 @@ static int cli_main(int argc, char **argv)
      * nothing left for the second open, which blocks for good */
     struct stat sst;
     if (pass >= 2 && stat(stats_path, &sst) == 0 && !S_ISREG(sst.st_mode)) {
-        fprintf(stderr, "yah264: --stats '%s' isn't a regular file, and --pass %d reads "
+        fprintf(stderr, "y264: --stats '%s' isn't a regular file, and --pass %d reads "
                 "it more than once\n", stats_path, pass);
         return 1;
     }
@@ -6947,11 +6947,11 @@ static int cli_main(int argc, char **argv)
         if (sf)
             fclose(sf);
         else if (err != ENOENT) {
-            fprintf(stderr, "yah264: cannot read stats file '%s' (%s)\n", stats_path,
+            fprintf(stderr, "y264: cannot read stats file '%s' (%s)\n", stats_path,
                     strerror(err));
             return 1;
         } else if (pass == 2) {
-            fprintf(stderr, "yah264: no stats file '%s': pass 2 plans from the records "
+            fprintf(stderr, "y264: no stats file '%s': pass 2 plans from the records "
                     "pass 1 writes; run pass 1 into it first\n", stats_path);
             return 1;
         }
@@ -6963,11 +6963,11 @@ static int cli_main(int argc, char **argv)
     FILE *in = !strcmp(in_path, "-") || in_fd == 0 ? stdin
              : in_dup >= 0 ? fdopen(in_dup, "rb") : in_fd > 0 ? NULL : fopen(in_path, "rb");
     if (!in) {
-        fprintf(stderr, "yah264: cannot open input '%s'\n", in_path);
+        fprintf(stderr, "y264: cannot open input '%s'\n", in_path);
         return 1;
     }
     if (g_control_out && !g_control_file && g_control_fd < 0) {
-        fprintf(stderr, "yah264: --control-out records live control events and needs "
+        fprintf(stderr, "y264: --control-out records live control events and needs "
                 "--control or --control-fd\n");
         return 2;
     }
@@ -6982,7 +6982,7 @@ static int cli_main(int argc, char **argv)
                         : g_scan_in || g_scan_out ? "--scan-in and --scan-out"
                         : g_gop_threads > 0 ? "--gop-threads" : NULL;
         if (why) {
-            fprintf(stderr, "yah264: --control and --control-fd cannot be combined with %s\n", why);
+            fprintf(stderr, "y264: --control and --control-fd cannot be combined with %s\n", why);
             return 2;
         }
         if (control_fd_open() < 0)
@@ -6993,18 +6993,18 @@ static int cli_main(int argc, char **argv)
      * and only then truncate (see files_clash) */
     int to_stdout = !strcmp(out_path, "-");
     if (!to_stdout && out_open(&g_of, out_path, 0) < 0) {
-        fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);
+        fprintf(stderr, "y264: cannot open output '%s'\n", out_path);
         return 1;
     }
     if (recon_path && out_open(&g_rf, recon_path, 1) < 0) {
-        fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
+        fprintf(stderr, "y264: cannot open recon '%s'\n", recon_path);
         out_drop(&g_of);
         return 1;
     }
     const char *clash = files_clash(fileno(in), to_stdout ? STDOUT_FILENO : g_of.fd, g_rf.fd,
                                     pass > 0 ? stats_path : NULL);
     if (clash) {
-        fprintf(stderr, "yah264: %s are the same file; give each its own name\n", clash);
+        fprintf(stderr, "y264: %s are the same file; give each its own name\n", clash);
         out_drop(&g_of); out_drop(&g_rf);
         return 2;
     }
@@ -7018,7 +7018,7 @@ static int cli_main(int argc, char **argv)
     FILE *out = to_stdout ? stdout : fdopen(g_of.fd, "wb");
     FILE *recon = recon_path ? fdopen(g_rf.fd, "wb") : NULL;
     if (!out || (recon_path && !recon)) {
-        fprintf(stderr, "yah264: cannot open %s\n", !out ? "the output" : "the recon");
+        fprintf(stderr, "y264: cannot open %s\n", !out ? "the output" : "the recon");
         return 1;
     }
 
@@ -7034,7 +7034,7 @@ static int cli_main(int argc, char **argv)
  * garbage, which is exactly the failure a default would cause. */
     if (raw_in) {
         if (raw_w <= 0 || raw_h <= 0) {
-            fprintf(stderr, "yah264: --input-raw needs --input-res WxH -- raw input "
+            fprintf(stderr, "y264: --input-raw needs --input-res WxH -- raw input "
                     "says nothing about its own geometry\n");
             return 1;
         }
@@ -7047,19 +7047,19 @@ static int cli_main(int argc, char **argv)
         g_raw_input = 1;
     } else {
     if (raw_w > 0 || raw_fps_n > 0 || raw_csp != YAH264_CSP_I420 || raw_depth != 8) {
-        fprintf(stderr, "yah264: --input-res, --input-csp and --fps describe RAW "
+        fprintf(stderr, "y264: --input-res, --input-csp and --fps describe RAW "
                 "input; a Y4M stream carries its own geometry and this one would "
                 "disagree with it. Use --input-raw, or drop them.\n");
         return 1;
     }
     int hlen = read_line(in, line, sizeof(line));
     if (hlen == -3 && !strncmp(line, "YUV4MPEG2", 9)) {
-        fprintf(stderr, "yah264: the Y4M stream header has no newline in its first %d "
+        fprintf(stderr, "y264: the Y4M stream header has no newline in its first %d "
                 "bytes: the input is malformed\n", (int)sizeof(line) - 1);
         return 1;
     }
     if (hlen < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
-        fprintf(stderr, "yah264: input is not a Y4M stream\n");
+        fprintf(stderr, "y264: input is not a Y4M stream\n");
         return 1;
     }
     for (char *tok = strtok(line + 9, " "); tok; tok = strtok(NULL, " ")) {
@@ -7088,7 +7088,7 @@ static int cli_main(int argc, char **argv)
             if (tok[1] == 't') g_y4m_interlace = 1;
             else if (tok[1] == 'b') g_y4m_interlace = 2;
             else if (tok[1] != 'p' && tok[1] != '?' && tok[1] != '\0') {
-                fprintf(stderr, "yah264: Y4M interlace mode I%c is not supported "
+                fprintf(stderr, "y264: Y4M interlace mode I%c is not supported "
                         "(It, Ib and Ip are)\n", tok[1]);
                 csp_ok = 0;
             }
@@ -7104,7 +7104,7 @@ static int cli_main(int argc, char **argv)
     }
     }
     if (width <= 0 || height <= 0 || !csp_ok) {
-        fprintf(stderr, "yah264: unsupported Y4M geometry/colorspace "
+        fprintf(stderr, "y264: unsupported Y4M geometry/colorspace "
                         "(got %dx%d)\n", width, height);
         return 1;
     }
@@ -7114,17 +7114,17 @@ static int cli_main(int argc, char **argv)
      * not squeezed into an 8-bit encoder, because that is a conversion with a
      * quality decision in it and this CLI has no conversion stage. */
     if (in_depth != 8 && in_depth != 10) {
-        fprintf(stderr, "yah264: %d-bit input is not supported (8 and 10 are)\n",
+        fprintf(stderr, "y264: %d-bit input is not supported (8 and 10 are)\n",
                 in_depth);
         return 1;
     }
     if (out_depth < 0) out_depth = in_depth;
     if (out_depth != 8 && out_depth != 10) {
-        fprintf(stderr, "yah264: --output-depth takes 8 or 10, not %d\n", out_depth);
+        fprintf(stderr, "y264: --output-depth takes 8 or 10, not %d\n", out_depth);
         return 1;
     }
     if (out_depth < in_depth) {
-        fprintf(stderr, "yah264: --output-depth %d on %d-bit input would have to "
+        fprintf(stderr, "y264: --output-depth %d on %d-bit input would have to "
                         "discard samples; convert with ffmpeg first\n",
                 out_depth, in_depth);
         return 1;
@@ -7145,18 +7145,18 @@ static int cli_main(int argc, char **argv)
     if (g_crop_l | g_crop_t | g_crop_r | g_crop_b) {
         int cw = width - g_crop_l - g_crop_r, ch = height - g_crop_t - g_crop_b;
         if (cw <= 0 || ch <= 0) {
-            fprintf(stderr, "yah264: --crop-rect leaves nothing of a %dx%d input\n",
+            fprintf(stderr, "y264: --crop-rect leaves nothing of a %dx%d input\n",
                     width, height);
             return 1;
         }
         if ((g_crop_l % g_sub_w) || (g_crop_t % g_sub_h) ||
             (g_crop_r % g_sub_w) || (g_crop_b % g_sub_h)) {
-            fprintf(stderr, "yah264: --crop-rect must be a multiple of %d horizontally "
+            fprintf(stderr, "y264: --crop-rect must be a multiple of %d horizontally "
                     "and %d vertically for this chroma format\n", g_sub_w, g_sub_h);
             return 1;
         }
         if ((cw & 1) || (ch & 1)) {
-            fprintf(stderr, "yah264: --crop-rect leaves %dx%d; both must be even\n", cw, ch);
+            fprintf(stderr, "y264: --crop-rect leaves %dx%d; both must be even\n", cw, ch);
             return 1;
         }
         width = cw; height = ch;
@@ -7179,7 +7179,7 @@ static int cli_main(int argc, char **argv)
                     return 1;
                 }
                 if (len < 0 || strncmp(line, "FRAME", 5) != 0) {
-                    fprintf(stderr, "yah264: --seek %ld is past the end of the input "
+                    fprintf(stderr, "y264: --seek %ld is past the end of the input "
                             "(%ld frame(s))\n", seek_frames, k);
                     return 1;
                 }
@@ -7190,7 +7190,7 @@ static int cli_main(int argc, char **argv)
                 while (left) {
                     size_t want = left < sizeof skip ? left : sizeof skip;
                     if (fread(skip, 1, want, in) != want) {
-                        fprintf(stderr, "yah264: --seek %ld is past the end of the "
+                        fprintf(stderr, "y264: --seek %ld is past the end of the "
                                 "input\n", seek_frames);
                         return 1;
                     }
@@ -7199,14 +7199,14 @@ static int cli_main(int argc, char **argv)
             } else if (g_raw_input) {
                 int c = fgetc(in);
                 if (c == EOF) {
-                    fprintf(stderr, "yah264: --seek %ld is past the end of the input "
+                    fprintf(stderr, "y264: --seek %ld is past the end of the input "
                             "(%ld frame(s))\n", seek_frames, k + 1);
                     return 1;
                 }
                 ungetc(c, in);
             }
         }
-        LOGF(LOG_INFO, "yah264: skipped %ld input frame(s)\n", seek_frames);
+        LOGF(LOG_INFO, "y264: skipped %ld input frame(s)\n", seek_frames);
     }
 
     yah264_param_t param;
@@ -7217,7 +7217,7 @@ static int cli_main(int argc, char **argv)
     /* E.2.1: GBR (matrix 0) only at 4:4:4. The library refuses it too; said
      * here, the refusal names the option instead of failing the open. */
     if (g_vs_set && g_vs.matrix == 0 && csp != YAH264_CSP_I444) {
-        fprintf(stderr, "yah264: --colormatrix GBR (0) needs 4:4:4 input; this input is "
+        fprintf(stderr, "y264: --colormatrix GBR (0) needs 4:4:4 input; this input is "
                 "4:2:%s\n", csp == YAH264_CSP_I422 ? "2" : "0");
         return 2;
     }
@@ -7229,7 +7229,7 @@ static int cli_main(int argc, char **argv)
      * subme, subpel, ref and lookahead; an explicit flag overrides it. */
     if (!preset) preset = "medium";
     if (g_api->param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */
-        fprintf(stderr, "yah264: unknown preset '%s'\n", preset);
+        fprintf(stderr, "y264: unknown preset '%s'\n", preset);
         return 1;
     }
     /* Explicit CLI tool flags override the preset (all default to -1 = unset). */
@@ -7279,7 +7279,7 @@ static int cli_main(int argc, char **argv)
         cqm = YAH264_CQM_CUSTOM;
     } else if (cqmc.set4 || cqmc.set8) {
         if (cqm == YAH264_CQM_JVT) {
-            fprintf(stderr, "yah264: --cqm jvt and the per-list --cqm4*/--cqm8* options "
+            fprintf(stderr, "y264: --cqm jvt and the per-list --cqm4*/--cqm8* options "
                     "do not combine; give every list, or use --cqmfile\n");
             return 2;
         }
@@ -7297,7 +7297,7 @@ static int cli_main(int argc, char **argv)
     /* the library caps the window at 64 frames; say so rather than let a
      * deeper request read as if it ran */
     if (rc_lookahead > 64 && hw == YAH264_HW_OFF)
-        fprintf(stderr, "yah264: warning: --rc-lookahead %d is above the 64-frame cap; "
+        fprintf(stderr, "y264: warning: --rc-lookahead %d is above the 64-frame cap; "
                 "the window runs at 64\n", rc_lookahead);
     if (badapt >= 0)
         param.badapt = badapt;
@@ -7383,7 +7383,7 @@ static int cli_main(int argc, char **argv)
  * without naming a profile. */
             if (weightp == -2) weightp = YAH264_WEIGHTP_OFF;
         } else {
-            fprintf(stderr, "yah264: unknown --tune '%s' "
+            fprintf(stderr, "y264: unknown --tune '%s' "
                     "(grain, film, animation, psnr, ssim, zerolatency, "
                     "stillimage, fastdecode)\n", tune);
             return 2;
@@ -7452,11 +7452,11 @@ static int cli_main(int argc, char **argv)
             const char *effect = rc_arg[a].mode == RC_ARG_QP
                                ? "still sets only the base QP" : "is dropped";
             if (pass > 0)
-                LOGF(LOG_WARN, "yah264: warning: %s %s %s -- --pass %d targets "
+                LOGF(LOG_WARN, "y264: warning: %s %s %s -- --pass %d targets "
                         "--bitrate (2-pass CRF is not implemented)\n",
                         rc_arg[a].flag, rc_arg[a].val, effect, pass);
             else
-                LOGF(LOG_WARN, "yah264: warning: %s %s %s -- %s %s came later and "
+                LOGF(LOG_WARN, "y264: warning: %s %s %s -- %s %s came later and "
                         "selects %s (last rate-control flag wins, as in x264)\n",   /* x264-ok */
                         rc_arg[a].flag, rc_arg[a].val, effect,
                         rc_arg[n_rc_arg - 1].flag, rc_arg[n_rc_arg - 1].val,
@@ -7545,17 +7545,17 @@ static int cli_main(int argc, char **argv)
  * reaches the user as "encoder_open failed" and this one has a reason worth
  * printing. */
     if (g_scan_in && g_scan_out) {
-        fprintf(stderr, "yah264: --scan-in and --scan-out together would rewrite the scan "
+        fprintf(stderr, "y264: --scan-in and --scan-out together would rewrite the scan "
                 "with itself; give one\n");
         return 2;
     }
     if ((g_scan_in || g_scan_out) && recon_path) {
-        fprintf(stderr, "yah264: --scan-in/--scan-out have no pre-scan to use under "
+        fprintf(stderr, "y264: --scan-in/--scan-out have no pre-scan to use under "
                 "--dump-recon, which encodes serially without --cut-split\n");
         return 2;
     }
     if (open_gop && stitchable) {
-        fprintf(stderr, "yah264: --open-gop and --stitchable contradict each other: "
+        fprintf(stderr, "y264: --open-gop and --stitchable contradict each other: "
                 "--stitchable promises a cut point at every keyframe, and open GOP "
                 "is the decision that a keyframe is not one\n");
         return 2;
@@ -7587,19 +7587,19 @@ static int cli_main(int argc, char **argv)
             why = hbuf;
         }
         if (why && fld_asked) {
-            fprintf(stderr, "yah264: field coding refused: it %s. Drop that "
+            fprintf(stderr, "y264: field coding refused: it %s. Drop that "
                     "or drop --tff/--bff\n", why);
             return 2;
         }
         if (why) {
-            fprintf(stderr, "yah264: the input declares a field order, but "
+            fprintf(stderr, "y264: the input declares a field order, but "
                     "field coding %s -- coding frames instead. --tff or --bff "
                     "makes this a refusal; --no-interlaced silences it\n", why);
             param.interlaced = 0;
         }
     }
     if (fake_interlaced && !param.interlaced && (param.height % 4)) {
-        fprintf(stderr, "yah264: --fake-interlaced needs a height that is a "
+        fprintf(stderr, "y264: --fake-interlaced needs a height that is a "
                 "multiple of 4 (got %d), for the same reason --tff does\n",
                 param.height);
         return 2;
@@ -7628,18 +7628,18 @@ static int cli_main(int argc, char **argv)
         for (int i = 0; PROF[i].name; i++)
             if (!strcmp(profile, PROF[i].name)) pi = i;
         if (pi < 0) {
-            fprintf(stderr, "yah264: unknown --profile '%s' (baseline, main, high, "
+            fprintf(stderr, "y264: unknown --profile '%s' (baseline, main, high, "
                     "high10, high422, high444)\n", profile);
             return 2;
         }
         int cf = csp == YAH264_CSP_I444 ? 3 : csp == YAH264_CSP_I422 ? 2 : 1;
         if (cf > PROF[pi].maxcf) {
-            fprintf(stderr, "yah264: --profile %s cannot code %s input\n",
+            fprintf(stderr, "y264: --profile %s cannot code %s input\n",
                     profile, cf == 3 ? "4:4:4" : "4:2:2");
             return 2;
         }
 #define PROF_REFUSE(what) do {                                               \
-            fprintf(stderr, "yah264: --profile %s forbids %s; drop the flag " \
+            fprintf(stderr, "y264: --profile %s forbids %s; drop the flag " \
                     "or raise the profile\n", profile, (what));               \
             return 2;                                                        \
         } while (0)
@@ -7660,7 +7660,7 @@ static int cli_main(int argc, char **argv)
     }
 #undef PROF_REFUSE
     if (qp_min && qp_max && qp_min > qp_max) {
-        fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
+        fprintf(stderr, "y264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
     /* what the HRD cannot hold, refused before any output exists (the library
@@ -7671,7 +7671,7 @@ static int cli_main(int argc, char **argv)
         for (int i = 0; i < g_nzones; i++) zq |= (g_zones[i].flags & YAH264_ZONE_QP) != 0;
         int qcap = qp_max > 0 && qp_max < 51;
         if (crf_max > 0.0 || qcap || forced || zq) {
-            fprintf(stderr, "yah264: --nal-hrd cannot be combined with %s: it holds the QP under "
+            fprintf(stderr, "y264: --nal-hrd cannot be combined with %s: it holds the QP under "
                     "what the buffer may need, and the stream would fail its own declaration\n",
                     crf_max > 0.0 ? "--crf-max" : qcap ? "--qpmax under 51"
                     : forced ? "a forced qpfile QP" : "a --zones q= zone");
@@ -7685,7 +7685,7 @@ static int cli_main(int argc, char **argv)
         /* a field is a picture: under --tff/--bff the period is a field's */
         double pic = fps > 0.0 ? br / (param.interlaced ? 2.0 * fps : fps) : 0.0;
         if (nal_hrd == YAH264_NAL_HRD_CBR && fps > 0.0 && cpb <= pic) {
-            fprintf(stderr, "yah264: --nal-hrd cbr needs a buffer larger than one picture period "
+            fprintf(stderr, "y264: --nal-hrd cbr needs a buffer larger than one picture period "
                     "of arrival (%.0f bits, a field's under --tff/--bff); --vbv-bufsize gives %.0f\n",
                     pic, cpb);
             if (out != stdout) out_forget(&g_of, out);
@@ -7697,7 +7697,7 @@ static int cli_main(int argc, char **argv)
     int vbv_k1 = param.keyint == 1 && param.rc.vbv_maxrate > 0 && param.rc.vbv_bufsize > 0;
     if ((nal_hrd || vbv_k1)
         && (g_cut_split || g_shot_table || g_shot_crf || g_segment_out)) {
-        fprintf(stderr, "yah264: %s cannot be combined with %s: it runs one "
+        fprintf(stderr, "y264: %s cannot be combined with %s: it runs one "
                 "continuous encoder, and that option needs the per-GOP encoders\n",
                 nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV",
                 g_shot_crf ? "--shot-crf" : g_shot_table ? "--shot-table"
@@ -7720,15 +7720,15 @@ static int cli_main(int argc, char **argv)
         else if (param.interlaced) why = "field coding";
         else if (stitchable) why = "--stitchable, which promises a cut point at every keyframe";
         if (why) {
-            fprintf(stderr, "yah264: --intra-refresh cannot be combined with %s\n", why);
+            fprintf(stderr, "y264: --intra-refresh cannot be combined with %s\n", why);
             return 2;
         }
         if (param.bframes > 0)
-            LOGF(LOG_INFO, "yah264: --intra-refresh codes P frames only: "
+            LOGF(LOG_INFO, "y264: --intra-refresh codes P frames only: "
                  "--bframes %d becomes 0\n", param.bframes);
         param.bframes = 0;
         if (scenecut > 0)
-            LOGF(LOG_WARN, "yah264: warning: --scenecut is ignored under "
+            LOGF(LOG_WARN, "y264: warning: --scenecut is ignored under "
                  "--intra-refresh, which places no keyframe at a cut\n");
         param.intra_refresh = 1;
     }
@@ -7740,7 +7740,7 @@ static int cli_main(int argc, char **argv)
  * by more output during the encode. */
     char partbuf[32];
     LOGF(LOG_DEBUG,
-         "yah264: resolved: %dx%d %s in, %dx%d coded%s, %d/%d fps, preset %s%s%s, "
+         "y264: resolved: %dx%d %s in, %dx%d coded%s, %d/%d fps, preset %s%s%s, "
          "subme %d ref %d bframes %d %s, partitions %s, %s, keyint %d, threads %d\n",
          g_in_w, g_in_h,
          param.csp == YAH264_CSP_I444 ? "4:4:4" : param.csp == YAH264_CSP_I422 ? "4:2:2" : "4:2:0",
@@ -7803,7 +7803,7 @@ static int cli_main(int argc, char **argv)
         tp_mt = 0;
         if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
             LOGF(threads > 1 ? LOG_WARN : LOG_INFO,
-                 "yah264: %s--intra-refresh is one sequence with no keyframes to split "
+                 "y264: %s--intra-refresh is one sequence with no keyframes to split "
                  "at, so the %d threads run the row wavefront of one encoder instead "
                  "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
     }
@@ -7813,7 +7813,7 @@ static int cli_main(int argc, char **argv)
     if (ctl_on) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path)
-            LOGF(LOG_INFO, "yah264: live control runs one continuous encoder, so the %d threads "
+            LOGF(LOG_INFO, "y264: live control runs one continuous encoder, so the %d threads "
                  "run its row wavefront and lookahead instead of parallel GOPs\n", nthreads);
     }
     /* a per-GOP join starts from an assumed buffer level, and one-frame GOPs
@@ -7823,7 +7823,7 @@ static int cli_main(int argc, char **argv)
     if (one_enc) {
         tp_mt = 0;
         if (nthreads > 1 && !recon_path && hw == YAH264_HW_OFF)
-            LOGF(LOG_INFO, "yah264: %s runs one continuous encoder, so the %d threads "
+            LOGF(LOG_INFO, "y264: %s runs one continuous encoder, so the %d threads "
                  "run its row wavefront instead of parallel GOPs\n",
                  nal_hrd ? "--nal-hrd" : "--keyint 1 with a VBV", nthreads);
     }
@@ -7851,7 +7851,7 @@ static int cli_main(int argc, char **argv)
                                       ? "this pass's stats file holds no records to split"
           :                             "this pass's stats file has no GOP markers to "
                                         "split on, so a serial pass wrote it";
-        LOGF(LOG_WARN, "yah264: warning: --threads %d cannot be honoured, "
+        LOGF(LOG_WARN, "y264: warning: --threads %d cannot be honoured, "
                 "encoding serially: %s\n", threads, why);
     }
     if (hw != YAH264_HW_OFF) {
@@ -7864,19 +7864,19 @@ static int cli_main(int argc, char **argv)
             n += c == Y264_HW_IGNORED || c == Y264_HW_APPROX;
         }
         if (n) {
-            fprintf(stderr, "yah264: hw: %d option(s) not honoured as given by the hardware encoder:\n", n);
+            fprintf(stderr, "y264: hw: %d option(s) not honoured as given by the hardware encoder:\n", n);
             for (int i = 1; i < argc; i++) {
                 const char *note = NULL;
                 enum y264_hw_class c = y264_hw_option_class(argv[i], &note);
                 if (c == Y264_HW_IGNORED || c == Y264_HW_APPROX)
-                    fprintf(stderr, "yah264: hw:   %s (%s%s%s)\n", argv[i],
+                    fprintf(stderr, "y264: hw:   %s (%s%s%s)\n", argv[i],
                             c == Y264_HW_IGNORED ? "ignored" : "approximated",
                             note ? ": " : "", note ? note : "");
             }
-            if (hw_strict) { fprintf(stderr, "yah264: hw: --hw-strict: refusing\n"); return 2; }
+            if (hw_strict) { fprintf(stderr, "y264: hw: --hw-strict: refusing\n"); return 2; }
         }
         if (recon_path) {
-            fprintf(stderr, "yah264: hw: --dump-recon has no reconstruction to dump in hardware mode\n");
+            fprintf(stderr, "y264: hw: --dump-recon has no reconstruction to dump in hardware mode\n");
             return 2;
         }
         tp_mt = 0;                              /* the hardware has its own parallelism */
@@ -7890,12 +7890,12 @@ static int cli_main(int argc, char **argv)
         if (rc != Y264_GO_SERIAL) {
             if (g_force_reject) {
                 if (g_force_reject_base > 0)
-                    fprintf(stderr, "yah264: --qpfile: refused inside the GOP starting at input frame %d; "
+                    fprintf(stderr, "y264: --qpfile: refused inside the GOP starting at input frame %d; "
                                     "add that to the frame number above\n", g_force_reject_base);
-                fprintf(stderr, "yah264: --qpfile: the encode was refused, the output is incomplete\n");
+                fprintf(stderr, "y264: --qpfile: the encode was refused, the output is incomplete\n");
                 rc = 1;
             } else if (g_gop_encode_err) {
-                fprintf(stderr, "yah264: an encode inside a GOP failed; the output is incomplete\n");
+                fprintf(stderr, "y264: an encode inside a GOP failed; the output is incomplete\n");
                 rc = 1;
             }
             if (in != stdin) fclose(in);
@@ -7911,7 +7911,7 @@ static int cli_main(int argc, char **argv)
             return close_out(out, rc);
         }
         if (threads > 1)
-            LOGF(LOG_WARN, "yah264: warning: --threads %d cannot be honoured, "
+            LOGF(LOG_WARN, "y264: warning: --threads %d cannot be honoured, "
                  "encoding serially: --open-gop is one encoder instance for the "
                  "whole stream and the GOP schedule needs a frame count this "
                  "input does not carry; encode from a file\n", threads);
@@ -7930,7 +7930,7 @@ static int cli_main(int argc, char **argv)
     }
     apply_video_signal(enc);
     if (!enc) {
-        fprintf(stderr, "yah264: encoder_open failed\n");
+        fprintf(stderr, "y264: encoder_open failed\n");
         return 1;
     }
     /* The serial path is one instance over the whole stream, so the plan and
@@ -7954,9 +7954,9 @@ static int cli_main(int argc, char **argv)
         return 1;
     }
     if (strcmp(g_api->encoder_backend(enc), "yah264"))
-        LOGF(LOG_INFO, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
+        LOGF(LOG_INFO, "y264: encoder: %s\n", g_api->encoder_backend(enc));
     else
-        LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
+        LOGF(LOG_INFO, "y264: cpu features: %s\n", g_api->cpu_features());
 
     /* The recon is the CODED picture, so the dump carries the cropped geometry
  * and not the input's. */
@@ -7983,7 +7983,7 @@ static int cli_main(int argc, char **argv)
     if (!rd_on) {
         y = malloc(y_bytes); u = malloc(c_bytes); v = malloc(c_bytes);
         if (!y || !u || !v) {
-            fprintf(stderr, "yah264: out of memory\n");
+            fprintf(stderr, "y264: out of memory\n");
             return 1;
         }
     }
@@ -8001,7 +8001,7 @@ static int cli_main(int argc, char **argv)
     long sst_cap = 0;
 
     if (g_api->encoder_headers(enc, &nal, &count) < 0) {
-        fprintf(stderr, "yah264: headers failed\n");
+        fprintf(stderr, "y264: headers failed\n");
         rc = 1;
         goto done;
     }
@@ -8012,7 +8012,7 @@ static int cli_main(int argc, char **argv)
     unsigned bad = 0;
     if (g_frame_stats && hw == YAH264_HW_OFF) {
         sfst = fopen(g_frame_stats, "w");
-        if (!sfst) fprintf(stderr, "yah264: cannot write --frame-stats %s\n", g_frame_stats);
+        if (!sfst) fprintf(stderr, "y264: cannot write --frame-stats %s\n", g_frame_stats);
     }
 #define SERIAL_STATS(nal_, cnt_) do { \
         if (control_drain(enc) < 0) { rc = 1; goto done; } \
@@ -8040,7 +8040,7 @@ static int cli_main(int argc, char **argv)
         if (s == 0)
             break;                                  /* clean EOF */
         if (s == -1) {
-            fprintf(stderr, "yah264: expected FRAME header at frame %ld, got '%s'\n",
+            fprintf(stderr, "y264: expected FRAME header at frame %ld, got '%s'\n",
                     frame + g_seek_frames, rd_on ? rd.line : line);
             rc = 1;
             goto done;
@@ -8083,7 +8083,7 @@ static int cli_main(int argc, char **argv)
         int bytes = g_api->encoder_encode(enc, &nal, &count, &pic);
         if (rd_on) serial_rd_release(&rd);
         if (bytes < 0) {
-            fprintf(stderr, "yah264: encode failed on frame %ld\n", frame + g_seek_frames);
+            fprintf(stderr, "y264: encode failed on frame %ld\n", frame + g_seek_frames);
             rc = 1;
             goto done;
         }
@@ -8095,7 +8095,7 @@ static int cli_main(int argc, char **argv)
         frame++;
         SERIAL_STATS(nal, count);
         if (ferror(out)) {
-            fprintf(stderr, "yah264: error writing the output stream\n");
+            fprintf(stderr, "y264: error writing the output stream\n");
             rc = 1;
             goto done;
         }
@@ -8104,7 +8104,7 @@ static int cli_main(int argc, char **argv)
     for (;;) {                                      /* flush (window + B reorder) */
         int fb = g_api->encoder_encode(enc, &nal, &count, NULL);
         if (fb < 0) {
-            fprintf(stderr, "yah264: encode failed while flushing; the output is incomplete\n");
+            fprintf(stderr, "y264: encode failed while flushing; the output is incomplete\n");
             rc = 1;
             break;
         }
@@ -8116,7 +8116,7 @@ static int cli_main(int argc, char **argv)
         }
         SERIAL_STATS(nal, count);
         if (ferror(out)) {
-            fprintf(stderr, "yah264: error writing the output stream\n");
+            fprintf(stderr, "y264: error writing the output stream\n");
             rc = 1;
             break;
         }
@@ -8132,10 +8132,10 @@ static int cli_main(int argc, char **argv)
  * there; our own streams can carry several NALs per frame, so the count is
  * only reported for the hardware. */
     if (hw != YAH264_HW_OFF && strcmp(g_api->encoder_backend(enc), "yah264"))
-        LOGF(LOG_INFO, "yah264: encoded %ld frame(s), %ld returned by the hardware%s\n", frame, returned,
+        LOGF(LOG_INFO, "y264: encoded %ld frame(s), %ld returned by the hardware%s\n", frame, returned,
                 returned == frame ? "" : " (MISMATCH)");
     else
-        LOGF(LOG_INFO, "yah264: encoded %ld frame(s)\n", frame);
+        LOGF(LOG_INFO, "y264: encoded %ld frame(s)\n", frame);
 
     if (recon) {                                    /* write recons in display order */
         /* The CODED geometry, which --crop-rect makes smaller than the input's:
@@ -8185,7 +8185,7 @@ done:
         int bad = ferror(recon);
         bad |= fclose(recon) != 0;
         if (bad && !rc) {
-            fprintf(stderr, "yah264: error writing the recon\n");
+            fprintf(stderr, "y264: error writing the recon\n");
             rc = 1;
         }
     }

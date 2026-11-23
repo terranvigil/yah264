@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """cli_robust_check.py - the CLI's handling of damaged or awkward input files.
 
-    python3 tests/cli_robust_check.py path/to/cli/yah264
+    python3 tests/cli_robust_check.py path/to/cli/y264
 
 Each case runs the encoder on a small synthetic clip and checks the exit
 status and what it says on stderr:
@@ -570,7 +570,7 @@ def stats_is_output(enc, tmp):
         data = open(keep, "rb").read()
         check(f"-o {name} appended to a file keeps what was there",
               rc == 0 and data.startswith(b"keep\n") and len(data) > 5, f"rc {rc}, {len(data)} bytes")
-    # { echo HEADER; yah264 -o /dev/stdout; } > file: written after it
+    # { echo HEADER; y264 -o /dev/stdout; } > file: written after it
     with open(keep, "wb") as f:
         f.write(b"HEADER\n")
         f.flush()

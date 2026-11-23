@@ -76,7 +76,7 @@ X264, VMAF_HDR and ffmpeg must resolve to Mach-O or ELF executables, since
 the key hashes the file itself; HDR_LADDER_ALLOW_SCRIPTS=1 lets a test
 harness pass wrapper scripts, with no cached rung reused.
 
-  YAH264    yah264 CLI (default build/cli/yah264)
+  YAH264    yah264 CLI (default build/cli/y264)
   X264      x264 CLI (default x264)
   VMAF_HDR  a vmaf CLI built with the HDR models' colour options (checked
             at start: a build without them scores PQ as SDR and exits 0)
@@ -307,7 +307,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bdcompare import bd_rate, v1_scaled, V1_SCALE_VF          # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-YAH = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
+YAH = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "y264"))
 X264 = os.environ.get("X264", "x264")
 VMAF = os.environ.get("VMAF_HDR")
 FFMPEG = "ffmpeg"

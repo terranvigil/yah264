@@ -12,7 +12,7 @@ import os, re, sys, json, math, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES = 120
-N = os.environ.get("YAH264", "build/cli/yah264")
+N = os.environ.get("YAH264", "build/cli/y264")
 
 ladders = json.load(open(os.path.join(HERE, "ladders.json")))
 

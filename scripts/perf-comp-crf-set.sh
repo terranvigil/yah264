@@ -111,7 +111,7 @@ PY
     else
         tgt_flag="--target-kbps $br"
     fi
-    sol=$(YAH264="${YAH264:-$root/build/cli/yah264}" \
+    sol=$(YAH264="${YAH264:-$root/build/cli/y264}" \
           python3 "$root/scripts/crf-solve.py" --clip "$path" --seconds "$SECONDS_PER" \
               $tgt_flag --threads "$THREADS" --preset "$PRESET" \
               --y264-args "$N_ARGS" --x264-args "$X_ARGS" 2>&1)
@@ -139,7 +139,7 @@ PY
     # RC_MODE=crf is explicit rather than inferred, and Y264_CRF/X264_CRF are the
     # per-side overrides perf-comp.sh already exposes -- no bitrate flag goes
     # near this run, so nothing can silently drop one side back into ABR.
-    out=$(THREADS="$THREADS" YAH264="${YAH264:-$root/build/cli/yah264}" \
+    out=$(THREADS="$THREADS" YAH264="${YAH264:-$root/build/cli/y264}" \
         RC_MODE=crf Y264_CRF="$ncrf" X264_CRF="$xcrf" \
         YAH264_ARGS="$N_ARGS" X264_ARGS="$X_ARGS" \
         PURE_C="$([ "$MODE" = pure ] && echo 1 || echo 0)" \

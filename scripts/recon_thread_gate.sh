@@ -35,7 +35,7 @@ knobs=$(env | sed -n 's/^\(Y264_[A-Za-z0-9_]*\)=.*/\1/p' |
   grep -Fxvf <(names src/common/env.h cli_backed; echo Y264_MAX_INPUT_MB; echo Y264_STREAM_WINDOW) |
   tr '\n' ' ')
 if [ -n "$knobs" ]; then
-  cli="$(dirname "$BIN")/../../cli/yah264"
+  cli="$(dirname "$BIN")/../../cli/y264"
   if [ ! -x "$cli" ]; then
     echo "recon_thread_gate: ${knobs}set, and the build kind of $BIN couldn't be determined (no CLI at $cli); run it from a -Ddev_knobs=true build tree" >&2
     exit 2

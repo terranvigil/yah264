@@ -85,7 +85,7 @@ for entry in $CLIPS; do
     else
         yargs="--preset $PRESET --cabac --transform-8x8 --bitrate $br"; xargs="--preset $PRESET --bitrate $br"
     fi
-    out=$(THREADS="${SET_THREADS:-1}" YAH264="${YAH264:-$root/build/cli/yah264}" \
+    out=$(THREADS="${SET_THREADS:-1}" YAH264="${YAH264:-$root/build/cli/y264}" \
         RC_MODE="$SET_RC" YAH264_ARGS="$yargs" X264_ARGS="$xargs" \
         bash "$script" "$path" "$CRF" "$SECONDS_PER" 2>&1)
     rc=$?

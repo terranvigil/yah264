@@ -30,7 +30,7 @@ export LC_ALL=C   # perf and awk decimals
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SECONDS_PER="${1:-6}"
 PRESET="${SET_PRESET:-medium}"
-YAH264="${YAH264:-$root/build/cli/yah264}"
+YAH264="${YAH264:-$root/build/cli/y264}"
 X264_C="${X264_C:-$root/../x264/x264-noasm-autovec}"
 . "$root/scripts/parity-clips.sh"
 

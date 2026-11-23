@@ -6,14 +6,14 @@
 # absolute VMAF v1 and CAMBI against the source. Mirrors scripts/bdcompare.py's
 # v1 path: both sides at 10-bit 4:2:0, the model picked by the source's height
 # and frame rate, CAMBI told the encode's coded bit depth. Env:
-#   YAH264   encoder binary (default build/cli/yah264)
+#   YAH264   encoder binary (default build/cli/y264)
 #   VMAF_V1_BIN     float-enabled libvmaf 3.x CLI (default ~/.local/opt/vmaf-v1/bin/vmaf;
 #                   the Homebrew vmaf cannot load the v1 models)
 #   VMAF_V1_MODELS  v1 model directory (default ~/.local/share/vmaf/model)
 #   ENCCFG    encoder flags (default: --crf <crf> --cabac --bframes 2)
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="${YAH264:-$root/build/cli/yah264}"
+CLI="${YAH264:-$root/build/cli/y264}"
 clip="${1:?usage: vmaf.sh <clip.y4m> [crf] [frames]}"
 crf="${2:-28}"
 frames="${3:-0}"

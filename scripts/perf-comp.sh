@@ -52,7 +52,7 @@
 #
 # Env overrides:
 #   PURE_C       1 = pure-C mode (x264 --no-asm + YAH264_NO_ASM=1); default 0
-#   YAH264      yah264 binary (default build/cli/yah264)
+#   YAH264      yah264 binary (default build/cli/y264)
 #   X264_ASM     optimized x264 (default ../x264/x264-asm, NEON)
 #   X264_C       pure-C x264    (default ../x264/x264-noasm, cpu-caps none)
 #   X264         override either (wins over the mode-selected default)
@@ -70,7 +70,7 @@ clip="${1:-$root/tests/corpus/ducks_720p.y4m}"
 crf="${2:-25}"
 seconds="${3:-15}"
 
-YAH264="${YAH264:-$root/build/cli/yah264}"
+YAH264="${YAH264:-$root/build/cli/y264}"
 # x264 reference binaries built FROM SOURCE (../x264), self-contained, same source
 # version, so the comparison is fair and never picks up a stray/asm x264 from PATH.
 # x264-asm = NEON. For the pure-C default we use x264-noasm-AUTOVEC (no asm, but the

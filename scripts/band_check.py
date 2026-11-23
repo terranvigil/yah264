@@ -46,7 +46,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOWS = os.environ.get("WINDOWS", "nocturne-x10_1080p:29280,nocturne-x10_1080p:3960,"
                          "tears-x10_1080p:10200,tears-x10_1080p:9480,meridian-x10_1080p:2400")
 SRC_DIR = os.environ.get("SRC_DIR", "/Volumes/T7/staging/yah264/y4m")
-YAH264 = os.environ.get("YAH264", os.path.join(REPO, "build/cli/yah264"))
+YAH264 = os.environ.get("YAH264", os.path.join(REPO, "build/cli/y264"))
 X264 = os.environ.get("X264", "x264")
 ARGS = os.environ.get("ARGS", "").split()
 FLAT_MARGIN = float(os.environ.get("FLAT_MARGIN", "0.05"))

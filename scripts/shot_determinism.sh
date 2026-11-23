@@ -21,7 +21,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IN="${1:-$ROOT/local/corpus/ms_cif_30.y4m}"; shift || true
-BIN="${YAH264:-$ROOT/build/cli/yah264}"; T="${T:-4}"; K="${K:-2}"; CRF="${CRF:-26}"
+BIN="${YAH264:-$ROOT/build/cli/y264}"; T="${T:-4}"; K="${K:-2}"; CRF="${CRF:-26}"
 [ "$T" = 1 ] && K=1
 if [ ! -f "$IN" ] && [ "$(basename "$IN")" = ms_cif_30.y4m ]; then
     echo "building $IN from the gate corpus (scripts/make_multishot.py)"

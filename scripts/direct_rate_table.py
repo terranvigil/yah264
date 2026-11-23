@@ -41,7 +41,7 @@ CALIB = {
 # published blue_sky ladder covered (VMAF-NEG 48 to 93).
 MULT = (0.4, 0.55, 0.8, 1.15)
 
-Y = "./build/cli/yah264"
+Y = "./build/cli/y264"
 # DRT_EXTRA is appended to EVERY arm including x264, so both sides stay
 # configured the same way. DRT_ARMS picks a subset by name. Together they let
 # this harness answer a base-path question ("--bframes 0 on both sides, at the

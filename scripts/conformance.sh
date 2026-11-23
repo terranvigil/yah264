@@ -1411,7 +1411,7 @@ for a in "$@"; do
     esac
 done
 : "${YAH264_CONF_FAST:=0}"
-enc="${enc:-$root/build/cli/yah264}"
+enc="${enc:-$root/build/cli/y264}"
 compute_config
 JOBS="${YAH264_CONF_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 8)}"
 

@@ -12,7 +12,7 @@
 # them and narrows its read-ahead window to (workers + 1) x 16 frames once the
 # split is decided. A worker that finished a GOP and waited for the next
 # boundary did not count as starved, so the reader parked at the window with the
-# boundary a keyint away: `ffmpeg ... | yah264 --input-y4m -` hung at any thread
+# boundary a keyint away: `ffmpeg ... | y264 --input-y4m -` hung at any thread
 # count whose window was below keyint, which is every default on a machine with
 # fewer than ~15 cores. The shipped build only met pipes at 18 threads, where the
 # window happens to exceed keyint, so nothing caught it until 2026-09-24.
@@ -22,7 +22,7 @@
 #   scripts/pipe_window_check.sh [build-dir]
 set -u
 BUILD=${1:-build}
-Y=$BUILD/cli/yah264
+Y=$BUILD/cli/y264
 command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null || { echo ">> pipe window check skipped (no ffmpeg/ffprobe)"; exit 0; }
 [ -x "$Y" ] || { echo "pipe window check: no binary at $Y"; exit 1; }
 

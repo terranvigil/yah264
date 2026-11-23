@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """narrow_check.py - narrow and short pictures.
 
-    python3 tests/narrow_check.py path/to/cli/yah264
+    python3 tests/narrow_check.py path/to/cli/y264
 
 The clips are 16x16, 16x48, 16x64, 32x48 and 48x16: one or two macroblocks
 wide, and one macroblock-row tall. Each row's CABAC rate estimate is seeded

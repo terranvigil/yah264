@@ -9,7 +9,7 @@ move between shots; this encodes the S0 multi-shot sequences
 shot) at several CRF points for every arm and reports, per sequence,
 BD-VMAF-v1 for every arm pair, the per-shot VMAF v1 at each point and the
 per-shot bit share. Arms are "name=<command template>" with {src} {q} {out};
-"name=env:VAR=val ..." runs our binary (YAH264, default build/cli/yah264)
+"name=env:VAR=val ..." runs our binary (YAH264, default build/cli/y264)
 at --threads 0 under that environment, "x264" runs the reference at medium.
 
   scripts/multishot_bd.py --arms flat=env: aqdc=env:Y264_AQ_DC=0.4 x264 \\
@@ -74,7 +74,7 @@ def main():
     ap.add_argument("--x264", default=os.environ.get("X264", os.path.join(ROOT, "..", "x264", "x264")))
     ap.add_argument("--threads", default="0", help="our --threads (0 = auto)")
     a = ap.parse_args()
-    ours = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
+    ours = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "y264"))
     os.makedirs(a.work, exist_ok=True)
     pts = [int(x) for x in a.points.split(",")]
     arms = {}

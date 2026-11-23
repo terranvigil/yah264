@@ -5,7 +5,7 @@
 through the record/replay harness (src/encoder/rcreplay.h).
 
     python3 scripts/rc_invariants.py                       # REF = CAND = build-rel
-    REF=/old/build-rel/cli/yah264 python3 scripts/rc_invariants.py
+    REF=/old/build-rel/cli/y264 python3 scripts/rc_invariants.py
     ONLY='a6|stefan' python3 scripts/rc_invariants.py
     CAND_ENV='Y264_VBV_PLAN=0' python3 scripts/rc_invariants.py
 
@@ -43,7 +43,7 @@ point is to change behaviour).
 import hashlib, os, re, shlex, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REF = os.environ.get("REF", os.path.join(ROOT, "build-rel/cli/yah264"))
+REF = os.environ.get("REF", os.path.join(ROOT, "build-rel/cli/y264"))
 CAND = os.environ.get("CAND", REF)
 CAND_ENV = os.environ.get("CAND_ENV", "")
 CORPUS = os.environ.get("CORPUS", os.path.join(ROOT, "tests/corpus"))

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """rc_selftest.py - the rate controller's meson test, with no corpus.
 
-    python3 tests/rc_selftest.py path/to/cli/yah264
+    python3 tests/rc_selftest.py path/to/cli/y264
 
 Writes a synthetic QCIF clip (a moving textured pattern with a cut halfway,
 so the VBV and the bits models see a regime change) and runs

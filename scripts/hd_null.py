@@ -22,7 +22,7 @@ ONE live control again. The reference binary's default curve comes from the
 point cache when a band has run on it, and is otherwise encoded here (bytes
 only, five encodes a clip, no VMAF; --no-encode skips that).
 
-    python3 scripts/hd_null.py                      # fit, ref = build/cli/yah264
+    python3 scripts/hd_null.py                      # fit, ref = build/cli/y264
     YAH264=/path/to/yah264 python3 scripts/hd_null.py
     python3 scripts/hd_null.py --show               # print the stored fit
 """
@@ -130,7 +130,7 @@ def anchor_bytes(ref, clip, rungs, args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", help="reference binary (default: $YAH264 or build/cli/yah264)")
+    ap.add_argument("--ref", help="reference binary (default: $YAH264 or build/cli/y264)")
     ap.add_argument("--preset", default=os.environ.get("PRESET", "medium"))
     ap.add_argument("--threads", type=int, default=int(os.environ.get("THREADS", "1")))
     ap.add_argument("--frames", type=int, default=int(os.environ.get("FRAMES", "120")))
@@ -169,7 +169,7 @@ def main():
                   + ("" if clip in f["anchor"] else "  (no ref anchor)"))
         return
 
-    ref = args.ref or os.environ.get("YAH264", "build/cli/yah264")
+    ref = args.ref or os.environ.get("YAH264", "build/cli/y264")
     ref = ref if os.path.isabs(ref) else os.path.join(ROOT, ref)
     ref_lib = sha12(ref)
     points = json.load(open(os.path.join(cache, "points.json")))

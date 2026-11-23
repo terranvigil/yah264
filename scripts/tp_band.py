@@ -9,7 +9,7 @@ single-pass. This one is built on bdcompare.py (its VMAF score cache and its
 BD integral) and adds the two things a two-pass arm is judged on: quality at
 the rate it delivered, and how far that rate is from the target.
 
-  ARMS='new=@/abs/build/cli/yah264' YAH264=/abs/baseline python3 scripts/tp_band.py
+  ARMS='new=@/abs/build/cli/y264' YAH264=/abs/baseline python3 scripts/tp_band.py
   ARMS='a=@/bin Y264_<KNOB>=1;b=@/bin Y264_<KNOB>=2' ...      (env per arm)
 
 Rates per clip come from scripts/ladders.json (the ABR band's four rungs) plus
@@ -39,7 +39,7 @@ import bdcompare                                                 # noqa: E402
 import scratch                                                   # noqa: E402
 
 ROOT = os.path.dirname(HERE)
-ANCHOR = os.environ.get("YAH264", os.path.join(ROOT, "build/cli/yah264"))
+ANCHOR = os.environ.get("YAH264", os.path.join(ROOT, "build/cli/y264"))
 FRAMES = int(os.environ.get("FRAMES", "120"))
 JOBS = int(os.environ.get("JOBS", "3"))
 THREADS = os.environ.get("THREADS", "1")

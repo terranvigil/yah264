@@ -32,7 +32,7 @@ import bdcompare                                                # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRATCH = os.environ.get("HF_SCRATCH", "/tmp/hf_probe")
-YAH264 = os.path.join(REPO, "build/cli/yah264")
+YAH264 = os.path.join(REPO, "build/cli/y264")
 X264 = os.environ.get("X264", "x264")
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 

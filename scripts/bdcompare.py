@@ -12,13 +12,13 @@ Templates use {src}, {q}, {out}. Examples:
 
   # working tree vs x264 medium, CRF mode, VMAF
   scripts/bdcompare.py \
-      --a './build/cli/yah264 --input-y4m {src} --crf {q} --cabac --bframes 3 --ref 3 --transform-8x8 --threads 8 -o {out}' \
+      --a './build/cli/y264 --input-y4m {src} --crf {q} --cabac --bframes 3 --ref 3 --transform-8x8 --threads 8 -o {out}' \
       --b '../x264/x264-noasm --crf {q} --preset medium --keyint 250 --demuxer y4m -o {out} {src}' \
       --points 20,23,26,29 --vmaf
 
   # feature evaluation: current binary vs a saved baseline binary, CQP PSNR
   scripts/bdcompare.py \
-      --a './build/cli/yah264 --input-y4m {src} --qp {q} --cabac --bframes 3 --threads 8 -o {out}' \
+      --a './build/cli/y264 --input-y4m {src} --qp {q} --cabac --bframes 3 --threads 8 -o {out}' \
       --b './baseline_yah264 --input-y4m {src} --qp {q} --cabac --bframes 3 --threads 8 -o {out}'
 
 BD sign: negative means config A uses fewer bits than B at equal quality.
@@ -321,6 +321,8 @@ def _resolve(w):
 
 
 _CD = re.compile(r"(^|[;&|(]\s*)cd\s")
+# the CLI is y264; yah264 is its old name, still installed as an alias
+_CLI_NAMES = ("y264", "yah264")
 
 
 def _yah264_words(tmpl):
@@ -329,7 +331,7 @@ def _yah264_words(tmpl):
     be resolved: a name that isn't an executable file, or a path after a cd,
     whose target we don't track."""
     if _CD.search(tmpl):
-        return None if "yah264" in tmpl else []
+        return None if any(n in tmpl for n in _CLI_NAMES) else []
     try:
         lex = shlex.shlex(tmpl, posix=True, punctuation_chars=True)
         lex.whitespace_split = True
@@ -339,14 +341,14 @@ def _yah264_words(tmpl):
     found = []
     for w in words:
         if " " in w:                        # a quoted command string
-            if "yah264" in w:
+            if any(n in w for n in _CLI_NAMES):
                 sub = _yah264_words(w)
                 if sub is None:
                     return None
                 found += sub
             continue
         w = w.split("=", 1)[1] if _ASSIGN.match(w) else w     # YAH264=/path/yah264
-        if os.path.basename(w) == "yah264":
+        if os.path.basename(w) in _CLI_NAMES:
             p = _resolve(w)
             if not (os.path.isfile(p) and os.access(p, os.X_OK)):
                 return None
