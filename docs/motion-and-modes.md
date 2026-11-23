@@ -85,7 +85,7 @@ At `--subme 8` and below, a P macroblock goes through these steps in order:
    it's smaller than the block's own noise, when it buys less distortion than
    8 bits cost at the mode lambda, and on dark blocks that aren't black, where
    intra plateaus over a smooth gradient band worse than the skip.
-   `Y264_FLAT_SKIP_DC=0` turns the check off.
+   `Y264_FLAT_SKIP_DC=0` turns the check off in a dev_knobs build.
 2. **16x16 search** over the active references.
 3. **Ref-0 exit**, on pictures of at least 1200 macroblocks. When the ref-0
    16x16 vector falls within one quarter-pel of the skip vector and its raw
@@ -145,7 +145,8 @@ whether to keep or drop it.
 
 On very smooth intra blocks the RDOQ lambda ramps from full at a source
 variance of 8 down to zero at 2. That keeps the small levels that make up a
-gentle gradient. `Y264_TREL_SMOOTH=0` turns the ramp off.
+gentle gradient. In a dev_knobs build, `Y264_TREL_SMOOTH=0` turns the ramp
+off.
 
 ### Coefficient decimation
 

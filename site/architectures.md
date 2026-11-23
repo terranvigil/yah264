@@ -169,8 +169,8 @@ We chose intrinsics for three reasons:
 I expect hand assembly to win in a few places. The compiler's instruction order
 is rarely the best one for a given core. It sometimes spills a register a
 person would have kept. And a loop that handles one block per call can be
-unrolled by hand to do four. The x86 timings will show which kernels are worth
-it.
+unrolled by hand to do four. The x86 timings point at the kernels where that's
+worth doing.
 
 ## What would make it faster still
 

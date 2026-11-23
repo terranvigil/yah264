@@ -295,8 +295,9 @@ lists all of them with the reason for each line.
 
 `yah264 --help` prints every flag with its default. Beyond that there are about
 140 `Y264_*` environment knobs. They're research instruments that change between
-commits without notice. A build reads them only when it's configured with
-`-Ddev_knobs=true`.
+commits without notice. Most are read only in a build configured with
+`-Ddev_knobs=true`. The few the CLI passes its own options through are read in
+every build.
 [knob_census.py](https://github.com/terranvigil/yah264/blob/main/scripts/knob_census.py)
 generates the catalog in
 [knobs.md](https://github.com/terranvigil/yah264/blob/main/docs/knobs.md),

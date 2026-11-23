@@ -241,9 +241,9 @@ alongside it is dropped with a warning.
 `--aq-strength` has two defaults. It's 0.4 under CRF, ABR and two-pass, and 0.0
 under constant QP. An explicit value, including an explicit `0`, always wins.
 0.4 is this encoder's own measured value and differs from x264 medium's 1.0. A
-seven-clip VMAF-NEG (earlier metric) sweep put the optimum near 0.3, and the shipped default sits
-just above it. Why it comes out so far below the reference's default is an open
-question.
+seven-clip VMAF-NEG (earlier metric) sweep put the optimum near 0.3, and the
+shipped default sits just above it. Why it comes out so far below the
+reference's default is an open question.
 
 ### GOP structure
 
@@ -383,12 +383,12 @@ the reconstruction. `make conformance` runs it at every recovery point of
 several streams, beside the recon-match cells.
 
 The table compares it with plain keyframes at the same period. Both sides ran
-`--keyint 60` (with `--no-scenecut` on the keyframe side) and `--bframes 0`
-with a one-second VBV (`--bitrate R --vbv-maxrate R --vbv-bufsize R`). Each
-encode is 180 frames at `--threads 1`, at four rates from half to one and a half
-times the board rate. BD-rate is on VMAF-NEG (earlier metric), where positive means intra refresh
-needs more bits for the same quality. The peak is the largest frame after the
-opening IDR over the mean frame size, at the board rate.
+`--keyint 60` (with `--no-scenecut` on the keyframe side) and `--bframes 0` with
+a one-second VBV (`--bitrate R --vbv-maxrate R --vbv-bufsize R`). Each encode is
+180 frames at `--threads 1`, at four rates from half to one and a half times the
+board rate. BD-rate is on VMAF-NEG (earlier metric), where positive means intra
+refresh needs more bits for the same quality. The peak is the largest frame
+after the opening IDR over the mean frame size, at the board rate.
 
 | Clip | Board rate | BD-rate (VMAF-NEG) | Peak, intra refresh | Peak, keyframes |
 | --- | --- | --- | --- | --- |
@@ -421,8 +421,8 @@ threshold is untouched and the output is byte-identical to an encode without
 the flag.
 
 The table covers four board clips at 120 frames and `--threads 1`, CRF 23 to 35
-in five rungs. BD-rate is on VMAF-NEG (earlier metric) against `--b-bias 0`. The B share is
-read at CRF 29.
+in five rungs. BD-rate is on VMAF-NEG (earlier metric) against `--b-bias 0`. The
+B share is read at CRF 29.
 
 | clip | B share at 0 | at -50 | BD at -50 | at +50 and +100 |
 |---|--:|--:|--:|---|
@@ -471,9 +471,9 @@ nothing here suggests moving it from 0.
 | `-t`, `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
 | `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded. The macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule. See below. |
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when three things hold: the 16x16 result already costs less than this many lambdas, the neighborhood is homogeneous, and nothing downstream depends on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
-| `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. It's off because the largest speed gain left costs up to 2.3% BD on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
+| `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. It's off because the largest speed gain left costs up to 2.3% BD-VMAF-NEG (earlier metric) on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
-| `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar, and on at `faster` and below. Under rate control at medium, a picture whose longer side is 3840 or more gets 2. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
+| `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar, and on at `faster` and below. Under rate control at subme 7 (medium), a picture whose longer side is 3840 or more gets 2 unless the option is given. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
 | `--b-intra-band` | 16ths | 0 (off) | Skip both the B intra SATD screen and the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. The verdict is per band instead of per macroblock. It's taken once per frame from fields the lookahead already built. Off, with the number below. `--no-b-intra-band` is 0. |
@@ -526,8 +526,9 @@ only the flat lists. Any non-flat list runs the C weighted path.
 
 ### What the exhaustive searches cost
 
-`esa` and `tesa` against `--me umh` on the same five clips and ladder
-(VMAF-NEG, the earlier metric, negative is better), with the CPU time of one 120-frame encode at CRF 26:
+`esa` and `tesa` against `--me umh` on the same five clips and ladder (VMAF-NEG,
+the earlier metric, negative is better), with the CPU time of one 120-frame
+encode at CRF 26:
 
 | clip | esa BD-VMAF-NEG | esa CPU | tesa BD-VMAF-NEG | tesa CPU |
 | --- | --- | --- | --- | --- |
@@ -565,13 +566,13 @@ veryslow, placebo) search both orientations too.
 
 ### The three low-rate decision gates
 
-At low bitrate most of a picture is a skip. Most of the tournament only
-confirms it. On a 1080p clip at the rate it ships at, 38% of the B macroblocks
-that end as skip have run a full motion search first. These three flags each end
-one of those searches earlier. Each trades bits for speed, so each is read
-against BD-VMAF-NEG (earlier metric) at matched achieved bitrate on a band of twelve 720p and
-1080p clips. The one that's on is the one that holds its quality on every clip
-of that band.
+At low bitrate most of a picture is a skip. Most of the tournament only confirms
+it. On a 1080p clip at the rate it ships at, 38% of the B macroblocks that end
+as skip have run a full motion search first. These three flags each end one of
+those searches earlier. Each trades bits for speed, so each is read against
+BD-VMAF-NEG (earlier metric) at matched achieved bitrate on a band of twelve
+720p and 1080p clips. The one that's on is the one that holds its quality on
+every clip of that band.
 
 `--p-part-gate` is that one. Where the 16x16 search has already found a cheap
 answer, it searches none of the splits. Cheap is measured in lambdas, so the
@@ -616,7 +617,8 @@ profiled 1080p cells at matched bytes. The reference encoder pays 0.6% for the
 same deletion. Its lookahead earns its keep downstream in a way ours
 didn't entirely.
 
-`--lr-settle` came out of that measurement. It's off from `fast` up and on at `faster` and below.
+`--lr-settle` came out of that measurement. It's off from `fast` up and on at
+`faster` and below. At medium, a picture 3840 or more on its longer side gets 2.
 The lowres block search starts at a predictor its already-searched neighbors and
 the previous field agree on. Where that predictor leaves almost no residual, the
 block's answer is in hand before the candidate list, the hexagon, the square
@@ -808,7 +810,8 @@ Interlaced sources are coded as field pictures (PAFF), described under
 `--slices` costs bits. Nothing predicts across a slice's first row, so that row
 codes without its neighbors above. Each slice also pays a header and an
 entropy-coder reset. Measured at `--slices 4`, 120 frames, five CRF rungs inside
-the VMAF-NEG (earlier metric) 55-95 band, at matched achieved bitrate (`scripts/bd_at_rate.py`):
+the VMAF-NEG (earlier metric) 55-95 band, at matched achieved bitrate
+(`scripts/bd_at_rate.py`):
 
 | clip | BD-VMAF-NEG vs `--slices 1` |
 | --- | --- |
@@ -1105,10 +1108,11 @@ effort. Because every other column buys picture quality with time, a slower
 preset is better everywhere. This one gives a little quality back for speed and
 runs the other way down the ladder. It's the only column that has to be argued
 against a bar. Presets at medium and above use none of these arms and keep the
-+0.2%-per-clip bar the parity claim is read on. The presets below
-medium are allowed +0.5% per clip. `superfast` and `ultrafast` run no lookahead
-window. The value they name changes no byte there. It's written so the column
-never turns back on as the ladder gets faster.
++0.2%-per-clip bar the parity claim is read on. The presets below medium are
+allowed +0.5% per clip. `superfast` and `ultrafast` run no lookahead window. The
+value they name changes no byte there. It's written so the column never turns
+back on as the ladder gets faster. At medium, a picture 3840 or more on its
+longer side gets 2 under rate control. An explicit value wins.
 
 subpel 2 is a capped diamond. -1 is an 8-neighbor square
 iterated to convergence. subme at or below 8 uses the fast SATD partition path,
@@ -1213,8 +1217,8 @@ yah264: warning: --threads 8 cannot be honoured, encoding serially: --dump-recon
 ```
 
 The warning fires only on an explicit `--threads` above 1. Leaving it unset
-means "auto, every core", which isn't a request. Warning on it would fire on every
-`--dump-recon` run of the conformance gate.
+means "auto, every core", which isn't a request. Warning on it would fire on
+every `--dump-recon` run of the conformance gate.
 
 4:2:2 and 4:4:4 thread too. The encoder codes all three chroma formats through
 I/P/B on both entropy coders. The GOP-parallel reader's frame store reads the

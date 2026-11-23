@@ -83,13 +83,13 @@ wins on SSD alone. Because psy-RD only steers decisions, the reconstruction
 stays exact. On 2160p frames at medium, the pre-search skip bound keeps half
 the psy term. That saves about 4% of instructions on meridian 2160p.
 
-**Dark, smooth blocks.** Banding shows first in dark gradients and faint
-dark grain. VMAF scores miss most of it, because v1's banding term ignores
-very dark areas. Two terms guard those blocks directly. A macroblock counts as dark and smooth by two linear ramps. The
-first is its luma mean, at full weight at 32 or below and none at 64 on the
-8-bit scale. The second is its variance, full at 4 or below and none at 16.
-On those blocks the psy-RD weight rises to 5x, because at one QP the RD
-decision would otherwise code faint grain to a flat block.
+**Dark, smooth blocks.** Banding shows first in dark gradients and faint dark
+grain. VMAF scores miss most of it, because v1's banding term ignores very dark
+areas. Two terms guard those blocks directly. A macroblock counts as dark and
+smooth by two linear ramps. The first is its luma mean, at full weight at 32 or
+below and none at 64 on the 8-bit scale. The second is its variance, full at 4
+or below and none at 16. On those blocks the psy-RD weight rises to 5x, because
+at one QP the RD decision would otherwise code faint grain to a flat block.
 
 Those blocks also get a dark cut of up to 6 QP below the variance offset in two
 kinds of frame. The first kind holds bright areas as well. In such a frame the
@@ -143,20 +143,20 @@ letterboxed night scene would dilute its share and keep the gate shut.
 Film-scan or analog noise over a matte makes its blocks non-flat. Counted as
 grain, those blocks would open the gate on their own. One frame can't tell such
 a matte from a grainy dark wall or night sky. So on each axis where it found no
-flat bars, the lookahead looks for bars a second time under looser terms. That walk
-lets in blocks up to twice the grain ceiling and needs every line to be nearly
-all matte. It keeps the same pair rule of one color, matched depths and no
-drift. The bars must sit within four levels of the coded black (16, or 0 when
+flat bars, the lookahead looks for bars a second time under looser terms. That
+walk lets in blocks up to twice the grain ceiling and needs every line to be
+nearly all matte. It keeps the same pair rule of one color, matched depths and
+no drift. The bars must sit within four levels of the coded black (16, or 0 when
 the stream signals full range). They must also frame a picture that isn't a
 quarter or more of their own level, as grain behind credits is. A frame leaves
-them out only when the frame before and the frame after it found the same
-depths at the same level. With a one-frame window (`--rc-lookahead 1`) a frame
-can be coded before its successor arrives. There it compares the two frames
-before it instead, whatever `--sync-lookahead` is. Grain beside a clean matte
-still counts, because an axis that found flat bars keeps them. Without a
-lookahead window only flat bars are left out. A grainy band of near-black
-picture at both edges, at one level and holding still, still reads as a matte.
-So do the dark bands of full-range input that isn't tagged as full range.
+them out only when the frame before and the frame after it found the same depths
+at the same level. With a one-frame window (`--rc-lookahead 1`) a frame can be
+coded before its successor arrives. There it compares the two frames before it
+instead, whatever `--sync-lookahead` is. Grain beside a clean matte still
+counts, because an axis that found flat bars keeps them. Without a lookahead
+window only flat bars are left out. A grainy band of near-black picture at both
+edges, at one level and holding still, still reads as a matte. So do the dark
+bands of full-range input that isn't tagged as full range.
 
 **Psy-trellis and the flat-content lattice.** `--psy-trellis` defaults to 0.
 When on, the trellis rewards keeping the AC energy of the reconstructed
@@ -190,7 +190,8 @@ cadence. [B frames](b-frames.md) covers the pyramid and the B coding itself.
 
 ## What we chose and why
 
-BD figures on this page are BD-VMAF-NEG (earlier metric) at matched achieved bitrate unless a row says v1. Negative is better.
+BD figures on this page are BD-VMAF-NEG (earlier metric) at matched achieved
+bitrate unless a row says v1. Negative is better.
 
 | choice | why |
 |---|---|

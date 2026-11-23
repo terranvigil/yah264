@@ -6,9 +6,9 @@ Blues. We measure every animation change on both kinds, because a setting that
 helps one kind often costs the other. Against x264 medium we're far ahead on
 CGI and a few points ahead on hand-drawn.
 
-All numbers here are BD-rate on VMAF-NEG (earlier metric), where negative is better. Self-A/Bs
-are against yah264's shipped default on the same binary. Cross-encoder numbers
-are against x264 medium.
+All numbers here are BD-rate on VMAF-NEG (earlier metric), where negative is
+better. Self-A/Bs are against yah264's shipped default on the same binary.
+Cross-encoder numbers are against x264 medium.
 
 ## What yah264 does
 
@@ -77,11 +77,11 @@ the parity tables, the lead is about 3%.
 
 ## Measuring it
 
-Run bbb_720p and sita_720p on every change, and add sintel_720p when AQ or
-psy moves. Because bbb saturates above VMAF-NEG (earlier metric) 94 or so, read it at CRF 34-46 as
-well as the standard 30-42 points. sita_720p is 140 frames calibrated at
-900 kbps. bbb_720p is in the HD band (`scripts/hd_band.py`) but not in the
-standing CRF ladders.
+Run bbb_720p and sita_720p on every change, and add sintel_720p when AQ or psy
+moves. Because bbb saturates above VMAF-NEG (earlier metric) 94 or so, read it
+at CRF 34-46 as well as the standard 30-42 points. sita_720p is 140 frames
+calibrated at 900 kbps. bbb_720p is in the HD band (`scripts/hd_band.py`) but
+not in the standing CRF ladders.
 
     scripts/bdcompare.py --a '...yah264...' --b '...x264...' \
         --clips bbb_720p,sita_720p --frames 180 --vmaf --points 30,34,38,42

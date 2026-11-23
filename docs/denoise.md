@@ -6,9 +6,9 @@ source in time before the lookahead sees it. Both exist for grainy and noisy
 sources. Each has a noise gate that keeps clean content byte-identical to an
 encode without the tool, and animation is the case that matters most.
 
-The quality numbers here are BD-rate on VMAF-NEG (earlier metric) of the tool against the
-shipped default on the same binary and CRF ladder, where negative is better.
-They're scored against the original source, never the filtered one.
+The quality numbers here are BD-rate on VMAF-NEG (earlier metric) of the tool
+against the shipped default on the same binary and CRF ladder, where negative is
+better. They're scored against the original source, never the filtered one.
 
 ## When to use which
 
@@ -126,5 +126,6 @@ The grain clips are 120-frame excerpts the scripts don't fetch:
     ffmpeg -ss <off> -i <mov> -frames:v 120 -vf scale=W:H:flags=lanczos,format=yuv420p
 
 Run `scripts/hd_band.py` with a near-null control arm, `Y264_MBT_DEPFLOOR=16`,
-beside the tool. On the grain clips the control's own spread reaches +0.5,
-as large as several of the tool's per-clip readings.
+beside the tool. The control needs a dev_knobs build. On the grain clips the
+control's own spread reaches +0.5, as large as several of the tool's per-clip
+readings.

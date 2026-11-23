@@ -19,7 +19,7 @@ developer's view of how the tiers are built, dispatched and tested.
 | tier | architecture | what it covers | runs when |
 |---|---|---|---|
 | NEON | aarch64 | every kernel family | always on aarch64 |
-| NEON + dot product | aarch64 | SAD 16x16 and 8x16, 16x16 variance, SSD | the CPU reports dotprod (Apple M1 and later, Graviton 2 and later) |
+| NEON + dot product | aarch64 | SAD 16x16 and 8x16, 16x16 variance, SSD | the CPU reports dotprod (Apple M1 and later, Graviton2 and later) |
 | SVE | aarch64 Linux | SATD at 16x16, 16x8 and 8x8, averaged SATD at 16x16 and 16x8, SA8D and texture/AC at 16x16, SATD x4 at 8x8, and the forward quant | the CPU reports SVE with vectors of 256 bits or wider (Graviton3) |
 | SSE4.2 | x86-64 | every kernel family | the x86 floor |
 | AVX2 (with FMA3, BMI2) | x86-64 | every kernel family | the main x86 tier |

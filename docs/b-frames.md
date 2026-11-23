@@ -14,7 +14,8 @@ of x264 medium, while with B-frames on the same clips spread from well ahead
 to well behind. We made `--direct auto` the default because the direct-mode
 choice is the largest single cause.
 
-Quality figures on this page are on VMAF-NEG (earlier metric).
+Quality figures on this page are on VMAF-NEG (earlier metric) unless a row
+says v1.
 
 ## How it works
 
@@ -146,7 +147,7 @@ RD on all combinations.
 | QGATE 10 over 6 | 6 costs 2-4% of wall where 10 costs 1.1-1.3%. It buys about twice the gain, which is more than the quality bar needs. 16 is past the knee, where foreman goes positive |
 | The rate charge with the gate | without it the gate costs half a BD point at its mildest setting. With it the cost is three hundredths |
 | B_8x8 searched after the skip exit | searching before the exit throws away 19-30% of all quadrant searches. Quality is the same either way |
-| No 16x8/8x16 at medium by default | it helps every band clip but costs 13-21% more instructions |
+| No 16x8/8x16 at medium by default | on VMAF v1 it helps every band clip but costs 13-21% more instructions |
 | Mid-exit on non-reference B's only | errors in a reference B propagate. Byte-identical on the CRF band, worst +0.89% on the ABR band |
 | Direct-competitive precondition on the exit | without it the exit skips too often at low ABR rates: akiyo +2.21%, park_joy +1.56% |
 | B intra margin 0.75x | median +0.01% at matched rate, for 0.5-2.5% of wall at 12 threads. A tighter margin buys nothing more |

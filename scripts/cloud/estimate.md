@@ -7,9 +7,9 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 **Superseded.** The plan below is for GCP and books some sessions on-demand.
 Cloud work now runs on AWS spot instances only, under a price cap and never
-on-demand. The SIMD doc's section on
-[testing tiers the Mac can't run](../../docs/simd.md#testing-tiers-the-mac-cant-run)
-has the current rule and the rented-machine kit. The plan stays here as the record of what was estimated.
+on-demand. The SIMD doc's section on [testing tiers the Mac can't
+run](../../docs/simd.md#testing-tiers-the-mac-cant-run) has the current rule and
+the rented-machine kit. The plan stays here as the record of what was estimated.
 
 The session table has a column for what each session really cost. After a
 session, fill in the actual column from the instance's own billing page and

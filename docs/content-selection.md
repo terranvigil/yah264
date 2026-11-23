@@ -8,8 +8,8 @@ A general per-clip selector over the content-split constants doesn't work with
 frame-level features. The prize is real, although a small minority of
 sequences holds it.
 
-All numbers are BD-rate on VMAF-NEG (earlier metric) against the shipped default at matched
-achieved bitrate unless noted. Negative is better.
+All numbers are BD-rate on VMAF-NEG (earlier metric) against the shipped default
+at matched achieved bitrate unless noted. Negative is better.
 
 ## What ships
 
@@ -121,7 +121,8 @@ fitted against a coarser lowres search than the one that ships.
   24, 30 and 36.
 - **Three classes, not two.** An arm earns the label only when it beats the
   default by more than 0.30%; otherwise the label is `default`.
-- `Y264_PSY_FLAT_LOG=1` and `Y264_ADME_LOG=1` dump the frame features.
+- `Y264_PSY_FLAT_LOG=1` and `Y264_ADME_LOG=1` dump the frame features in a
+  dev_knobs build.
 - Any fitted table has a header naming its training set, labels, features,
   the ceiling and what it achieved, and a `REFIT IF:` line that lists the
   encoder changes that invalidate it.

@@ -430,14 +430,14 @@ the decide and pop order, never timing.
   before a non-B decide. Only B frames decide on their own burst's predictions,
   corrected at the next anchor. Burst-lagged anchors doubled the rate deviation.
 - **`Y264_RCP_LAG` 1** lets an anchor decide one burst ahead of its actuals.
-  Bursts can then overlap under ABR the way they do under CRF. It's granted
-  only where the wide staircase can engage: B-pyramid, no VBV and a pool of at
-  least `Y264_MT_POOL_MIN` threads. That minimum is 2. The lag is 0 at
-  `--threads 1`. In-flight frames are predicted from their own complexity
-  instead of their type's mean. On the ABR board at twelve threads it bought
-  7-10% of wall on 720p and 1080p cells. BD-VMAF-NEG against lag 0 was inside
-  the instrument's +-1.7 on all clips but sintel, which read -1.9 in the
-  lag's favor. stockholm read +1.4.
+  It's read only in a dev_knobs build. Bursts can then overlap under ABR the way
+  they do under CRF. It's granted only where the wide staircase can engage:
+  B-pyramid, no VBV and a pool of at least `Y264_MT_POOL_MIN` threads. That
+  minimum is 2. The lag is 0 at `--threads 1`. In-flight frames are predicted
+  from their own complexity instead of their type's mean. On the ABR board at
+  twelve threads it bought 7-10% of wall on 720p and 1080p cells. BD-VMAF-NEG
+  against lag 0 was inside the instrument's +-1.7 on all clips but sintel, which
+  read -1.9 in the lag's favor. stockholm read +1.4.
 - **Split anchor drain.** The anchor waits for the predecessor anchor's bits
   because the decide needs them. It leaves that burst's B frames flying. It buys
   1.04-1.11x where it engages. On cut-heavy content at `--ref 3` it costs about
@@ -543,7 +543,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27. The fit reads rms 3.2 QP over QP 16-44 on 32 clips |
 | Half-full handoff for segments | it's the CRF fill budget's fixed point, so segments compose without extra machinery |
 | Zero-lag anchors | burst-lagged anchors doubled the rate deviation |
-| Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads with BD inside the noise |
+| Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads, with BD inside the noise on all clips but sintel, which favors the lag |
 | Two-pass offline plan always on | without the plan the I frame got the highest QP in its GOP, at 2.7x a B frame's bytes against 18x with it. With the plan two-pass beats one-pass ABR on all seven corpus clips (-1.61% to -35.66% BD-VMAF-NEG) |
 | Shared ABR ledger across GOP workers | 87.4 against 89.8 VMAF-NEG with six workers on a 1080p title |
 | Buffer charged slice payload plus framing | payload alone drifted 30 kbit over a few hundred CBR pictures |
@@ -569,7 +569,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Rate-aware lookahead cost consumed by mb-tree | mean +0.08%, foreman +0.91%, akiyo +1.36%. Pricing MV rate cuts propagation where mb-tree wants to boost |
 | Lowres SATD candidates in full-res decisions | +0.28% BD. The lookahead feeds frame-level decisions only |
 | A lookahead thread with no lead | 1.00-1.02x, and +1.5% to +10.6% wall on the clips the lead wins on |
-| Gating the lead on frame size | frame size doesn't predict the lead's gain. Three 720p clips of one size moved -15.2%, -12.3% and +0.8% in wall with it |
+| Gating the lead on frame size | frame size doesn't predict the lead's gain. Three 720p clips of one size moved -15.2%, -12.3% and +0.8% in wall with the lead |
 
 ## Open questions
 
@@ -617,7 +617,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
   bdcompare too, because its cache keys on the command string and a rebuild
   doesn't invalidate it.
 - **`Y264_LA_BUF` overrides downward too.** Print the resolved lead before
-  pricing it.
+  pricing it. It's read only in a dev_knobs build.
 - **Lag changes need decode gates**: `scripts/recon_thread_gate.sh` and
   `scripts/abr_decode_gate.sh`. Conformance forces the serial path and never
   reaches the lagged one.

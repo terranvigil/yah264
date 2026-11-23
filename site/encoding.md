@@ -473,9 +473,10 @@ model trained on MOS scores to predict them. It has become the standard the
 streaming industry judges quality by.
 
 VMAF is the metric this project runs on. We read every comparison against x264,
-every tuning decision and every quality gate on it. We use VMAF v1. Its cap
-on enhancement gain means sharpening tricks can't inflate the score. PSNR stays underneath as a
-floor. A change can't buy VMAF by making the picture less accurate.
+every tuning decision and every quality gate on it. We use VMAF v1. Its cap on
+enhancement gain means sharpening tricks can't inflate the score. PSNR stays
+underneath as a floor. A change can't buy VMAF by making the picture less
+accurate.
 
 <div class="aside" id="bd-rate">
 <p class="aside-title">BD-rate</p>
