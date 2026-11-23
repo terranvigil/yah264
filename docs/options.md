@@ -6,6 +6,7 @@ the others. Read it against `cli/yah264_cli.c`, `include/yah264.h` and
 This file is the bug.
 
 The command-line program is `y264`; `yah264` is installed beside it as an alias.
+`meson uninstall` leaves that alias behind, so remove `bin/yah264` by hand.
 
 Rate control has its own guide: [rate-control.md](rate-control.md). Read that
 one before picking `--crf` or `--bitrate`. This file only says what the flags

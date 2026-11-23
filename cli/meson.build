@@ -8,7 +8,8 @@ yah264_cli_exe = executable('y264',
 
 # the binary was called yah264 before; the alias keeps existing command lines
 # and out-of-tree harnesses that run build/cli/yah264 working
-alias_py = import('python').find_installation()
+# the build machine's python: a cross file's python entry names a host binary
+alias_py = find_program('python3', native : true)
 
 # y264 as an input relinks the alias whenever y264 relinks, and only then
 custom_target('yah264-alias',

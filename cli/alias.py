@@ -24,8 +24,6 @@ def build(src, dst):
 
 
 def install(bindir):
-    if os.environ.get("MESON_INSTALL_DRY_RUN"):
-        return
     if os.path.isabs(bindir):
         # an absolute bindir sits outside the prefix, so only DESTDIR moves it
         destdir = os.environ.get("DESTDIR", "")
@@ -38,12 +36,13 @@ def install(bindir):
         sys.exit(f"alias.py: {dst} is a directory; not replacing it with a link")
     # an earlier install left a real yah264 binary here; replace it (or an old
     # link) in one rename so there is never a moment with no yah264
-    tmp = dst + ".tmp-alias"
+    tmp = f"{dst}.tmp-alias-{os.getpid()}"
     if os.path.lexists(tmp):
         os.unlink(tmp)
     os.symlink("y264", tmp)
     os.replace(tmp, dst)
-    print(f"Installing symlink pointing to y264 to {dst}")
+    if not os.environ.get("MESON_INSTALL_QUIET"):
+        print(f"Installing symlink pointing to y264 to {dst}")
 
 
 if __name__ == "__main__":
