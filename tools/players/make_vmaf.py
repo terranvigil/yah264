@@ -9,10 +9,9 @@ It takes a reference plus one or two encodings, decodes each to raw frames,
 runs the standalone `vmaf` CLI per frame, remuxes/transcodes the videos to MP4
 so a browser can play them, and writes a JSON file the players read.
 
-VMAF model selection matches bench/bench.py: prefer the June 2026 v1 model
-("vmaf_v1") if this libvmaf provides it, otherwise fall back to the v0.6.1
-baseline plus its NEG variant. Set YAH264_VMAF_MODEL=/path/to/model.json to
-point at a v1 model file explicitly.
+It scores VMAF v1 only: the built-in "vmaf_v1" model if this libvmaf has it,
+or the model file YAH264_VMAF_MODEL=/path/to/model.json points at. Without
+either it stops rather than scoring an older model.
 
 Inputs may be:
   - reference: .y4m, .mp4, .mov, or a raw .264 Annex-B stream
@@ -94,7 +93,7 @@ _model_args = None
 
 
 def vmaf_model_args():
-    """Best available VMAF models, preferring v1. Mirrors bench/bench.py."""
+    """The VMAF v1 model arguments, or an exit when no v1 model is available."""
     global _model_args
     if _model_args is not None:
         return _model_args
@@ -112,8 +111,9 @@ def vmaf_model_args():
                      "-o", os.path.join(d, "o.json"), "--json"])
             if p.returncode == 0 and b"no such built-in model" not in p.stderr:
                 args += ["--model", "version=vmaf_v1:name=vmaf_v1"]
-    args += ["--model", "version=vmaf_v0.6.1:name=vmaf",
-             "--model", "version=vmaf_v0.6.1neg:name=vmaf_neg"]
+    if not args:
+        sys.exit("make_vmaf: this libvmaf has no built-in v1 model; set "
+                 "YAH264_VMAF_MODEL to a v1 model file")
     _model_args = args
     return args
 
@@ -131,20 +131,12 @@ def vmaf_per_frame(ref_y4m, dist_y4m, fps):
     finally:
         os.unlink(outp)
 
-    # prefer the v1 score, then plain vmaf, whichever the frame carries
-    def pick(metrics):
-        for k in ("vmaf_v1", "vmaf"):
-            if k in metrics:
-                return metrics[k], k
-        return None, None
-
     frames = []
-    model_name = "vmaf"
+    model_name = "vmaf_v1"
     for fr in data.get("frames", []):
-        v, k = pick(fr.get("metrics", {}))
+        v = fr.get("metrics", {}).get("vmaf_v1")
         if v is None:
             continue
-        model_name = k
         n = fr.get("frameNum", len(frames))
         frames.append({"frame": n, "time": round(n / fps, 4),
                        "vmaf": round(v, 4)})
@@ -191,7 +183,7 @@ def main():
         to_mp4(args.reference, os.path.join(args.out, ref_mp4))
 
     encs = []
-    model_used = "vmaf"
+    model_used = "vmaf_v1"
     for i, spec in enumerate(args.enc):
         label, path = parse_enc(spec)
         if not os.path.exists(path):

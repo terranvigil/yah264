@@ -43,9 +43,9 @@ tools/players/make_vmaf.py --reference $SRC \
 `--enc` takes `LABEL:PATH`. The label is what shows on the pane and in the
 stats. Inputs can be `.264` Annex-B streams, which get remuxed to MP4, or
 `.mp4`/`.y4m`, which get transcoded near-lossless. Pass one `--enc` for a
-single-encoding inspection file instead. The tool prefers the VMAF v1 model
-if this libvmaf build has it and falls back to v0.6.1 plus its NEG variant. Point at an explicit model
-with `YAH264_VMAF_MODEL=/path/to/model.json`.
+single-encoding inspection file instead. The tool scores VMAF v1 only. It uses the
+built-in v1 model when this libvmaf build has one, or a model file named with
+`YAH264_VMAF_MODEL=/path/to/model.json`, and stops when it finds neither.
 
 Serve the directory and open a player. Browsers won't load `<video>` over
 `file://`.
