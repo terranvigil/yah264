@@ -890,7 +890,9 @@ typedef struct {
  * `--subme 9` on a fast preset searching exactly what it searched before.
  *
  * Inline so the CLI can print the resolved set without a second copy of the
- * rule, and without a new exported symbol on both depth libraries. */
+ * rule, and without a new exported symbol on both depth libraries. The
+ * encoder resolves AUTO itself; call this only to show the set, and it
+ * reflects the header you built against. */
 static inline int yah264_partitions_resolved(const yah264_param_t *param)
 {
     int subme;
@@ -916,7 +918,9 @@ static inline int yah264_partitions_resolved(const yah264_param_t *param)
  * explicit_set keeps its value, and partitions keeps any value but AUTO.
  *
  * Inline for the same reason as yah264_partitions_resolved: the CLI prints
- * the values the encode uses without a second copy of the rule. */
+ * the values the encode uses without a second copy of the rule. The encoder
+ * applies this itself at open; call it only to show the resolved values, and
+ * it reflects the header you built against. */
 static inline void yah264_param_size_defaults(yah264_param_t *p)
 {
     int longer;

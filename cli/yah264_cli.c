@@ -7750,7 +7750,9 @@ static int cli_main(int argc, char **argv)
  * are answered by seeing the resolved preset, mode and geometry rather than
  * by more output during the encode. */
     char partbuf[32];
-    /* the values the software encoder runs with, size defaults applied */
+    /* the values the software encoder runs with, size defaults applied. Under
+ * --hw the hardware ignores them, so they're left out; a --hw auto that
+ * falls back to software still prints the unsized values. */
     yah264_param_t shown = param;
     if (hw == YAH264_HW_OFF)
         yah264_param_size_defaults(&shown);
