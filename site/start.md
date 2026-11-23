@@ -19,7 +19,8 @@ That configures into `build/` and compiles. `make test` runs the unit tests.
 the rest.
 
 One build gives you both sample depths. `make build` produces an 8-bit encoder
-library and a 10-bit one. A single `y264` binary links both. Each library
+library and a 10-bit one. A single `y264` binary links both. `y264` is the
+command for yah264, and `yah264` still works as an alias. Each library
 installs with its own pkg-config file: `yah264.pc` and `yah264_10.pc`.
 `-Dbit_depth` doesn't change any of that. It only picks the depth the tests and
 the in-tree tools build at.
