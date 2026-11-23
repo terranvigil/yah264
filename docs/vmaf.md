@@ -13,7 +13,7 @@ earns nothing under that cap, a separate NEG score would add nothing.
 
 | | what we do |
 |---|---|
-| model | `vmaf_v1.0.16_3d0h` below 1440 lines, `vmaf_v1.0.16_1d5h_2160` at 1440 and up, and the `_hfr` twin at 50 fps and up |
+| model | `vmaf_v1.0.16_3d0h` up to a height of 1080, `vmaf_v1.0.16_1d5h_2160` above it, and the `_hfr` twin at 50 fps and up |
 | bit depth | both sides converted to 10-bit, with `cambi.enc_bitdepth` set to the stream's coded depth |
 | resolution | display resolution. We scale a picture smaller than 1920x1080 in both dimensions up to fit it, bicubic with the aspect kept, on the reference and the distorted side. CAMBI is told the coded size. PSNR is read at the coded size |
 | frames | every frame, mean pooled |

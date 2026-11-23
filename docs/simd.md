@@ -19,7 +19,7 @@ developer's view of how the tiers are built, dispatched and tested.
 | tier | architecture | what it covers | runs when |
 |---|---|---|---|
 | NEON | aarch64 | every kernel family | always on aarch64 |
-| NEON + dot product | aarch64 | SAD 16x16 and 8x16, 16x16 variance, SSD | the CPU reports dotprod (Apple M1 and later, Graviton 2 and later) |
+| NEON + dot product | aarch64 | SAD 16x16 and 8x16, 16x16 variance, SSD | the CPU reports dotprod (Apple M1 and later, Graviton2 and later) |
 | SVE | aarch64 Linux | SATD at 16x16, 16x8 and 8x8, averaged SATD at 16x16 and 16x8, SA8D and texture/AC at 16x16, SATD x4 at 8x8, and the forward quant | the CPU reports SVE with vectors of 256 bits or wider (Graviton3) |
 | SSE4.2 | x86-64 | every kernel family | the x86 floor |
 | AVX2 (with FMA3, BMI2) | x86-64 | every kernel family | the main x86 tier |
@@ -286,11 +286,11 @@ code, runs checkasm per tier and checks tier identity. The macOS job is manual.
 | Intrinsics, no assembly | Reviewable as C. One source compiles for SSE4.2 and AVX2 with different flags. Hand assembly may still win on a few kernels once timings point at them. |
 | SSE4.2 as the x86 floor, AVX2 as the main tier | AVX2 only pays where the data is at least 16 lanes wide. Short rows leave half the register idle, so those kernels match SSE4.2. |
 | AVX-512 built by default | On one binary it takes 0.966x AVX2's one-thread CPU time on an AMD EPYC 9R14 and 0.964x on an Intel Xeon 8488C. The output is identical. |
-| AVX-512 limited to pixel metrics and MC | The pixel kernels win on both vendors. MC has no AVX-512 kernel yet. |
+| AVX-512 limited to pixel metrics | The pixel kernels win on both vendors. MC has no AVX-512 kernel yet. |
 | SVE only at 256 bits or wider | At 128 bits it did no better than NEON. On Graviton3 it takes 0.976x NEON's CPU time on one binary. |
 | Unaligned loads everywhere | Frame planes are plain `malloc` with a border offset. Nothing promises alignment. |
-| Per-class `Y264_ASM_OFF` bits | Lets a profile price one kernel family without a rebuild. |
-| Tier cap at build time and run time | `-Dsimd=none` gives a truly pure-C binary. `Y264_SIMD_FORCE` lets one binary on one machine test every tier. |
+| Per-class `Y264_ASM_OFF` bits | Lets a profile in a dev_knobs build price one kernel family without a rebuild. |
+| Tier cap at build time and run time | `-Dsimd=none` gives a truly pure-C binary. In a dev_knobs build, `Y264_SIMD_FORCE` lets one binary on one machine test every tier. |
 
 One-thread readings on rented machines, CRF 23, against x264 at medium:
 

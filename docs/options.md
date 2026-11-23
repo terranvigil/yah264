@@ -102,7 +102,7 @@ else.
 
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
-| `--input-y4m` | path or `-` | required | Y4M input. No other input format exists. |
+| `--input-y4m` | path or `-` | this or `--input-raw` | Y4M input. `--input-raw` takes raw YUV instead. |
 | `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. It may not be the input, the `--dump-recon` file or the stats file, whatever names reach them (a symlink, another case, `/dev/stdout`, a redirected standard input or output): the check compares the open files. A terminal, socket or FIFO never counts as one of them, so the standard input and output may share a socket. An existing output is cut only once the encode starts, and a descriptor's file (`-`, `/dev/stdout`, `/dev/fd/N`, however spelled) never is: it is written through that descriptor, from where it stands, as `--input-y4m /dev/stdin` reads through it. A run refused before its encode starts, or ended then by one of the signals listed under `--stats`, removes an output or `--dump-recon` file it made and leaves one that was already there untouched. |
 | `--input-raw` | path or `-` | | Raw YUV. Needs `--input-res`. |
 | `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
@@ -175,7 +175,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window, at most 64 frames. A larger value runs at 64 and the CLI warns. 0 turns the window off. With B frames the lookahead still buffers `bframes+2` frames, at most 9, when the window is shorter. |
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. That's already the policy at constant QP, where x264 forces it too. |
 | `--ipratio`, `--pbratio` | float | 1.4, 1.3 | Two-pass only. The I-to-P and P-to-B qscale factors of the offline allocator. They keep x264's names, numbers and defaults. The single-pass modes anchor I and B their own way and never read these. |
-| `--cplxblur` | | 20 | Two-pass only. Width of the planner's complexity blur: a gaussian over neighboring frames' costs with sigma `--cplxblur`/2 frames. 0 turns it off. `--qblur` is accepted for compatibility and ignored with a warning, because the planner has no quantizer blur. |
+| `--cplxblur` | float | 20 | Two-pass only. Width of the planner's complexity blur: a gaussian over neighboring frames' costs with sigma `--cplxblur`/2 frames. 0 turns it off. `--qblur` is accepted for compatibility and ignored with a warning, because the planner has no quantizer blur. |
 
 ### `--crf-max` buys quality with the buffer model
 
@@ -244,9 +244,9 @@ alongside it is dropped with a warning.
 `--aq-strength` has two defaults. It's 0.4 under CRF, ABR and two-pass, and 0.0
 under constant QP. An explicit value, including an explicit `0`, always wins.
 0.4 is this encoder's own measured value and differs from x264 medium's 1.0. A
-seven-clip VMAF-NEG sweep put the optimum near 0.3, and the shipped default sits
-just above it. Why it comes out so far below the reference's default is an open
-question.
+seven-clip VMAF-NEG (earlier metric) sweep put the optimum near 0.3, and the
+shipped default sits just above it. Why it comes out so far below the
+reference's default is an open question.
 
 ### GOP structure
 
@@ -256,13 +256,13 @@ question.
 | `-i`, `--min-keyint` | N or `auto` | 0 = auto (`keyint/10`) | A scene cut closer than this to the last keyframe is not promoted to an IDR. Clamped internally to `[1, keyint/2+1]`. |
 | `--scenecut` | N | 40 | Adaptive-keyframe aggressiveness. Higher inserts more. `0` or any negative turns it off. |
 | `--no-scenecut` | | | Same as `--scenecut 0`. Only `--keyint` places IDRs. |
-| `--open-gop` | | off | The periodic keyframe is a non-IDR I picture with a recovery_point SEI in place of an IDR. The B frames before it keep referencing the anchor behind it, the DPB is not flushed and POC runs on. See the note below. |
+| `--open-gop` / `--no-open-gop` | | off | The periodic keyframe is a non-IDR I picture with a recovery_point SEI in place of an IDR. The B frames before it keep referencing the anchor behind it, the DPB is not flushed and POC runs on. See the note below. |
 | `--intra-refresh` | | off | No keyframe after the first. A column of intra macroblocks sweeps the picture once every `--keyint` frames. Each sweep opens with a recovery_point SEI. P frames only. See the note below. |
 | `-b`, `--bframes` | N | preset (3) | Consecutive B frames between anchors. Up to 16 are accepted. A run is capped at 7. 0 disables B entirely. |
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
 | `--b-bias` | -100..100 | 0 | Leans the adaptive B placement toward more B frames (positive) or fewer (negative). It's a tuning dial: see [`--b-bias`](#--b-bias-is-a-tuning-dial) below. Ignored at `--b-adapt 0`. |
 | `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation. `auto` lets each B slice pick by the running skippability score. |
-| `-r`, `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. |
+| `-r`, `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. Under rate control at subme 7 (medium), a picture whose longer side is 3840 or more gets 2 unless the option is given. |
 
 `--bframes 2` or higher enables the B-pyramid. That changes `max_num_ref_frames`
 and therefore the auto-selected level.
@@ -386,12 +386,12 @@ the reconstruction. `make conformance` runs it at every recovery point of
 several streams, beside the recon-match cells.
 
 The table compares it with plain keyframes at the same period. Both sides ran
-`--keyint 60` (with `--no-scenecut` on the keyframe side) and `--bframes 0`
-with a one-second VBV (`--bitrate R --vbv-maxrate R --vbv-bufsize R`). Each
-encode is 180 frames at `--threads 1`, at four rates from half to one and a half
-times the board rate. BD-rate is on VMAF-NEG, where positive means intra refresh
-needs more bits for the same quality. The peak is the largest frame after the
-opening IDR over the mean frame size, at the board rate.
+`--keyint 60` (with `--no-scenecut` on the keyframe side) and `--bframes 0` with
+a one-second VBV (`--bitrate R --vbv-maxrate R --vbv-bufsize R`). Each encode is
+180 frames at `--threads 1`, at four rates from half to one and a half times the
+board rate. BD-rate is on VMAF-NEG (earlier metric), where positive means intra
+refresh needs more bits for the same quality. The peak is the largest frame
+after the opening IDR over the mean frame size, at the board rate.
 
 | Clip | Board rate | BD-rate (VMAF-NEG) | Peak, intra refresh | Peak, keyframes |
 | --- | --- | --- | --- | --- |
@@ -424,8 +424,8 @@ threshold is untouched and the output is byte-identical to an encode without
 the flag.
 
 The table covers four board clips at 120 frames and `--threads 1`, CRF 23 to 35
-in five rungs. BD-rate is on VMAF-NEG against `--b-bias 0`. The B share is
-read at CRF 29.
+in five rungs. BD-rate is on VMAF-NEG (earlier metric) against `--b-bias 0`. The
+B share is read at CRF 29.
 
 | clip | B share at 0 | at -50 | BD at -50 | at +50 and +100 |
 |---|--:|--:|--:|---|
@@ -461,7 +461,7 @@ nothing here suggests moving it from 0.
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
 | `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
-| `--weightp` | 0\|1\|2 | 1 | Explicit weighted prediction on P slices. **0** clears `weighted_pred_flag`. No P slice header has a `pred_weight_table`, and neither the prediction nor the search uses a weight. It's the one flag that can lower the declared profile. Annex A.2.1 forbids the tool in Baseline and nothing else here asserted it, so a CAVLC stream with no B frames and no 8x8 transform declares Baseline at `--weightp 0` and Main at 1. **1** is the default. It codes one luma weight and offset per active list-0 reference. The weight is a 1/64 step and the offset a whole 8-bit code, chosen together for the least expected error. On a textured picture the slope is the ratio of the picture's and the reference's standard deviations. On a flat one it's the ratio of their means, measured from black when the picture has black in it (a fade from or to black). A slope up to about 130/64 is sent as 127/64. A steeper one isn't weighted. A mean shift of a quarter code is enough to weight a flat picture. A textured one needs two codes. Chroma weights stay identity. Letterboxed and pillarboxed pictures get extra handling. On a progressive picture with bars of about the same depth on opposite sides, within a macroblock row or so, where reference 0's pair would move the bars' level, the list holds reference 0 a second time, plain, behind the weighted copy. That needs room in the list (under 16 entries). Bars of clearly unequal depth, or on one side only, aren't covered. A macroblock whose bar samples the plain copy predicts better than the weighted one doesn't take skip. Its partitions that are mostly bar code against the plain copy, so the bars hold their level through a fade. The slot is added at any `--ref`, 1 included. Under `--weightp 2` it's added only when that mode hasn't already put its duplicate on another reference. When the duplicate is reference 0's, the bars use it. **2** adds a second list-0 slot with that weight while the reference's own slot stays plain, so the mode decision picks weighted or plain per macroblock instead of per frame. It fires only where the frame-level estimate already did, and only where the weight wins on most of the picture but not all of it. Because it needs a slot for the duplicate, it's refused at `--ref 1`. It's also refused with `--tff`/`--bff`. Mode 2 is off by default. It costs +0.29% BD-VMAF-NEG on a CIF fade clip. On ten of the twelve HD band clips it's inert and byte-identical to `--weightp 1`. [plan.md](plan.md) has the measurement. |
+| `--weightp` | 0\|1\|2 | 1 | Explicit weighted prediction on P slices. **0** clears `weighted_pred_flag`. No P slice header has a `pred_weight_table`, and neither the prediction nor the search uses a weight. It's the one flag that can lower the declared profile. Annex A.2.1 forbids the tool in Baseline and nothing else here asserted it, so a CAVLC stream with no B frames and no 8x8 transform declares Baseline at `--weightp 0` and Main at 1. **1** is the default. It codes one luma weight and offset per active list-0 reference. The weight is a 1/64 step and the offset a whole 8-bit code, chosen together for the least expected error. On a textured picture the slope is the ratio of the picture's and the reference's standard deviations. On a flat one it's the ratio of their means, measured from black when the picture has black in it (a fade from or to black). A slope up to about 130/64 is sent as 127/64. A steeper one isn't weighted. A mean shift of a quarter code is enough to weight a flat picture. A textured one needs two codes. Chroma weights stay identity. Letterboxed and pillarboxed pictures get extra handling. On a progressive picture with bars of about the same depth on opposite sides, within a macroblock row or so, where reference 0's pair would move the bars' level, the list holds reference 0 a second time, plain, behind the weighted copy. That needs room in the list (under 16 entries). Bars of clearly unequal depth, or on one side only, aren't covered. A macroblock whose bar samples the plain copy predicts better than the weighted one doesn't take skip. Its partitions that are mostly bar code against the plain copy, so the bars hold their level through a fade. The slot is added at any `--ref`, 1 included. Under `--weightp 2` it's added only when that mode hasn't already put its duplicate on another reference. When the duplicate is reference 0's, the bars use it. **2** adds a second list-0 slot with that weight while the reference's own slot stays plain, so the mode decision picks weighted or plain per macroblock instead of per frame. It fires only where the frame-level estimate already did, and only where the weight wins on most of the picture but not all of it. Because it needs a slot for the duplicate, it's refused at `--ref 1`. It's also refused with `--tff`/`--bff`. Mode 2 is off by default. It costs +0.29% BD-VMAF-NEG (earlier metric) on a CIF fade clip. On ten of the twelve HD band clips it's inert and byte-identical to `--weightp 1`. [plan.md](plan.md) has the measurement. |
 | `--slices` | N | 1 | Cut each picture into N independently decodable slices on macroblock-row boundaries. Nothing crosses a slice's first row. The intra reference samples, the mode and motion-vector predictors, the CAVLC nC, the CABAC contexts and the `mb_qp_delta` chain all stop there. Each slice is its own NAL. A decoder can resynchronize at any of them and decode several at once. The in-loop filter does cross slice edges. Every slice header writes `disable_deblocking_filter_idc` 0, so the picture is deblocked whole and the slice edges don't show. Slices cost bits (see below). Clamped to the picture's macroblock row count, and to 256. Refused with `--hw`. |
 | `--constrained-intra` | | off | Sets the PPS `constrained_intra_pred_flag`. Intra prediction in a P or B slice then treats an inter-coded neighbor as unavailable, for the reference samples and for the intra mode predictor alike. An intra macroblock then decodes from intra data alone. That buys error resilience at a price in bits. The prediction has less to work with: I_16x16 plane and the corner-reading 4x4/8x8 modes drop out wherever the above-left neighbor is inter. No effect on I slices, where every neighbor is intra already. |
 | `--chroma-qp-offset` | -12..12 | by the longer side: -4 below 1280, -2 below 1920, 0 from 1920 up; 0 with psy off | PPS `chroma_qp_index_offset`. It applies to both the chroma quantizer and the deblock filter's chroma edge QP, as the spec requires. It's written to `second_chroma_qp_index_offset` too. |
@@ -472,38 +472,38 @@ nothing here suggests moving it from 0.
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
 | `-t`, `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
-| `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded. The macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule. See below. |
+| `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. Under rate control at subme 7 (medium), the default on a picture 1920 or more on its longer side drops `p8x8` and `b8x8`, leaving `i4x4` (and `i8x8` with the 8x8 transform). A list you give is kept. A shape outside the list is never searched and never coded. The macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule. See below. |
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when three things hold: the 16x16 result already costs less than this many lambdas, the neighborhood is homogeneous, and nothing downstream depends on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
-| `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. It's off because the largest speed gain left costs up to 2.3% BD on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
+| `--b-preme-skip` | 0..4 | 0 (off); 2 at medium when the longer side is 1920 or more | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. Below a longer side of 1920, at any subme other than 7 and under CQP, it's off, because the largest speed gain left costs up to 2.3% BD-VMAF-NEG (earlier metric) on a detailed 1080p clip. Under rate control at subme 7 (medium), a picture whose longer side is 1920 or more runs mode 2 unless the option is given. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
-| `--lr-settle` | SAD/pixel | preset (0 at medium, 1 below it) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at medium and above, where it misses the bar, and on at `veryfast` and below. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
+| `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar, and on at `faster` and below. Under rate control at subme 7 (medium), on a picture whose longer side is 3840 or more, a 0 becomes 2 unless the option is given. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
-| `--b-intra-band` | 16ths | 0 (off) | Skip both the B intra SATD screen and the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. The verdict is per band instead of per macroblock. It's taken once per frame from fields the lookahead already built. Off, with the number below. |
-| `--b8-band` | CoV^2 x100 | 0 (off) | Decline the B_8x8 quadrant gate and its eight motion searches in a row band whose lookahead pair-leg cost field has a squared coefficient of variation under this many hundredths. Off, with the number below. |
+| `--b-intra-band` | 16ths | 0 (off) | Skip both the B intra SATD screen and the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. The verdict is per band instead of per macroblock. It's taken once per frame from fields the lookahead already built. Off, with the number below. `--no-b-intra-band` is 0. |
+| `--b8-band` | CoV^2 x100 | 0 (off) | Decline the B_8x8 quadrant gate and its eight motion searches in a row band whose lookahead pair-leg cost field has a squared coefficient of variation under this many hundredths. Off, with the number below. `--no-b8-band` is 0. |
 | `-m`, `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement pattern: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | Search radius for `umh`, `esa` and `tesa`, x264's `--merange`. `dia` and `hex` ignore it, so it does nothing at medium. |
 | `--qcomp` | 0..1 | 0.6 | Rate-curve compression, x264's `--qcomp`. See the divergence below. |
-| `--cut-split` | off | File input only: put an IDR on every scene cut the pre-scan finds and split the GOP workers there, instead of at arithmetic keyint boundaries. The cuts become clean seek points. Each shot is coded as its own unit. From a file the pre-scan is a separate pass. It reads the file once and keeps one byte per frame, then rewinds and encodes through the ordinary bounded window. It needs about the memory a plain encode does (see [Memory](#memory-the-parallel-path-streams-through-a-bounded-window)). A pipe can't be read twice. From a pipe the input is held in memory until it reaches the limit, where the encode is refused. |
-| `--shot-table` | off | Print the pre-scan's shot table as JSON on stderr (first/last frame, mean and peak lowres intra cost, mean inter cost, ratio). Implies `--cut-split`. |
-| `--shot-crf` | off | Per-shot CRF from the shot table: `crf + 6(1-qcomp) log2(C_shot / C_title)`, where C is the shot's mean lowres inter cost, clamped to +-4 QP. Shots under 24 frames merge into their predecessor. Each GOP takes its shot's CRF. Implies `--cut-split`. On ten real titles at 1080p (three 2-minute segments, seven 10-minute excerpts) it reads a median -1.0% BD-rate on VMAF-NEG (7 of 10 better) and -5.3% on PSNR-Y (all 10 better) against plain CRF. On the short multi-shot sequences it reads -1 to -4% against the default and -6 to -11% against `--cut-split` alone. Ignored by `--pass 1`. |
-| `--scan-out FILE` | off | With `--cut-split` or `--shot-crf`: also save the pre-scan's result (the IDR map and the shot table) to FILE, so a later encode of the same input can skip the pre-scan. See [the saved pre-scan](#the-saved-pre-scan---scan-out-and---scan-in). |
-| `--scan-in FILE` | off | With `--cut-split` or `--shot-crf`: use a saved pre-scan instead of running one. It's refused unless the frame count, the input's geometry, the scan's settings and a hash of three frames' luma all match this encode. Output is byte-identical to running the scan. |
-| `--plan FILE` | off | Zones, one per line: `first last [idr] [qp+N\|qp-N]`, frames from 0 in input order, inclusive. `idr` forces a keyframe and a GOP boundary at `first`. The QP offset applies to every frame in the range on top of the rate control (CRF, CQP, ABR). This is the plan from the [engine interface](engine-interface.md). |
-| `--zones LIST` | off | x264's inline zones: `start,end,option` joined by `/`, frames from 0 in input order, inclusive. `q=N` codes every frame in the range at base QP N, 0..51, the way `--qp N` would. I frames take N-3 and B frames the cascade on top, and neither the rate control nor the VBV moves it. `b=F` multiplies the range's bitrate by F. It's applied as a QP offset of -6 log2(F) on what the rate control chose, so `b=0.5` is `qp+6` in a `--plan` file. One option per zone. Anything else, overlapping zones and `--plan` on the same command line are refused with a message. |
-| `--qpfile FILE` | off | Per-frame forces, one line per frame: `<frame> <type> <qp>`, frames from 0 in input order. Type `I` or `K` forces an IDR (under `--open-gop` as well), `P` an anchor and `B` or `b` a B frame. `-` leaves the type alone. QP is absolute 0..51, or `-1` to leave it to the rate control, so a line can force a type, a QP, or both. Frames the file does not name are free. A force the encoder can't place is refused by frame number instead of approximated. See below. |
-| `--gop-threads K` | off | Set every GOP instance's frame threads to K, so a GOP re-encoded alone reproduces its bytes (`scripts/shot_determinism.sh`). |
-| `--segment-out PATTERN` | off | Also write each GOP to its own file (`%d` = GOP index), each with its own parameter sets. Concatenated in order they equal the stream. Refused where the encode runs one encoder instance: `--nal-hrd` and `--keyint 1` with a VBV. |
-| `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k, and `control` on a frame where a live control event took effect. It's written on every path, `--dump-recon` included. That path runs one instance, so `gop` is 0 there. Not under `--hw`. |
-| `--control FILE` | off | Live control events, one per line: `<frame> <kind> [name=value ...]`, frames counted from 0 in input order and not decreasing down the file. Kinds `rate` (`bitrate=` `maxrate=` `bufsize=`), `crf` (`value=`), `qp` (`min=` `max=`), `key` and `zone` (`last=` `offset=`). The whole file is parsed and every event checked against the encoder before the first frame, so a malformed line or an event the encoder would refuse stops the run with the line number and leaves the output untouched. Not with `--segment-out`, `--cut-split`, `--shot-table`, `--shot-crf`, `--scan-in`, `--scan-out` or `--gop-threads`, which need per-GOP encoders. Runs one encoder instance, its threads on the row wavefront and the lookahead. Not under `--hw` or `--pass`. See [live-control.md](live-control.md). |
-| `--control-fd N` | off | The same lines, read from descriptor N between frames as they arrive. The frame may be `next`, the next frame handed in. Up to 64 lines are taken before each frame. A numbered line for a frame already handed in, or an event the encoder refuses, is skipped with a warning; a malformed line or an unreadable descriptor stops the encode. |
-| `--control-out FILE` | off | Write every applied event as a `--control` log, with the frame each named, sorted by it and, within a frame, in the order handed in. Replaying it with `--control` gives the same stream at one thread. Needs `--control` or `--control-fd`. |
+| `--cut-split` | | off | File input only: put an IDR on every scene cut the pre-scan finds and split the GOP workers there, instead of at arithmetic keyint boundaries. The cuts become clean seek points. Each shot is coded as its own unit. From a file the pre-scan is a separate pass. It reads the file once and keeps one byte per frame, then rewinds and encodes through the ordinary bounded window. It needs about the memory a plain encode does (see [Memory](#memory-the-parallel-path-streams-through-a-bounded-window)). A pipe can't be read twice. From a pipe the input is held in memory until it reaches the limit, where the encode is refused. |
+| `--shot-table` | | off | Print the pre-scan's shot table as JSON on stderr (first/last frame, mean and peak lowres intra cost, mean inter cost, ratio). Implies `--cut-split`. |
+| `--shot-crf` | | off | Per-shot CRF from the shot table: `crf + 6(1-qcomp) log2(C_shot / C_title)`, where C is the shot's mean lowres inter cost, clamped to +-4 QP. Shots under 24 frames merge into their predecessor. Each GOP takes its shot's CRF. Implies `--cut-split`. On ten real titles at 1080p (three 2-minute segments, seven 10-minute excerpts) it reads a median -1.0% BD-rate on VMAF-NEG (earlier metric, 7 of 10 better) and -5.3% on PSNR-Y (all 10 better) against plain CRF. On the short multi-shot sequences it reads -1 to -4% against the default and -6 to -11% against `--cut-split` alone. Ignored by `--pass 1`. |
+| `--scan-out` | FILE | off | With `--cut-split` or `--shot-crf`: also save the pre-scan's result (the IDR map and the shot table) to FILE, so a later encode of the same input can skip the pre-scan. See [the saved pre-scan](#the-saved-pre-scan---scan-out-and---scan-in). |
+| `--scan-in` | FILE | off | With `--cut-split` or `--shot-crf`: use a saved pre-scan instead of running one. It's refused unless the frame count, the input's geometry, the scan's settings and a hash of three frames' luma all match this encode. Output is byte-identical to running the scan. |
+| `--plan` | FILE | off | Zones, one per line: `first last [idr] [qp+N\|qp-N]`, frames from 0 in input order, inclusive. `idr` forces a keyframe and a GOP boundary at `first`. The QP offset applies to every frame in the range on top of the rate control (CRF, CQP, ABR). This is the plan from the [engine interface](engine-interface.md). |
+| `--zones` | LIST | off | x264's inline zones: `start,end,option` joined by `/`, frames from 0 in input order, inclusive. `q=N` codes every frame in the range at base QP N, 0..51, the way `--qp N` would. I frames take N-3 and B frames the cascade on top, and neither the rate control nor the VBV moves it. `b=F` multiplies the range's bitrate by F. It's applied as a QP offset of -6 log2(F) on what the rate control chose, so `b=0.5` is `qp+6` in a `--plan` file. One option per zone. Anything else, overlapping zones and `--plan` on the same command line are refused with a message. |
+| `--qpfile` | FILE | off | Per-frame forces, one line per frame: `<frame> <type> <qp>`, frames from 0 in input order. Type `I` or `K` forces an IDR (under `--open-gop` as well), `P` an anchor and `B` or `b` a B frame. `-` leaves the type alone. QP is absolute 0..51, or `-1` to leave it to the rate control, so a line can force a type, a QP, or both. Frames the file does not name are free. A force the encoder can't place is refused by frame number instead of approximated. See below. |
+| `--gop-threads` | K | off | Set every GOP instance's frame threads to K, so a GOP re-encoded alone reproduces its bytes (`scripts/shot_determinism.sh`). |
+| `--segment-out` | PATTERN | off | Also write each GOP to its own file (`%d` = GOP index), each with its own parameter sets. Concatenated in order they equal the stream. Refused where the encode runs one encoder instance: `--nal-hrd` and `--keyint 1` with a VBV. |
+| `--frame-stats` | FILE | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k, and `control` on a frame where a live control event took effect. It's written on every path, `--dump-recon` included. That path runs one instance, so `gop` is 0 there. Not under `--hw`. |
+| `--control` | FILE | off | Live control events, one per line: `<frame> <kind> [name=value ...]`, frames counted from 0 in input order and not decreasing down the file. Kinds `rate` (`bitrate=` `maxrate=` `bufsize=`), `crf` (`value=`), `qp` (`min=` `max=`), `key` and `zone` (`last=` `offset=`). The whole file is parsed and every event checked against the encoder before the first frame, so a malformed line or an event the encoder would refuse stops the run with the line number and leaves the output untouched. Not with `--segment-out`, `--cut-split`, `--shot-table`, `--shot-crf`, `--scan-in`, `--scan-out` or `--gop-threads`, which need per-GOP encoders. Runs one encoder instance, its threads on the row wavefront and the lookahead. Not under `--hw` or `--pass`. See [live-control.md](live-control.md). |
+| `--control-fd` | N | off | The same lines, read from descriptor N between frames as they arrive. The frame may be `next`, the next frame handed in. Up to 64 lines are taken before each frame. A numbered line for a frame already handed in, or an event the encoder refuses, is skipped with a warning; a malformed line or an unreadable descriptor stops the encode. |
+| `--control-out` | FILE | off | Write every applied event as a `--control` log, with the frame each named, sorted by it and, within a frame, in the order handed in. Replaying it with `--control` gives the same stream at one thread. Needs `--control` or `--control-fd`. |
 | `--deadzone-inter` | 0..32 | 21 | Inter luma quantization deadzone, x264's flag and x264's value. |
 | `--deadzone-intra` | 0..32 | 11 | Intra luma quantization deadzone. |
 | `--no-psy` | | psy on | `--psy-rd 0 --psy-trellis 0`, which is how x264 spells it. An explicit `--psy-rd` anywhere on the line still wins, exactly as it wins over a `--tune`. |
 | `--nr` / `--nr-intra` / `--nr-inter` | 0..2000 | 0 (off) | Coefficient noise reduction. Before quantization, every coefficient moves toward zero by an offset learned per transform position from the running coefficient energy. `--nr` sets both block classes. The other two set one each. Pictures that read clean on a spatial noise gate get no offset. `--nr-inter 100` is the measured setting: neutral to better on the HD band, best on noisy live action. It stays off because it does not help on film grain. [denoise.md](denoise.md) has the numbers. |
-| `--mcstf` / `--no-mcstf` | | off | Motion-compensated temporal pre-filter on the source, in front of the lookahead. Every fourth picture (the anchor spacing at `--bframes 3`) is replaced by a weighted average of itself and its motion-compensated neighbors. Everything downstream sees the filtered picture. A temporal-noise gate skips pictures that read clean, so animation and other clean content stay byte-identical. It reads up to -2.8% BD-VMAF-NEG on grain excerpts and -17% on touchdown. foreman_cif reads +1.2. The filter also costs 10-13% of the instructions. It stays opt-in, for grain and sensor noise. [denoise.md](denoise.md) has the numbers. |
+| `--mcstf` / `--no-mcstf` | | off | Motion-compensated temporal pre-filter on the source, in front of the lookahead. Every fourth picture (the anchor spacing at `--bframes 3`) is replaced by a weighted average of itself and its motion-compensated neighbors. Everything downstream sees the filtered picture. A temporal-noise gate skips pictures that read clean, so animation and other clean content stay byte-identical. It reads up to -2.8% BD-VMAF-NEG (earlier metric) on grain excerpts and -17% on touchdown. foreman_cif reads +1.2. The filter also costs 10-13% of the instructions. It stays opt-in, for grain and sensor noise. [denoise.md](denoise.md) has the numbers. |
 | `--mcstf-range` | 1..4 | 1 | Neighbors per side that `--mcstf` averages over. 1 is the measured setting. |
 | `--no-dct-decimate` | | decimation on | Never drop a block whose coefficients are all marginal. |
 | `--no-fast-pskip` | | fast P-skip on | Drop the cheap P_Skip pre-test, so every P macroblock takes the full analysis path. Only reachable at `--subme` 8 and below, where that test runs. It's slower and moves bits. |
@@ -514,7 +514,7 @@ nothing here suggests moving it from 0.
 A matrix is a quality choice, not a speed one. The default lists are tuned for neither this
 encoder's rate control nor VMAF. This is `--cqm jvt` against flat on five board clips,
 120 frames, `--preset medium`, CRF 23-35, one thread, BD-rate on VMAF-NEG
-(negative is better):
+(earlier metric, negative is better):
 
 | clip | BD-VMAF-NEG | CPU time |
 | --- | --- | --- |
@@ -529,8 +529,9 @@ only the flat lists. Any non-flat list runs the C weighted path.
 
 ### What the exhaustive searches cost
 
-`esa` and `tesa` against `--me umh` on the same five clips and ladder
-(negative is better), with the CPU time of one 120-frame encode at CRF 26:
+`esa` and `tesa` against `--me umh` on the same five clips and ladder (VMAF-NEG,
+the earlier metric, negative is better), with the CPU time of one 120-frame
+encode at CRF 26:
 
 | clip | esa BD-VMAF-NEG | esa CPU | tesa BD-VMAF-NEG | tesa CPU |
 | --- | --- | --- | --- | --- |
@@ -568,13 +569,13 @@ veryslow, placebo) search both orientations too.
 
 ### The three low-rate decision gates
 
-At low bitrate most of a picture is a skip. Most of the tournament only
-confirms it. On a 1080p clip at the rate it ships at, 38% of the B macroblocks
-that end as skip have run a full motion search first. These three flags each end
-one of those searches earlier. Each trades bits for speed, so each is read
-against BD-VMAF-NEG at matched achieved bitrate on a band of twelve 720p and
-1080p clips. The one that's on is the one that holds its quality on every clip
-of that band.
+At low bitrate most of a picture is a skip. Most of the tournament only confirms
+it. On a 1080p clip at the rate it ships at, 38% of the B macroblocks that end
+as skip have run a full motion search first. These three flags each end one of
+those searches earlier. Each trades bits for speed, so each is read against
+BD-VMAF-NEG (earlier metric) at matched achieved bitrate on a band of twelve
+720p and 1080p clips. The one that's on is the one that holds its quality on
+every clip of that band.
 
 `--p-part-gate` is that one. Where the 16x16 search has already found a cheap
 answer, it searches none of the splits. Cheap is measured in lambdas, so the
@@ -595,13 +596,18 @@ trials and the subpartitions after it only confirm it. Modes 1 and 2 differ in
 whether reference B slices may use it, because a reference picture's errors
 travel into the pictures that read it.
 
-What refuses it is the shape of the bound, not the idea. A distortion measured in lambdas
-widens as lambda grows. Lambda grows as the rate falls, so the gate is most
-generous exactly where a wrong skip costs most. On the band's hardest 1080p clip
-it takes nothing at the top of the ladder and 2.7 VMAF-NEG points at the bottom.
-Modes 3 and 4 read the same distortion as an absolute bound that can't widen.
-They move the damage between clips without removing it. Both stay reachable
-with their numbers recorded.
+What keeps it off elsewhere is the shape of the bound, not the idea. A
+distortion measured in lambdas widens as lambda grows. Lambda grows as the rate
+falls, so the gate is most generous exactly where a wrong skip costs most. On
+the band's hardest 1080p clip it takes nothing at the top of the ladder and 2.7
+VMAF-NEG points at the bottom. Modes 3 and 4 read the same distortion as an
+absolute bound that can't widen. They move the damage between clips without
+removing it. Both stay reachable with their numbers recorded.
+
+Medium runs mode 2 anyway on pictures 1920 or more on the longer side, together
+with the partition default that drops the 8x8 inter sub-partitions there. On a
+1440-frame window of a 1080p title, those two together cost 0.8% at CRF and
+1.0% at VBR in BD-VMAF-NEG (earlier metric).
 
 `--rd-surv-rank` is off too. It RDs only the top-ranked candidates of each B set
 instead of everything the score threshold admits, at a cost of +0.63% at the
@@ -610,6 +616,8 @@ that one number settles both directions.
 
 ### The lookahead's own fixed cost
 
+Quality in this section is scored with VMAF-NEG (earlier metric).
+
 The lookahead costs the same whether the residual is cheap or not. At
 low-bitrate HD that's where a large share of the encode goes. Deleting the
 window and the tree together takes 14.8% of the instructions off one of the two
@@ -617,7 +625,9 @@ profiled 1080p cells at matched bytes. The reference encoder pays 0.6% for the
 same deletion. Its lookahead earns its keep downstream in a way ours
 didn't entirely.
 
-`--lr-settle` came out of that measurement. It's off at medium and on below it.
+`--lr-settle` came out of that measurement. It's off from `fast` up and on at
+`faster` and below. At medium, a picture 3840 or more on its longer side gets 2
+unless the option is given.
 The lowres block search starts at a predictor its already-searched neighbors and
 the previous field agree on. Where that predictor leaves almost no residual, the
 block's answer is in hand before the candidate list, the hexagon, the square
@@ -667,6 +677,8 @@ baseline on both cells, in both directions. That number shows the tree's time
 goes to its motion search, not its arithmetic.
 
 ### Band-level decisions
+
+Quality in this section is scored with VMAF-NEG (earlier metric).
 
 The gates above decide per macroblock. A row band can decide too. When a band
 rule is armed, the frame builds a small table at frame open from the lookahead
@@ -722,7 +734,8 @@ in.
 sets the band width in macroblock rows (2). `Y264_BAND_PRECOMP=1` moves the P
 sub-partition gate's two interlocks into the frame-open pass. It's
 byte-identical but off, because the gate's lambda test already screens out most
-macroblocks before either interlock is consulted.
+macroblocks before either interlock is consulted. All three variables are read
+only in a dev_knobs build.
 
 ### `--qpfile` refuses what it cannot place
 
@@ -746,9 +759,9 @@ These forces are refused:
   placed four frames after a key frame at `--bframes 3` arrives with the run
   already full. Naming the whole type sequence instead of a few frames of it
   avoids the problem.
-- `i`, a non-IDR I frame. It needs an open GOP, which this encoder does not
-  have. `I` and `K` both mean IDR here. That's what the same file asks for
-  on a closed-GOP encoder anyway.
+- `i`, a non-IDR I frame. A forced non-IDR I isn't supported. Under
+  `--open-gop` the encoder makes its other keyframes non-IDR itself. `I` and
+  `K` both mean IDR here.
 
 A forced `P` on a key frame's own slot isn't refused. It yields to the key
 frame, because an IDR is an anchor and gives more than was asked for.
@@ -806,7 +819,8 @@ Interlaced sources are coded as field pictures (PAFF), described under
 `--slices` costs bits. Nothing predicts across a slice's first row, so that row
 codes without its neighbors above. Each slice also pays a header and an
 entropy-coder reset. Measured at `--slices 4`, 120 frames, five CRF rungs inside
-the VMAF-NEG 55-95 band, at matched achieved bitrate (`scripts/bd_at_rate.py`):
+the VMAF-NEG (earlier metric) 55-95 band, at matched achieved bitrate
+(`scripts/bd_at_rate.py`):
 
 | clip | BD-VMAF-NEG vs `--slices 1` |
 | --- | --- |
@@ -894,7 +908,7 @@ conflicting tool came from:
 `weighted_pred_flag` and `weighted_bipred_idc`, and that's what makes 66
 reachable at all.
 
-`--profile high10` is refused on an 8-bit build, which is every build today.
+`--profile high10` is refused on an 8-bit build. A 10-bit build takes it.
 
 ### `--stitchable` pins the SPS, and charges for it
 
@@ -1013,11 +1027,10 @@ field coding gets a speed leg.
 the Y4M's own `I` tag. That's the picture a decoder outputs and the picture the
 conformance gate compares.
 
-What it costs was measured before B fields existed. The figures below were
-taken when field coding was I and P only, with a same-parity reference list and
-both fields of an I frame coded intra. All three have since changed, and each
-of them moves the number. Read it as an old reading, not the current one. The
-re-measurement is a named follow-up in docs/plan.md. On the two synthetic
+The cost figures below come from an older field coder that had I and P fields
+only, a same-parity reference list and both fields of an I frame coded intra.
+The current coder differs in all three, and each of them moves the number.
+Nobody has re-measured the figures on it. On the two synthetic
 interlaced fixtures, at QP 26 with CABAC and the 8x8 transform, field coding cost
 bytes for very little PSNR. On the testsrc2 clip it made 69.1 kB at 45.44 dB Y
 against frame coding's 55.3 kB at 45.31 dB. On an interlaced foreman it made
@@ -1025,10 +1038,9 @@ against frame coding's 55.3 kB at 45.31 dB. On an interlaced foreman it made
 progressive source run through `tinterlace`. Their two fields are adjacent
 frames of a 50 Hz sequence and correlate vertically, which is the content frame
 coding is best at. Field coding earns its keep on real interlaced capture, where
-the fields are half a frame apart in time. This project hasn't measured that
-yet. The rate-distortion leg is an interlaced board, scheduled with the B-field
-item. Until then, use `--tff` when the source really
-is interlaced and you need a field-coded stream. Don't use it to save bits.
+the fields are half a frame apart in time. This project hasn't measured that.
+Use `--tff` when the source really is interlaced and you need a field-coded
+stream. Don't use it to save bits.
 
 `--level` takes a Table A-1 level (`3.1`, `31` or `3`). Anything else,
 including `1b`, is refused. The DPB is fitted to the level. When the frames the
@@ -1105,10 +1117,16 @@ effort. Because every other column buys picture quality with time, a slower
 preset is better everywhere. This one gives a little quality back for speed and
 runs the other way down the ladder. It's the only column that has to be argued
 against a bar. Presets at medium and above use none of these arms and keep the
-+0.2%-per-clip bar the parity claim is read on. The presets below
-medium are allowed +0.5% per clip. `superfast` and `ultrafast` run no lookahead
-window. The value they name changes no byte there. It's written so the column
-never turns back on as the ladder gets faster.
++0.2%-per-clip bar the parity claim is read on. The presets below medium are
+allowed +0.5% per clip. `superfast` and `ultrafast` run no lookahead window. The
+value they name changes no byte there. It's written so the column never turns
+back on as the ladder gets faster.
+
+Medium, meaning subme 7 under rate control, has four more defaults that follow
+the picture size. From a longer side of 1920, AUTO partitions drop `p8x8` and
+`b8x8` and `--b-preme-skip` runs mode 2. From 3840, `--ref` 3 becomes 2 and an
+lr-settle of 0 becomes 2. An explicit value wins, and for partitions that means
+any list you give.
 
 subpel 2 is a capped diamond. -1 is an 8-neighbor square
 iterated to convergence. subme at or below 8 uses the fast SATD partition path,
@@ -1143,7 +1161,7 @@ An unknown preset name is an error.
 
 | Tune | Effect |
 | --- | --- |
-| `grain` | psy-trellis 1.0, psy-rd 1.5. The 1.5 was a measured VMAF-NEG win on heavy grain against a 1.0 default. The default is now 2.0. The tune therefore lowers psy-rd. Nobody has re-measured it against 2.0. |
+| `grain` | psy-trellis 1.0, psy-rd 1.5. The 1.5 was a measured VMAF-NEG (earlier metric) win on heavy grain against a 1.0 default. The default is 2.0. The tune therefore lowers psy-rd. Nobody has re-measured it against 2.0. |
 | `film` | psy-trellis 0.5. psy-rd left at the 2.0 default. The film value has not been BD-measured for want of a film clip. |
 | `animation` | 4 more B frames, only when `--bframes` isn't given and the preset's count is under 8. psy-trellis and AQ stay at the preset's values. Raising one and lowering the other measured as a coin flip across two cartoon clips. |
 | `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. With psy off, the size-based chroma QP and deblocking offsets stay at 0. |
@@ -1213,8 +1231,8 @@ y264: warning: --threads 8 cannot be honoured, encoding serially: --dump-recon n
 ```
 
 The warning fires only on an explicit `--threads` above 1. Leaving it unset
-means "auto, every core", which isn't a request. Warning on it would fire on all
-252 `--dump-recon` runs of the conformance gate.
+means "auto, every core", which isn't a request. Warning on it would fire on
+every `--dump-recon` run of the conformance gate.
 
 4:2:2 and 4:4:4 thread too. The encoder codes all three chroma formats through
 I/P/B on both entropy coders. The GOP-parallel reader's frame store reads the
@@ -1471,7 +1489,7 @@ Options that differ, and how:
 | Option | The difference |
 | --- | --- |
 | `--nr` | Same flag and range, different tool. The reference's `--nr` takes one value. Here `--nr N` sets the intra and inter strengths together, and `--nr-intra` and `--nr-inter` set one each. The offset is scaled by each transform position's gain. Pictures that read clean on a spatial noise gate are coded with no offset at all. See [denoise.md](denoise.md). |
-| `--qpfile` | Same file format and the same frame-type letters, with two differences. `i` (a non-IDR I frame) is refused, because that needs an open GOP. `I` and `K` both force an IDR. `b` codes a B slice but doesn't force it to be a non-reference one. The B-pyramid still decides whether a B is a reference. |
+| `--qpfile` | Same file format and the same frame-type letters, with two differences. `i` (a non-IDR I frame) is refused, because a forced non-IDR I isn't supported. `I` and `K` both force an IDR. `b` codes a B slice but doesn't force it to be a non-reference one. The B-pyramid still decides whether a B is a reference. |
 | `--crf` | The number isn't comparable to x264's. The same CRF value has measured a size difference from -54.6% to +45.3% against x264 across the corpus. Don't port a CRF setting across. See [rate-control.md](rate-control.md). |
 | `--crf` | Fractional values are accepted but largely inert. The quantizer rounds to an integer QP. |
 | `--crf` | The CRF scale moved with this release. The frame-level AQ strength under uncapped CRF went from 1.04 to 1.3, and capped CRF keeps 1.04. At the same CRF value, busy content now codes smaller than it did before: 5% on foreman, 13% on stefan and 19% on bus at CRF 23. Quality per bit is better. If you tuned a CRF value on an earlier yah264, check your sizes again. Compare encoders at matched size or quality, never at matched CRF. |
@@ -1530,7 +1548,8 @@ below for you.
 Zero means the default here, not off. `yah264_param_t` fills itself from
 `yah264_param_default`, and twenty of its fields treat zero as "unset, pick the
 default". That convention is fine until a field's off switch is a value x264
-spells as zero. Three fields are in that position:
+spells as zero. `scenecut` and `sync_lookahead` are in that position. `filler`
+works the same way, although x264 has no off switch for it:
 
 | Field | x264 spells off as | Zero here means | Off here is |
 | --- | --- | --- | --- |
@@ -1556,9 +1575,14 @@ param.scenecut = YAH264_SCENECUT_OFF; /* NOT 0 */
 
 Both constants are `-1`, and any negative value means off.
 
-The convention is deliberate for these two. Nineteen other fields depend on
+The convention is deliberate for these two. Eighteen other fields depend on
 zero-as-unset. Making two of them read zero differently would swap a
 divergence you can document for an inconsistency you can't.
+
+Three defaults follow the picture size at `subme` 7 under rate control:
+`b_preme_skip`, `ref` and `lr_settle`. To keep a value you assigned to one of
+them, set its `YAH264_SET_*` bit in `explicit_set`. The CLI sets the bit for
+every one of those flags you pass.
 
 ### The enumerated fields carry x264's values
 
@@ -1646,7 +1670,7 @@ surprise you:
 ## Environment variables
 
 [knobs.md](knobs.md) lists the encoder's `Y264_*` environment variables, about
-120 of them, and is generated from the source. They're read only in a build
+140 of them, and is generated from the source. They're read only in a build
 configured with `-Ddev_knobs=true`. A default build reads only the 16 the CLI
 sets to pass its own options down (`src/common/env.h`) and the two memory
 bounds below. No other variable changes its output there. Its CLI refuses to
@@ -1704,7 +1728,7 @@ defaults were measured. Moving one moves quality in ways that have usually
 been tested and rejected already. They're listed so you know what you're
 looking at if you find one in a script. Don't tune with them.
 
-Motion and mode decision: `Y264_DCTDEC`, `Y264_PART_EARLYTERM`,
+Motion and mode decision: `Y264_PART_EARLYTERM`,
 `Y264_PROBE_TRELLIS`, `Y264_P_INTRA_CABAC`.
 
 Rate control: `Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`.

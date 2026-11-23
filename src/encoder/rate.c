@@ -32,6 +32,7 @@ static int rc_cplx_wanted(const yah264_encoder_t *e)
 
 static int tp_floor_bound(const yah264_encoder_t *e, int i);
 static int tp_floor_content(const yah264_encoder_t *e, int i);
+static int tp_unfloored_content(const yah264_encoder_t *e, int i);
 
 /* Pass-1 bits per macroblock under which a frame is nearly all skip: its
  * bits do not scale with the quantiser (the plan bias and the floor). */
@@ -1310,6 +1311,11 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
                 e->tp_lcnt++;
                 e->tp_lact3[e->tp_stats[p->tp_rec].type] += p->bits;
                 e->tp_lmod3[e->tp_stats[p->tp_rec].type] += p->pred;
+            }
+            else if (!p->held && tp_unfloored_content(e, p->tp_rec)) {
+                e->tp_uact += p->bits;
+                e->tp_umod += p->pred;
+                e->tp_ucnt++;
             }
         }
     }
@@ -2658,6 +2664,15 @@ static int tp_floor_content(const yah264_encoder_t *e, int i)
         && e->tp_stats[i].cplx >= (double)e->width_in_mbs * e->height_in_mbs;
 }
 
+/* a frame pass 1 coded under TP_LOBITS a macroblock, with texture, in a plan
+ * the floor left off: its bits say as little about a finer quantiser as a
+ * floored frame's, but nothing holds it */
+static int tp_unfloored_content(const yah264_encoder_t *e, int i)
+{
+    double mbs = (double)e->width_in_mbs * e->height_in_mbs;
+    return !e->tp_qlo && e->tp_stats[i].bits < TP_LOBITS * mbs && e->tp_stats[i].cplx >= mbs;
+}
+
 double tp_qscale2qp(double q)   { return 12.0 + 6.0 * log2(q); }
 
 /* Modelled bits for record i at qscale q: the model the greedy loop used,
@@ -2690,6 +2705,8 @@ double tp_bits_at(const yah264_encoder_t *e, int i, double q)
 #define TP_LOWARM     2
 #define TP_LOHI       8.0
 #define TP_LOSLEW     6.0
+#define TP_UFAR       4.0
+#define TP_UPROBE     4.0
 
 /* Frame-type shaping. The complexity curve decides the P frames; the I and B
  * frames are placed relative to them, because a frame's own coding cost does
@@ -3040,19 +3057,19 @@ void tp_build_plan(yah264_encoder_t *e)
 }
 
 
-/* Field coding: the budget correction may move at most TP_FSLEW QP lower
- * per field than the last scale it applied; raising it is free. This bounds
- * the correction, not the QP: the plan under it still steps between field
- * types. A field is half a frame's worth of plan, so near a section's end the
- * last few fields' modelled bits are a small divisor, and a few kbit left
- * over turned into a 6-QP drop on one field. On grain that pass 1 coded
- * near skip, that drop crosses the point where the grain starts to code:
- * one field cost 350 kbit against a 1.5 Mbit budget (grain10 at 300 kbit/s,
- * +24% on 120 frames). */
-#define TP_FSLEW 2.0
-static double tp_field_slew(yah264_encoder_t *e, double s, double lo)
+/* The budget correction may move at most TP_CSLEW QP lower per picture than
+ * the last scale it applied; raising it is free. This bounds the correction,
+ * not the QP: the plan under it still steps between picture types. Near a
+ * section's end the last few pictures' modelled bits are a small divisor, and
+ * a few kbit left over turned into a 6-QP drop on one picture. On grain that
+ * pass 1 coded near skip, that drop crosses the point where the grain starts
+ * to code: one field cost 350 kbit against a 1.5 Mbit budget (grain10 at 300
+ * kbit/s under --tff, +24% on 120 frames), and progressive grain8 at --keyint
+ * 48 read +4.4% without the bound and +1.5% with it. */
+#define TP_CSLEW 2.0
+static double tp_corr_slew(yah264_encoder_t *e, double s, double lo)
 {
-    double up = pow(2.0, TP_FSLEW / 6.0);
+    double up = pow(2.0, TP_CSLEW / 6.0);
     if (e->tp_slast > 0.0 && s > e->tp_slast * up)
         s = e->tp_slast * up;
     /* a scale left by a hold at another bias may sit under this band */
@@ -3175,6 +3192,21 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, c
             if (bound) e->tp_lastq[ty] = q;
             return q;
         }
+        /* low-evidence frames the floor left off don't enter k. Once their
+         * own bias, warm, has read TP_UFAR or more, the model doesn't reach
+         * them, and the band widens by that bias too: on grain pass 1 coded
+         * at 2 bits a macroblock the plan sat 9 QP under pass 1, short of
+         * the floor's distance, a frame cost 100 times its model, and a band
+         * held at k's 6 QP let the clip land at 70 times its target (grain10
+         * at 300 kbit/s, 120 frames). It latches, because the frames then
+         * coded near skip pull the running bias back down. The corpus cells
+         * read it at 2 or under, so it engages on none of them. */
+        if (e->tp_ucnt >= TP_LOWARM && e->tp_umod >= 1 && e->tp_uact >= TP_UFAR * e->tp_umod)
+            e->tp_ufar = 1;
+        double kw = k;
+        if (e->tp_ufar && e->tp_uact > kw * e->tp_umod)
+            kw = e->tp_uact / e->tp_umod;
+        double lo = 0.5 / (kw > 1.0 ? (kw < 4.0 ? kw : 4.0) : 1.0);
         if (rem_m > 1 && rem_t > 1 && k > 0) {
             /* Bounded to [0.5, 2]: one frame moves at most 6 QP off plan on
  * the budget's say-so; near the last records rem_m goes to zero and
@@ -3188,18 +3220,27 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, c
  * the budget term by an exponent 0.65-0.85: it cut akiyo's worst
  * error to 1.0-2.1% but read stefan +0.4-0.6% and sintel +2.8%. */
             double s = rem_t / (k * rem_m);
-            double lo = 0.5 / (k > 1.0 ? (k < 4.0 ? k : 4.0) : 1.0);
             if (s < lo) s = lo;
             if (s > 2.0) s = 2.0;
-            if (e->fields)
-                s = tp_field_slew(e, s, lo);
-            q /= s;
-        } else if (e->fields && rem_t <= 1 && k > 0) {
-            /* an overspent ledger holds the fields at the band's top: left
-             * at the plan, the fields after grain that cost many times its
-             * model coded finer than the ones that overspent */
-            double lo = 0.5 / (k > 1.0 ? (k < 4.0 ? k : 4.0) : 1.0);
-            q /= tp_field_slew(e, lo, lo);
+            q /= tp_corr_slew(e, s, lo);
+        } else if (rem_t <= 1 && k > 0) {
+            /* an overspent ledger holds the frames at the band's top, where
+             * the correction tends as the budget runs out; left at the plan,
+             * the frames after grain that cost many times its model coded
+             * finer than the ones that overspent */
+            q /= tp_corr_slew(e, lo, lo);
+        }
+        /* until TP_LOWARM low-evidence frames have landed, such a frame codes
+         * no finer than TP_UPROBE QP under its pass-1 QP, so the first ones
+         * measure their bias near the evidence. At the plan, the first grain
+         * frame after the I cost 726 kbit of a 1.5 Mbit budget, and nothing
+         * after it could land the clip. Once their bias has read TP_UFAR or
+         * more (latched), the hold stays: the correction still prices the frames still to
+         * come at k, so released, the next one went 6 QP under pass 1 and
+         * cost a third of the budget (grain10 then black, 300 kbit/s, +29%). */
+        if ((e->tp_ucnt < TP_LOWARM || e->tp_ufar) && tp_unfloored_content(e, idx)) {
+            double qe = e->tp_qrec[idx] * pow(2.0, -TP_UPROBE / 6.0);
+            if (q < qe) q = qe;
         }
         double qlo = tp_qp2qscale(1), qhi = tp_qp2qscale(51);
         if (q < qlo) q = qlo;

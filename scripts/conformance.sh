@@ -61,7 +61,7 @@
 #      YAH264_CONF_ONLY      run only the sections whose name contains this
 set -euo pipefail
 
-FIXVER=7                        # bump to invalidate cached fixtures
+FIXVER=8                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -1485,7 +1485,10 @@ if ! "$enc" --input-y4m "$fixdir/syn_16x16.y4m" --threads 1 -o "$work/preflight.
 fi
 genlavfi syn_motion "testsrc2=size=320x240:rate=30" 12
 genlavfi syn_long   "testsrc2=size=64x48:rate=25" 560
-genlavfi syn_noise  "nullsrc=size=192x160:rate=25,geq=random(1)*256:128:128" 3
+# geq's random() state is per slice job, and a lavfi input graph slices by core
+# count, so the filter runs in the output graph on one thread
+genlavfi syn_noise  "nullsrc=size=192x160:rate=25" 3 \
+    -vf "geq=random(1)*256:128:128" -filter_threads 1
 genlavfi syn_fade   "testsrc2=size=320x240:rate=25" 12 -vf "fade=t=out:st=0.1:d=0.4"
 # A fade that is NOT the same fade everywhere: two different sources dissolved
 # into one another, so the luma shift a frame-level weight can describe is right
@@ -1509,10 +1512,11 @@ genlavfi sc_a       "smptebars=size=176x144:rate=25" 12
 genlavfi sc_b       "testsrc2=size=176x144:rate=25" 12
 # Noisy black pillars beside a picture: the grain share leaves them out only
 # when neighbouring lookahead frames agree, which must not move with the lead.
+# The noise seed is named so the clip doesn't hang on the filter's default.
 if [ ! -f "$fixdir/syn_npillar.y4m" ]; then
     ffmpeg -v error -f lavfi -i "color=black:size=320x240:rate=25" \
         -f lavfi -i "testsrc2=size=128x240:rate=25" -filter_complex \
-        "[0:v]format=yuv420p,noise=alls=5:allf=t[bg];[bg][1:v]overlay=96:0:shortest=1" \
+        "[0:v]format=yuv420p,noise=alls=5:allf=t:all_seed=123457[bg];[bg][1:v]overlay=96:0:shortest=1" \
         -frames:v 16 -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_npillar.y4m.tmp.$$"
     mv "$fixdir/syn_npillar.y4m.tmp.$$" "$fixdir/syn_npillar.y4m"
 fi
@@ -1578,11 +1582,14 @@ if [ ! -f "$fixdir/syn_p10_crop.y4m" ]; then
 fi
 # Three unrelated synthetic shots of 50 frames, so an encode with a keyint
 # above 50 places scene-cut IDRs inside a GOP: the shape that left an IDR
-# without a buffering period under --nal-hrd.
+# without a buffering period under --nal-hrd. The life filter draws a fresh
+# random seed unless given one, so the third shot names its seed: unseeded,
+# each machine got its own clip and a cell could fail on one and pass on the
+# next.
 if [ ! -f "$fixdir/syn_shots.y4m" ]; then
     ffmpeg -v error -f lavfi -i "testsrc2=size=352x288:rate=25" \
         -f lavfi -i "mandelbrot=size=352x288:rate=25" \
-        -f lavfi -i "life=size=352x288:rate=25:mold=10:ratio=0.3" \
+        -f lavfi -i "life=size=352x288:rate=25:mold=10:ratio=0.3:seed=1" \
         -filter_complex "[0:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[a];[1:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[b];[2:v]trim=end_frame=50,setpts=PTS-STARTPTS,format=yuv420p[c];[a][b][c]concat=n=3:v=1[o]" \
         -map "[o]" -f yuv4mpegpipe "$fixdir/syn_shots.y4m.tmp.$$"
     mv "$fixdir/syn_shots.y4m.tmp.$$" "$fixdir/syn_shots.y4m"

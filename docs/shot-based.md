@@ -8,6 +8,8 @@ orchestrator that runs above the encoder and handles the trial encodes, the
 resolution ladder and the quality metric. The contract between the two is the
 [engine interface](engine-interface.md), which this page doesn't repeat.
 
+Quality figures on this page are on VMAF-NEG (earlier metric).
+
 ## How it works
 
 **The pre-scan.** The shot detector is the lookahead's own scene-cut decision
@@ -152,7 +154,7 @@ Joining one cell's segments reproduced that cell's encode byte for byte.
 - On VMAF-NEG, `--shot-crf` sits near its 1% kill line for real content. The
   median is -1.0% with 3 of 10 titles not better. On PSNR-Y it clears on every
   title. If more long-form titles push the median under 1%, title-level CRF
-  with mb-tree is enough on the metric we gate on. The hooks would then be
+  with mb-tree is enough on that metric. The hooks would then be
   what's left worth shipping.
 - The pre-scan's inter cost misreads animated pans: `--shot-crf` loses 2.6% to
   flat CRF on the Big Buck Bunny window. Measure before trusting it on
@@ -170,7 +172,7 @@ Joining one cell's segments reproduced that cell's encode byte for byte.
 
 ## Measuring it
 
-- Each stage gate is BD-VMAF-NEG against our own flat CRF, from
+- Each stage gate is BD-rate on VMAF v1 against our own flat CRF, from
   `scripts/bdcompare.py --vmaf --no-cache` over five-point CRF sweeps.
 - Because the ten-clip board is single-shot clips, a shot-based gain on it is
   zero by construction. `scripts/make_multishot.py` builds the five-shot

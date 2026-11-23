@@ -4506,10 +4506,11 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic);
 static void hw_scenecut_free(yah264_encoder_t *e);
 static void warm_lr_statics(void);
 
-/* Size-gated effort at the medium tier. At 2160p the medium tier holds a quality margin over the
+/* Size-gated effort at the medium tier, applied by yah264_param_size_defaults
+ * in yah264.h. At 2160p the medium tier holds a quality margin over the
  * reference at matched size (VMAF-NEG +0.5 to +2.2 on the tier S and tier M
- * cells) and spends 1.3x its instructions. On pictures of at least
- * 3840x1600 luma samples this trades effort the cells do not need: two
+ * cells) and spends 1.3x its instructions. On pictures whose longer side is
+ * 3840 or more this trades effort the cells do not need: two
  * references instead of three, no 8x8 inter sub-partitions, the B
  * pre-search skip at 2 and the lowres settle exit at 2. psy-RD stays on: it
  * read as a free win on the tier S clips, but over chimera_2160p's long
@@ -4522,10 +4523,8 @@ static void warm_lr_statics(void);
  * psy-RD stay: on the chimera 1080p window (1440 frames) the full set cost
  * +5.1% BD-VMAF-NEG at CRF and +4.0% at VBR, nearly all of it the
  * reference cut, where these two cost +0.8% / +1.0%. Each change
- * applies only where the parameter still holds the medium preset's value,
- * so an explicit choice that differs from it is kept; an explicit choice
- * EQUAL to it (--ref 3 at medium, say) is not distinguishable and is
- * traded too. */
+ * applies only where the parameter still holds the medium preset's value and
+ * its YAH264_SET_* bit isn't set, so a value the caller chose is kept. */
 /* An effort cut on the 2160p size tier only: the P intra admission at 1.0x
  * the inter SATD instead of 1.5x and the B intra admission at 0.5x instead of
  * 0.75x. -2.8% instructions on meridian 2160p, -1.8% on bbb 2160p,
@@ -4538,7 +4537,7 @@ static int uhd_lite_on(const yah264_param_t *p)
            y264_size_class(p->width, p->height) >= 3;
 }
 /* A cheaper psy-RD form on the 2160p size tier (mbcode.h psy4k): on frames
- * of at least 3840x1600 at the medium tier with psy-RD on, the pre-ME skip
+ * whose longer side is 3840 or more at the medium tier with psy-RD on, the pre-ME skip
  * bound keeps half of the psy term. With the whole term in it, about a third more B
  * macroblocks escape the bound and run the full search only to end as skips
  * (meridian 2160p: psy-RD costs +12.9% instructions, nearly all of it there).
@@ -4552,21 +4551,6 @@ static int psy4k_on(const yah264_param_t *p)
         p->psy_rd <= 0.0f || y264_size_class(p->width, p->height) < 3)
         return 0;
     return 1;
-}
-static void size_trades(yah264_param_t *p)
-{
-    if (p->subme != 7 || p->rc.method == YAH264_RC_CQP)
-        return;
-    int cls = y264_size_class(p->width, p->height);
-    if (cls < 2)
-        return;
-    if (p->partitions == YAH264_PART_AUTO)
-        p->partitions = YAH264_PART_I4X4 | (p->transform8x8 ? YAH264_PART_I8X8 : 0);
-    if (p->b_preme_skip == 0) p->b_preme_skip = 2;
-    if (cls < 3)
-        return;                                 /* the 1080p set ends here */
-    if (p->ref == 3) p->ref = 2;
-    if (p->lr_settle == 0) p->lr_settle = 2;
 }
 
 /* Defaults that follow the picture size (y264_size_class: the longer side
@@ -9019,7 +9003,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     /* Default ON above one thread (keyed on the user's thread request, like
  * the other flip-first trades): at t8 the CRF band reads median -0.12%,
  * worst +0.39%. At --threads 1 it is on for the 1080p class only (at least
- * 1920x1080, under the 3840x1600 size-trade tier). Read at t1 with the Phase A hexagon
+ * 1920x1080, below the 3840 longer-side size-trade tier). Read at t1 with the Phase A hexagon
  * on, 2026-10-04: CIF band +0.25% median and akiyo_cif +1.26%, so below
  * 1080p stays off; eight 1080p clips median +0.03%, worst station2 +0.40%
  * (the hexagon alone reads +0.53% there), multi-shot 1080p +0.07%, -1.4% of the
@@ -18323,7 +18307,7 @@ yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
         fprintf(stderr, "yah264: hardware encoder unavailable (%s); using the software encoder\n", why);
     }
     yah264_param_t sized = *param;
-    size_trades(&sized);
+    yah264_param_size_defaults(&sized);
     return encoder_open_sw(&sized);
 }
 

@@ -43,10 +43,11 @@ tools/players/make_vmaf.py --reference $SRC \
 `--enc` takes `LABEL:PATH`. The label is what shows on the pane and in the
 stats. Inputs can be `.264` Annex-B streams, which get remuxed to MP4, or
 `.mp4`/`.y4m`, which get transcoded near-lossless. Pass one `--enc` for a
-single-encoding inspection file instead. VMAF model selection matches
-`bench/bench.py`. It prefers the June 2026 v1 model if this libvmaf build has
-it and falls back to v0.6.1 plus its NEG variant. Point at an explicit model
-with `YAH264_VMAF_MODEL=/path/to/model.json`.
+single-encoding inspection file instead. The tool scores VMAF v1 only, the way
+the BD gate does. It uses the libvmaf at `VMAF_V1_BIN` and picks the v1 model
+from `VMAF_V1_MODELS` by the source's size and frame rate. A picture smaller
+than 1920x1080 is scaled up to fit it before scoring.
+`YAH264_VMAF_MODEL=/path/to/model.json` names a model file instead.
 
 Serve the directory and open a player. Browsers won't load `<video>` over
 `file://`.
@@ -73,7 +74,7 @@ dip marker.
 {
   "reference": "reference.mp4",
   "fps": 30.0,
-  "model": "vmaf",
+  "model": "vmaf_v1.0.16_3d0h",
   "encodings": [
     { "label": "yah264", "video": "encA.mp4",
       "frames": [{ "frame": 0, "time": 0.0, "vmaf": 92.29 }],

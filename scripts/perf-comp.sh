@@ -165,8 +165,8 @@ import sys
 fps, want = float(sys.argv[1]), float(sys.argv[2])
 print(1 if want <= 0 else max(1, int(round(fps / want))))" "$fps" "$VMAF_FPS")
 
-# The VMAF v1 model follows the source (docs/vmaf.md): the 3H model below 1440
-# lines, the 4K 1.5H model at and above, and the high-frame-rate twin of
+# The VMAF v1 model follows the source (docs/vmaf.md): the 3H model up to a height
+# of 1080, the 4K 1.5H model above it, and the high-frame-rate twin of
 # either at 50 fps and up. Both sides are scored at 10-bit 4:2:0, so the
 # reference is converted once here and every decode below lands at 10-bit too.
 height=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$ref")
@@ -174,7 +174,7 @@ v1model=$(python3 -c "
 import sys
 h, fps, d = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
 hfr = '_hfr' if fps >= 50 else ''
-print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h >= 1440 else '3d0h'}.json\")" \
+print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h > 1080 else '3d0h'}.json\")" \
     "$height" "$fps" "$VMAF_MODELS")
 [ -f "$v1model" ] || { echo "perf-comp: VMAF v1 model not found: $v1model" >&2; exit 2; }
 ffmpeg -v error -y -i "$ref" -pix_fmt yuv420p10le -strict -1 "$wd/ref10.y4m"

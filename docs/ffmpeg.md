@@ -26,7 +26,7 @@ applies the preset, maps the options below and opens the encoder.
 | `-maxrate`, `-bufsize` | VBV max rate and buffer | |
 | `-g` | keyint | left to the preset when unset |
 | `-bf` | B-frame count | left to the preset when unset |
-| `-refs` | reference count | only when explicitly set (see below) |
+| `-refs` | reference count | only when explicitly set (see below). At medium on a picture 3840 or more on its longer side, `-refs 3` is replaced by 2, because the wrapper doesn't mark it as explicit |
 | `-threads` | thread budget | 0 passes through as "encoder decides" |
 | sample aspect ratio | SAR | |
 | frame rate, or the inverse time base | timebase | |
@@ -111,7 +111,7 @@ field moves the library reads the wrong settings.
 | the parameter struct records its own size, as of ABI 3, and open refuses a mismatch | a wrapper one field behind the library compiled, loaded and encoded garbage settings with no error |
 | soname = ABI version | an ffmpeg built against an older ABI can't load a newer install at all |
 | depth in pkg-config Cflags, and `yah264_bit_depth()` checked at init | a consumer compiled for the wrong depth links fine and reads every plane at the wrong stride |
-| `-refs` applied only when explicitly set | ffmpeg's default of 1 looks like a real value. Treating it as a choice ran every encode at one reference. In exchange, an explicit `-refs 1` reads as unset |
+| `-refs` applied only when explicitly set | ffmpeg's default of 1 looks like a real value. Treating it as a choice ran every encode at one reference. In exchange, an explicit `-refs 1` reads as unset, and at medium from a longer side of 3840 an explicit `-refs 3` becomes 2 |
 | extradata holds SPS and PPS only | because MP4 and Matroska rebuild extradata as a decoder configuration record with no room for SEI, the mastering display and light level SEI written there never reached the file |
 | HDR10 metadata read from the codec context at init, not from frames | the encoder takes it at open, before the first frame. Side data that only appears on a later frame can't reach the stream |
 | threads passed through unchanged | core counting and clamping are the encoder's policy |

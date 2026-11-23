@@ -1340,8 +1340,8 @@ static void usage(const char *argv0)
         "                     (default 40; 0 = off, same as --no-scenecut)\n"
         "  --no-scenecut      never insert extra keyframes; only --keyint places\n"
         "                     IDRs. Also makes the cut-aware GOP split a no-op\n"
-        "  --open-gop         every keyframe but the first, a --plan keyframe and a\n"
-        "                     --qpfile I/K is a non-IDR I picture\n"
+        "  --open-gop         every keyframe but the first and the forced ones\n"
+        "                     (--plan idr, --qpfile I/K) is a non-IDR I picture\n"
         "                     with a recovery_point SEI -- the --keyint cadence and\n"
         "                     the adaptive scene cuts alike: the B frames before it\n"
         "                     keep referencing the anchor behind it, the DPB is not\n"
@@ -1509,6 +1509,9 @@ static void usage(const char *argv0)
         "  --cplxblur F       2-PASS ONLY: the allocator's complexity blur\n"
         "                     (default 20; a gaussian of sigma F/2 frames).\n"
         "                     --qblur is accepted and ignored\n"
+        "  --abr-model M      ABR allocation without mb-tree (--bframes 0\n"
+        "                     --rc-lookahead 0): default or rf. With mb-tree\n"
+        "                     both use the rate-factor ledger.\n"
         "  (--subme/--subpel override the preset; --merange, --qcomp, --aq-mode,\n"
         "   the --no-* switches above, the ratio pair, --cplxblur and the\n"
         "   deadzone pair reach the encoder through the Y264_* variable they were\n"
@@ -7239,10 +7242,16 @@ static int cli_main(int argc, char **argv)
  * other tool flag here. The derived default is left alone when it is not
  * given, so a preset keeps searching exactly what it searched before. */
     if (partitions != YAH264_PART_AUTO) param.partitions = partitions;
-    if (b_preme_skip >= 0) param.b_preme_skip = b_preme_skip;
+    if (b_preme_skip >= 0) {
+        param.b_preme_skip = b_preme_skip;
+        param.explicit_set |= YAH264_SET_B_PREME_SKIP;
+    }
     if (p_part_gate >= 0) param.p_part_gate = p_part_gate;
     if (rd_surv_rank >= 0) param.rd_surv_rank = rd_surv_rank;
-    if (lr_settle >= 0) param.lr_settle = lr_settle;
+    if (lr_settle >= 0) {
+        param.lr_settle = lr_settle;
+        param.explicit_set |= YAH264_SET_LR_SETTLE;
+    }
     if (lr_subgate >= 0) param.lr_subgate = lr_subgate;
     if (mbt_depfloor >= 0) param.mbt_depfloor = mbt_depfloor;
     if (b_intra_band >= 0) param.b_intra_band = b_intra_band;
@@ -7257,8 +7266,10 @@ static int cli_main(int argc, char **argv)
         param.scenecut = scenecut;
     if (bframes >= 0)
         param.bframes = bframes;
-    if (nref >= 1)
+    if (nref >= 1) {
         param.ref = nref;
+        param.explicit_set |= YAH264_SET_REF;
+    }
     if (me_method >= 0)                             /* --me overrides the preset's ME gate */
         param.me_method = me_method;
     param.no_mixed_refs = no_mixed_refs;
@@ -7739,6 +7750,12 @@ static int cli_main(int argc, char **argv)
  * are answered by seeing the resolved preset, mode and geometry rather than
  * by more output during the encode. */
     char partbuf[32];
+    /* the values the software encoder runs with, size defaults applied. Under
+ * --hw the hardware ignores them, so they're left out; a --hw auto that
+ * falls back to software still prints the unsized values. */
+    yah264_param_t shown = param;
+    if (hw == YAH264_HW_OFF)
+        yah264_param_size_defaults(&shown);
     LOGF(LOG_DEBUG,
          "y264: resolved: %dx%d %s in, %dx%d coded%s, %d/%d fps, preset %s%s%s, "
          "subme %d ref %d bframes %d %s, partitions %s, %s, keyint %d, threads %d\n",
@@ -7748,9 +7765,9 @@ static int cli_main(int argc, char **argv)
          (g_crop_l | g_crop_t | g_crop_r | g_crop_b) ? " (cropped)" : "",
          param.timebase.fps_num, param.timebase.fps_den, preset,
          tune ? " tune " : "", tune ? tune : "",
-         param.subme > 0 ? param.subme : 10, param.ref, param.bframes,
+         param.subme > 0 ? param.subme : 10, shown.ref, param.bframes,
          param.cabac ? "cabac" : "cavlc",
-         part_str(yah264_partitions_resolved(&param), partbuf, sizeof partbuf),
+         part_str(yah264_partitions_resolved(&shown), partbuf, sizeof partbuf),
          param.rc.method == YAH264_RC_CRF   ? "crf"
        : param.rc.method == YAH264_RC_ABR   ? "abr"
        : param.rc.method == YAH264_RC_2PASS ? "multi-pass" : "cqp",

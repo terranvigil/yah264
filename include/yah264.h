@@ -463,7 +463,7 @@ typedef struct {
  * candidate inside the score threshold) */
     int lr_settle;          /* end the lowres block search at its predictor
  * when that leaves under this much SAD per lowres
- * pixel (0 = off) */
+ * pixel (0 = off; see explicit_set) */
     int lr_subgate;         /* skip the lowres subpel refine when the
  * whole-pel winner is under this much SATD per
  * lowres pixel (0 = off) */
@@ -863,7 +863,18 @@ typedef struct {
  * segments gives a segment that follows an IDR a base whose first id
  * differs from the id the previous segment ended on. 0 = the default. */
     int idr_pic_id_base;
+
+    /* The fields among YAH264_SET_* that the caller chose on purpose. At
+ * subme 7 under rate control, a few defaults follow the picture size
+ * (yah264_param_size_defaults below). A field whose bit is set keeps the
+ * value given. 0 = none, so every size default applies. Start from
+ * yah264_param_default(), or zero the struct, so the mask reads 0. */
+    unsigned explicit_set;
 } yah264_param_t;
+
+#define YAH264_SET_REF           (1u << 0)
+#define YAH264_SET_B_PREME_SKIP  (1u << 1)
+#define YAH264_SET_LR_SETTLE     (1u << 2)
 
 /* param.weightp: 0 is unset (= 1), so off needs a value of its own. */
 #define YAH264_WEIGHTP_OFF         (-1)
@@ -879,7 +890,9 @@ typedef struct {
  * `--subme 9` on a fast preset searching exactly what it searched before.
  *
  * Inline so the CLI can print the resolved set without a second copy of the
- * rule, and without a new exported symbol on both depth libraries. */
+ * rule, and without a new exported symbol on both depth libraries. The
+ * encoder resolves AUTO itself; call this only to show the set, and it
+ * reflects the header you built against. */
 static inline int yah264_partitions_resolved(const yah264_param_t *param)
 {
     int subme;
@@ -895,6 +908,39 @@ static inline int yah264_partitions_resolved(const yah264_param_t *param)
     if (param->transform8x8)
         mask |= YAH264_PART_I8X8;
     return mask;
+}
+
+/* Apply the defaults that follow the picture size, the way the software
+ * encoder does at open. They apply at subme 7 under rate control. From a
+ * longer side of 1920, AUTO partitions become 4x4 intra (plus 8x8 intra with
+ * the 8x8 transform) and b_preme_skip 0 becomes 2. From 3840, ref 3 becomes 2
+ * and lr_settle 0 becomes 2. A field whose YAH264_SET_* bit is set in
+ * explicit_set keeps its value, and partitions keeps any value but AUTO.
+ *
+ * Inline for the same reason as yah264_partitions_resolved: the CLI prints
+ * the values the encode uses without a second copy of the rule. The encoder
+ * applies this itself at open; call it only to show the resolved values, and
+ * it reflects the header you built against. */
+static inline void yah264_param_size_defaults(yah264_param_t *p)
+{
+    int longer;
+    unsigned set;
+    if (!p || p->subme != 7 || p->rc.method == YAH264_RC_CQP)
+        return;
+    longer = p->width > p->height ? p->width : p->height;
+    if (longer < 1920)
+        return;
+    set = p->explicit_set;
+    if (p->partitions == YAH264_PART_AUTO)
+        p->partitions = YAH264_PART_I4X4 | (p->transform8x8 ? YAH264_PART_I8X8 : 0);
+    if (!(set & YAH264_SET_B_PREME_SKIP) && p->b_preme_skip == 0)
+        p->b_preme_skip = 2;
+    if (longer < 3840)
+        return;
+    if (!(set & YAH264_SET_REF) && p->ref == 3)
+        p->ref = 2;
+    if (!(set & YAH264_SET_LR_SETTLE) && p->lr_settle == 0)
+        p->lr_settle = 2;
 }
 
 /* param.nal_hrd: which hypothetical reference decoder model the SPS declares. */

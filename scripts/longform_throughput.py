@@ -1146,10 +1146,10 @@ def ssim_611(cell, bitstream, wd, start, count):
 
 def v1_model(info):
     """The v1 model for a cell, by its height and frame rate: the 3H model
-    below 1440 lines, the 4K 1.5H model at and above, and the high-frame-rate
+    up to a height of 1080, the 4K 1.5H model above it, and the high-frame-rate
     twin of either at 50 fps and up (scripts/bdcompare.py picks the same)."""
     hfr = "_hfr" if fps_of(info) >= 50 else ""
-    name = f"vmaf_{bd.V1_VER}{hfr}_{'1d5h_2160' if info['h'] >= 1440 else '3d0h'}.json"
+    name = f"vmaf_{bd.V1_VER}{hfr}_{'1d5h_2160' if info['h'] > 1080 else '3d0h'}.json"
     return os.path.join(bd.V1_MODELS, f"vmaf_{bd.V1_VER}{hfr}", name)
 
 
