@@ -233,24 +233,34 @@ before the picture's removal time on the declared schedule. They're re-coded
 at a higher QP until they fit or the coded QP reaches 51. At 51 the picture is
 coded once more without its per-macroblock offsets.
 
+An inter picture is then coded once more with every macroblock that can be
+skipped skipped when it's still late on the declared schedule, or when the
+reserve below says it would make a coming key late and the picture by itself
+costs over twice what arrives per picture. A picture that's all prediction
+beats one that stalls the decoder. The rate control's own buffer model alone
+never skips a picture.
+
 The room left after a picture is a reserve for the next key the encoder can see
 coming: the keyint key or a scene cut the lookahead flagged. The reserve is
 what the last intra picture cost at QP 51, less what arrives before that key.
-Under field coding it also covers the second field of an intra first field.
-Because the rate control never sees these raises, a frame raised by `--qpstep`
-or more makes the next frame of its type start from the raised QP. A frame with
-room to spare lowers that start. A key, a cut or a lookahead window without use
-drops it.
+When the coming key is a scene cut ahead of the keyint key, or a key the
+lookahead has already released, that cost is scaled up by the two keys' lowres
+intra costs if the coming one's is higher (at most 16 times, and not under
+field coding). Under field coding the reserve also covers
+the second field of an intra first field. Because the rate control never sees
+these raises, a frame raised by `--qpstep` or more makes the next frame of its
+type start from the raised QP. A frame with room to spare lowers that start. A
+key, a cut or a lookahead window without use drops it.
 
-The encoder counts any picture still late at the ceiling and ends with one
-warning naming the count. Because the reserve is an estimate that covers keys
-only, a stream whose pictures would all have fitted at QP 51 can still have a
-late access unit. The warning says so when that happens. Pass 1 of a two-pass
-encode is not held. Its stream still has the HRD SEIs but answers to nothing.
-Send it to `/dev/null`. Under `--nal-hrd` the encoder refuses `--crf-max`,
-`--qpmax` under 51, forced QPs and `--zones q=` because each holds a QP under
-what the buffer may need. `scripts/hrd_check.py` reads the declaration back and
-simulates Annex C.
+The encoder counts a key still late at QP 51, or an inter picture still late
+once skipped, and ends with one warning naming the count. The reserve is an
+estimate, so a key can still arrive late after a cut into content far harder
+than the lookahead's lowres costs show. The warning says so when that happens.
+Pass 1 of a two-pass encode is not held. Its stream still has the HRD SEIs but
+answers to nothing. Send it to `/dev/null`. Under `--nal-hrd` the encoder
+refuses `--crf-max`, `--qpmax` under 51, forced QPs and `--zones q=` because
+each holds a QP under what the buffer may need. `scripts/hrd_check.py` reads
+the declaration back and simulates Annex C.
 
 ### Two-pass
 

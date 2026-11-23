@@ -291,6 +291,7 @@ typedef struct {
     int cur_qp_scaled;
     int cur_chroma_qp_scaled;
     int8_t *aq_off;             /* per-MB luma QP offset from AQ (NULL = none) */
+    int force_skip;             /* --nal-hrd: QP 51 didn't fit, so skip every macroblock that can */
     /* per-MB luma {sum, sum of squares} taken at prep by the psy gate's
      * pass, for the source plane *mbvar_src names (NULL = not taken): the AQ
      * pass reads it instead of measuring the same blocks again, when that
