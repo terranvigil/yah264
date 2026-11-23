@@ -74,9 +74,12 @@ it codes: the mean bits and QP of a group of frames coded before the step
 and of the first group coded after it give the exponent a in bits ~
 qscale^-a, held to between 1 and 3, and the operating point moves again to
 where that group would have spent the new target. One more group, nearer
-the target, refits once. A group is one GOP of B frames plus its anchor,
-leaving out I frames; each group stands as many frames from a QP move as
-the encoder has in flight. What the measured frames over- or under-spent is
+the target, refits once. A group is an anchor and the B frames coded
+against it; its mean QP is the frame QP the rate control chose, before the
+adaptive-quantization and mb-tree offsets, and I frames are left out of it.
+Each group stands as many frames from a QP move as the encoder has in
+flight, and a scene cut in a group or between the two stops the refit,
+leaving the moves already made. What the measured frames over- or under-spent is
 forgiven at each refit, and for two seconds after the last one the rate
 control's ledger runs on a memory of about a second, so the frames at the
 new rate soon outweigh those coded at the old one. With a buffer, only a

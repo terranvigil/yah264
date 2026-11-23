@@ -1149,8 +1149,11 @@ static double rcp_vbv_scale_eff(const yah264_encoder_t *e, int type)
  * predictor shift so that group's spend would have hit the new target. A
  * second group, nearer the target, refits once more. What the measured
  * frames over- or under-spent is forgiven at each refit, since the move
- * answers it. A group is bframes + 1 frames with I frames left out of its
- * means. Coded bits and QPs only, so a replay refits the same way. */
+ * answers it. A group is an anchor and the B frames decided after it, as
+ * the encoder placed them, so a group never mixes the levels of two
+ * pyramids; I frames are left out of its means, and a scene cut in or
+ * between the groups stops the refit. Coded bits and QPs only, so a replay
+ * refits the same way. */
 #define RT_HIST 128
 #define RT_FIT_KMIN 1.0
 #define RT_FIT_KMAX 3.0
@@ -1192,6 +1195,7 @@ static void rc_fit_mark(yah264_encoder_t *e)
     int g = e->param.bframes + 1 > 16 ? 16 : e->param.bframes + 1;
     e->rt_fit_seq = atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1;
     e->rt_fit_skip = e->rcp_n > g ? (e->rcp_n > 40 ? 40 : e->rcp_n) : g;
+    e->rt_fit_bset = 0;
 }
 
 static void rc_fit_shift(yah264_encoder_t *e, double shift)
@@ -1212,38 +1216,87 @@ static void rc_fit_shift(yah264_encoder_t *e, double shift)
     if (e->abr_qp > 51) e->abr_qp = 51;
 }
 
-static int rc_fit_group(const yah264_encoder_t *e, unsigned from, int g, double *bits, double *qp)
+/* the frames of decide sequence [lo, hi) in the history: the mean bits and
+ * frame QP (the rate control's QP for the frame, before the adaptive-
+ * quantization and mb-tree offsets inside it) of those that aren't intra, and whether a scene cut is among them.
+ * 0 when one has left the history or every one is intra */
+static int rc_fit_span(const yah264_encoder_t *e, unsigned lo, unsigned hi,
+                       double *bits, double *qp, int *cut)
 {
     double b = 0.0, q = 0.0;
     int n = 0, seen = 0;
     int have = e->rt_hn < RT_HIST ? e->rt_hn : RT_HIST;
+    *cut = 0;
     for (int i = 0; i < have; i++) {
-        int d = (int)(e->rt_hist[i].seq - from);
-        if (d < 0 || d >= g) continue;
+        if ((int)(e->rt_hist[i].seq - lo) < 0 || (int)(e->rt_hist[i].seq - hi) >= 0) continue;
         seen++;
+        *cut |= e->rt_hist[i].cut;
         if (e->rt_hist[i].type == 0) continue;
         b += e->rt_hist[i].bits;
         q += e->rt_hist[i].fqp;
         n++;
     }
-    if (seen != g || n == 0) return 0;
+    if (seen != (int)(hi - lo) || n == 0) return 0;
     *bits = b / n;
     *qp = q / n;
     return 1;
 }
 
+/* the last whole group (an anchor and the frames decided after it, up to the
+ * next anchor) that ends at or before decide sequence lim: its first and end
+ * sequence. 0 when the history doesn't hold one */
+static int rc_fit_last_group(const yah264_encoder_t *e, unsigned lim, unsigned *lo, unsigned *hi)
+{
+    int have = e->rt_hn < RT_HIST ? e->rt_hn : RT_HIST, f2 = 0, f1 = 0;
+    unsigned a2 = 0, a1 = 0;
+    for (int i = 0; i < have; i++)
+        if (e->rt_hist[i].type != 2 && (int)(e->rt_hist[i].seq - lim) <= 0
+            && (!f2 || (int)(e->rt_hist[i].seq - a2) > 0)) {
+            a2 = e->rt_hist[i].seq;
+            f2 = 1;
+        }
+    if (!f2) return 0;
+    for (int i = 0; i < have; i++)
+        if (e->rt_hist[i].type != 2 && (int)(e->rt_hist[i].seq - a2) < 0
+            && (!f1 || (int)(e->rt_hist[i].seq - a1) > 0)) {
+            a1 = e->rt_hist[i].seq;
+            f1 = 1;
+        }
+    if (!f1) return 0;
+    *lo = a1;
+    *hi = a2;
+    return 1;
+}
+
+/* runs as each anchor's frame is accounted: the anchor that follows group B
+ * closes it, so the refit lands at the first decision after B's last frame
+ * is in. B is the first group whose anchor is decided rt_fit_skip or more
+ * frames after the move. A group with a scene cut in it, or a cut between
+ * the two groups, stops the refit, as a missing group does, and the moves
+ * made stand */
 static void rc_fit_step(yah264_encoder_t *e, const struct rcp_pend *p)
 {
-    unsigned g = (unsigned)e->param.bframes + 1u, sk = (unsigned)e->rt_fit_skip;
-    if (g > 16u) g = 16u;
-    if ((int)(p->seq - (e->rt_fit_seq + sk + g - 1u)) < 0)
+    if (p->type == 2)
         return;
-    double qa = e->rt_fit_qa, ba = e->rt_fit_ba, qb, bb;
-    if (e->rt_fit == 1 && !rc_fit_group(e, e->rt_fit_seq - sk - g, (int)g, &ba, &qa)) {
-        e->rt_fit = 0;
+    if (!e->rt_fit_bset) {
+        if ((int)(p->seq - (e->rt_fit_seq + (unsigned)e->rt_fit_skip)) >= 0) {
+            e->rt_fit_b0 = p->seq;
+            e->rt_fit_bset = 1;
+        }
         return;
     }
-    if (!rc_fit_group(e, e->rt_fit_seq + sk, (int)g, &bb, &qb) || !(ba > 0.0) || !(bb > 0.0)) {
+    unsigned b0 = e->rt_fit_b0, b1 = p->seq, lo = e->rt_fit_lo, ahi;
+    double qa = e->rt_fit_qa, ba = e->rt_fit_ba, qb, bb, qx, bx;
+    int cut = 0, cx = 0;
+    if (e->rt_fit == 1) {
+        if (!rc_fit_last_group(e, e->rt_fit_seq - (unsigned)e->rt_fit_skip, &lo, &ahi)
+            || !rc_fit_span(e, lo, ahi, &ba, &qa, &cut)) {
+            e->rt_fit = 0;
+            return;
+        }
+    }
+    if (!rc_fit_span(e, b0, b1, &bb, &qb, &cx) || !(ba > 0.0) || !(bb > 0.0)
+        || !rc_fit_span(e, lo, b1, &bx, &qx, &cut) || cut) {
         e->rt_fit = 0;
         return;
     }
@@ -1264,6 +1317,7 @@ static void rc_fit_step(yah264_encoder_t *e, const struct rcp_pend *p)
     e->rt_fit_k = k;
     e->rt_fit_qa = qb;
     e->rt_fit_ba = bb;
+    e->rt_fit_lo = b0;
     if (e->rt_fit++ >= RT_FIT_STAGES)
         e->rt_fit = 0;
     else
@@ -1278,6 +1332,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->rt_hist[i].type = p->type;
         e->rt_hist[i].fqp = (int16_t)p->fqp;
         e->rt_hist[i].bits = p->bits;
+        e->rt_hist[i].cut = p->cut;
         if (e->rt_fast > 0)
             rc_fast_step(e);
         if (e->rt_fit) {
@@ -2316,6 +2371,11 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     memset(&en, 0, sizeof en);
     en.tp_rec = -1;                             /* 0 is a valid record index */
     en.rs = 1.0;
+    /* the content's scene cut, not a key the caller or the cadence asked for */
+    if (type == 0) {
+        en.cut = (int8_t)e->rcp_cur_cut;
+        e->rcp_cur_cut = 0;
+    }
     en.type = (int8_t)type;
     en.rc_type = (int8_t)(e->fld_pic && e->fld_rc_type >= 0 ? e->fld_rc_type : type);
     en.is_ref = (int8_t)is_ref;

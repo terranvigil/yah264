@@ -660,6 +660,7 @@ struct yah264_encoder {
         pixel   *lr_hp[3];     /* whole-run B placement: this frame's lowres half-pel
                                  * planes taken from the source (h, v, centre) */
         int      is_cut;        /* scene cut here (the core obeys this flag) */
+        int      det_cut;       /* ...and it is the content's cut, not a forced key */
         int      is_idr;
         int      is_anchor;
         int      typed;         /* is_anchor finalized (lags one push: b-adapt
@@ -991,7 +992,10 @@ struct yah264_encoder {
     int      rt_fast;            /* frames left on the short-memory ledger after a large step */
     double   rfm_drop;           /* owed bits the short memory took out of rfm_owed: the ledger's age still counts them */
     int      rt_fit_skip;        /* entries left between a QP move and the group measured after it */
-    struct { unsigned seq; int8_t type; int16_t fqp; double bits; } rt_hist[128];
+    struct { unsigned seq; int8_t type, cut; int16_t fqp; double bits; } rt_hist[128];
+    unsigned rt_fit_b0, rt_fit_lo;   /* group B's first frame; the older point's first frame */
+    int      rt_fit_bset;        /* group B has begun */
+    int      rcp_cur_cut;        /* the key being coded is the content's scene cut */
     int      rt_hn;              /* frames accounted into rt_hist */
     int      last_ref_n;         /* how many of last_ref_qp hold a value */
     struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
@@ -1120,6 +1124,7 @@ struct yah264_encoder {
         int8_t  type, is_ref, dropped, filled;
         int8_t  held;           /* raised by the --nal-hrd hold: off the plan's model */
         int8_t  rc_type;        /* the rate-control type: an I frame's second field is coded P, quantised I */
+        int8_t  cut;            /* a scene cut the detector found (an I frame) */
         int8_t  tight;          /* decided in a serial-tight VBV burst: pops at
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */

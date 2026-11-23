@@ -11542,6 +11542,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     else if (ff && ff->type != YAH264_FORCE_NONE) raw_cut = 0;
     if (ctl_key_at(e, force_disp)) raw_cut = 1;    /* a live keyframe request */
     en->is_cut = raw_cut;
+    en->det_cut = det_cut;
     if (raw_cut)
         e->la_since_idr = 0;
     /* a detected cut ends a slow fade, one under the fade test's cut step
@@ -11871,6 +11872,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     en->sum_cost[LR_LEG_PREV] = pc;
     en->sc_cleared = 0;
     en->is_cut = 0;
+    en->det_cut = 0;
     en->is_idr = 0;
     en->since_val = 0;
     en->is_anchor = 0;                   /* provisional until typed */
@@ -16796,6 +16798,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                   : (have_flags ? flag_cut
                      : (e->since_idr >= sc.keyint_min &&
                         detect_scenecut(e, e->since_idr))));
+    /* the content's own cut, before a live keyframe request; the lookahead
+     * kept it apart from the keys a zone, force or request asked for */
+    int det_cut = rcr_flags < 0 && is_cut
+                && (have_flags ? e->cur_la_en && e->cur_la_en->det_cut : !sc.off);
     if (rcr_flags < 0 && ctl_key_at(e, (int)e->frame_count))
         is_cut = 1;                             /* a live keyframe request, whatever the detector */
     if (is_cut)
@@ -16806,6 +16812,8 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     int since_idr = e->since_idr;
     e->since_idr = (e->since_idr + 1) % keyint;       /* advance for the next frame */
     int is_key = (since_idr == 0);
+    if (det_cut && is_key)
+        e->rcp_cur_cut = 1;     /* the key's own decide takes it */
     /* --open-gop: a key is still an I picture and still an anchor, but it stops
  * being an IDR. Two keys keep the reset anyway. The FIRST picture of the
  * instance has nothing to continue from -- no DPB, no POC line -- and a
