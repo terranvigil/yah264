@@ -47,7 +47,7 @@ head = open(sys.argv[1], "rb").readline(512).decode("ascii", "replace").split()
 h = int(next(t[1:] for t in head if t.startswith("H")))
 n, d = next((t[1:] for t in head if t.startswith("F")), "30:1").split(":")
 hfr = "_hfr" if int(n) / max(1, int(d)) >= 50 else ""
-print(f"{sys.argv[2]}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h >= 1440 else '3d0h'}.json")
+print(f"{sys.argv[2]}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h > 1080 else '3d0h'}.json")
 PY
 )
 [ -f "$model" ] || { echo "vmaf.sh: VMAF v1 model not found: $model"; exit 2; }

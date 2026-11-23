@@ -14,6 +14,9 @@ of x264 medium, while with B-frames on the same clips spread from well ahead
 to well behind. We made `--direct auto` the default because the direct-mode
 choice is the largest single cause.
 
+Quality figures on this page are on VMAF-NEG (earlier metric) unless a row
+says v1.
+
 ## How it works
 
 ### Placement
@@ -144,14 +147,14 @@ RD on all combinations.
 | QGATE 10 over 6 | 6 costs 2-4% of wall where 10 costs 1.1-1.3%. It buys about twice the gain, which is more than the quality bar needs. 16 is past the knee, where foreman goes positive |
 | The rate charge with the gate | without it the gate costs half a BD point at its mildest setting. With it the cost is three hundredths |
 | B_8x8 searched after the skip exit | searching before the exit throws away 19-30% of all quadrant searches. Quality is the same either way |
-| No 16x8/8x16 at medium by default | it helps every band clip but costs 13-21% more instructions |
+| No 16x8/8x16 at medium by default | on VMAF v1 it helps every band clip but costs 13-21% more instructions |
 | Mid-exit on non-reference B's only | errors in a reference B propagate. Byte-identical on the CRF band, worst +0.89% on the ABR band |
 | Direct-competitive precondition on the exit | without it the exit skips too often at low ABR rates: akiyo +2.21%, park_joy +1.56% |
 | B intra margin 0.75x | median +0.01% at matched rate, for 0.5-2.5% of wall at 12 threads. A tighter margin buys nothing more |
 
 These modes are expensive in any encoder. On four of our clips, x264 spends
-4.6-10.6% of its wall on the same B partition set. With the quadrant gate at
-4, our cost comes to between 0.8x and 1.4x of x264's.
+4.6-10.6% of its wall on the same B partition set. The quadrant gate ships at
+10. With it at 4, our cost came to between 0.8x and 1.4x of x264's.
 
 The table below compares fixed temporal with fixed spatial direct. Both are
 BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
@@ -179,7 +182,7 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
 | Commit B_Skip before motion search on a motion signal (lowres-static, mb-tree leaf, neighbor-skip) | every such gate also admits 10-95% of macroblocks whose searches then win by 8-25% SATD |
 | Staged skip decision (neighbor admission, graded probe, commit after the ref-0 search) | built in full. It commits 6-16% of B macroblocks. The wall is a wash against a +3% bar |
 | Propagation-guarded mid-exit for reference B's (`Y264_B_SKIP_EXIT=3`) | quality-neutral (worst +0.07%) but buys only 0.3-0.5% of wall |
-| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls, which lost 2.7 VMAF-NEG points on sunflower's bottom rung. The absolute form moves the damage between clips |
+| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls, which lost 2.7 VMAF-NEG points on sunflower's bottom rung. The absolute form moves the damage between clips. Medium still runs mode 2 on pictures 1920 or more on the longer side |
 | `--rd-surv-rank` (RD only the top-ranked survivors) | +0.63% band median |
 | Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. The B_8x8 gain drops from -1.27% to -0.81% |
 
@@ -205,6 +208,9 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
   reference-list construction under the pyramid as a way to raise it.
 
 ## Measuring it
+
+The `Y264_*` variables here are read only in a build configured with
+`-Ddev_knobs=true`.
 
 - `Y264_DIRECT_WHY=1` prints each B slice's list 0, the co-located reference
   POCs with a star on unresolvable ones, a hash of the co-located field and

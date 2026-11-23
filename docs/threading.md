@@ -244,7 +244,7 @@ decoders.
   default too.
 - **`Y264_GOP_FORCE_G` and `Y264_GOP_FORCE_K` change the bytes.** A GOP's bits
   depend on its share, so a forced split is a different stream, not just a
-  timing arm.
+  timing arm. Both are read only in a dev_knobs build.
 - **`/usr/bin/time -l` gives peak footprint.** When a whole-input buffer goes
   away, check for a per-open leak it had been hiding.
 - **Run determinism checks on a loaded box** with spinners. Gate the

@@ -34,7 +34,7 @@ The [results page](results.md) has every number and explains the method. If you 
 
 <figure class="chart"><img src="assets/blog/speed.svg" alt="Dot plot: median speedup over x264 for each resolution and length group, at three goals. Every dot sits between 1.22x and 2.13x faster."></figure>
 
-<figure class="chart"><img src="assets/blog/quality.svg" alt="Bar chart: VMAF-NEG points ahead of x264 at the same file size per group, from -0.05 at CIF to +2.06."></figure>
+<figure class="chart"><img src="assets/blog/quality.svg" alt="Bar chart: VMAF-NEG (earlier metric) points ahead of x264 at the same file size per group, from -0.05 at CIF to +2.06."></figure>
 
 <figure class="chart"><img src="assets/blog/bitrate-vs-quality.svg" alt="Rate-quality curves for Chimera, Tears of Steel and Meridian at 1080p. yah264's curve sits above and left of x264's on all three."></figure>
 

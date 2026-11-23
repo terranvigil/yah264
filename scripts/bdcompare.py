@@ -203,7 +203,7 @@ def vmaf_of(bitstream, src_path, work, src_id=None):
 # enhancement-gain cap. It wants a float-enabled libvmaf and SDR scored at
 # 10-bit, so both sides go through a 10-bit conversion, and CAMBI is told the
 # encode's real bit depth. The model follows the source: the 1080p 3H model
-# below 1440 lines, the 4K 1.5H model at and above, and the high-frame-rate
+# up to a height of 1080, the 4K 1.5H model above it, and the high-frame-rate
 # twin of either at 50 fps and up.
 V1 = os.environ.get("VMAF_V1", "0") == "1"
 # The score a band or ladder gates on. VMAF-NEG remains only to reproduce
@@ -230,10 +230,12 @@ def _y4m_geometry(src_path):
 
 
 def v1_model(src_path):
-    """The v1 model file for a source, by its height and frame rate."""
+    """The v1 model file for a source, by its height and frame rate. The 1080p
+    model covers heights up to 1080; the cutover is by height alone, so a
+    wide picture such as 2560x1080 stays on it."""
     _, h, fps = _y4m_geometry(src_path)
     hfr = fps >= 50
-    name = f"vmaf_{V1_VER}{'_hfr' if hfr else ''}_{'1d5h_2160' if h >= 1440 else '3d0h'}.json"
+    name = f"vmaf_{V1_VER}{'_hfr' if hfr else ''}_{'1d5h_2160' if h > 1080 else '3d0h'}.json"
     return os.path.join(V1_MODELS, f"vmaf_{V1_VER}{'_hfr' if hfr else ''}", name)
 
 

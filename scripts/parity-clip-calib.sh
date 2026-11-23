@@ -88,14 +88,14 @@ if [ "$have" -lt "$N" ]; then
     N="$have"
 fi
 
-# The v1 model follows the source: the 3H model below 1440 lines, the 4K 1.5H
-# model at and above, the high-frame-rate twin of either at 50 fps and up. Both
+# The v1 model follows the source: the 3H model up to a height of 1080, the 4K
+# 1.5H model above it, the high-frame-rate twin of either at 50 fps and up. Both
 # sides are scored at 10-bit 4:2:0, so the reference is converted once here.
 v1model=$(python3 -c "
 import sys
 h, fps, d = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
 hfr = '_hfr' if fps >= 50 else ''
-print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h >= 1440 else '3d0h'}.json\")" \
+print(f\"{d}/vmaf_v1.0.16{hfr}/vmaf_v1.0.16{hfr}_{'1d5h_2160' if h > 1080 else '3d0h'}.json\")" \
     "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$ref")" \
     "$fps" "$VMAF_MODELS")
 [ -f "$v1model" ] || { echo "missing VMAF v1 model: $v1model" >&2; exit 2; }

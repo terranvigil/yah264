@@ -61,7 +61,7 @@ split into rows that run in parallel, with a frame pipeline on top, as the
 |---|---|--:|---|
 | Apple silicon, other 64-bit ARM | NEON | 53 of 67 entry points | shipped. At parity on Apple M5 Max and checked on AWS Graviton4 |
 | ARM with SVE at 256 bits: AWS Graviton3 | SVE | 10, plus quant | shipped, checked and timed on a cloud machine |
-| ARM with the dot-product extension: Apple M1 and later, Graviton 2 and later | NEON + dot product | 3 extra | shipped, measured |
+| ARM with the dot-product extension: Apple M1 and later, Graviton2 and later | NEON + dot product | 3 extra | shipped, measured |
 | x86-64, anything since 2008 | SSE4.2 | 58 | shipped, checked, not timed |
 | x86-64 with AVX2, most chips from the last decade | AVX2 | 58 | shipped, checked, timed on a cloud machine |
 | x86-64 with AVX-512 | AVX-512 | 18, pixel comparison only | shipped, on by default where the chip has it; timed on AMD and Intel |
@@ -98,7 +98,7 @@ can do less work and still take longer. The AVX-512 kernels so far cover pixel
 comparison. On one binary they take about 2% to 4% less CPU time than AVX2 on
 both an AMD EPYC and an Intel Xeon, at one thread and with all cores busy. Motion compensation and the transforms still run on AVX2.
 
-## Planned
+## What the tiers leave out
 
 **Other ARM extensions.** SVE and SVE2 are ARM's scalable vector sets. Apple
 silicon doesn't have them. Our SVE kernels run on Graviton3, which has SVE at
@@ -169,8 +169,8 @@ We chose intrinsics for three reasons:
 I expect hand assembly to win in a few places. The compiler's instruction order
 is rarely the best one for a given core. It sometimes spills a register a
 person would have kept. And a loop that handles one block per call can be
-unrolled by hand to do four. Now that x86 timings exist, they'll point at the
-kernels where that's worth doing.
+unrolled by hand to do four. The x86 timings point at the kernels where that's
+worth doing.
 
 ## What would make it faster still
 

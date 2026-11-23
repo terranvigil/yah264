@@ -1,5 +1,7 @@
 # VMAF pipeline audit
 
+This page documents the VMAF v0.6.1 pipeline the project used before v1.
+
 Before we count a residual quality gap as real coding efficiency, we check
 that nothing about our OUTPUT makes our VMAF read lower than it should:
 resolution, frame rate, color space and the other stream properties.
