@@ -7,13 +7,18 @@ yah264_cli_exe = executable('y264',
   install : true)
 
 # the binary was called yah264 before; the alias keeps existing command lines
-# and out-of-tree harnesses that point at build/cli/yah264 working
-install_symlink('yah264',
-  pointing_to : 'y264',
-  install_dir : get_option('bindir'))
+# and out-of-tree harnesses that run build/cli/yah264 working
+alias_py = import('python').find_installation()
 
+# y264 as an input relinks the alias whenever y264 relinks, and only then
 custom_target('yah264-alias',
+  input : yah264_cli_exe,
   output : 'yah264',
-  command : [find_program('ln'), '-sf', 'y264', '@OUTPUT@'],
-  depends : yah264_cli_exe,
+  command : [alias_py, files('alias.py'), 'build', '@INPUT@', '@OUTPUT@'],
   build_by_default : true)
+
+# a script, not install_symlink: that refuses to replace the real yah264
+# binary an earlier install left in bindir, and aborts the install half done
+meson.add_install_script(alias_py, files('alias.py'), 'install',
+  get_option('bindir'),
+  install_tag : 'runtime')
