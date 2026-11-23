@@ -1198,6 +1198,11 @@ static void rc_fit_mark(yah264_encoder_t *e)
     e->rt_fit_bset = 0;
 }
 
+/* the ledger and its references only: the base QP follows at the next
+ * anchor's decision. above one thread a refit can land mid-burst, and moving
+ * the base there put the burst's remaining B frames on a different base from
+ * their own anchor; on bbb's 10x step up that ran the first second 62% over
+ * against 18% when they keep it */
 static void rc_fit_shift(yah264_encoder_t *e, double shift)
 {
     double f = pow(2.0, shift / 6.0);
@@ -1214,10 +1219,6 @@ static void rc_fit_shift(yah264_encoder_t *e, double shift)
     e->abr_qp += shift;
     if (e->abr_qp < 1) e->abr_qp = 1;
     if (e->abr_qp > 51) e->abr_qp = 51;
-    /* a B decided before the next anchor codes on this base */
-    int q = e->qp + (int)lround(shift);
-    e->qp = qp_bound(e, q < 0 ? 0 : q > 51 ? 51 : q);
-    e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 }
 
 /* the frames of decide sequence [lo, hi) in the history: the mean bits and
@@ -3914,8 +3915,15 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
             e->rt_fit_bal = e->abr_cum_target - e->abr_cum_actual;
         e->rt_owed_end = e->rfm_owed + e->rfm_drop + e->rck.rfm_fb_t * nb * fps;
         e->param.rc.bitrate = kbps;
-        if (prior != 0.0)
+        if (prior != 0.0) {
+            /* the landing's prior moves the base with the landing, as the
+             * step itself does (a B coded after it takes the new rate); a
+             * refit doesn't, below */
             rc_fit_shift(e, prior);
+            int q2 = e->qp + (int)lround(prior);
+            e->qp = qp_bound(e, q2 < 0 ? 0 : q2 > 51 ? 51 : q2);
+            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+        }
     }
     if (maxrate > 0 && e->vbv_on) {
         e->vbv.rate = (double)maxrate * 1000.0 / fps / fdiv;
