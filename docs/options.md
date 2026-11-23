@@ -5,6 +5,8 @@ the others. Read it against `cli/yah264_cli.c`, `include/yah264.h` and
 `src/encoder/params.c`. Where this file and the code disagree, the code wins.
 This file is the bug.
 
+The command-line program is `y264`; `yah264` is installed beside it as an alias.
+
 Rate control has its own guide: [rate-control.md](rate-control.md). Read that
 one before picking `--crf` or `--bitrate`. This file only says what the flags
 are and leaves the choice to that guide.
@@ -26,7 +28,7 @@ are and leaves the choice to that guide.
 ## Invoking it
 
 ```sh
-yah264 --input-y4m <in.y4m|-> [-o <out.264|->] [options]
+y264 --input-y4m <in.y4m|-> [-o <out.264|->] [options]
 ```
 
 Input is Y4M or raw YUV, with no container demuxer and no format sniffing.
@@ -35,8 +37,8 @@ chroma format. `--input-raw` takes raw planes, so those four have to be given on
 Pipe from ffmpeg for anything else:
 
 ```sh
-ffmpeg -i input.mp4 -f yuv4mpegpipe - | yah264 --input-y4m - --crf 23 -o out.264
-yah264 --input-raw in.yuv --input-res 1920x1080 --fps 24 --crf 23 -o out.264
+ffmpeg -i input.mp4 -f yuv4mpegpipe - | y264 --input-y4m - --crf 23 -o out.264
+y264 --input-raw in.yuv --input-res 1920x1080 --fps 24 --crf 23 -o out.264
 ```
 
 Raw input says nothing about itself. `--input-res` is required with it. A wrong
@@ -67,7 +69,7 @@ with exit status 1 and names the value and the input frame.
 
 ## What the bare default is
 
-`yah264 --input-y4m in.y4m -o out.264` with no other flags is `x264 --preset
+`y264 --input-y4m in.y4m -o out.264` with no other flags is `x264 --preset
 medium`'s tool-set on purpose. The two are then comparable without an argument
 list on either side. That means preset medium, CABAC, `--ref 3`, `--bframes 3`,
 8x8 transform on, adaptive B on, `--rc-lookahead 40`, `--keyint 250`.
@@ -86,7 +88,7 @@ medium's row. See [Presets](#presets).
 
 A value outside an option's domain is refused with a message that names the domain.
 A non-numeric value and an out-of-range one both exit 2 with a message like
-`yah264: --ref expects 1..2147483647 (got '0')`. Parsing is lenient about the
+`y264: --ref expects 1..2147483647 (got '0')`. Parsing is lenient about the
 *form* of the number. `--bitrate 800.0` works, because that is what `str(float)`
 produces. A non-integral value for an integer option is still refused, never
 truncated.
@@ -221,8 +223,8 @@ compares the two on this path.
 line wins, as in x264. A warning on stderr names what the loser still does:
 
 ```
-yah264: warning: --crf 23 is dropped -- --bitrate 5000 came later and selects ABR (last rate-control flag wins, as in x264)
-yah264: warning: --qp 26 still sets only the base QP -- --crf 26 came later and selects CRF (last rate-control flag wins, as in x264)
+y264: warning: --crf 23 is dropped -- --bitrate 5000 came later and selects ABR (last rate-control flag wins, as in x264)
+y264: warning: --qp 26 still sets only the base QP -- --crf 26 came later and selects CRF (last rate-control flag wins, as in x264)
 ```
 
 The two messages differ because `--qp` isn't thrown away: `rc.qp` seeds the
@@ -1187,7 +1189,7 @@ in-frame row-wavefront threads. It sizes each GOP's share by the frames it
 actually owns and prints what it chose:
 
 ```
-yah264: encoded 250 frame(s) in 2 GOP(s) on 2 GOP-worker(s) x 4 frame-thread(s)
+y264: encoded 250 frame(s) in 2 GOP(s) on 2 GOP-worker(s) x 4 frame-thread(s)
 ```
 
 Determinism is guaranteed only at one thread. At `--threads 1` the same input
@@ -1206,7 +1208,7 @@ the cases below. A `--threads N` greater than 1 that can't be honored says so on
 stderr and names the condition. It never encodes on one thread silently:
 
 ```
-yah264: warning: --threads 8 cannot be honoured, encoding serially: --dump-recon needs one continuous self-consistent recon stream, which per-GOP encoders cannot produce
+y264: warning: --threads 8 cannot be honoured, encoding serially: --dump-recon needs one continuous self-consistent recon stream, which per-GOP encoders cannot produce
 ```
 
 The warning fires only on an explicit `--threads` above 1. Leaving it unset
@@ -1270,7 +1272,7 @@ or on 2160p titles at default threads. On a 16 GiB laptop it keeps a 2160p
 encode out of swap. When it limits the workers, it says so on stderr:
 
 ```
-yah264: 3 GOP worker(s) instead of 8 to stay inside the memory budget (about 2.6 GiB of 2.9 GiB; --max-memory sets it)
+y264: 3 GOP worker(s) instead of 8 to stay inside the memory budget (about 2.6 GiB of 2.9 GiB; --max-memory sets it)
 ```
 
 The table gives peak footprint (`/usr/bin/time -l`) as the median of
@@ -1364,10 +1366,10 @@ would have run. It also answers differently between two runs of the same
 command.
 
 ```
-yah264: this encode needs 41.7 GiB of memory and the limit is 32.0 GiB
-yah264: the threaded path streams, but its window is (--threads + 1) x --keyint = 14250 frame(s); lower either, or set Y264_STREAM_WINDOW
-yah264: limit 32.0 GiB (50% of 64.0 GiB physical), 2.97 MiB resident per 1920x1080 frame, so 11046 frame(s) fit
-yah264: encode a segment with --frames, split the input, or raise Y264_MAX_INPUT_MB
+y264: this encode needs 41.7 GiB of memory and the limit is 32.0 GiB
+y264: the threaded path streams, but its window is (--threads + 1) x --keyint = 14250 frame(s); lower either, or set Y264_STREAM_WINDOW
+y264: limit 32.0 GiB (50% of 64.0 GiB physical), 2.97 MiB resident per 1920x1080 frame, so 11046 frame(s) fit
+y264: encode a segment with --frames, split the input, or raise Y264_MAX_INPUT_MB
 ```
 
 A raw 4:2:0 8-bit frame is `w*h*1.5` bytes, 4:2:2 is `w*h*2` and 4:4:4 is

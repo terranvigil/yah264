@@ -19,7 +19,7 @@ That configures into `build/` and compiles. `make test` runs the unit tests.
 the rest.
 
 One build gives you both sample depths. `make build` produces an 8-bit encoder
-library and a 10-bit one. A single `yah264` binary links both. Each library
+library and a 10-bit one. A single `y264` binary links both. Each library
 installs with its own pkg-config file: `yah264.pc` and `yah264_10.pc`.
 `-Dbit_depth` doesn't change any of that. It only picks the depth the tests and
 the in-tree tools build at.
@@ -31,7 +31,7 @@ the in-tree tools build at.
 The shortest useful command reads Y4M and writes an Annex-B stream:
 
 ```
-yah264 --input-y4m in.y4m -o out.264
+y264 --input-y4m in.y4m -o out.264
 ```
 
 Input is a flag. There is no positional input argument. Both ends accept `-` for
@@ -67,7 +67,7 @@ Each of these flags selects a mode:
 Capped CRF is a common choice for VOD libraries and adaptive ladders:
 
 ```
-yah264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
+y264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
 ```
 
 The encoder codes to the quality target. The buffer sets a ceiling. Easy
@@ -293,7 +293,7 @@ lists all of them with the reason for each line.
 
 ## The full option list
 
-`yah264 --help` prints every flag with its default. Beyond that there are about
+`y264 --help` prints every flag with its default. Beyond that there are about
 440 `Y264_*` environment knobs. They're research instruments and change between
 commits without notice.
 [knob_census.py](https://github.com/terranvigil/yah264/blob/main/scripts/knob_census.py)

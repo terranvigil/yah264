@@ -238,7 +238,7 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
 - Reproduce the B_8x8 arm:
 
   ```
-  Y264_B8_STAT=1 build/cli/yah264 --input-y4m tests/corpus/foreman_cif.y4m \
+  Y264_B8_STAT=1 build/cli/y264 --input-y4m tests/corpus/foreman_cif.y4m \
     --crf 27 --preset medium --threads 1 -o /dev/null
   BANDS=crf ARM='Y264_B8_QGATE=4' python3 scripts/run_band.py
   ```

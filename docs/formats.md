@@ -2,7 +2,7 @@
 
 yah264 encodes 8-bit and 10-bit video at 4:2:0, 4:2:2 or 4:4:4. Each depth
 and each chroma format recon-matches ffmpeg's decoder across I, P and B frames
-on both entropy coders. One `yah264` binary handles both depths and picks the
+on both entropy coders. One `y264` binary handles both depths and picks the
 encoder from the input.
 
 The tuned path is 8-bit 4:2:0. The 10-bit path keeps the 8-bit
