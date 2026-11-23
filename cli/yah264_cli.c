@@ -685,9 +685,9 @@ static void apply_zones(yah264_encoder_t *e, int start, int end)
     free(z);
 }
 
-/* Per-frame stats join: the NALs of one encode call, the display indices the
+/* Per-frame stats join: the NALs of the encode calls, the display indices the
  * encoder emitted them for (coding order) and its decision records; one JSON
- * line per slice NAL. `st_by` is indexed by display index within the instance. */
+ * line per frame. `st_by` is indexed by display index within the instance. */
 /* --- live control (docs/live-control.md) ----------------------------------
  * --control FILE is parsed whole at startup and queued before the first
  * frame; --control-fd N is read between frames as lines arrive. Applied
@@ -1232,60 +1232,109 @@ static char picture_slice_type(const yah264_nal_t *n)
     return "PBI??"[t % 5];
 }
 
+/* one frame's slice bytes, gathered from the NALs of one or more encode calls */
+struct fst_frame {
+    long bytes, fbytes[2];
+    char ftype[2];
+    int idr_nal;
+};
+
+/* what --frame-stats carries between encode calls of one encoder instance.
+ * With frame threads a call can end between the two fields of a pair (it
+ * returns the last field of one frame and the first of the next), and the
+ * display index for a frame can arrive in a different call from its NALs, so
+ * the open frame, the closed frames still waiting for an index and the
+ * indices still waiting for a frame all live here. */
+struct fst_carry {
+    int pic;                    /* pictures seen in the open frame */
+    struct fst_frame open;
+    struct fst_frame *done; int ndone, done_cap;
+    int *dq; int nq, dq_cap;
+};
+
+static void fst_carry_free(struct fst_carry *c)
+{
+    free(c->done);
+    free(c->dq);
+    memset(c, 0, sizeof *c);
+}
+
+static void fst_close(struct fst_carry *c)
+{
+    if (c->ndone == c->done_cap) {
+        int nc = c->done_cap ? 2 * c->done_cap : 16;
+        struct fst_frame *q = realloc(c->done, (size_t)nc * sizeof *q);
+        if (!q) { c->pic = 0; return; }
+        c->done = q; c->done_cap = nc;
+    }
+    c->done[c->ndone++] = c->open;
+    c->pic = 0;
+}
+
 /* one line per frame, in coding order. The library hands out one record and
  * one display index per frame, but a sliced picture is several NALs and a
  * field-coded frame two pictures, so the NALs are grouped by picture start
  * (two per frame under field coding) and bytes summed over the group: the
- * lines then total the stream's slice payload. type, idr, ref and qp are
- * the first field's, since that is the record the library keeps; "fields"
- * carries each field's own type and bytes, where an I frame's second field
- * shows as the P field it is. */
-static void frame_stats_emit(FILE *out, yah264_encoder_t *e, const yah264_nal_t *nal, int cnt,
+ * lines then total the stream's slice payload. A frame is written once all
+ * of its pictures are in and its display index has come out. type, idr, ref
+ * and qp are the first field's, since that is the record the library keeps;
+ * "fields" carries each field's own type and bytes, where an IDR frame's
+ * second field shows as the P field it is. */
+static void frame_stats_emit(FILE *out, yah264_encoder_t *e, struct fst_carry *c,
+                             const yah264_nal_t *nal, int cnt,
                              yah264_frame_stats_t *st_by, int nst, int base, int gop, int k)
 {
     yah264_frame_stats_t st[128];
     int m = g_api->frame_stats(e, st, 128);
     for (int i = 0; i < m; i++) if (st[i].disp >= 0 && st[i].disp < nst) st_by[st[i].disp] = st[i];
     int ppf = g_field_coded ? 2 : 1;
-    int pics = 0;
-    for (int i = 0; i < cnt; i++) pics += is_slice_nal(&nal[i]) && slice_opens_picture(&nal[i]);
-    int frames = (pics + ppf - 1) / ppf;
-    int disp[128]; int got = g_api->frame_order(e, disp, frames < 128 ? frames : 128);
-    int fi = -1, pic = -1;
-    long bytes = 0, fbytes[2] = { 0, 0 };
-    char ftype[2] = { '?', '?' };
-    int idr_nal = 0;
-    for (int i = 0; i <= cnt; i++) {
-        int opens = i < cnt && is_slice_nal(&nal[i]) && slice_opens_picture(&nal[i]);
-        if ((i == cnt || (opens && (pic + 1) % ppf == 0)) && fi >= 0) {
-            int d = disp[fi];
-            const yah264_frame_stats_t *r = d >= 0 && d < nst ? &st_by[d] : NULL;
-            fprintf(out, "{\"frame\": %d, \"gop\": %d, \"type\": \"%c\", \"idr\": %d, \"ref\": %d, \"qp\": %d, \"bytes\": %ld, \"k\": %d",
-                    base + d, gop, r ? "IPB"[r->type] : '?', r ? r->is_idr : idr_nal,
-                    r ? r->is_ref : -1, r ? r->qp : -1, bytes, k);
-            if (ppf == 2)
-                fprintf(out, ", \"fields\": [{\"type\": \"%c\", \"bytes\": %ld}, {\"type\": \"%c\", \"bytes\": %ld}]",
-                        ftype[0], fbytes[0], ftype[1], fbytes[1]);
-            if (g_ctl_echo_n) control_echo_tail(out, base + d);
-            fputs("}\n", out);
-            fi = -1;
-        }
-        if (i == cnt) break;
+    for (int i = 0; i < cnt; i++) {
         if (!is_slice_nal(&nal[i])) continue;
-        if (opens) {
-            pic++;
-            if (pic % ppf == 0) {
-                if (pic / ppf >= got) break;
-                fi = pic / ppf;
-                bytes = 0; fbytes[0] = fbytes[1] = 0; ftype[0] = ftype[1] = '?';
-                idr_nal = nal[i].type == YAH264_NAL_SLICE_IDR;
+        if (slice_opens_picture(&nal[i])) {
+            if (c->pic == ppf) fst_close(c);
+            if (c->pic == 0) {
+                memset(&c->open, 0, sizeof c->open);
+                c->open.ftype[0] = c->open.ftype[1] = '?';
+                c->open.idr_nal = nal[i].type == YAH264_NAL_SLICE_IDR;
             }
-            ftype[pic % ppf] = picture_slice_type(&nal[i]);
+            c->open.ftype[c->pic++] = picture_slice_type(&nal[i]);
         }
-        if (fi < 0) continue;       /* a slice with no picture start in this call */
-        bytes += (long)nal[i].size;
-        fbytes[pic % ppf] += (long)nal[i].size;
+        if (c->pic == 0) continue;  /* a slice before any picture start: nothing to join */
+        c->open.bytes += (long)nal[i].size;
+        c->open.fbytes[c->pic - 1] += (long)nal[i].size;
     }
+    /* a call never ends inside a picture, so a frame with all its pictures
+     * is complete here */
+    if (c->pic == ppf) fst_close(c);
+    for (;;) {
+        if (c->nq + 128 > c->dq_cap) {
+            int nc = c->dq_cap ? 2 * c->dq_cap : 256;
+            int *q = realloc(c->dq, (size_t)nc * sizeof *q);
+            if (!q) break;
+            c->dq = q; c->dq_cap = nc;
+        }
+        int got = g_api->frame_order(e, c->dq + c->nq, 128);
+        c->nq += got;
+        if (got < 128) break;
+    }
+    int n = c->ndone < c->nq ? c->ndone : c->nq;
+    for (int j = 0; j < n; j++) {
+        const struct fst_frame *f = &c->done[j];
+        int d = c->dq[j];
+        const yah264_frame_stats_t *r = d >= 0 && d < nst ? &st_by[d] : NULL;
+        fprintf(out, "{\"frame\": %d, \"gop\": %d, \"type\": \"%c\", \"idr\": %d, \"ref\": %d, \"qp\": %d, \"bytes\": %ld, \"k\": %d",
+                base + d, gop, r ? "IPB"[r->type] : '?', r ? r->is_idr : f->idr_nal,
+                r ? r->is_ref : -1, r ? r->qp : -1, f->bytes, k);
+        if (ppf == 2)
+            fprintf(out, ", \"fields\": [{\"type\": \"%c\", \"bytes\": %ld}, {\"type\": \"%c\", \"bytes\": %ld}]",
+                    f->ftype[0], f->fbytes[0], f->ftype[1], f->fbytes[1]);
+        if (g_ctl_echo_n) control_echo_tail(out, base + d);
+        fputs("}\n", out);
+    }
+    memmove(c->done, c->done + n, (size_t)(c->ndone - n) * sizeof *c->done);
+    c->ndone -= n;
+    memmove(c->dq, c->dq + n, (size_t)(c->nq - n) * sizeof *c->dq);
+    c->nq -= n;
 }
 static int g_vs_set, g_y4m_full_range = -1;
 /* The VUI colour codes by name. Each H.273 code takes the spelling the
@@ -1750,7 +1799,8 @@ static void usage(const char *argv0)
         "                          refused where the encode runs one encoder (--nal-hrd,\n"
         "                          --keyint 1 with a VBV)\n"
         "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k,\n"
-        "                          \"fields\" (each field's type and bytes) under --tff/--bff,\n"
+        "                          \"fields\" (each field's type and bytes) under field coding\n"
+        "                          (--tff/--bff or an interlaced Y4M),\n"
         "                          and \"control\" on a frame where a live control event took effect\n"
         "  --control FILE          live control events, one per line: \"<frame> <kind> [name=value ...]\",\n"
         "                          kinds rate (bitrate= maxrate= bufsize=), crf (value=), qp (min= max=),\n"
@@ -2378,6 +2428,7 @@ static void *gop_worker(void *arg)
         if (e) apply_forces(e, start, end, j->tp_grid, j->tp_keys);
         FILE *fst = NULL; char *fst_buf = NULL; size_t fst_len = 0;
         yah264_frame_stats_t *st_by = NULL;
+        struct fst_carry fcarry = { 0 };
         if (g_frame_stats && e) {
             fst = open_memstream(&fst_buf, &fst_len);
             st_by = calloc((size_t)(end - start), sizeof *st_by);
@@ -2443,7 +2494,7 @@ static void *gop_worker(void *arg)
             if (g_api->encoder_encode(e, &nal, &cnt, &pic) >= 0) {
                 for (int k = 0; k < cnt; k++)
                     buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
-                if (fst) frame_stats_emit(fst, e, nal, cnt, st_by, end - start, start, g, p.frame_threads);
+                if (fst) frame_stats_emit(fst, e, &fcarry, nal, cnt, st_by, end - start, start, g, p.frame_threads);
             } else if (g_nforces) {
                 g_force_reject = 1;             /* the qpfile named something unplaceable */
                 g_force_reject_base = start;
@@ -2474,9 +2525,9 @@ static void *gop_worker(void *arg)
                 break;
             for (int k = 0; k < cnt; k++)
                 buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
-            if (fst) frame_stats_emit(fst, e, nal, cnt, st_by, end - start, start, g, p.frame_threads);
+            if (fst) frame_stats_emit(fst, e, &fcarry, nal, cnt, st_by, end - start, start, g, p.frame_threads);
         }
-        if (fst) { fclose(fst); free(st_by); }
+        if (fst) { fclose(fst); free(st_by); fst_carry_free(&fcarry); }
         yah264_rc_state_t st;
         st.size = (int)sizeof st;
         int have_st = g_api->rc_state(e, &st) == 0;
@@ -8093,6 +8144,7 @@ static int cli_main(int argc, char **argv)
     FILE *sfst = NULL;
     yah264_frame_stats_t *sst_by = NULL;
     long sst_cap = 0;
+    struct fst_carry sst_carry = { 0 };
 
     if (g_api->encoder_headers(enc, &nal, &count) < 0) {
         fprintf(stderr, "y264: headers failed\n");
@@ -8117,7 +8169,7 @@ static int cli_main(int argc, char **argv)
                 if (q) { memset(q + sst_cap, 0, (size_t)(nc - sst_cap) * sizeof *q); sst_by = q; sst_cap = nc; } \
             } \
             if (sst_cap >= frame + 1) \
-                frame_stats_emit(sfst, enc, (nal_), (cnt_), sst_by, (int)sst_cap, 0, 0, \
+                frame_stats_emit(sfst, enc, &sst_carry, (nal_), (cnt_), sst_by, (int)sst_cap, 0, 0, \
                                  param.frame_threads > 0 ? param.frame_threads : nthreads); \
         } \
     } while (0)
@@ -8254,6 +8306,7 @@ done:
     progress_done();
     if (sfst) fclose(sfst);
     free(sst_by);
+    fst_carry_free(&sst_carry);
     if (rd_on && serial_rd_stop(&rd, rd_tid) != 0) {
         /* An error while the reader is inside a read, which on a stalled
          * pipe can last forever. Close everything that doesn't touch the
