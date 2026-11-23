@@ -1154,6 +1154,8 @@ static double rcp_vbv_scale_eff(const yah264_encoder_t *e, int type)
  * and QPs only, each frame's own (rcp_fill), so a replay refits the same
  * way. */
 #define RT_HIST 256
+/* a run whose mean base QP is this close to a QP bound is held by it */
+#define RT_FIT_PIN 0.5
 #define RT_OWN_MAX 64
 /* the least a measured run spans, in seconds: a quarter second already
  * spans two groups at 30 fps; half a second read worse on every clip */
@@ -1235,7 +1237,7 @@ static void rc_fit_shift(yah264_encoder_t *e, double shift)
 static int rc_fit_span(const yah264_encoder_t *e, unsigned lo, unsigned hi,
                        double *bits, double *qp, int *cut)
 {
-    double b = 0.0, q = 0.0;
+    double b = 0.0, q = 0.0, bq = 0.0, ql = 0.0, qh = 0.0;
     int n = 0, seen = 0;
     int have = e->rt_hn < RT_HIST ? e->rt_hn : RT_HIST;
     *cut = 0;
@@ -1246,9 +1248,15 @@ static int rc_fit_span(const yah264_encoder_t *e, unsigned lo, unsigned hi,
         if (e->rt_hist[i].intra) continue;
         b += e->rt_hist[i].bits;
         q += e->rt_hist[i].fqp;
+        bq += e->rt_hist[i].base;
+        ql += e->rt_hist[i].qlo;
+        qh += e->rt_hist[i].qhi;
         n++;
     }
     if (seen != (int)(hi - lo) || n == 0) return 0;
+    /* a run held at a QP bound says nothing about the content's slope: its
+     * bits answer the clamp, and a refit read off it moves without limit */
+    if (bq / n <= ql / n + RT_FIT_PIN || bq / n >= qh / n - RT_FIT_PIN) return 0;
     *bits = b / n;
     *qp = q / n;
     return 1;
@@ -1391,7 +1399,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         struct rt_own *o = &e->rt_own[e->rt_own_n++];
         o->disp = p->disp; o->seq = p->seq; o->type = p->type; o->f2 = p->f2;
         o->cut = p->cut; o->intra = p->rc_type == 0; o->fqp = p->fqp; o->rs = p->rs;
-        o->pred = p->pred;
+        o->pred = p->pred; o->base = p->base_qp; o->qlo = p->qlo; o->qhi = p->qhi;
     }
     if (e->abr_rf2) {
         if (e->rt_fast > 0)
@@ -1671,7 +1679,7 @@ static int rc_own_find(yah264_encoder_t *e, int disp, struct rt_own *o)
             p->own_filled = 1;
             o->disp = p->disp; o->seq = p->seq; o->type = p->type; o->f2 = p->f2;
             o->cut = p->cut; o->intra = p->rc_type == 0; o->fqp = p->fqp; o->rs = p->rs;
-            o->pred = p->pred;
+            o->pred = p->pred; o->base = p->base_qp; o->qlo = p->qlo; o->qhi = p->qhi;
             return 1;
         }
     }
@@ -1720,6 +1728,9 @@ void rcp_fill(yah264_encoder_t *e, double bits, int disp)
             e->rt_hist[i].bits = bits;
             e->rt_hist[i].cut = o.cut;
             e->rt_hist[i].intra = o.intra;
+            e->rt_hist[i].base = (int8_t)o.base;
+            e->rt_hist[i].qlo = o.qlo;
+            e->rt_hist[i].qhi = o.qhi;
         }
     } else if (e->abr_on) {
         e->rt_shadow += bits;       /* no record: counted at its arrival slot */
@@ -2496,6 +2507,13 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     en.rs = 1.0;
     en.disp = e->cur_disp;
     en.f2 = (int8_t)f2;
+    {
+        /* the QP bounds in force on this frame, a live QP_LIMITS event's or
+         * the encode's */
+        const struct ctl_slot *cs = ctl_slot_at(e, e->cur_disp);
+        en.qlo = (int8_t)(cs ? cs->qp_min : e->qp_min);
+        en.qhi = (int8_t)(cs ? cs->qp_max : e->qp_max);
+    }
     e->rcp_last_disp = e->cur_disp;
     /* the content's scene cut, not a key the caller or the cadence asked for */
     if (type == 0) {

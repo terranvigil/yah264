@@ -31,9 +31,15 @@ static int fails;
 static sample_t y[W * H], u[W * H / 4], v[W * H / 4];
 
 static int cut_at = -1;     /* from this frame on, a different picture */
+static int flat;
 
 static void fill(sample_t *p, int w, int h, int n, int plane)
 {
+    if (flat) {                     /* a near-flat picture: next to nothing to code */
+        for (int i = 0; i < w * h; i++)
+            p[i] = (sample_t)(plane ? 128 : 60 + ((i / w + n) & 1));
+        return;
+    }
     if (cut_at >= 0 && n >= cut_at) {
         for (int r = 0; r < h; r++)
             for (int c = 0; c < w; c++) {
@@ -50,7 +56,7 @@ static void fill(sample_t *p, int w, int h, int n, int plane)
         }
 }
 
-static int la_off, open_gop, interlaced, no_b;
+static int la_off, open_gop, interlaced, no_b, qpmin;
 
 static int threads = 1;
 
@@ -66,6 +72,8 @@ static yah264_encoder_t *open_abr(int kbps, int vbv)
     p.rc.bitrate = kbps;
     if (vbv) { p.rc.vbv_maxrate = kbps; p.rc.vbv_bufsize = kbps; }
     if (la_off) p.rc.lookahead = 0;
+    if (qpmin) p.rc.qp_min = qpmin;
+    p.level_idc = 51;               /* room for every step the tests take */
     if (open_gop) { p.open_gop = 1; p.keyint = 24; }
     if (no_b) p.bframes = 0;
     if (interlaced) { p.interlaced = 1; p.bframes = 0; }
@@ -204,7 +212,7 @@ int main(void)
         cut_at = c ? 60 : -1;
         yah264_encoder_t *e = open_abr(400, 0);
         CHECK(e != NULL);
-        CHECK(rate(e, 52, 40, 0, 0) == YAH264_CTL_OK);
+        CHECK(rate(e, 52, 120, 0, 0) == YAH264_CTL_OK);
         int base = landed(e), refits = 0, seen_cut = 0;
         unsigned lo = e->rt_fit_lo;
         for (int i = 0; i <= NF; i++) {
@@ -308,6 +316,34 @@ int main(void)
         CHECK(worst <= 0.0);
         yah264_encoder_close(e);
     }
+
+    /* a run held at a QP bound is missing: a flat clip at a high rate sits on
+     * --qpmin, and a busy one at a very low rate on 51, and neither refits,
+     * on a 10x step either way */
+    for (int c = 0; c < 4; c++) {
+        int floor_case = c < 2, down = !(c & 1);
+        flat = floor_case;
+        qpmin = floor_case ? 20 : 0;
+        int k0 = floor_case ? (down ? 4000 : 400) : (down ? 20 : 2);
+        yah264_encoder_t *e = open_abr(k0, 0);
+        qpmin = 0;
+        CHECK(e != NULL);
+        CHECK(rate(e, 60, down ? k0 / 10 : k0 * 10, 0, 0) == YAH264_CTL_OK);
+        int base = landed(e), refits = 0, armed = 0;
+        unsigned lo = e->rt_fit_lo;
+        for (int i = 0; i <= NF; i++) {
+            if (i < NF) CHECK(push(e, i) == 0);
+            else flush(e);
+            if (landed(e) > base && e->rt_fit) armed = 1;
+            if (landed(e) > base && e->rt_fit_lo != lo) { refits++; lo = e->rt_fit_lo; }
+        }
+        if (refits) fprintf(stderr, "pinned case %d: %d refits\n", c, refits);
+        CHECK(armed);
+        CHECK(refits == 0);
+        CHECK(e->abr_qp >= 0.0 && e->abr_qp <= 51.0);
+        yah264_encoder_close(e);
+    }
+    flat = 0;
 
     if (fails) { fprintf(stderr, "ratestep: %d failure(s)\n", fails); return 1; }
     printf("ratestep: all checks passed\n");
