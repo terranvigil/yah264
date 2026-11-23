@@ -80,7 +80,7 @@ turns that block into an error, for scripted use.
 ## The trade
 
 The table covers the ten board clips at their ABR targets, scored with
-VMAF-NEG. Our encoder ran at auto threads. Each cell is the median of
+VMAF-NEG (earlier metric). Our encoder ran at auto threads. Each cell is the median of
 five runs per side on a quiet machine.
 
 | clip | wall, hardware / ours | CPU, ours / hardware | VMAF, hardware minus ours |

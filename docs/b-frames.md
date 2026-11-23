@@ -14,6 +14,8 @@ of x264 medium, while with B-frames on the same clips spread from well ahead
 to well behind. We made `--direct auto` the default because the direct-mode
 choice is the largest single cause.
 
+Quality figures on this page are on VMAF-NEG (earlier metric).
+
 ## How it works
 
 ### Placement
@@ -150,8 +152,8 @@ RD on all combinations.
 | B intra margin 0.75x | median +0.01% at matched rate, for 0.5-2.5% of wall at 12 threads. A tighter margin buys nothing more |
 
 These modes are expensive in any encoder. On four of our clips, x264 spends
-4.6-10.6% of its wall on the same B partition set. With the quadrant gate at
-4, our cost comes to between 0.8x and 1.4x of x264's.
+4.6-10.6% of its wall on the same B partition set. The quadrant gate ships at
+10. With it at 4, our cost came to between 0.8x and 1.4x of x264's.
 
 The table below compares fixed temporal with fixed spatial direct. Both are
 BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
@@ -205,6 +207,9 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
   reference-list construction under the pyramid as a way to raise it.
 
 ## Measuring it
+
+The `Y264_*` variables here are read only in a build configured with
+`-Ddev_knobs=true`.
 
 - `Y264_DIRECT_WHY=1` prints each B slice's list 0, the co-located reference
   POCs with a star on unresolvable ones, a hash of the co-located field and

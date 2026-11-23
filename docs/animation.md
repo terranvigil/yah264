@@ -6,7 +6,7 @@ Blues. We measure every animation change on both kinds, because a setting that
 helps one kind often costs the other. Against x264 medium we're far ahead on
 CGI and a few points ahead on hand-drawn.
 
-All numbers here are BD-rate on VMAF-NEG, where negative is better. Self-A/Bs
+All numbers here are BD-rate on VMAF-NEG (earlier metric), where negative is better. Self-A/Bs
 are against yah264's shipped default on the same binary. Cross-encoder numbers
 are against x264 medium.
 
@@ -45,7 +45,7 @@ the parity tables, the lead is about 3%.
 | stronger P and mid-frame skip exits | they misjudge flat content: +13% to +32% on sintel, +2.8% to +5.7% on bbb, for at most 1.2% of threaded wall |
 | `Y264_B_SKIP_EXIT=3` | nearly free on quality but buys only 0.35% of wall at 12 threads |
 | limiting the skip exits to flat content | every exit costs bits on both animation clips. A gate would have nothing to keep |
-| stronger mb-tree to fix sita | strength 2.8 and 4.0 read -7.6% and -22.9% worse |
+| stronger mb-tree to fix sita | strength 2.8 and 4.0 are far worse: their matched-rate VMAF-NEG deltas read -7.6 and -22.9 |
 | more intra blocks in P frames | +0.7% and +0.2% on sita: no gain |
 | per-MB lambda on flat macroblocks only, or on negative offsets only | the hand-drawn win comes from the line-art minority. Restricting it to the flat majority kills it |
 | anchor-grade lambda on non-reference B frames | +2.2% |
@@ -72,13 +72,13 @@ the parity tables, the lead is about 3%.
   on natural video. That's where animation's extra time goes. Most of it
   overlaps with other work at 12 threads, so price any fix at 12 threads, not
   at 1.
-- **Banding.** VMAF doesn't see it. `vmaf --feature cambi` runs locally and
-  hasn't been read on animation yet.
+- **Banding.** VMAF v1 scores it through CAMBI. Apart from sintel's dark
+  frames, CAMBI hasn't been read on the animation clips.
 
 ## Measuring it
 
 Run bbb_720p and sita_720p on every change, and add sintel_720p when AQ or
-psy moves. Because bbb saturates above VMAF-NEG 94 or so, read it at CRF 34-46 as
+psy moves. Because bbb saturates above VMAF-NEG (earlier metric) 94 or so, read it at CRF 34-46 as
 well as the standard 30-42 points. sita_720p is 140 frames calibrated at
 900 kbps. bbb_720p is in the HD band (`scripts/hd_band.py`) but not in the
 standing CRF ladders.

@@ -6,7 +6,7 @@ source in time before the lookahead sees it. Both exist for grainy and noisy
 sources. Each has a noise gate that keeps clean content byte-identical to an
 encode without the tool, and animation is the case that matters most.
 
-The quality numbers here are BD-rate on VMAF-NEG of the tool against the
+The quality numbers here are BD-rate on VMAF-NEG (earlier metric) of the tool against the
 shipped default on the same binary and CRF ladder, where negative is better.
 They're scored against the original source, never the filtered one.
 

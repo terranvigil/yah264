@@ -8,7 +8,7 @@ A general per-clip selector over the content-split constants doesn't work with
 frame-level features. The prize is real, although a small minority of
 sequences holds it.
 
-All numbers are BD-rate on VMAF-NEG against the shipped default at matched
+All numbers are BD-rate on VMAF-NEG (earlier metric) against the shipped default at matched
 achieved bitrate unless noted. Negative is better.
 
 ## What ships

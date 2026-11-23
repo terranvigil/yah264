@@ -86,7 +86,7 @@ as suspect until a header says otherwise.
 
 The calibrated operating points come from `scripts/parity-clip-calib.sh`,
 run on 6-second windows at preset medium and threads 1. Each one is the lowest
-ABR target that puts us in VMAF 0.6.1 88-94 while our own rate error stays
+ABR target that puts us in VMAF v0.6.1 (earlier metric) 88-94 while our own rate error stays
 inside a few percent. Any new gate clip gets its operating point the same way.
 Don't pick a bitrate by hand.
 

@@ -13,6 +13,8 @@ and up run full RD on every partition and keep RDOQ in every trial. The rest
 of this page describes medium unless it says otherwise. [B-frames](b-frames.md)
 covers direct mode, B_8x8 and the B skip decision.
 
+Quality figures on this page are on VMAF-NEG (earlier metric).
+
 ## How it works
 
 ### Integer search
@@ -160,7 +162,7 @@ off.
 | choice | why |
 |---|---|
 | Hex with the parity features at medium, UMH from `--subme 8` | -0.48% VMAF-NEG against x264 medium without the wide grid's cost |
-| No UMH on 8x8 and smaller | about 6-7% faster single-threaded. BD is neutral or better on the motion clips: stefan -0.75%, bus +0.21% |
+| No UMH on 8x8 and smaller | about 6-7% faster single-threaded. BD is near neutral on the motion clips: stefan -0.75%, bus +0.21% |
 | Seed early-out, K 48 sub-16x16 and 4 at 16x16 | 2-3% of wall at 12 threads for a CRF-band median of +0.12% |
 | Capped diamond sub-pel at medium | a speed trade. Slower presets keep the square |
 | Adaptive partition margin plus importance rescue (mode 4) | the rescue buys back 0.63 points of the margin's 1.32% band cost for 1-3 points of its 4.33% wall saving |
@@ -200,6 +202,9 @@ off.
   bounded version and expect to park it.
 
 ## Measuring it
+
+The `Y264_*` variables here are read only in a build configured with
+`-Ddev_knobs=true`.
 
 - `Y264_ME_ETSTAT=1` buckets searches by seed cost and reports how far the
   integer stages moved the vector. Read the distance column. The SATD gain is

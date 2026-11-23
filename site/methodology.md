@@ -35,7 +35,7 @@ done.
 
 BD-rate over a solved rate range decides quality. It's measured with full-frame
 [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion)
-v0.6.1 NEG at matched achieved bitrates. A change that improves one clip and
+v1 at matched achieved bitrates. A change that improves one clip and
 costs two others is a refusal even when the mechanism is elegant.
 
 The table decides speed. It measures our wall time as a ratio to x264's at a
@@ -56,7 +56,7 @@ The gates exist because that explanation is worth nothing on its own.
 The most expensive recurring mistake had nothing to do with encoding. A session
 would spend its first hour building a profiler, an oracle, or an A/B harness
 that already existed under a name nobody remembered. The tree holds about
-eighty harness scripts and around 440 environment knobs. That's well past what
+eighty harness scripts and about 140 environment knobs. That's well past what
 fits in one context window.
 
 The [instrument catalog](https://github.com/terranvigil/yah264/blob/main/docs/instruments.md)

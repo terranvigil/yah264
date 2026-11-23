@@ -224,9 +224,9 @@ Both libraries install side by side. `yah264.pc` and `yah264_10.pc` each name
 their depth in `Cflags`. That's what makes a caller's `yah264_encoder_open()`
 resolve to the library it configured against.
 
-The ffmpeg wrapper offers `yuv420p`, `yuv422p` and `yuv444p` today. The wrapper
-on the fork's `yah264` branch is being updated to add `yuv420p10le`,
-`yuv422p10le` and `yuv444p10le`.
+The ffmpeg wrapper takes `yuv420p`, `yuv422p` and `yuv444p` when it's built
+against the 8-bit library. Built against the 10-bit library, it takes
+`yuv420p10le`, `yuv422p10le` and `yuv444p10le`.
 
 ## Checking that it decoded
 
@@ -294,8 +294,9 @@ lists all of them with the reason for each line.
 ## The full option list
 
 `yah264 --help` prints every flag with its default. Beyond that there are about
-440 `Y264_*` environment knobs. They're research instruments and change between
-commits without notice.
+140 `Y264_*` environment knobs. They're research instruments that change between
+commits without notice. A build reads them only when it's configured with
+`-Ddev_knobs=true`.
 [knob_census.py](https://github.com/terranvigil/yah264/blob/main/scripts/knob_census.py)
 generates the catalog in
 [knobs.md](https://github.com/terranvigil/yah264/blob/main/docs/knobs.md),

@@ -12,7 +12,8 @@ The models, the VBV and the pipelined decide and account live in
 `src/encoder/rate.c`. Mode setup (`yah264_encoder_open`), the frame-type
 cascade (`frame_qp`) and the lookahead are in `src/encoder/encoder.c`.
 [options.md](options.md) lists the flags, and [knobs.md](knobs.md) has each
-`Y264_*` default quoted here.
+`Y264_*` default quoted here. Quality figures on this page are on VMAF-NEG
+(earlier metric).
 
 ## How it works
 
@@ -117,7 +118,7 @@ it plus its own frame DC.
 An older fit read near each clip's own operating point,
 `8.69 + 2.92 log2(cme/MB) - 1.32 log2(bits/MB)`, does two jobs beside it.
 First, the ledger opens at the lower of the two. That keeps static content at a
-low rate where the opening I and the first P frames are what the GOP lives on.
+low QP, because its opening I and first P frames are what the GOP lives on.
 Second, where the older fit falls under 15, the lowres cost is too small for
 either fit. Flat 4K animation does this, and so do dark or black openings. The
 opening then comes from the intra fit, 8 QP lower. The opening matters because
@@ -435,7 +436,8 @@ the decide and pop order, never timing.
   `--threads 1`. In-flight frames are predicted from their own complexity
   instead of their type's mean. On the ABR board at twelve threads it bought
   7-10% of wall on 720p and 1080p cells. BD-VMAF-NEG against lag 0 was inside
-  the instrument's +-1.7. It read -1.9 on sintel and +1.4 on stockholm.
+  the instrument's +-1.7 on all clips but sintel, which read -1.9 in the
+  lag's favor. stockholm read +1.4.
 - **Split anchor drain.** The anchor waits for the predecessor anchor's bits
   because the decide needs them. It leaves that burst's B frames flying. It buys
   1.04-1.11x where it engages. On cut-heavy content at `--ref 3` it costs about
@@ -536,7 +538,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Flat CRF base under mb-tree, plus level 2.3 and fps slope 2.9 | mb-tree handles the per-frame allocation. The constants match bytes at equal `--crf` against x264 medium to a median 5.2% on 22 clips |
 | Frame DC 1.3 under uncapped CRF | lowest worst clip on the CRF band. It recovers long multi-shot titles: a 1080p animated feature reads -1.81% at 1.04 and -5.60% at 1.4. At 1.4 the static deep-band clip starts to pay |
 | Frame DC 1.04 under capped CRF and bitrate targets | the capped-VBR compliance gate with CBR HRD read 68/72 at 1.3 and 72/72 at 1.04 |
-| `--aq-strength` 0.4 | a seven-clip VMAF-NEG sweep put the optimum near 0.3 |
+| `--aq-strength` 0.4 | a seven-clip sweep put the optimum near 0.3. The default sits just above it |
 | RF2 ledger for ABR | it's the CRF path plus a rate factor. We read each constant on the ABR band and the capped-VBR tracking cells |
 | Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27. The fit reads rms 3.2 QP over QP 16-44 on 32 clips |
 | Half-full handoff for segments | it's the CRF fill budget's fixed point, so segments compose without extra machinery |
@@ -545,7 +547,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Two-pass offline plan always on | without the plan the I frame got the highest QP in its GOP, at 2.7x a B frame's bytes against 18x with it. With the plan two-pass beats one-pass ABR on all seven corpus clips (-1.61% to -35.66% BD-VMAF-NEG) |
 | Shared ABR ledger across GOP workers | 87.4 against 89.8 VMAF-NEG with six workers on a 1080p title |
 | Buffer charged slice payload plus framing | payload alone drifted 30 kbit over a few hundred CBR pictures |
-| CBR dive rule at 2 QP | 3 was the largest with no underflow on sintel's four CBR rungs at four and six threads. 2 keeps a QP of margin |
+| CBR dive rule at 2 QP | under CBR, a burst whose rate factor sits more than 2 QP below the regime the bits model was calibrated at takes the serial schedule, because the model under-predicts there. 3 was the largest with no underflow on sintel's four CBR rungs at four and six threads. 2 keeps a QP of margin |
 | Sync-lookahead as ring capacity | fencing the window instead would change mb-tree's math. Capacity is pure latency |
 
 ## What didn't work
@@ -567,7 +569,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Rate-aware lookahead cost consumed by mb-tree | mean +0.08%, foreman +0.91%, akiyo +1.36%. Pricing MV rate cuts propagation where mb-tree wants to boost |
 | Lowres SATD candidates in full-res decisions | +0.28% BD. The lookahead feeds frame-level decisions only |
 | A lookahead thread with no lead | 1.00-1.02x, and +1.5% to +10.6% wall on the clips the lead wins on |
-| Gating the lead on frame size | clips sharing one wavefront knee read -15.2%, -12.3% and +0.8% |
+| Gating the lead on frame size | frame size doesn't predict the lead's gain. Three 720p clips of one size moved -15.2%, -12.3% and +0.8% in wall with it |
 
 ## Open questions
 

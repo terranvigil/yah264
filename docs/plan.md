@@ -35,9 +35,9 @@ A (class, group, goal) combination passes when:
 
 - the median ratio of our wall time to x264's is at or under 1.00 and the
   worst cell is at or under 1.15
-- the median VMAF-NEG difference is no worse than -0.5 and no cell is more
-  than 1.0 VMAF-NEG or 1.0 dB PSNR-Y behind
-- on real titles, BD-rate on VMAF-NEG over a five-rung ladder (CRF 20 to 32)
+- the median VMAF v1 difference is no worse than -0.5 and no cell is more
+  than 1.0 VMAF v1 or 1.0 dB PSNR-Y behind
+- on real titles, BD-rate on VMAF v1 over a five-rung ladder (CRF 20 to 32)
   is at or under +1.0%, at CRF and at capped VBR, with lookahead depth swept
   and no shot-based encoding
 - at VBR on real titles, the bitrate of each rung is within 10% of its target
@@ -151,7 +151,7 @@ goes into its subsystem doc's "What didn't work" table.
 
 25. A fuzz harness. There isn't one.
 26. A flat-gradient banding test set, so AQ changes are checked for banding
-    as well as VMAF-NEG.
+    as well as VMAF v1.
 
 ### Decoding
 
