@@ -259,7 +259,7 @@ reference's default is an open question.
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
 | `--b-bias` | -100..100 | 0 | Leans the adaptive B placement toward more B frames (positive) or fewer (negative). It's a tuning dial: see [`--b-bias`](#--b-bias-is-a-tuning-dial) below. Ignored at `--b-adapt 0`. |
 | `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation. `auto` lets each B slice pick by the running skippability score. |
-| `-r`, `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. |
+| `-r`, `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. Under rate control at subme 7 (medium), a picture whose longer side is 3840 or more gets 2 unless the option is given. |
 
 `--bframes 2` or higher enables the B-pyramid. That changes `max_num_ref_frames`
 and therefore the auto-selected level.
@@ -471,7 +471,7 @@ nothing here suggests moving it from 0.
 | `-t`, `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
 | `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded. The macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule. See below. |
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when three things hold: the 16x16 result already costs less than this many lambdas, the neighborhood is homogeneous, and nothing downstream depends on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
-| `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. It's off because the largest speed gain left costs up to 2.3% BD-VMAF-NEG (earlier metric) on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
+| `--b-preme-skip` | 0..4 | 0 (off); 2 at medium when the longer side is 1920 or more | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. It's off because the largest speed gain left costs up to 2.3% BD-VMAF-NEG (earlier metric) on a detailed 1080p clip. Under rate control at subme 7 (medium), a picture whose longer side is 1920 or more gets 2 unless the option is given. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
 | `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar, and on at `faster` and below. Under rate control at subme 7 (medium), a picture whose longer side is 3840 or more gets 2 unless the option is given. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
@@ -618,7 +618,8 @@ same deletion. Its lookahead earns its keep downstream in a way ours
 didn't entirely.
 
 `--lr-settle` came out of that measurement. It's off from `fast` up and on at
-`faster` and below. At medium, a picture 3840 or more on its longer side gets 2.
+`faster` and below. At medium, a picture 3840 or more on its longer side gets 2
+unless the option is given.
 The lowres block search starts at a predictor its already-searched neighbors and
 the previous field agree on. Where that predictor leaves almost no residual, the
 block's answer is in hand before the candidate list, the hexagon, the square
@@ -1564,6 +1565,11 @@ Both constants are `-1`, and any negative value means off.
 The convention is deliberate for these two. Eighteen other fields depend on
 zero-as-unset. Making two of them read zero differently would swap a
 divergence you can document for an inconsistency you can't.
+
+Three defaults follow the picture size at `subme` 7 under rate control:
+`b_preme_skip`, `ref` and `lr_settle`. To keep a value you assigned to one of
+them, set its `YAH264_SET_*` bit in `explicit_set`. The CLI sets the bit for
+every one of those flags you pass.
 
 ### The enumerated fields carry x264's values
 
