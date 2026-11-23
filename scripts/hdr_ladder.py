@@ -534,7 +534,10 @@ def score(out, src, w, h, threads, model_arg, scaled, tmp, vj):
         # -xerror and explode turn a damaged stream into an error; anything
         # ffmpeg says at -v error is treated the same, whatever its exit code
         spawn("dec", nice([FFMPEG, "-v", "error", "-nostdin", "-xerror", "-err_detect", "explode",
-                           "-i", out, "-fps_mode", "passthrough", "-pix_fmt", "yuv420p10le",
+                           "-i", out, "-fps_mode", "passthrough",
+                           # a field-coded encode decodes to woven frames marked
+                           # interlaced, which libvmaf refuses in a Y4M
+                           "-vf", "setfield=prog", "-pix_fmt", "yuv420p10le",
                            "-strict", "-1", "-f", "yuv4mpegpipe", "pipe:1"]),
               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err("dec"))
 

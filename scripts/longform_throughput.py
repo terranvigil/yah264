@@ -1157,7 +1157,9 @@ def _vmaf_pass(cell, bitstream, wd, start, count, j, args, scaled):
     """One libvmaf pass of a bitstream against its feeder frames, both at
     10-bit and, when `scaled`, both fitted to the v1 display. Returns the JSON."""
     dfifo = _fifo(wd, "dec.fifo")
-    vf = ["-vf", bd.V1_SCALE_VF] if scaled else []
+    # tagged progressive first, both sides: a field-coded encode decodes to
+    # woven frames marked interlaced, which libvmaf refuses in a Y4M
+    vf = bd._progressive_vf(["-vf", bd.V1_SCALE_VF] if scaled else [])
     dec = subprocess.Popen(
         [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
          "-i", bitstream, "-fps_mode", "passthrough", *vf, "-pix_fmt", "yuv420p10le",

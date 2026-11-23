@@ -364,34 +364,34 @@ def _sps_fields(rbsp):
 
 
 def _nal_starts(data):
-    """Offsets of each NAL's header byte in an Annex-B buffer."""
-    i, out = 0, []
+    """Offsets of each NAL's header byte in an Annex-B buffer, found as the
+    walk asks for them."""
+    i = 0
     while True:
         i = data.find(b"\x00\x00\x01", i)
         if i < 0:
-            return out
-        out.append(i + 3)
+            return
+        yield i + 3
         i += 3
 
 
 def _coded_frames(bitstream):
-    """Coded frames in an H.264 stream, or None. A field pair is one frame, as
-    the decoder outputs it, where ffprobe's packet count makes it two. A stream
+    """Coded frames in an H.264 stream. A field pair is one frame, as the
+    decoder outputs it, where ffprobe's packet count makes it two. A stream
     whose SPS says frame_mbs_only has no fields to pair, so it keeps the packet
-    count; any other is walked here: every picture's first slice (first_mb 0)
-    read as far as field_pic_flag, and the field pictures paired up. A stream
-    this cannot read falls back to the packet count, which is right for all
-    but field pictures."""
+    count and is read only as far as its first slice; any other is walked:
+    every picture's first slice (first_mb 0) read as far as field_pic_flag,
+    and the field pictures paired up. A stream this cannot read falls back to
+    the packet count, which is right for all but field pictures."""
     import mmap
     try:
         with open(bitstream, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
-            starts = _nal_starts(m)
             sps, frames, fields = {}, 0, 0
-            for k, s in enumerate(starts):
+            for s in _nal_starts(m):
                 t = m[s] & 0x1F
                 if t == 7:
-                    end = starts[k + 1] - 3 if k + 1 < len(starts) else len(m)
-                    sid, sep, lmfn, fmo = _sps_fields(m[s + 1:end])
+                    end = m.find(b"\x00\x00\x01", s)
+                    sid, sep, lmfn, fmo = _sps_fields(m[s + 1:end if end >= 0 else len(m)])
                     sps[sid] = (sep, lmfn, fmo)
                 elif t in (1, 5) and m[s + 1] & 0x80:      # first_mb_in_slice == 0
                     # which SPS a slice uses is behind its PPS: read only one
@@ -403,7 +403,7 @@ def _coded_frames(bitstream):
                     if sep:
                         b.u(2)
                     b.u(lmfn)
-                    if not fmo and b.u(1):
+                    if b.u(1):
                         fields += 1
                     else:
                         frames += 1
@@ -518,11 +518,15 @@ def _progressive_vf(vf):
     the file. The woven frame is what gets scored, against the source frame
     it was cut from, so the tag is dropped rather than the fields taken apart;
     a progressive frame passes through unchanged."""
-    chain = ["setfield=prog"]
-    for i in range(0, len(vf) - 1, 2):
-        if vf[i] == "-vf":
+    chain, rest, i = ["setfield=prog"], [], 0
+    while i < len(vf):
+        if vf[i] == "-vf" and i + 1 < len(vf):
             chain.append(vf[i + 1])
-    return ["-vf", ",".join(chain)]
+            i += 2
+        else:
+            rest.append(vf[i])
+            i += 1
+    return ["-vf", ",".join(chain)] + rest
 
 
 def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):

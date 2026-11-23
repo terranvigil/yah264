@@ -952,10 +952,13 @@ def vmaf_v1(clip, frames, bitstream):
     """
     ref, dec = f"{WD}/ref.y4m", f"{WD}/dec.y4m"
     if not os.path.exists(ref):
-        sh(["ffmpeg", "-v", "error", "-y", "-i", clip_path(clip),
-            "-frames:v", str(frames), "-pix_fmt", "yuv420p10le", "-strict", "-1", ref])
+        sh(["ffmpeg", "-v", "error", "-y", "-i", clip_path(clip), "-frames:v", str(frames),
+            "-vf", "setfield=prog", "-pix_fmt", "yuv420p10le", "-strict", "-1", ref])
+    # setfield=prog on both sides: a field-coded encode decodes to woven frames
+    # marked interlaced, which libvmaf refuses in a Y4M, and the woven frame is
+    # what's scored against the source frame
     sh(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-fps_mode", "passthrough",
-        "-pix_fmt", "yuv420p10le", "-strict", "-1", dec])
+        "-vf", "setfield=prog", "-pix_fmt", "yuv420p10le", "-strict", "-1", dec])
     j = f"{WD}/v.json"
     # VMAF_THREADS, because scoring is not part of any measurement here: it runs
     # outside sample(), it is skipped entirely when the quality cache hits, and
