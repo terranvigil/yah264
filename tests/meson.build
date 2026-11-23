@@ -133,6 +133,15 @@ if rc_python.found()
     timeout : 300)
 endif
 
+# scripts/bdcompare.py on field-coded streams: a field pair counts as one
+# frame, and the woven decode scores against the source (v1 half skipped
+# without the v1 libvmaf)
+if rc_python.found()
+  test('field_score', rc_python,
+    args : [files('field_score_check.py'), yah264_cli_exe],
+    timeout : 300)
+endif
+
 # The CLI on damaged or awkward input files: a truncated Y4M, a missing
 # or empty stats file, a FIFO given as one.
 if rc_python.found()

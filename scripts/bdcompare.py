@@ -292,7 +292,8 @@ def _v1_ident(model):
 
 
 def _packets(bitstream):
-    """Coded frames in a stream, by packet count, or None."""
+    """Packets in a stream by ffprobe's count, or None. Its parser makes a
+    packet of every coded picture, so a field pair is two."""
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
                         "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", bitstream],
                        capture_output=True, text=True)
@@ -300,6 +301,115 @@ def _packets(bitstream):
         return int(r.stdout.strip().split(",")[0])
     except ValueError:
         return None
+
+
+class _Bits:
+    """An Exp-Golomb reader over a NAL's RBSP (emulation bytes removed)."""
+
+    def __init__(self, ebsp):
+        self.b = bytes(ebsp).replace(b"\x00\x00\x03", b"\x00\x00")
+        self.p = 0
+
+    def u(self, n):
+        v = 0
+        for _ in range(n):
+            byte = self.b[self.p >> 3]     # IndexError past the end: the caller's fallback
+            v = v << 1 | (byte >> (7 - (self.p & 7)) & 1)
+            self.p += 1
+        return v
+
+    def ue(self):
+        z = 0
+        while not self.u(1):
+            z += 1
+            if z > 31:
+                raise ValueError("bad ue(v)")
+        return (1 << z) - 1 + self.u(z)
+
+    def se(self):
+        k = self.ue()
+        return (k + 1) // 2 if k & 1 else -(k // 2)
+
+
+def _sps_fields(rbsp):
+    """(sps id, separate_colour_plane, log2_max_frame_num, frame_mbs_only)."""
+    b = _Bits(rbsp)
+    prof = b.u(8)
+    b.u(16)
+    sid = b.ue()
+    sep = 0
+    if prof in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
+        cf = b.ue()
+        if cf == 3:
+            sep = b.u(1)
+        b.ue(); b.ue(); b.u(1)
+        if b.u(1):                          # seq_scaling_matrix_present_flag
+            for i in range(12 if cf == 3 else 8):
+                if b.u(1):
+                    last = nxt = 8
+                    for _ in range(16 if i < 6 else 64):
+                        if nxt:
+                            nxt = (last + b.se() + 256) % 256
+                        last = nxt or last
+    lmfn = b.ue() + 4
+    poc = b.ue()
+    if poc == 0:
+        b.ue()
+    elif poc == 1:
+        b.u(1); b.se(); b.se()
+        for _ in range(b.ue()):
+            b.se()
+    b.ue(); b.u(1); b.ue(); b.ue()
+    return sid, sep, lmfn, b.u(1)
+
+
+def _nal_starts(data):
+    """Offsets of each NAL's header byte in an Annex-B buffer."""
+    i, out = 0, []
+    while True:
+        i = data.find(b"\x00\x00\x01", i)
+        if i < 0:
+            return out
+        out.append(i + 3)
+        i += 3
+
+
+def _coded_frames(bitstream):
+    """Coded frames in an H.264 stream, or None. A field pair is one frame, as
+    the decoder outputs it, where ffprobe's packet count makes it two. A stream
+    whose SPS says frame_mbs_only has no fields to pair, so it keeps the packet
+    count; any other is walked here: every picture's first slice (first_mb 0)
+    read as far as field_pic_flag, and the field pictures paired up. A stream
+    this cannot read falls back to the packet count, which is right for all
+    but field pictures."""
+    import mmap
+    try:
+        with open(bitstream, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+            starts = _nal_starts(m)
+            sps, frames, fields = {}, 0, 0
+            for k, s in enumerate(starts):
+                t = m[s] & 0x1F
+                if t == 7:
+                    end = starts[k + 1] - 3 if k + 1 < len(starts) else len(m)
+                    sid, sep, lmfn, fmo = _sps_fields(m[s + 1:end])
+                    sps[sid] = (sep, lmfn, fmo)
+                elif t in (1, 5) and m[s + 1] & 0x80:      # first_mb_in_slice == 0
+                    # which SPS a slice uses is behind its PPS: read only one
+                    if len(sps) != 1 or all(v[2] for v in sps.values()):
+                        return _packets(bitstream)
+                    sep, lmfn, fmo = next(iter(sps.values()))
+                    b = _Bits(m[s + 1:s + 24])
+                    b.ue(); b.ue(); b.ue()                  # first_mb, slice_type, pps id
+                    if sep:
+                        b.u(2)
+                    b.u(lmfn)
+                    if not fmo and b.u(1):
+                        fields += 1
+                    else:
+                        frames += 1
+            return frames + (fields + 1) // 2
+    except (OSError, ValueError, IndexError):
+        return _packets(bitstream)
 
 
 _ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -401,6 +511,20 @@ def coded_size_is(bitstream, w, h):
     return r.stdout.strip().split("\n")[0] == f"{w},{h}"
 
 
+def _progressive_vf(vf):
+    """vf (an ffmpeg ["-vf", chain] or []) with the frames tagged progressive
+    first. A field-coded stream decodes to woven frames that ffmpeg marks
+    interlaced, the Y4M muxer writes that as It or Ib, and libvmaf refuses
+    the file. The woven frame is what gets scored, against the source frame
+    it was cut from, so the tag is dropped rather than the fields taken apart;
+    a progressive frame passes through unchanged."""
+    chain = ["setfield=prog"]
+    for i in range(0, len(vf) - 1, 2):
+        if vf[i] == "-vf":
+            chain.append(vf[i + 1])
+    return ["-vf", ",".join(chain)]
+
+
 def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
     """One libvmaf pass of a bitstream against its source, both at 10-bit and
     fitted to the display by `vf`, writing js. Returns the parsed JSON, or None
@@ -420,6 +544,7 @@ def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
         return None
     if not coded_size_is(bitstream, sw, sh_):
         return None
+    vf = _progressive_vf(vf)
     d = tempfile.mkdtemp(prefix="v1.", dir=work)
     dec = os.path.join(d, "dec.y4m")
     os.mkfifo(dec)
@@ -469,7 +594,7 @@ def v1_pass(bitstream, src_path, work, js, model_args, vf, extra=()):
             return None
         with open(js) as f:
             jj = json.load(f)
-        n = _packets(bitstream)
+        n = _coded_frames(bitstream)
         if n is None or len(jj.get("frames", ())) < -(-n // max(1, SUBSAMPLE)):
             return None                 # libvmaf scored fewer frames than were coded
         return jj
@@ -560,7 +685,7 @@ def _v0_of(bitstream, src_path, work, src_id=None):
     # that cannot code the clip rather than as a harness that threw the clip
     # away. Passthrough can neither drop nor duplicate, so it is right wherever
     # the rates already agreed too.
-    sh(f'ffmpeg -v error -y {_FF_T} -i "{bitstream}" -fps_mode passthrough '
+    sh(f'ffmpeg -v error -y {_FF_T} -i "{bitstream}" -fps_mode passthrough -vf setfield=prog '
        f'-pix_fmt {DEC_PIXFMT}{strict} "{dec}"')
     binary = os.environ.get("VMAF", "vmaf")
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
@@ -574,7 +699,7 @@ def _v0_of(bitstream, src_path, work, src_id=None):
         ref = dec + ".ref.y4m"
         os.mkfifo(ref)
         conv = subprocess.Popen(
-            ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path,
+            ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path, "-vf", "setfield=prog",
              "-pix_fmt", DEC_PIXFMT] + (["-strict", "-1"] if DEC_PIXFMT != "yuv420p" else [])
             + ["-f", "yuv4mpegpipe", ref],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
