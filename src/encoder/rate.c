@@ -1137,8 +1137,128 @@ static double rcp_vbv_scale_eff(const yah264_encoder_t *e, int type)
 }
 
 /* Commit one popped entry's actuals into the committed ledger. */
+/* After a step of more than 3x. The retarget moves the operating point by
+ * 6 log2(1/r), the move that is right when a frame's bits go as 1/qscale. On
+ * real content they fall faster with the QP: foreman and bbb spend a tenth of
+ * the bits about 9 QP up, not 20, so a 10x step down landed some 10 QP too
+ * coarse, a step up as far too fine, and the ledger took seconds to walk
+ * back. So a large step lands at 6 log2(1/r) / RT_FIT_K0, and then the
+ * content's own slope is read off the frames: a group coded before the step
+ * and the first group coded at the new QP give k (bits go as qscale^-k,
+ * k held to [1, 3]), and the ledger, its references and its in-flight
+ * predictor shift so that group's spend would have hit the new target. A
+ * second group, nearer the target, refits once more. What the measured
+ * frames over- or under-spent is forgiven at each refit, since the move
+ * answers it. A group is bframes + 1 frames with I frames left out of its
+ * means. Coded bits and QPs only, so a replay refits the same way. */
+#define RT_HIST 128
+#define RT_FIT_KMIN 1.0
+#define RT_FIT_KMAX 3.0
+/* the slope a landing assumes before any frame at the new rate is coded;
+ * the clips measured read 1.15 to 2.3 across a 10x step */
+#define RT_FIT_K0 1.5
+/* refits: the second, from the group after the first, reads the slope
+ * nearer the target */
+#define RT_FIT_STAGES 2
+
+/* the next decide is the first at the moved QP. a frame's bits can reach
+ * the ledger as many entries from its own as there are frames in flight, so
+ * the group measured after a move stands that far, and at least a group,
+ * from it (and the group before the step as far before it) */
+static void rc_fit_mark(yah264_encoder_t *e)
+{
+    int g = e->param.bframes + 1 > 16 ? 16 : e->param.bframes + 1;
+    e->rt_fit_seq = atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1;
+    e->rt_fit_skip = e->rcp_n > g ? (e->rcp_n > 40 ? 40 : e->rcp_n) : g;
+}
+
+static void rc_fit_shift(yah264_encoder_t *e, double shift)
+{
+    double f = pow(2.0, shift / 6.0);
+    e->rfm_work *= f;
+    e->rfm_rec_work *= f;
+    e->rfm_rec_lost *= f;
+    for (int t = 0; t < 3; t++) {
+        e->bm_rf2kc.k[t] *= f;
+        if (e->slew_set[t]) e->slew_ref[t] += shift;
+    }
+    e->itrk_qp += shift * e->itrk_wt;
+    for (int j = 0; j < e->last_ref_n; j++)
+        e->last_ref_qp[j] += shift;
+    e->abr_qp += shift;
+    if (e->abr_qp < 1) e->abr_qp = 1;
+    if (e->abr_qp > 51) e->abr_qp = 51;
+}
+
+static int rc_fit_group(const yah264_encoder_t *e, unsigned from, int g, double *bits, double *qp)
+{
+    double b = 0.0, q = 0.0;
+    int n = 0, seen = 0;
+    int have = e->rt_hn < RT_HIST ? e->rt_hn : RT_HIST;
+    for (int i = 0; i < have; i++) {
+        int d = (int)(e->rt_hist[i].seq - from);
+        if (d < 0 || d >= g) continue;
+        seen++;
+        if (e->rt_hist[i].type == 0) continue;
+        b += e->rt_hist[i].bits;
+        q += e->rt_hist[i].fqp;
+        n++;
+    }
+    if (seen != g || n == 0) return 0;
+    *bits = b / n;
+    *qp = q / n;
+    return 1;
+}
+
+static void rc_fit_step(yah264_encoder_t *e, const struct rcp_pend *p)
+{
+    unsigned g = (unsigned)e->param.bframes + 1u, sk = (unsigned)e->rt_fit_skip;
+    if (g > 16u) g = 16u;
+    if ((int)(p->seq - (e->rt_fit_seq + sk + g - 1u)) < 0)
+        return;
+    double qa = e->rt_fit_qa, ba = e->rt_fit_ba, qb, bb;
+    if (e->rt_fit == 1 && !rc_fit_group(e, e->rt_fit_seq - sk - g, (int)g, &ba, &qa)) {
+        e->rt_fit = 0;
+        return;
+    }
+    if (!rc_fit_group(e, e->rt_fit_seq + sk, (int)g, &bb, &qb) || !(ba > 0.0) || !(bb > 0.0)) {
+        e->rt_fit = 0;
+        return;
+    }
+    /* the slope between the two newest points; a few QP apart, frame-to-frame
+     * noise would swamp it, and the last one stands */
+    double k = e->rt_fit_k;
+    if (fabs(qb - qa) >= 3.0) {
+        k = -6.0 * log2(bb / ba) / (qb - qa);
+        if (!isfinite(k)) k = e->rt_fit_k;
+    }
+    if (k < RT_FIT_KMIN) k = RT_FIT_KMIN;
+    if (k > RT_FIT_KMAX) k = RT_FIT_KMAX;
+    rc_fit_shift(e, 6.0 / k * log2(bb / e->abr_target_bpf));
+    /* what the frames spent while the slope was measured is forgiven: the
+     * fit has moved the operating point for it, and the feedback answering
+     * it as well would overshoot the other way */
+    e->abr_cum_actual = e->abr_cum_target - e->rt_fit_bal;
+    e->rt_fit_k = k;
+    e->rt_fit_qa = qb;
+    e->rt_fit_ba = bb;
+    if (e->rt_fit++ >= RT_FIT_STAGES)
+        e->rt_fit = 0;
+    else
+        rc_fit_mark(e);
+}
+
 static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
 {
+    if (e->abr_rf2) {
+        int i = e->rt_hn++ % RT_HIST;
+        e->rt_hist[i].seq = p->seq;
+        e->rt_hist[i].type = p->type;
+        e->rt_hist[i].fqp = (int16_t)p->fqp;
+        e->rt_hist[i].bits = p->bits;
+        if (e->rt_fit)
+            rc_fit_step(e, p);
+    }
     if (e->vbv_on) {
         double qscale = pow(2.0, (p->fqp - 12) / 6.0);
         /* First measurement per type SNAPS (see the abr note below). The QP
@@ -3656,6 +3776,14 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
          * debt, repaid by several QP of feedback through the first second */
         for (int i = 0; i < e->rcp_n; i++)
             e->rcp[(e->rcp_head + i) % RCP_MAX].rs *= r;
+        double prior = 0.0;
+        if ((r < 1.0 / 3.0 || r > 3.0) && e->abr_rf2 && !e->rc_shared) {
+            e->rt_fit = 1;
+            e->rt_fit_k = RT_FIT_K0 > RT_FIT_KMIN ? RT_FIT_K0 : RT_FIT_KMIN;
+            prior = dq / RT_FIT_K0 - dq;
+        }
+        if (e->rt_fit)
+            rc_fit_mark(e);
         for (int t = 0; t < 3; t++)
             if (e->slew_set[t]) e->slew_ref[t] += dq;
         e->itrk_qp += dq * e->itrk_wt;
@@ -3680,8 +3808,16 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         if (bal > cap) e->abr_cum_actual += bal - cap;
         if (bal < -cap) e->abr_cum_actual += bal + cap;
         e->abr_target_bpf = nb;
+        if (e->rt_fit == 1)
+            e->rt_fit_bal = e->abr_cum_target - e->abr_cum_actual;
         e->rt_owed_end = e->rfm_owed + e->rck.rfm_fb_t * nb * fps;
         e->param.rc.bitrate = kbps;
+        if (prior != 0.0) {
+            rc_fit_shift(e, prior);
+            int q2 = e->qp + (int)lround(prior);
+            e->qp = qp_bound(e, q2 < 0 ? 0 : q2 > 51 ? 51 : q2);
+            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+        }
     }
     if (maxrate > 0 && e->vbv_on) {
         e->vbv.rate = (double)maxrate * 1000.0 / fps / fdiv;

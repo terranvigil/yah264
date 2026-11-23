@@ -52,29 +52,42 @@ The rate control's ledger is retargeted, not reset. At the landing decision,
 with r the new per-frame target over the old one:
 
 - the bits spent and the bits owed so far are both scaled by r, so an over-
-  or under-spend carries over as the same fraction of the new rate;
-- what the rate control has learned about the content is kept, so the
-  operating point moves straight to the one that spends the new target;
-- frames already decided but not yet coded keep their predicted size and owe
-  the new target from then on;
+  or under-spend carries over as the same fraction of the new rate. Frames
+  already decided when the change lands, coded or still in flight, count the
+  same way, at r times their size;
+- what the rate control has learned about the content is kept, and the
+  operating point moves by 6 log2(1/r) QP, the move that spends the new
+  target if a frame's bits go as 1/qscale;
 - the slew reference and the intra-frame track move by the same QP step as
   the operating point, so the slew still limits what the content does and not
   the step the caller asked for;
 - a buffer keeps its fill as a fraction of its size and refills at the new
   maxrate from the next frame;
-- the balance carried into the new rate, bits owed minus bits spent with the
-  frames already decided counted at their predicted size, is held to at most
-  one second of the new target, and the rest is forgiven.
+- the balance carried into the new rate, bits owed minus bits spent, is held
+  to at most one second of the new target, and the rest is forgiven.
+
+A step of more than 3x either way lands differently, because on real
+content a frame's bits fall faster than 1/qscale: a tenth of the bits is
+often 9 to 12 QP away, not 20. Such a step moves the operating point by
+6 log2(1/r) / 1.5 QP, and then reads the content's own slope off the frames
+it codes: the mean bits and QP of a group of frames coded before the step
+and of the first group coded after it give the exponent a in bits ~
+qscale^-a, held to between 1 and 3, and the operating point moves again to
+where that group would have spent the new target. One more group, nearer
+the target, refits once. A group is one GOP of B frames plus its anchor,
+leaving out I frames; each group stands as many frames from a QP move as
+the encoder has in flight. What the measured frames over- or under-spent is
+forgiven at each refit.
 
 For two seconds after a change the rate control may move its QP a whole step
 per anchor, as it does after the opening, while the content's cost at the
 new rate is still unproven.
 
-With a buffer of about a second, a step lands on its new rate within the
-first half second. With no buffer, a step down settles more slowly: what the
-rate control learned about the content at the old rate prices it at the new
-one, and that estimate is off by a few QP after a large step until frames at
-the new rate outweigh it.
+With a buffer of about a second, or with no buffer after a step of 3x or
+less, a step lands near its new rate within the first second. With no
+buffer, a step of more than 3x lands within the first half second or so,
+and as the ledger catches up with the content over the next second or two
+it can run over its rate by a quarter or more.
 
 ### What is refused, and why
 
@@ -236,7 +249,9 @@ end, so a caller built against an older header keeps working. Neither touches
   was handed in before its frame. A live run's `--control-out` log, fed back
   through `--control`, reproduces the live run's stream and stats. With more
   threads the landing frames and the echo are the same, and byte identity is
-  best effort, as everywhere else.
+  best effort, as everywhere else. A log replays byte for byte only on a build
+  that applies rate changes the same way; its landing frames and echo are
+  the same on any build.
 - A stream with events decodes to the encoder's own reconstruction under the
   reference decoders, and under `--nal-hrd vbr` passes the stream's own HRD
   check.

@@ -982,6 +982,15 @@ struct yah264_encoder {
     int      slew_set[3];        /* slew_ref[t] holds a value, which may be negative */
     double   rt_owed_end;        /* a live retarget's fast-slew window ends when rfm_owed passes this; 0 = none */
     int      rt_done;            /* a live retarget happened: the references go by their flags, not their sign */
+    /* the slope refit after a large live step (rate.c, rc_fit_step) */
+    int      rt_fit;             /* armed: a step of more than 3x waits for its frames */
+    unsigned rt_fit_seq;         /* the first decide under the new target */
+    double   rt_fit_k;           /* the last slope fitted */
+    double   rt_fit_qa, rt_fit_ba;   /* the last group measured: mean QP and bits */
+    double   rt_fit_bal;         /* the ledger balance the step landed with */
+    int      rt_fit_skip;        /* entries left between a QP move and the group measured after it */
+    struct { unsigned seq; int8_t type; int16_t fqp; double bits; } rt_hist[128];
+    int      rt_hn;              /* frames accounted into rt_hist */
     int      last_ref_n;         /* how many of last_ref_qp hold a value */
     struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
                                 * (in-flight prediction); have = meas */

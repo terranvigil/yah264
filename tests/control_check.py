@@ -18,6 +18,12 @@ On a synthetic 176x144 clip, no corpus and no ffmpeg needed:
    malformed one stops the encode.
 3. --control with no events (a file of comments) gives the stream of an
    encode without the option, and the stats lines carry no "control" key.
+4. a live run with 10x steps in plain ABR, where the rate control refits the
+   content's slope from the frames it codes, replays from its log at one
+   thread. Given the corpus directory and foreman_cif.y4m in it, a 10x step
+   down lands within 30% of its target over its first second.
+
+    python3 tests/control_check.py path/to/cli/yah264 [tests/corpus]
 """
 import json, os, subprocess, sys, tempfile, time
 
@@ -414,6 +420,56 @@ def main():
             fails += 1
         else:
             print("  ok   a 65536-event burst keeps every applied record, and replays")
+
+        # 4. large steps, live and replayed: the rebuild reads only coded
+        # history, so the recorded log gives the same bytes
+        ls, lsl, lsf = os.path.join(d, "ls.264"), os.path.join(d, "ls.ctl"), os.path.join(d, "ls.json")
+        abr = ["--threads", "1", "--no-progress", "--level", "4", "--bitrate", "300"]
+        rd, wr = os.pipe()
+        p = subprocess.Popen([enc, "--input-y4m", "-"] + abr + ["--control-fd", str(rd), "--control-out", lsl,
+                                                               "--frame-stats", lsf, "-o", ls],
+                             pass_fds=(rd,), stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(rd)
+        sched = {40: ["next rate bitrate=30"], 80: ["next rate bitrate=300"]}
+        p.stdin.write(frames[:hdr_end])
+        for n in range(NF):
+            for line in sched.get(n, []):
+                os.write(wr, (line + "\n").encode())
+            p.stdin.write(frames[hdr_end + n * fsz: hdr_end + (n + 1) * fsz])
+            p.stdin.flush()
+            time.sleep(0.002)
+        os.close(wr)
+        p.stdin.close()
+        _, err = p.communicate()
+        log = [l.strip() for l in open(lsl)] if os.path.exists(lsl) else []
+        rp, rfs = os.path.join(d, "ls2.264"), os.path.join(d, "ls2.json")
+        r = run(enc, ["--input-y4m", src] + abr + ["--control", lsl, "-o", rp, "--frame-stats", rfs])
+        if p.returncode != 0 or len(log) != 3 or r.returncode != 0 \
+                or open(rp, "rb").read() != open(ls, "rb").read() or open(rfs).read() != open(lsf).read():
+            print("FAIL a live run with 10x steps did not replay: status %d/%d, log %r"
+                  % (p.returncode, r.returncode, log))
+            fails += 1
+        else:
+            print("  ok   a live run with 10x steps replays byte for byte")
+
+        fore = os.path.join(sys.argv[2], "foreman_cif.y4m") if len(sys.argv) > 2 else ""
+        if fore and os.path.exists(fore):
+            fl, ff = os.path.join(d, "fore.ctl"), os.path.join(d, "fore.json")
+            with open(fl, "w") as f:
+                f.write("100 rate bitrate=300\n200 rate bitrate=3000\n")
+            r = run(enc, ["--input-y4m", fore, "--threads", "1", "--no-progress", "--level", "3",
+                          "--bitrate", "3000", "--control", fl, "--frame-stats", ff,
+                          "-o", os.path.join(d, "fore.264")])
+            rows = [json.loads(l) for l in open(ff)] if r.returncode == 0 else []
+            at = [x["frame"] for x in rows if any(c.startswith("100 ") for c in x.get("control", []))]
+            by = {x["frame"]: x["bytes"] * 8 for x in rows}
+            got = sum(by.get(i, 0) for i in range(at[0], at[0] + 30)) / 1001.0 if at else 0.0
+            if not at or abs(got / 300.0 - 1) > 0.30:
+                print("FAIL foreman, 10x step down: %.0f kbps over its first second, target 300" % got)
+                fails += 1
+            else:
+                print("  ok   foreman, 10x step down: %.0f kbps over its first second (target 300)" % got)
 
         # --control-out alone records nothing, so it is refused
         r = run(enc, base + ["--control-out", os.path.join(d, "alone.ctl"), "-o", os.path.join(d, "alone.264")])

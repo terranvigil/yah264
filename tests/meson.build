@@ -118,10 +118,12 @@ if rc_python.found()
 endif
 
 # Live control through the CLI: bad --control logs refused before a byte is
-# written, a live --control-fd run replayed from its --control-out log
+# written, a live --control-fd run replayed from its --control-out log, and,
+# when tests/corpus has foreman, how a 10x step down lands
 if rc_python.found()
   test('control_cli', rc_python,
-    args : [files('control_check.py'), yah264_cli_exe],
+    args : [files('control_check.py'), yah264_cli_exe,
+            meson.project_source_root() / 'tests' / 'corpus'],
     timeout : 300)
 endif
 

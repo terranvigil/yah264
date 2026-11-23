@@ -497,6 +497,34 @@ int main(void)
         CHECK(r.st[45].qp > r.st[35].qp + 6);
         close_enc(&r);
     }
+
+    /* 5b. plain ABR, 10x steps down and back up: the refit after each reads
+     * only coded frames, so the bytes are the same whether the events are
+     * handed in up front or each just before its frame */
+    {
+        unsigned char *big = NULL; long big_len = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            base_param(&p, YAH264_RC_ABR);
+            p.rc.vbv_maxrate = p.rc.vbv_bufsize = 0;
+            p.bframes = 3;
+            CHECK(open_enc(&r, &p) == 0);
+            if (pass == 0) {
+                CHECK(ev_rate(r.e, 30, 40, 0, 0) == YAH264_CTL_OK);
+                CHECK(ev_rate(r.e, 55, 400, 0, 0) == YAH264_CTL_OK);
+            }
+            for (int i = 0; i < NF; i++) {
+                if (pass == 1 && i == 30) CHECK(ev_rate(r.e, 30, 40, 0, 0) == YAH264_CTL_OK);
+                if (pass == 1 && i == 55) CHECK(ev_rate(r.e, 55, 400, 0, 0) == YAH264_CTL_OK);
+                CHECK(push(&r) == 0);
+            }
+            flush(&r);
+            CHECK(r.ndone == 2 && r.done[0].applied_frame >= 30 && r.done[1].applied_frame >= 55);
+            if (pass == 0) { big = r.buf; big_len = r.len; r.buf = NULL; }
+            else CHECK(r.len == big_len && !memcmp(r.buf, big, (size_t)big_len));
+            close_enc(&r);
+        }
+        free(big);
+    }
     free(ref);
 
     /* 6. the shared log grammar */
