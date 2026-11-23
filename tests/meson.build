@@ -72,6 +72,14 @@ test_darkaq = executable('test_darkaq',
   dependencies : yah264_dep)
 test('darkaq', test_darkaq, timeout : test_timeout_floor)
 
+# a large live rate step, from the rate control's own state: the refit ends
+# when a later step replaces it, a buffered step up never refits, and the
+# whole-step slew window closes on time after the short memory has run
+test_ratestep = executable('test_ratestep',
+  'test_ratestep.c',
+  dependencies : yah264_dep)
+test('ratestep', test_ratestep, timeout : test_timeout_floor)
+
 test_cutscan = executable('test_cutscan',
   'test_cutscan.c',
   dependencies : yah264_dep)

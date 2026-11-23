@@ -996,7 +996,7 @@ struct yah264_encoder {
     unsigned rt_fit_b0, rt_fit_lo;   /* group B's first frame; the older point's first frame */
     int      rt_fit_bset;        /* group B has begun */
     int      rcp_cur_cut;        /* the key being coded is the content's scene cut */
-    int      rt_hn;              /* frames accounted into rt_hist */
+    unsigned rt_hn;              /* frames accounted into rt_hist (wraps harmlessly past RT_HIST) */
     int      last_ref_n;         /* how many of last_ref_qp hold a value */
     struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
                                 * (in-flight prediction); have = meas */

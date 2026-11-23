@@ -66,7 +66,8 @@ with r the new per-frame target over the old one:
 - the balance carried into the new rate, bits owed minus bits spent, is held
   to at most one second of the new target, and the rest is forgiven.
 
-A step of more than 3x either way lands differently, because on real
+In the rate-factor model (B frames or a lookahead on, the default), a step
+of more than 3x either way lands differently, because on real
 content a frame's bits fall faster than 1/qscale: a tenth of the bits is
 often 9 to 12 QP away, not 20. Such a step moves the operating point by
 6 log2(1/r) / 1.5 QP, and then reads the content's own slope off the frames
@@ -82,9 +83,11 @@ flight, and a scene cut in a group or between the two stops the refit,
 leaving the moves already made. What the measured frames over- or under-spent is
 forgiven at each refit, and for two seconds after the last one the rate
 control's ledger runs on a memory of about a second, so the frames at the
-new rate soon outweigh those coded at the old one. With a buffer, only a
-step down is handled this way; a step up is left to the buffer, whose fill
-already paces it.
+new rate soon outweigh those coded at the old one. Any later rate change
+ends a refit in progress. With a buffer, only a step down is handled this
+way; a step up is left to the buffer, whose fill already paces it. The
+per-frame model (`--tune zerolatency`, or `--bframes 0` with no lookahead)
+moves straight by 6 log2(1/r) and never refits.
 
 For two seconds after a change the rate control may move its QP a whole step
 per anchor, as it does after the opening, while the content's cost at the

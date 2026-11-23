@@ -67,4 +67,12 @@ double abr_pbrate_scale(const yah264_encoder_t *e);
 int crf_cplx_env(void);
 int vbv_bounded_now(const yah264_encoder_t *e);
 
+/* the two seconds after a live retarget, when the ledger may move a whole
+ * step per anchor; measured in the ledger's age, so owed bits the short
+ * memory after a large step dropped (rfm_drop) still count */
+static inline int rc_rt_slew_open(const yah264_encoder_t *e, double wanted)
+{
+    return e->rt_owed_end > 0 && wanted + e->rfm_drop < e->rt_owed_end;
+}
+
 #endif

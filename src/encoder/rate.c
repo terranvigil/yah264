@@ -1136,7 +1136,6 @@ static double rcp_vbv_scale_eff(const yah264_encoder_t *e, int type)
     return vs;
 }
 
-/* Commit one popped entry's actuals into the committed ledger. */
 /* After a step of more than 3x. The retarget moves the operating point by
  * 6 log2(1/r), the move that is right when a frame's bits go as 1/qscale. On
  * real content they fall faster with the QP: foreman and bbb spend a tenth of
@@ -1183,6 +1182,7 @@ static void rc_fast_step(yah264_encoder_t *e)
     e->rfm_drop += (1.0 - d) * e->rfm_owed;
     e->rfm_work *= d;
     e->rfm_owed *= d;
+    e->rfm_rec_lost *= d;   /* a later restore adds it back to the decayed work */
     e->rt_fast--;
 }
 
@@ -1214,6 +1214,10 @@ static void rc_fit_shift(yah264_encoder_t *e, double shift)
     e->abr_qp += shift;
     if (e->abr_qp < 1) e->abr_qp = 1;
     if (e->abr_qp > 51) e->abr_qp = 51;
+    /* a B decided before the next anchor codes on this base */
+    int q = e->qp + (int)lround(shift);
+    e->qp = qp_bound(e, q < 0 ? 0 : q > 51 ? 51 : q);
+    e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 }
 
 /* the frames of decide sequence [lo, hi) in the history: the mean bits and
@@ -1324,6 +1328,7 @@ static void rc_fit_step(yah264_encoder_t *e, const struct rcp_pend *p)
         rc_fit_mark(e);
 }
 
+/* Commit one popped entry's actuals into the committed ledger. */
 static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
 {
     if (e->abr_rf2) {
@@ -2523,7 +2528,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                         }
                         /* after a live retarget the ledger follows at a whole step
                          * while the content's cost at the new rate is unproven */
-                        if (e->rt_owed_end > 0 && wanted < e->rt_owed_end && sl < e->rck.rfm_slew_fb)
+                        if (rc_rt_slew_open(e, wanted) && sl < e->rck.rfm_slew_fb)
                             sl = e->rck.rfm_slew_fb;
                         qp_lim = rfm_slew_qp(e, qp_led, e->slew_ref[1], sl);
                         /* the miss only lifts the opening slew, never the ordinary one */
@@ -3868,10 +3873,16 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         /* with a buffer, a step up is left to the buffer, whose fill already
          * paces it: refit there, bbb's CBR 10x step up ran its first second
          * 60% over */
+        e->rt_fit_bal *= r;
         if ((r < 1.0 / 3.0 || r > 3.0) && e->abr_rf2 && !e->rc_shared && (!e->vbv_on || r < 1.0)) {
             e->rt_fit = 1;
             e->rt_fit_k = RT_FIT_K0 > RT_FIT_KMIN ? RT_FIT_K0 : RT_FIT_KMIN;
             prior = dq / RT_FIT_K0 - dq;
+        } else {
+            /* any other step ends a refit and its short memory: they were
+             * measuring the move this step has replaced */
+            e->rt_fit = 0;
+            e->rt_fast = 0;
         }
         if (e->rt_fit)
             rc_fit_mark(e);
@@ -3901,14 +3912,10 @@ void rc_ctl_retarget(yah264_encoder_t *e, int kbps, int maxrate, int bufsize)
         e->abr_target_bpf = nb;
         if (e->rt_fit == 1)
             e->rt_fit_bal = e->abr_cum_target - e->abr_cum_actual;
-        e->rt_owed_end = e->rfm_owed + e->rck.rfm_fb_t * nb * fps;
+        e->rt_owed_end = e->rfm_owed + e->rfm_drop + e->rck.rfm_fb_t * nb * fps;
         e->param.rc.bitrate = kbps;
-        if (prior != 0.0) {
+        if (prior != 0.0)
             rc_fit_shift(e, prior);
-            int q2 = e->qp + (int)lround(prior);
-            e->qp = qp_bound(e, q2 < 0 ? 0 : q2 > 51 ? 51 : q2);
-            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
-        }
     }
     if (maxrate > 0 && e->vbv_on) {
         e->vbv.rate = (double)maxrate * 1000.0 / fps / fdiv;
