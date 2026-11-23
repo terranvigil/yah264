@@ -3234,8 +3234,8 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend, c
          * no finer than TP_UPROBE QP under its pass-1 QP, so the first ones
          * measure their bias near the evidence. At the plan, the first grain
          * frame after the I cost 726 kbit of a 1.5 Mbit budget, and nothing
-         * after it could land the clip. The hold stays while their bias reads
-         * TP_UFAR or more: the correction still prices the frames still to
+         * after it could land the clip. Once their bias has read TP_UFAR or
+         * more (latched), the hold stays: the correction still prices the frames still to
          * come at k, so released, the next one went 6 QP under pass 1 and
          * cost a third of the budget (grain10 then black, 300 kbit/s, +29%). */
         if ((e->tp_ucnt < TP_LOWARM || e->tp_ufar) && tp_unfloored_content(e, idx)) {

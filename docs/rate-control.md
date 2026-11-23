@@ -277,9 +277,9 @@ them at most 15 QP under it, and the runtime prices them at their own measured
 cost as they land. When the floor stays off, such frames code no finer than 4 QP
 under pass 1 until two of them have landed, on any clip. Once they cost 4 times
 the model or more, they stay held there and the correction's band widens by
-what they cost. On every picture the floor doesn't hold, including those after
-a floored plan's last floored frame, the correction lowers the QP by at most 2,
-and an overspent budget holds the picture at the top of its band.
+what they cost. On every picture of a plan the floor left off, and on those
+after a floored plan's last floored frame, the correction lowers the QP by at
+most 2, and an overspent budget holds the picture at the top of its band.
 `--pass 3` reads the records and writes them back from a
 real encode, so a further pass refines against it. Pass 2 needs the same
 `--frames`, `--keyint` and `--tff`/`--bff` as pass 1. It refuses a file from
