@@ -142,14 +142,14 @@ RD on all combinations.
 | `--direct auto` as the default | median 0.0% against spatial on the 14-clip CRF band, with station2 -33%, stockholm -14%, in_to_tree -7%, shields -5% and bus -4%. The worst clip is sunflower at +3.6%, all of it on the two lowest rungs |
 | Per-slice vote over a fixed mode | fixed temporal ranges from -26.5% to +18.5% against x264 medium depending on the clip, as the table below shows. Under the vote sunflower's loss is about +1%, and station2 still gains |
 | Per-macroblock temporal legality | the clause applies to each derivation. Enforcing it per frame wasted the mode on almost every frame |
-| No slice-level guard under auto | adding it lost on every clip it touched: station2 +9.7%, stockholm +3.6%, in_to_tree +2.5%, sunflower +1.7% |
+| No slice-level guard under auto | adding it lost on every clip it touched, station2 worst |
 | B_8x8 on, behind QGATE=10 | better on 10 of 12 clips on the CRF band for 1.1-1.3% of single-thread wall (median -0.33%, worst +0.02%). The board's quality leg rests on it |
 | QGATE 10 over 6 | 6 costs 2-4% of wall where 10 costs 1.1-1.3%. It buys about twice the gain, which is more than the quality bar needs. 16 is past the knee, where foreman goes positive |
 | The rate charge with the gate | without it the gate costs half a BD point at its mildest setting. With it the cost is three hundredths |
 | B_8x8 searched after the skip exit | searching before the exit throws away 19-30% of all quadrant searches. Quality is the same either way |
 | No 16x8/8x16 at medium by default | on VMAF v1 it helps every band clip but costs 13-21% more instructions |
 | Mid-exit on non-reference B's only | errors in a reference B propagate. Byte-identical on the CRF band, worst +0.89% on the ABR band |
-| Direct-competitive precondition on the exit | without it the exit skips too often at low ABR rates: akiyo +2.21%, park_joy +1.56% |
+| Direct-competitive precondition on the exit | without it the exit skips too often at low ABR rates, and akiyo and park_joy lose |
 | B intra margin 0.75x | median +0.01% at matched rate, for 0.5-2.5% of wall at 12 threads. A tighter margin buys nothing more |
 
 These modes are expensive in any encoder. On four of our clips, x264 spends
@@ -171,12 +171,12 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
 
 | idea | why not |
 |---|---|
-| Cost-driven B placement (pairwise, path-cost at integer and half pel) | all three demoted too many B-frames, +8-12% BD. The lowres diamond starts from zero and overestimates the longest-distance leg |
+| Cost-driven B placement (pairwise, path-cost at integer and half pel) | all three demoted too many B-frames and lost clearly. The lowres diamond starts from zero and overestimates the longest-distance leg |
 | `--b-bias` below 0 | -50 removes most B-frames and costs 11-54% |
 | Predict the better direct mode from prediction SSD | coastguard predicts better under temporal but codes worse. samsung does the reverse |
 | Predict it from the direct share | the share barely moves, 86.4% against 86.7%, while BD moves 6 points |
 | Decide direct mode per shot in the lookahead, on lowres bi-prediction SATD | rho -0.76 in sample, then 0 for 3 out of sample: stockholm +9.0%, shields +9.5%, parkrun +4.2%. Out-of-sample rho was 0.000 |
-| The same lowres vote scored by distance from the lowres search result | rho -0.06. Its spatial arm is biased toward exactly the content temporal suits |
+| The same lowres vote scored by distance from the lowres search result | it doesn't predict the better mode either. Its spatial arm is biased toward exactly the content temporal suits |
 | `--direct temporal` as the default | sunflower +18.5% against spatial's -7.7% |
 | Use a scaled lowres cost as the skip exit's SATD precondition | the ratio's median ranges from 1.4 to 4.1 across clips. It catches 32-49% at 23-38% false positives |
 | Commit B_Skip before motion search on a motion signal (lowres-static, mb-tree leaf, neighbor-skip) | every such gate also admits 10-95% of macroblocks whose searches then win by 8-25% SATD |
@@ -184,7 +184,7 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
 | Propagation-guarded mid-exit for reference B's (`Y264_B_SKIP_EXIT=3`) | quality-neutral (worst +0.07%) but buys only 0.3-0.5% of wall |
 | `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls, which lost 2.7 VMAF-NEG points on sunflower's bottom rung. The absolute form moves the damage between clips. Medium still runs mode 2 on pictures 1920 or more on the longer side |
 | `--rd-surv-rank` (RD only the top-ranked survivors) | +0.63% band median |
-| Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. The B_8x8 gain drops from -1.27% to -0.81% |
+| Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. It gives back over a third of the B_8x8 gain |
 
 ## Open questions
 

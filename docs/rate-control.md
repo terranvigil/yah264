@@ -561,19 +561,19 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Idea | Why not |
 | --- | --- |
 | Burst-lagged anchor decides | twice the rate deviation of zero-lag anchors |
-| Lag with in-flight frames predicted at their type's mean | sintel +14.4% BD because a black opening credited each in-flight frame at the mean |
-| Lag granted at `--ref 3` without width | 7 of 11 clips lose (akiyo +20.66%) and sintel's rate control fails (+212% over target) |
-| Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals. samsung +3.31% for the least speed |
+| Lag with in-flight frames predicted at their type's mean | a large loss on sintel, because a black opening credited each in-flight frame at the mean |
+| Lag granted at `--ref 3` without width | most clips lose, akiyo worst, and sintel's rate control fails (+212% over target) |
+| Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals. samsung loses bits for the smallest speed gain |
 | A bit-neutral launch split | analysis consumes the QP from its first statement. At most 1.4% of wall is QP-independent |
-| Lowres intra energy as ABR decide complexity | park_joy -1.67%, akiyo +13.03%: near-zero inter cost on static content is a correct read |
-| Geometric blend of intra and inter cost | akiyo +22.06% |
+| Lowres intra energy as ABR decide complexity | a small gain on park_joy and a large loss on akiyo: near-zero inter cost on static content is a correct read |
+| Geometric blend of intra and inter cost | a large loss on akiyo |
 | A content term on the flat CRF base | +0.6 costs sintel 10%, -0.6 costs akiyo 1.6% |
 | Dropping the B cascade under CRF | ducks -8.92%, sintel +7.00%, no net |
 | An exit constraint on capped-CRF segments | never bound on 30 of 36 cells. Where it did, it cost a compliance cell and spent 600 kbit/s more |
 | Fill horizon 1 for capped CRF | underflows a cell at four threads |
 | `Y264_ABR_QCOMP` 0.7 | +45% BD |
-| Rate-aware lookahead cost consumed by mb-tree | mean +0.08%, foreman +0.91%, akiyo +1.36%. Pricing MV rate cuts propagation where mb-tree wants to boost |
-| Lowres SATD candidates in full-res decisions | +0.28% BD. The lookahead feeds frame-level decisions only |
+| Rate-aware lookahead cost consumed by mb-tree | a loss on the mean, largest on foreman and akiyo. Pricing MV rate cuts propagation where mb-tree wants to boost |
+| Lowres SATD candidates in full-res decisions | a small BD loss. The lookahead feeds frame-level decisions only |
 | A lookahead thread with no lead | 1.00-1.02x, and +1.5% to +10.6% wall on the clips the lead wins on |
 | Gating the lead on frame size | frame size doesn't predict the lead's gain. Three 720p clips of one size moved -15.2%, -12.3% and +0.8% in wall with the lead |
 
@@ -618,7 +618,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 - **Short single-GOP windows aren't quality measurements.** sintel's drain-split
   cost read +11.70% at 144 frames and +1.32% over 1152.
 - **`touchdown_420` can't be used in a BD round.** Three in-band ladders of the
-  same pair read +4.27%, +61.01% and +1.31%.
+  same pair disagree by tens of points.
 - **Read the VMAF band before believing a BD cell.** Pass `--no-cache` to
   bdcompare too, because its cache keys on the command string and a rebuild
   doesn't invalidate it.

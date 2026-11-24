@@ -16,7 +16,7 @@ Cross-encoder numbers are against x264 medium.
 |---|---|---|
 | `--tune animation` | adds four B frames and changes nothing else: seven at every preset with B frames, four at ultrafast. An explicit `--bframes` wins over it | B frames are the one tune element that helps both CGI clips: bbb -6.8%, sintel -1.0%, at neutral wall on bbb and 0.945x on sintel. Dropping back to five costs bbb 5.7% |
 | adaptive quantization | stays at the 0.4 default | on bbb and sita the default is best or within noise. Sita's best alternative is -0.25%. No fixed value suits the class, because sintel would gain 6.9% from AQ off while bbb loses 6.8% at the same setting |
-| mode-decision lambda | follows the mb-tree part of each macroblock's QP, on non-flat macroblocks only | at the frame QP, mb-tree's finer quantizer on static line art got priced into skip. Per-MB lambda takes about 45% off the hand-drawn gap to x264 and reads -2 to -3% median on the natural-video bands. bbb pays +3.1%, the one clip that does |
+| mode-decision lambda | follows the mb-tree part of each macroblock's QP, on non-flat macroblocks only | at the frame QP, mb-tree's finer quantizer on static line art got priced into skip. Per-MB lambda narrows the hand-drawn gap to x264 and gains on the natural-video bands. bbb is the one clip that pays |
 | psy-trellis on flat frames | the psy flat gate raises psy-trellis on frames where at least 75% of macroblocks are near-flat | it's a per-frame content gate. It fires on every frame of sintel and on no frame of the other corpus clips: sintel -5.6% to -9.0% at matched rate |
 | repeated frames | no special handling | held frames are already cheap. A bbb cut with half its frames repeated encodes 18% faster than the unique-frame cut |
 
@@ -42,14 +42,14 @@ the parity tables, the lead is about 3%.
 | more reference frames (`--ref 6`, `--ref 9`) | costs bbb 0.3-0.7% and sintel 1.4%. Sita -0.4% is inside noise |
 | `--aq-strength 0.6` | costs every animation clip: bbb +0.7-1.0%, sita +2.6%, sintel +5.9-7.3% |
 | psy-trellis 0.5 in the tune | +0.6% on bbb, byte-identical on sintel, where the flat gate already sets more |
-| stronger P and mid-frame skip exits | they misjudge flat content: +13% to +32% on sintel, +2.8% to +5.7% on bbb, for at most 1.2% of threaded wall |
+| stronger P and mid-frame skip exits | they misjudge flat content and cost bits on sintel and bbb, for at most 1.2% of threaded wall |
 | `Y264_B_SKIP_EXIT=3` | nearly free on quality but buys only 0.35% of wall at 12 threads |
 | limiting the skip exits to flat content | every exit costs bits on both animation clips. A gate would have nothing to keep |
 | stronger mb-tree to fix sita | strength 2.8 and 4.0 are far worse: their matched-rate VMAF-NEG deltas read -7.6 and -22.9 |
-| more intra blocks in P frames | +0.7% and +0.2% on sita: no gain |
+| more intra blocks in P frames | no gain on sita |
 | per-MB lambda on flat macroblocks only, or on negative offsets only | the hand-drawn win comes from the line-art minority. Restricting it to the flat majority kills it |
-| anchor-grade lambda on non-reference B frames | +2.2% |
-| a larger B-frame QP step of 2.0 | sita -2.6%, but ducks +10.0% and touchdown +6.1%. The best step depends on content |
+| anchor-grade lambda on non-reference B frames | it loses |
+| a larger B-frame QP step of 2.0 | sita gains, but ducks and touchdown lose more. The best step depends on content |
 | frame dedup or VFR machinery | repeats are already near-free in-codec |
 | screen-content tools (intra block copy, palette) | not in H.264 |
 
