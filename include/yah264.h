@@ -102,7 +102,7 @@ extern "C" {
 #endif
 
 #define YAH264_VERSION_MAJOR 0
-#define YAH264_VERSION_MINOR 1
+#define YAH264_VERSION_MINOR 2
 #define YAH264_VERSION_PATCH 0
 
 /* Chroma sampling (planar Y, Cb, Cr).
@@ -284,8 +284,13 @@ typedef struct {
  * through an ffmpeg wrapper built one field behind the library, and timed the
  * encode at 32x slower than the reference encoder. Nothing in the loader catches this: the
  * soname matched and every symbol resolved. The refusal at open is the
- * tripwire that case had none of. */
-#define YAH264_ABI_VERSION         3
+ * tripwire that case had none of.
+ *
+ * 4 = the parameter struct grows: idr_pic_id_base and explicit_set (with its
+ * YAH264_SET_* bits) are appended, and the live-control, status and HDR
+ * metadata calls are new. A struct built against an ABI 3 header has the old
+ * size, so yah264_encoder_open() refuses it; every caller must recompile. */
+#define YAH264_ABI_VERSION         4
 
 /* rc.method. CQP/CRF/ABR carry x264's values. 2PASS is ours; see above.   [x264-ok] */
 #define YAH264_RC_CQP              0

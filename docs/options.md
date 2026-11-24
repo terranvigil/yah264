@@ -1599,10 +1599,10 @@ available. No value quietly encodes something else.
 | `csp` | I400 1, I420 2, I422 6, I444 12 | x264's **I420 2, I422 6, I444 12** |
 | `subme` | 0 = fastest | 0 = the library default 10, the slowest; see below |
 
-`YAH264_ABI_VERSION` is 3. Assert on it if you want a build-time tripwire, and
+`YAH264_ABI_VERSION` is 4. Assert on it if you want a build-time tripwire, and
 `#ifndef` it if you also build against headers that predate it.
 
-At ABI 3 the first field of `yah264_param_t` is `size`.
+From ABI 3 on, the first field of `yah264_param_t` is `size`.
 `yah264_param_default()` writes it with `sizeof(yah264_param_t)`.
 `yah264_encoder_open()` refuses a struct whose `size` is not the library's own.
 A caller built against a different copy of the header is stopped at open

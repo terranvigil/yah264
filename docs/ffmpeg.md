@@ -77,7 +77,7 @@ The library builds in two forms. The CLI and the in-tree tools link the static
 one. The shared one is what gets installed. Both depths install side by
 side under different names. Each has its own pkg-config file, `yah264` or
 `yah264_10`, whose Cflags set `-DY264_BIT_DEPTH`. The soname is the ABI
-version, currently 3.
+version, currently 4.
 
 ```
 FFB=$(cd .. && pwd)/build/ffboard
