@@ -4,10 +4,10 @@ yah264 treats animation as two classes. Rendered 3D, such as Big Buck Bunny
 and Sintel, behaves differently from hand-drawn 2D, such as Sita Sings the
 Blues. We measure every animation change on both kinds, because a setting that
 helps one kind often costs the other. Against x264 medium we're far ahead on
-CGI and a few points ahead on hand-drawn.
+CGI and slightly behind on hand-drawn.
 
-All numbers here are BD-rate on VMAF-NEG (earlier metric), where negative is
-better. Self-A/Bs are against yah264's shipped default on the same binary.
+Numbers here are BD-rate on VMAF-NEG (earlier metric) unless they say VMAF v1.
+Negative is better. Self-A/Bs are against yah264's shipped default on the same binary.
 Cross-encoder numbers are against x264 medium.
 
 ## What yah264 does
@@ -22,13 +22,13 @@ Cross-encoder numbers are against x264 medium.
 
 ## Where it stands against x264 medium
 
-| clip | kind | BD-rate vs x264 medium |
+| clip | kind | BD-rate on VMAF v1 vs x264 medium |
 |---|---|--:|
-| bbb_720p | 3D CGI | -38.6% |
-| sita_720p | hand-drawn 2D | -3.9% |
+| bbb_720p | 3D CGI | -37.4% |
+| sita_720p | hand-drawn 2D | +1.9% |
 
 Both are short windows of 180 and 140 frames, read at CRF 30 to 42 with both
-encoders at two threads. Since a median over the two would read about -21%
+encoders at two threads. Since a median over the two would read about -18%
 and describe neither clip, we always quote animation results per clip.
 
 On the 10-minute Big Buck Bunny excerpt in the parity tables, scored on VMAF
