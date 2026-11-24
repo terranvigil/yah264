@@ -408,7 +408,7 @@ keyframe there is coded once at a low QP and then skipped through, while a
 refresh column is coded at the P frames' QP. The column beside the sweep's edge
 also can't predict its last 4 luma columns from where they were. In CRF on
 fourpeople the cost is +42%. Removing the motion bound, which breaks
-recovery, still leaves most of the cost, and most of that is the intra columns
+recovery, still leaves most of the cost. Most of that is the intra columns
 themselves. A lower QP on the refresh column made it worse at both offsets
 tried, 3 and 6.
 
