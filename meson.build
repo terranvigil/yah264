@@ -1,8 +1,8 @@
 project('yah264', 'c',
   # Keep in step with YAH264_VERSION_* in include/yah264.h, which is what
-  # yah264_version() is built from. 0.1.0 is the x264 enum renumbering: it
-  # broke the ABI (YAH264_ABI_VERSION 1) and callers must recompile.
-  version : '0.1.0',
+  # yah264_version() is built from. A release that changes the ABI moves
+  # YAH264_ABI_VERSION and the soversion below with it.
+  version : '0.2.0',
   license : 'GPL-2.0-or-later',
   default_options : [
     'c_std=c11',
@@ -432,6 +432,9 @@ endforeach
 # same mistake when the soname did NOT move -- a field added mid-struct inside
 # one ABI, which is the shape the 2026-09-19 board tripped over.
 #
+# 4 grows the parameter struct (idr_pic_id_base, explicit_set) and adds the
+# live-control and HDR calls, so a caller built against ABI 3 must recompile.
+#
 # Both depths are built and both are installed, under DIFFERENT names: the two
 # are no longer alternative builds of one library, they are two libraries a
 # single program links at once.
@@ -442,7 +445,7 @@ libyah264_both = both_libraries('yah264',
   include_directories : inc,
   dependencies : lib_deps,
   version : meson.project_version(),
-  soversion : '3',
+  soversion : '4',
   gnu_symbol_visibility : 'hidden',
   install : true)
 
@@ -453,7 +456,7 @@ libyah264_10_both = both_libraries('yah264_10',
   include_directories : inc,
   dependencies : lib_deps,
   version : meson.project_version(),
-  soversion : '3',
+  soversion : '4',
   gnu_symbol_visibility : 'hidden',
   install : true)
 
