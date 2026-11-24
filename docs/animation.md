@@ -56,9 +56,10 @@ capped VBR the two encoders are within 1% of each other.
 
 ## Open questions
 
-- **Hand-drawn leads by less than CGI.** On sita we're about 4% ahead, against
-  4.75% ahead on all-intra (`--keyint 1`). Inter coding still gives back a
-  little. Nothing we've found moves the B-frame share yet, and the obvious
+- **Hand-drawn trails while CGI leads.** On sita we're about 2% behind x264 on
+  VMAF v1. All-intra (`--keyint 1`) read 4.75% ahead on the earlier metric and
+  hasn't been re-read on v1, so whether inter coding is what gives the ground
+  back is open. Nothing we've found moves the B-frame share yet, and the obvious
   candidates are in the table above.
 - **The tune doesn't win on hand-drawn content.** With both encoders on
   `--tune animation`, sita trails by about 14%. Adding `--ref 6`,
@@ -85,7 +86,7 @@ calibrated at 900 kbps. bbb_720p is in the HD band (`scripts/hd_band.py`) but
 not in the standing CRF ladders.
 
     scripts/bdcompare.py --a '...yah264...' --b '...x264...' \
-        --clips bbb_720p,sita_720p --frames 180 --vmaf --points 30,34,38,42
+        --clips bbb_720p,sita_720p --frames 180 --vmaf --points 30,33,36,39,42
 
 Never ship an animation change measured on one clip. bbb and sita disagree
 about almost everything.

@@ -32,8 +32,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CORPUS = os.path.join(ROOT, "tests/corpus")
 FRAMES = 120
-# The earlier metric's 55/65/75/83 rungs, carried to v1 as the median v1 score
-# of x264's deep curve at those rates over the band's clips.
+# The earlier metric's 55/65/75/83 rungs carried to v1: at the rate where x264
+# scored each on the earlier metric, the median v1 score over the clips that
+# reach it.
 TARGETS = [37.0, 46.0, 55.0, 66.0]
 
 LADDERS_NAME = "ladders_deep.json"

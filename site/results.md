@@ -244,8 +244,9 @@ leaves about 0.3% residual. The two rates are matched within 0.5%.
 
 At CRF and the same size, yah264 scores a median 1.3 VMAF v1 points above x264
 on the ten clips at one thread, and 1.2 at three threads. Every clip is ahead,
-by at least 0.75. PSNR-Y has a median of +0.03 dB against x264. The worst clip
-is stefan_cif at -0.51 dB, which puts it on the debt list. The floor passes.
+by at least 0.75. At one thread PSNR-Y has a median of +0.03 dB against x264.
+The worst clip is stefan_cif at -0.51 dB, which puts it on the debt list. The
+floor passes.
 
 ## CRF versus ABR
 
@@ -264,7 +265,8 @@ tables at the top of this page cover capped VBR.
 
 The VMAF v1 and size columns are medians over the ten clips. Goals 2 and 3 code
 the same stream, read at three threads on both encoders. The speed columns come
-from the timed board at auto threads.
+from the timed board, at one thread for goal 1 and auto threads for goals 2
+and 3.
 
 x264's target is solved to hit the bitrate we achieved, as the size column
 shows. The rate controller's opening is fitted. A frame can also start against
@@ -332,12 +334,12 @@ that comparison.
 
 ## Quality across the rate range
 
-yah264 does best at low bitrates. In the deep band, from VMAF v1 37 to 66, it
-beats x264 on all 12 of the 13 quality-band clips that reach that band. The
-median gain there is about 17% in [BD-rate](encoding.html#bd-rate). BD-rate
-averages the comparison across a range of bitrates. Each clip runs 120 frames at
-one thread, with both encoders solved onto the same four rates. The quality-band
-clips aren't the ten on the speed board.
+In the deep band, from VMAF v1 37 to 66, twelve of the thirteen quality-band
+clips reach the band, and yah264 beats x264 on all twelve. The median gain there
+is about 17% in [BD-rate](encoding.html#bd-rate). BD-rate averages the
+comparison across a range of bitrates. Each clip runs 120 frames at one thread,
+with both encoders solved onto the same three or four rates per clip. The quality
+band overlaps the speed board on only six clips.
 
 yah264 is also ahead on every clip of the twelve-clip HD gate set, more so at
 720p. Nothing here was ever tuned against that set.
