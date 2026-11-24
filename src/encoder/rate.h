@@ -47,8 +47,8 @@ void rc_head_crf(yah264_encoder_t *e, int type, pixel *const src[3], int want_c)
 void rc_head_serial(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3]);
 void rc_knobs_resolve(yah264_encoder_t *e);
 void rcp_decide(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3]);
-void rcp_drop(yah264_encoder_t *e);
-void rcp_fill(yah264_encoder_t *e, double bits);
+void rcp_drop(yah264_encoder_t *e, int disp);   /* disp: the dropped frame's input number */
+void rcp_fill(yah264_encoder_t *e, double bits, int disp);   /* disp: the coded frame's input number */
 void rcp_flush_all(yah264_encoder_t *e);
 void rcp_head(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3]);
 void rcp_reqp(yah264_encoder_t *e, int type, int is_ref);
@@ -66,5 +66,13 @@ void tp_build_plan(yah264_encoder_t *e);
 double abr_pbrate_scale(const yah264_encoder_t *e);
 int crf_cplx_env(void);
 int vbv_bounded_now(const yah264_encoder_t *e);
+
+/* the two seconds after a live retarget, when the ledger may move a whole
+ * step per anchor; measured in the ledger's age, so owed bits the short
+ * memory after a large step dropped (rfm_drop) still count */
+static inline int rc_rt_slew_open(const yah264_encoder_t *e, double wanted)
+{
+    return e->rt_owed_end > 0 && wanted + e->rfm_drop < e->rt_owed_end;
+}
 
 #endif

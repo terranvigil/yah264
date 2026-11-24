@@ -7,16 +7,20 @@ RATE steps, read back from --frame-stats.
 usage: scripts/control_step.py --bin build/cli/y264 --clip CLIP.y4m
            --steps 3000@0,1000@150,3000@300 [--vbv cbr|capped|none]
            [--frames N] [--threads 1] [--keep DIR] [--check SECONDS]
+           [--json FILE]
 
 The first step is the open-time rate; each later one becomes a control line
 "FRAME rate bitrate=K [maxrate=M bufsize=B]". --vbv cbr sets maxrate =
 bufsize = the rate (one second of buffer), capped sets maxrate 1.5x and
 bufsize 2x, none leaves the buffer off. For each step it prints the rate of
-every half second after it, the settle time (the start of the first one-second
+every half second after it (a B frame numbered before the next step but
+coded after it is counted with the next step), the settle time (the start of the first one-second
 window, counted from the landing frame, whose rate is within 10% of the new
 target) and the rate over the whole span from the settle to the next step.
-With --check S it exits 1 when any step takes longer than S seconds to
-settle. One encode, so it obeys the box's one-encode rule.
+It also prints the error over the first second from the landing frame and
+over the whole span to the next step. With --check S it exits 1 when any step
+takes longer than S seconds to settle; --json FILE writes the same numbers, one
+object per step, for a harness to tabulate. One encode, so it obeys the box's one-encode rule.
 """
 import argparse
 import json
@@ -55,6 +59,7 @@ def main():
     ap.add_argument('--keep')
     ap.add_argument('--check', type=float, default=0.0)
     ap.add_argument('--extra', default='')
+    ap.add_argument('--json')
     a = ap.parse_args()
 
     steps = []
@@ -89,6 +94,7 @@ def main():
         sys.exit(f'encode failed: {r.returncode}')
     rows = [json.loads(l) for l in open(fst)]
     by = {x['frame']: x for x in rows}
+    coded = {x['frame']: i for i, x in enumerate(rows)}
     n = max(by) + 1
     bits = [by[i]['bytes'] * 8 if i in by else 0 for i in range(n)]
     landed = {}
@@ -98,9 +104,16 @@ def main():
     win = max(1, int(round(fps)))
     half = max(1, int(round(fps / 2)))
     worst = 0.0
+    res = []
     print(f'clip {os.path.basename(a.clip)}  {fps:.3f} fps  vbv {a.vbv}  threads {a.threads}  {n} frames')
     for i, (fr, k) in enumerate(steps):
         end = steps[i + 1][0] if i + 1 < len(steps) else n
+        if i + 1 < len(steps):
+            # a B frame numbered before the next step but coded after its
+            # landing frame takes the next rate: leave it out of this one
+            nl = coded.get(landed.get(end, end), len(rows))
+            while end > 0 and coded.get(end - 1, -1) > nl:
+                end -= 1
         at = landed.get(fr, fr) if i else 0
         halves = []
         for s in range(at, end, half):
@@ -116,13 +129,28 @@ def main():
         if settle is not None:
             s0 = at + int(settle * fps)
             rest = sum(bits[s0:end]) * fps / max(1, end - s0) / 1000.0
+        e1 = min(end, at + win)
+        first = sum(bits[at:e1]) * fps / max(1, e1 - at) / 1000.0
+        e2 = min(end, e1 + win)
+        second = sum(bits[e1:e2]) * fps / max(1, e2 - e1) / 1000.0 if e2 > e1 else None
+        span = sum(bits[at:end]) * fps / max(1, end - at) / 1000.0
         tag = 'open' if i == 0 else f'step at {fr} (landed {at})'
         st = f'{settle:.2f} s' if settle is not None else 'never'
         rs = f'{rest:.0f} kbps ({(rest / k - 1) * 100:+.1f}%)' if rest is not None else '-'
-        print(f'{tag}: target {k} kbps, settle {st}, after settle {rs}')
+        print(f'{tag}: target {k} kbps, settle {st}, after settle {rs}, '
+              f'first second {(first / k - 1) * 100:+.1f}%'
+              + (f', second second {(second / k - 1) * 100:+.1f}%' if second is not None else '')
+              + f', span {(span / k - 1) * 100:+.1f}%')
+        res.append({'frame': fr, 'landed': at, 'kbps': k, 'settle': settle,
+                    'after_settle': rest, 'first_s': first, 'second_s': second,
+                    'span': span, 'end': end})
         print('  half-seconds: ' + ' '.join(f'{h:.0f}' for h in halves))
         if i:
             worst = max(worst, settle if settle is not None else float('inf'))
+    if a.json:
+        with open(a.json, 'w') as f:
+            json.dump({'clip': os.path.basename(a.clip), 'vbv': a.vbv, 'fps': fps,
+                       'steps': res}, f)
     if not a.keep:
         for p in (log, fst, out):
             os.remove(p)

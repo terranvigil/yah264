@@ -11542,6 +11542,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     else if (ff && ff->type != YAH264_FORCE_NONE) raw_cut = 0;
     if (ctl_key_at(e, force_disp)) raw_cut = 1;    /* a live keyframe request */
     en->is_cut = raw_cut;
+    en->det_cut = det_cut;
     if (raw_cut)
         e->la_since_idr = 0;
     /* a detected cut ends a slow fade, one under the fade test's cut step
@@ -11871,6 +11872,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     en->sum_cost[LR_LEG_PREV] = pc;
     en->sc_cleared = 0;
     en->is_cut = 0;
+    en->det_cut = 0;
     en->is_idr = 0;
     en->since_val = 0;
     en->is_anchor = 0;                   /* provisional until typed */
@@ -12106,18 +12108,18 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
     if (size == 0) {
         slice_overflow_warn();
         if (e->rcp_on)
-            rcp_drop(e);                /* pending entry retired without accounting */
+            rcp_drop(e, p->disp);       /* pending entry retired without accounting */
         return;                         /* overflow: drop (mirrors serial ret 0) */
     }
     int r; TPROF(TP_NAL, r = append_picture_nals(e, off, p->ref_idc, p->nal_type,
                                                 p->rbsp, &p->sm, p->disp, p->rp));
     if (r < 0) {
         if (e->rcp_on)
-            rcp_drop(e);                /* retire the entry, or every later fill lands one frame late */
+            rcp_drop(e, p->disp);       /* retire the entry, or every later fill lands one frame late */
         return;
     }
     if (e->rcp_on)                      /* stage the actuals; the schedule pops */
-        rcp_fill(e, 8.0 * (double)size);
+        rcp_fill(e, 8.0 * (double)size, p->disp);
     /* CQP and pure CRF have no rate-control tail. */
 }
 
@@ -12601,7 +12603,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         e->recon_cb(e->recon_ud, &rp, e->cur_disp, Y264_BIT_DEPTH);
     }
     if (r >= 0 && e->rcp_on) {
-        rcp_fill(e, 8.0 * (double)rbsp_size);   /* lagged: schedule pops later */
+        rcp_fill(e, 8.0 * (double)rbsp_size, e->cur_disp);   /* lagged: schedule pops later */
         return r;
     }
     return r;
@@ -13331,7 +13333,7 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
         if (r < 0)
             return -1;
         if (e->rcp_on)
-            rcp_fill(e, 8.0 * (double)L->size);
+            rcp_fill(e, 8.0 * (double)L->size, L->disp);
         for (int c = 0; c < 3; c++) e->rec_out[c] = L->rec[c];
         y264_note_emit(e, L->disp);
         if (e->recon_cb) {
@@ -14563,7 +14565,7 @@ static int stair_drain_anchor(yah264_encoder_t *e, size_t *off,
     }
     g_ew_site = 4;
     w2_flush(e, off);                       /* keeps the ledger in fill order */
-    rcp_fill(e, 8.0 * (double)B->size);
+    rcp_fill(e, 8.0 * (double)B->size, B->disp);
     B->anchor_billed = 1;
     return 0;
 }
@@ -14601,7 +14603,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     if (r < 0)
         return -1;
     if (e->rcp_on && !B->anchor_billed)     /* else stair_drain_anchor billed it */
-        rcp_fill(e, 8.0 * (double)B->size); /* anchor actuals, coding order */
+        rcp_fill(e, 8.0 * (double)B->size, B->disp); /* anchor actuals, coding order */
     for (int k = 0; k < B->stash_n; k++) {
         TPROF(TP_NAL, r = append_slice_nal(e, off, B->stash_item[k].ref_idc,
                                            YAH264_NAL_SLICE,
@@ -14612,7 +14614,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
         if (r < 0)
             return -1;
         if (e->rcp_on)
-            rcp_fill(e, 8.0 * (double)B->stash_item[k].len);
+            rcp_fill(e, 8.0 * (double)B->stash_item[k].len, B->stash_item[k].disp);
     }
     B->stash_n = 0;
     B->stash_len = 0;
@@ -16796,6 +16798,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                   : (have_flags ? flag_cut
                      : (e->since_idr >= sc.keyint_min &&
                         detect_scenecut(e, e->since_idr))));
+    /* the content's own cut, before a live keyframe request; the lookahead
+     * kept it apart from the keys a zone, force or request asked for */
+    int det_cut = rcr_flags >= 0 ? (rcr_flags >> 2) & 1
+                : is_cut && (have_flags ? e->cur_la_en && e->cur_la_en->det_cut : !sc.off);
     if (rcr_flags < 0 && ctl_key_at(e, (int)e->frame_count))
         is_cut = 1;                             /* a live keyframe request, whatever the detector */
     if (is_cut)
@@ -16806,6 +16812,8 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     int since_idr = e->since_idr;
     e->since_idr = (e->since_idr + 1) % keyint;       /* advance for the next frame */
     int is_key = (since_idr == 0);
+    if (det_cut && is_key)
+        e->rcp_cur_cut = 1;     /* the key's own decide takes it */
     /* --open-gop: a key is still an I picture and still an anchor, but it stops
  * being an IDR. Two keys keep the reset anyway. The FIRST picture of the
  * instance has nothing to continue from -- no DPB, no POC line -- and a
@@ -16834,7 +16842,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     if (rcr_flags >= 0)
         is_anchor = rcr_flags & 1;
     else if (e->rcr)
-        rcr_put(e->rcr, RCR_FLAGS, (double)(is_cut * 2 + (is_anchor ? 1 : 0)));
+        rcr_put(e->rcr, RCR_FLAGS, (double)(det_cut * 4 + is_cut * 2 + (is_anchor ? 1 : 0)));
     /* POC follows display order, counted from the last IDR rather than the last
  * key, so it runs unbroken across an open one. Identical to since_idr * 2
  * whenever every key is an IDR, which is every default encode -- poc_base

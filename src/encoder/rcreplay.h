@@ -38,7 +38,7 @@
 #include <math.h>
 
 enum {
-    RCR_FLAGS = 1,      /* per frame: effective cut*2 + anchor */
+    RCR_FLAGS = 1,      /* per frame: detector cut*4 + effective cut*2 + anchor */
     RCR_ARR_CME,        /* arrival: frame_complexity_me */
     RCR_ARR_ILR,        /* arrival: frame_complexity_ilr */
     RCR_FC,             /* frame_complexity (full resolution) at a decide */

@@ -660,6 +660,7 @@ struct yah264_encoder {
         pixel   *lr_hp[3];     /* whole-run B placement: this frame's lowres half-pel
                                  * planes taken from the source (h, v, centre) */
         int      is_cut;        /* scene cut here (the core obeys this flag) */
+        int      det_cut;       /* ...and it is the content's cut, not a forced key */
         int      is_idr;
         int      is_anchor;
         int      typed;         /* is_anchor finalized (lags one push: b-adapt
@@ -982,6 +983,27 @@ struct yah264_encoder {
     int      slew_set[3];        /* slew_ref[t] holds a value, which may be negative */
     double   rt_owed_end;        /* a live retarget's fast-slew window ends when rfm_owed passes this; 0 = none */
     int      rt_done;            /* a live retarget happened: the references go by their flags, not their sign */
+    /* the slope refit after a large live step (rate.c, rc_fit_step) */
+    int      rt_fit;             /* armed: a step of more than 3x waits for its frames */
+    unsigned rt_fit_seq;         /* the first decide under the new target */
+    double   rt_fit_k;           /* the last slope fitted */
+    double   rt_fit_qa, rt_fit_ba;   /* the last group measured: mean QP and bits */
+    int      rt_fast;            /* frames left on the short-memory ledger after a large step */
+    double   rfm_drop;           /* owed bits the short memory took out of rfm_owed: the ledger's age still counts them */
+    int      rt_fit_skip;        /* entries left between a QP move and the group measured after it */
+    struct { unsigned seq; int disp; int8_t type, f2, cut, intra, pin; int16_t fqp; double bits; } rt_hist[256];
+    int      rcp_last_disp;      /* the frame of the last rate decision (field pairs share one) */
+    /* frames whose rate-control entry was committed on an earlier-coded
+     * frame's bits, waiting for their own (rate.c, rcp_fill) */
+    struct rt_own { int disp; unsigned seq; int8_t type, f2, cut, intra, pin; int fqp; double rs, pred; } rt_own[64];
+    int      rt_own_n;
+    int      rt_pin_base;        /* the last anchor's rate-control QP was clamped to [1, 51] */
+    double   rt_shadow;          /* every coded frame's bits at its rate scale, kept apart from the
+                                  * ledger: cum_actual plus the uncommitted slots' bits equals it */
+    unsigned rt_fit_b0, rt_fit_b1, rt_fit_lo;   /* group B's first frame and end; the older point's first frame */
+    int      rt_fit_bset, rt_fit_b1set;   /* group B has begun; its end is known */
+    int      rcp_cur_cut;        /* the key being coded is the content's scene cut */
+    unsigned rt_hn;              /* frames accounted into rt_hist (wraps harmlessly past RT_HIST) */
     int      last_ref_n;         /* how many of last_ref_qp hold a value */
     struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
                                 * (in-flight prediction); have = meas */
@@ -1109,6 +1131,7 @@ struct yah264_encoder {
         int8_t  type, is_ref, dropped, filled;
         int8_t  held;           /* raised by the --nal-hrd hold: off the plan's model */
         int8_t  rc_type;        /* the rate-control type: an I frame's second field is coded P, quantised I */
+        int8_t  cut;            /* a scene cut the detector found (an I frame) */
         int8_t  tight;          /* decided in a serial-tight VBV burst: pops at
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */
@@ -1123,6 +1146,16 @@ struct yah264_encoder {
         double  cq;             /* pass 2: complexity^qcomp share */
         int     tp_rec;         /* pass 2 plan: stats record index, -1 if none */
         double  pred;           /* predicted bits at decide */
+        int     disp;           /* the input frame decided */
+        int8_t  f2;             /* the second field of a frame */
+        int8_t  own_filled;     /* this frame's own bits are in */
+        int8_t  qlo, qhi;       /* the QP bounds in force on it */
+        int8_t  pin;            /* its coded QP sits on a bound, or its base was clamped */
+        double  rs;             /* the rate scale its bits carry into the ledger:
+ * 1, times r for each live retarget that lands
+ * after its decide (the frame was decided at the
+ * old rate, so its error carries over as a share
+ * of it, as every frame before it does) */
         double  vpred;          /* VBV-model predicted bits at decide (virtual
  * buffer advance; error == VBV model error) */
         double  vcplx;          /* VBV-model complexity (lowres intra sum) */
