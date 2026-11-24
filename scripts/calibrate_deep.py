@@ -2,7 +2,7 @@
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
 """The band ladders' DEEP extension: per clip, the ABR ladder whose x264-medium
-points land at VMAF-NEG 55/65/75/83 -- the deep-quant regime below the standing
+points land at VMAF v1 37/46/55/66 -- the deep-quant regime below the standing
 band (88-94), where this campaign's regime-shaped arms (the trellis-lambda
 ramp, the psy gates) do their work and where the standing gate was blind: the
 crossover of a regime arm sat in the unsampled 29-32 CRF hole between
@@ -32,14 +32,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CORPUS = os.path.join(ROOT, "tests/corpus")
 FRAMES = 120
-TARGETS = [55.0, 65.0, 75.0, 83.0]
+# The earlier metric's 55/65/75/83 rungs, carried to v1 as the median v1 score
+# of x264's deep curve at those rates over the band's clips.
+TARGETS = [37.0, 46.0, 55.0, 66.0]
 
 LADDERS_NAME = "ladders_deep.json"
 CURVES_NAME = "curves_deep.json"
 
 CLIPS = ["foreman_cif", "bus_cif", "stefan_cif", "akiyo_cif", "mobile_cif",
          "coastguard_cif", "tempete_cif",
-         "ducks_720p", "park_joy_720p", "fourpeople_720p", "sintel_720p",
+         "ducks_720p", "park_joy_720p", "fourpeople_720p", "samsung_720p", "sintel_720p",
          "touchdown_420"]
 
 CRFS = [30, 34, 38, 42, 46, 50]
@@ -96,7 +98,7 @@ def interp(pts, target):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog="calibrate_deep.py",
-        description="Solve the DEEP band (VMAF-NEG 55-83) ABR ladders onto x264 "
+        description="Solve the DEEP band (VMAF v1 37-66) ABR ladders onto x264 "
                     "medium's own CRF curve. Hours of encodes; nothing is written "
                     "until they finish.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -196,7 +198,7 @@ def main(argv=None):
                 results.setdefault(clip, []).append(r)
 
     ladders = {}
-    print("=== x264 medium deep curve (crf -> kbps / VMAF-NEG) ===")
+    print(f"=== x264 medium deep curve (crf -> kbps / {bd.GATE}) ===")
     for clip in args.clip_list:
         pts = sorted(results.get(clip, []), key=lambda x: x[1])
         if not pts:
