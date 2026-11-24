@@ -31,8 +31,9 @@ Both are short windows of 180 and 140 frames, read at CRF 30 to 42 with both
 encoders at two threads. Since a median over the two would read about -21%
 and describe neither clip, we always quote animation results per clip.
 
-Short windows also exaggerate. Over the 10-minute Big Buck Bunny excerpt in
-the parity tables, the lead is about 3%.
+Short windows also exaggerate. The 10-minute Big Buck Bunny excerpt in the
+parity tables, scored on VMAF v1, needs 1% to 2% fewer bits at CRF at 720p,
+1080p and 4K. At capped VBR the two encoders are within 1% of each other.
 
 ## What doesn't help
 
