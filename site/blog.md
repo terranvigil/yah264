@@ -1,13 +1,13 @@
 ---
 title: Introducing yah264
-description: An H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 and needs a median 13% fewer bits for the same quality.
+description: An H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 and needs a median 10% fewer bits for the same quality.
 image: assets/blog/og-card-v3.png
 type: article
 ---
 
 # Introducing yah264
 
-yah264 is an H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 across a wide range of test video. It needs a median 13% fewer bits for the same quality. The source is on [GitHub](https://github.com/terranvigil/yah264).
+yah264 is an H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 across a wide range of test video. It needs a median 10% fewer bits for the same quality. The source is on [GitHub](https://github.com/terranvigil/yah264).
 
 I've worked on video ingestion pipelines for over 15 years. The key goals are always "lowest cost" and "highest quality" for a given bitrate. And of course speed usually matters too. This is my attempt at all three, for anyone who'd like to try yah264 out.
 

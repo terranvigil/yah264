@@ -16,7 +16,7 @@ Cross-encoder numbers are against x264 medium.
 |---|---|---|
 | `--tune animation` | adds four B frames and changes nothing else: seven at every preset with B frames, four at ultrafast. An explicit `--bframes` wins over it | B frames are the one tune element that helps both CGI clips: bbb -6.8%, sintel -1.0%, at neutral wall on bbb and 0.945x on sintel. Dropping back to five costs bbb 5.7% |
 | adaptive quantization | stays at the 0.4 default | on bbb and sita the default is best or within noise. Sita's best alternative is -0.25%. No fixed value suits the class, because sintel would gain 6.9% from AQ off while bbb loses 6.8% at the same setting |
-| mode-decision lambda | follows the mb-tree part of each macroblock's QP, on non-flat macroblocks only | at the frame QP, mb-tree's finer quantizer on static line art got priced into skip. Per-MB lambda narrows the hand-drawn gap to x264 and gains on the natural-video bands. bbb is the one clip that pays |
+| mode-decision lambda | follows the mb-tree part of each macroblock's QP, on non-flat macroblocks only | at the frame QP, mb-tree's finer quantizer on static line art got priced into skip. Per-MB lambda takes about 45% off the hand-drawn gap to x264 and reads -2 to -3% median on the natural-video bands. bbb pays +3.1%, the one clip that does |
 | psy-trellis on flat frames | the psy flat gate raises psy-trellis on frames where at least 75% of macroblocks are near-flat | it's a per-frame content gate. It fires on every frame of sintel and on no frame of the other corpus clips: sintel -5.6% to -9.0% at matched rate |
 | repeated frames | no special handling | held frames are already cheap. A bbb cut with half its frames repeated encodes 18% faster than the unique-frame cut |
 
@@ -31,9 +31,9 @@ Both are short windows of 180 and 140 frames, read at CRF 30 to 42 with both
 encoders at two threads. Since a median over the two would read about -21%
 and describe neither clip, we always quote animation results per clip.
 
-Short windows also exaggerate. The 10-minute Big Buck Bunny excerpt in the
-parity tables, scored on VMAF v1, needs 1% to 2% fewer bits at CRF at 720p,
-1080p and 4K. At capped VBR the two encoders are within 1% of each other.
+On the 10-minute Big Buck Bunny excerpt in the parity tables, scored on VMAF
+v1, yah264 needs 1% to 2% fewer bits than x264 at CRF at 720p, 1080p and 4K. At
+capped VBR the two encoders are within 1% of each other.
 
 ## What doesn't help
 

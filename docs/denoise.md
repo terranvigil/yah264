@@ -90,7 +90,7 @@ costs +5.6% because the gate's own neighbor searches run.
 |---|---|
 | `--nr` with intra on | costs the added-in-post grain on Nocturne |
 | `--nr` unweighted by basis gain | lost on park_joy and sunflower |
-| `--mcstf` subpel refinement on poor matches | worse on most clips; it finds better matches on the noise itself and averages less |
+| `--mcstf` subpel refinement on poor matches | worse on 9 of 12; it finds better matches on the noise itself and averages less |
 | `-1` QP on filtered pictures | the median gain all but disappears |
 | `--mcstf` every picture (period 1) | lash_b loses |
 | per-block adaptive weights | fixes foreman on the HD band but not the standard band, moves the loss to riverbed and gives back most of lash_a's win |

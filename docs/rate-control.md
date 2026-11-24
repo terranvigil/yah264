@@ -562,8 +562,8 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | --- | --- |
 | Burst-lagged anchor decides | twice the rate deviation of zero-lag anchors |
 | Lag with in-flight frames predicted at their type's mean | a large loss on sintel, because a black opening credited each in-flight frame at the mean |
-| Lag granted at `--ref 3` without width | most clips lose, akiyo worst, and sintel's rate control fails (+212% over target) |
-| Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals. samsung loses bits for the smallest speed gain |
+| Lag granted at `--ref 3` without width | 7 of 11 clips lose, akiyo worst, and sintel's rate control fails (+212% over target) |
+| Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals. samsung pays the most bits for the smallest speed gain |
 | A bit-neutral launch split | analysis consumes the QP from its first statement. At most 1.4% of wall is QP-independent |
 | Lowres intra energy as ABR decide complexity | a small gain on park_joy and a large loss on akiyo: near-zero inter cost on static content is a correct read |
 | Geometric blend of intra and inter cost | a large loss on akiyo |
@@ -618,7 +618,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 - **Short single-GOP windows aren't quality measurements.** sintel's drain-split
   cost read +11.70% at 144 frames and +1.32% over 1152.
 - **`touchdown_420` can't be used in a BD round.** Three in-band ladders of the
-  same pair disagree by tens of points.
+  same pair read +4.27%, +61.01% and +1.31%.
 - **Read the VMAF band before believing a BD cell.** Pass `--no-cache` to
   bdcompare too, because its cache keys on the command string and a rebuild
   doesn't invalidate it.

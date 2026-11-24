@@ -176,7 +176,7 @@ BD-rate VMAF-NEG against x264 medium, rate-anchored over 150 frames.
 | Predict the better direct mode from prediction SSD | coastguard predicts better under temporal but codes worse. samsung does the reverse |
 | Predict it from the direct share | the share barely moves, 86.4% against 86.7%, while BD moves 6 points |
 | Decide direct mode per shot in the lookahead, on lowres bi-prediction SATD | rho -0.76 in sample, then 0 for 3 out of sample: stockholm +9.0%, shields +9.5%, parkrun +4.2%. Out-of-sample rho was 0.000 |
-| The same lowres vote scored by distance from the lowres search result | it doesn't predict the better mode either. Its spatial arm is biased toward exactly the content temporal suits |
+| The same lowres vote scored by distance from the lowres search result | rho -0.06. Its spatial arm is biased toward exactly the content temporal suits |
 | `--direct temporal` as the default | sunflower +18.5% against spatial's -7.7% |
 | Use a scaled lowres cost as the skip exit's SATD precondition | the ratio's median ranges from 1.4 to 4.1 across clips. It catches 32-49% at 23-38% false positives |
 | Commit B_Skip before motion search on a motion signal (lowres-static, mb-tree leaf, neighbor-skip) | every such gate also admits 10-95% of macroblocks whose searches then win by 8-25% SATD |
