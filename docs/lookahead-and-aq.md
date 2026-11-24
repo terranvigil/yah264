@@ -225,17 +225,17 @@ bitrate unless a row says v1. Negative is better.
 | Chroma in the AQ energy | +0.35 to -0.29%, neutral, for 9% of the mb-tree bucket. |
 | A gain that grows with frame energy above 1 | stefan +2.5%. The HD clips lost too. |
 | The spread gain on non-reference B under a bitrate target | Cost mobile's ABR band 1.2 to 2.4%. That path runs gain 1 there. |
-| Pulling only B frames busier than the level | Nothing on perseverance, sintel +0.3 to 0.5%. |
-| The DC term as a per-macroblock offset instead of on the base QP | mobile +2.4%: consumers keyed on the base QP (lambda, cascade, psy, trellis) don't see it. |
+| Pulling only B frames busier than the level | Nothing on perseverance, a small loss on sintel. |
+| The DC term as a per-macroblock offset instead of on the base QP | mobile loses: consumers keyed on the base QP (lambda, cascade, psy, trellis) don't see it. |
 | A CRF base term from lowres complexity under mb-tree | Either sign hurts some clip: +0.6 costs sintel 10%, -0.6 costs akiyo 1.6%. |
 | Centering the mb-tree boost under CRF | Destroys the cross-frame gain on static content (akiyo). |
 | A magnitude clamp on mb-tree offsets | Refused. |
 | Content-adaptive mb-tree strength from a motion ratio | It belongs to the per-anchor walk, which runs only as a fallback. The whole-window walk doesn't use it. |
-| A QP-ramped psy-RD weight, or one scaled by the ME lambda | Deep band median +0.24 / +0.44%. The lambda-scaled 4x4-only form also lost. |
+| A QP-ramped psy-RD weight, or one scaled by the ME lambda | Both lost on the deep band. The lambda-scaled 4x4-only form also lost. |
 | Psy energy inside the intra-mode SATD loops | BD loss. |
-| Psy-trellis as a residual-energy or dequantized-coefficient reward | Akiyo gains. Foreman and mobile lose 1 to 3% at every strength. Only the reconstruction-spectrum form is clean. |
+| Psy-trellis as a residual-energy or dequantized-coefficient reward | Akiyo gains. Foreman and mobile lose at every strength. Only the reconstruction-spectrum form is clean. |
 | The flat gate at 50% on the greedy trellis | Quality clean, but samsung wall +30%. |
-| Cost-driven B placement rules (pairwise, path-cost, path-cost on half-pel lowres) | +8 to +16% each. The fixed full cadence the conservative rule keeps is the optimum on most content. |
+| Cost-driven B placement rules (pairwise, path-cost, path-cost on half-pel lowres) | Each loses clearly. The fixed full cadence the conservative rule keeps is the optimum on most content. |
 | Whole-run B placement | Cosmos gains +0.4 to +0.85 VMAF-NEG. Coastguard and akiyo lose. The band median is 0. It costs +3.5% instructions at best and stays off. |
 | `--b-bias` below 0 | -50 costs 11 to 54% on four clips. Above 0 does nothing on that content, since every run is already full. |
 | The field-ME previous-frame leg for cut sums | Because it finds better matches, the sums fall below the calibrated cut threshold. chimera 2160p lost two real cuts. |
@@ -260,7 +260,7 @@ bitrate unless a row says v1. Negative is better.
 
 Judge AQ, the DC term and mb-tree at matched achieved bitrate with
 `scripts/bd_at_rate.py` or `scripts/band_at_rate.py`. A comparison at the same
-CRF number reads the absolute anchor as a large loss: samsung shows +9.3%.
+CRF number reads the absolute anchor as a large loss.
 Most of what the anchor does is move the CRF scale, and that's ladder
 placement, not quality. The 12-clip CRF band can't see the across-shot term at
 all, so run the multi-shot gate too. Don't re-sweep one of mb-tree's constants

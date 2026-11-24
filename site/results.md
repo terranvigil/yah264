@@ -519,5 +519,8 @@ tuned on.
 
 On a 180-frame window of the 3D CGI Big Buck Bunny, yah264 needs 39% fewer bits
 than x264 medium. On 140 frames of the hand-drawn Sita
-Sings the Blues it needs 4% fewer. Short windows exaggerate. Over the 10-minute
-Big Buck Bunny excerpt in the parity tables the lead is about 3%.
+Sings the Blues it needs 4% fewer.
+
+On the 10-minute Big Buck Bunny excerpt in the parity tables, scored on VMAF v1,
+yah264 needs 1% to 2% fewer bits than x264 at CRF at 720p, 1080p and 4K. At
+capped VBR the two encoders are within 1% of each other.

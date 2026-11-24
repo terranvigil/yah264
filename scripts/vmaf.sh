@@ -33,13 +33,16 @@ enccfg="${ENCCFG:---crf $crf --cabac --bframes 2}"
 "$CLI" --input-y4m "$clip" $enccfg $frflag -o "$wd/out.264" 2>"$wd/err" ||
     { echo "vmaf.sh: the encode failed: $(head -1 "$wd/err")"; exit 1; }
 bytes=$(wc -c < "$wd/out.264")
-ffmpeg -v error -y -i "$wd/out.264" -fps_mode passthrough -pix_fmt yuv420p10le -strict -1 "$wd/dec.y4m"
+# setfield=prog on both sides: a field-coded encode decodes to woven frames
+# tagged interlaced, which libvmaf refuses in a Y4M, and the woven frame is
+# what's scored against the source frame (bdcompare.py does the same)
+ffmpeg -v error -y -i "$wd/out.264" -fps_mode passthrough -vf setfield=prog -pix_fmt yuv420p10le -strict -1 "$wd/dec.y4m"
 
 # Match the reference length to the encode so VMAF aligns cleanly (no
 # "ended before" warning when only a prefix of the clip was encoded).
 frref=""; [ "$frames" -gt 0 ] 2>/dev/null && frref="-frames:v $frames"
 # shellcheck disable=SC2086
-ffmpeg -v error -y -i "$clip" $frref -pix_fmt yuv420p10le -strict -1 "$wd/ref.y4m"
+ffmpeg -v error -y -i "$clip" $frref -vf setfield=prog -pix_fmt yuv420p10le -strict -1 "$wd/ref.y4m"
 
 model=$(python3 - "$clip" "$models_dir" <<'PY'
 import sys
