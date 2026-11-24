@@ -407,9 +407,10 @@ it's about 5%. On a static scene (fourpeople, a video call) it's large. A
 keyframe there is coded once at a low QP and then skipped through, while a
 refresh column is coded at the P frames' QP. The column beside the sweep's edge
 also can't predict its last 4 luma columns from where they were. In CRF on
-fourpeople the cost is +42%. With the motion bound removed, which breaks
-recovery, it's still +27%. Most of it is the intra columns themselves. A lower
-QP on the refresh column made it worse at both offsets tried, 3 and 6.
+fourpeople the cost is +42%. Removing the motion bound, which breaks
+recovery, still leaves most of the cost. Most of that is the intra columns
+themselves. A lower QP on the refresh column made it worse at both offsets
+tried, 3 and 6.
 
 #### `--b-bias` is a tuning dial
 

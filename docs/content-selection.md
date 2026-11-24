@@ -66,7 +66,7 @@ default because it's narrow:
 
 | constant | split |
 |---|---|
-| a larger B-frame QP step of 2.0 | sita -2.6%, ducks +10.0%, touchdown +6.1% |
+| a larger B-frame QP step of 2.0 | sita gains, ducks and touchdown lose more |
 | `--aq-strength 0` | sintel -6.9%, bbb +6.8% |
 | `--aq-strength 0.2` / `0.6` | riverbed -0.84 at 0.2, blue_sky -0.63 at 0.6: opposite directions |
 

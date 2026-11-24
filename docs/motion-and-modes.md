@@ -173,7 +173,7 @@ off.
 | RDOQ on the winner only at medium (`--trellis 1`) | 1.18x faster at CIF and 1.29x at 720p in pure C, for +1.42% VMAF-NEG |
 | Viterbi RDOQ under CABAC at medium | -0.24% VMAF-NEG on seven clips and 1.1-1.3x faster than the greedy search |
 | Intra RDOQ lambda ramped to zero below a source variance of 8 | without it RDOQ drops the small levels in smooth gradients. The I frame then bands |
-| Round-to-nearest RDOQ seed | a deadzone seed drops would-be level-1 coefficients with no RD look. Round-to-nearest measured a -2.8% corpus mean and -6.7% on park_joy, with no clip worse |
+| Round-to-nearest RDOQ seed | a deadzone seed drops would-be level-1 coefficients with no RD look. Round-to-nearest gained on the corpus mean, most on park_joy, with no clip worse |
 | Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable. That's a different tool. Above 3 the results are flat: all eight shapes are within 0.13% |
 | 4x4 tail `3,2,2,1,1,1,1,1` | at or slightly ahead of every alternative on both bands, CRF -0.07% and deep +0.01%. No speed or size cost, and 254/254 conformance |
 
@@ -182,18 +182,18 @@ off.
 | idea | why not |
 |---|---|
 | Gate UMH on the lowres oracle (hex cost and distance against the lookahead's prediction) | UMH improves 40-58% of motion-clip searches. Its gains aren't concentrated where the oracle flags trouble. No skip region is BD-safe |
-| An 8-point square refine in place of UMH, without richer seeds | captures most of UMH's small near-hex gains and still costs +15.9% on bus, +8.2% on stefan. The quality comes from the rare distant finds |
+| An 8-point square refine in place of UMH, without richer seeds | captures most of UMH's small near-hex gains and still loses clearly on bus and stefan. The quality comes from the rare distant finds |
 | Cap sub-pel iterations on the square path | hpel and qpel converge in two iterations 96-99% of the time. A cap saves about 0.3% |
 | 4-point diamond to convergence in place of the square (`--subpel 1`) | foreman +1.67%, mobile +0.51% VMAF-NEG |
 | Constant-threshold partition early termination | +0.38% mean, mobile +0.54%, for 1-2% speed. Retuning the slack trades BD for speed one to one |
 | Constant threshold plus heterogeneity and importance guards (mode 2) | still +0.60% mean. The guards protect so many blocks that only 2-4% speed is left |
-| Seed partition searches from the 16x16 and sibling winners | no speed gain, since the seeds are already saturated. bus +0.96% |
+| Seed partition searches from the 16x16 and sibling winners | no speed gain, since the seeds are already saturated, and bus loses |
 | Hex iteration cap | near zero: the hex already exits on convergence |
 | `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: pedestrian +3.67% / +4.30%. The SAD-cheapest vector isn't the one that codes best |
 | A 9/8 intra admission margin | +0.48% BD. 18/16 costs tempete +2.44% on its own |
 | Decimate head weight 2 | +2.29%: lets an adjacent nonzero pair be dropped |
 | Decimate threshold 4 with the shipped table, or thresholds 6/4 | +2.37% at 4. RDOQ already drops marginal coefficients, so 6/4 over-decimates |
-| A top-1 SATD gate between 16x16 Bi and uni | +3.2% on bus. Co-clustered modes need to both reach RD |
+| A top-1 SATD gate between 16x16 Bi and uni | bus loses. Co-clustered modes need to both reach RD |
 
 ## Open questions
 

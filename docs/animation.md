@@ -31,8 +31,9 @@ Both are short windows of 180 and 140 frames, read at CRF 30 to 42 with both
 encoders at two threads. Since a median over the two would read about -21%
 and describe neither clip, we always quote animation results per clip.
 
-Short windows also exaggerate. Over the 10-minute Big Buck Bunny excerpt in
-the parity tables, the lead is about 3%.
+On the 10-minute Big Buck Bunny excerpt in the parity tables, scored on VMAF
+v1, yah264 needs 1% to 2% fewer bits than x264 at CRF at 720p, 1080p and 4K. At
+capped VBR the two encoders are within 1% of each other.
 
 ## What doesn't help
 
@@ -42,14 +43,14 @@ the parity tables, the lead is about 3%.
 | more reference frames (`--ref 6`, `--ref 9`) | costs bbb 0.3-0.7% and sintel 1.4%. Sita -0.4% is inside noise |
 | `--aq-strength 0.6` | costs every animation clip: bbb +0.7-1.0%, sita +2.6%, sintel +5.9-7.3% |
 | psy-trellis 0.5 in the tune | +0.6% on bbb, byte-identical on sintel, where the flat gate already sets more |
-| stronger P and mid-frame skip exits | they misjudge flat content: +13% to +32% on sintel, +2.8% to +5.7% on bbb, for at most 1.2% of threaded wall |
+| stronger P and mid-frame skip exits | they misjudge flat content and cost bits on sintel and bbb, for at most 1.2% of threaded wall |
 | `Y264_B_SKIP_EXIT=3` | nearly free on quality but buys only 0.35% of wall at 12 threads |
 | limiting the skip exits to flat content | every exit costs bits on both animation clips. A gate would have nothing to keep |
 | stronger mb-tree to fix sita | strength 2.8 and 4.0 are far worse: their matched-rate VMAF-NEG deltas read -7.6 and -22.9 |
-| more intra blocks in P frames | +0.7% and +0.2% on sita: no gain |
+| more intra blocks in P frames | no gain on sita |
 | per-MB lambda on flat macroblocks only, or on negative offsets only | the hand-drawn win comes from the line-art minority. Restricting it to the flat majority kills it |
-| anchor-grade lambda on non-reference B frames | +2.2% |
-| a larger B-frame QP step of 2.0 | sita -2.6%, but ducks +10.0% and touchdown +6.1%. The best step depends on content |
+| anchor-grade lambda on non-reference B frames | it loses |
+| a larger B-frame QP step of 2.0 | sita gains, but ducks and touchdown lose more. The best step depends on content |
 | frame dedup or VFR machinery | repeats are already near-free in-codec |
 | screen-content tools (intra block copy, palette) | not in H.264 |
 
