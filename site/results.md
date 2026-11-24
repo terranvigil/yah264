@@ -478,7 +478,8 @@ Coded one clip at a time, the same content reads a median -14% on CIF, -14% on
 
 The ten board clips are natural video from Xiph's public test collection. They're
 8-bit 4:2:0 at native resolution. The rate column is the ABR target each clip is
-coded at on the board.
+coded at on the board. The rates were chosen on the earlier metric and are kept
+so the speed columns stay comparable.
 
 | clip | size | what it is | rate |
 |---|---|---|---|
