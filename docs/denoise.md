@@ -6,9 +6,11 @@ source in time before the lookahead sees it. Both exist for grainy and noisy
 sources. Each has a noise gate that keeps clean content byte-identical to an
 encode without the tool, and animation is the case that matters most.
 
-The quality numbers here are BD-rate on VMAF-NEG (earlier metric) of the tool
-against the shipped default on the same binary and CRF ladder, where negative is
-better. They're scored against the original source, never the filtered one.
+The quality numbers here are BD-rate on VMAF v1 of the tool against the
+shipped default on the same binary and CRF ladder, where negative is better.
+The `--mcstf` range row is the exception: it's still on VMAF-NEG (earlier
+metric). Every reading is scored against the original source, never the
+filtered one.
 
 ## When to use which
 
@@ -18,8 +20,9 @@ better. They're scored against the original source, never the filtered one.
 | film grain | `--mcstf` | off |
 | clean digital, animation | neither, since both gate themselves off anyway | off |
 
-Don't combine them. `--mcstf` plus `--nr-inter 100` reads a median of -1.85 on
-the grain and noise clips against -2.20 for `--mcstf` alone.
+Don't combine them. On the four grain excerpts plus shields and fourpeople,
+`--mcstf` plus `--nr-inter 100` reads a median of -1.26 against -1.44 for
+`--mcstf` alone.
 
 ## How it works
 
@@ -59,26 +62,29 @@ in the corpus reads above 0.75. The code lives in `src/encoder/mcstf.c`.
 
 | choice | why |
 |---|---|
-| both off by default | neither is neutral everywhere. `--nr` doesn't help film grain; `--mcstf` loses on foreman_cif (+1.2) and costs 10-13% of the instructions |
-| `--nr-inter 100` as the setting to use | neutral to better on the HD band (median -0.06; shields -1.07, park_joy -0.43, crowd_run -0.32), with every clean clip byte-identical. `--nr 100` with intra on fails the per-clip bar on pedestrian_1080p (+0.50) |
-| inter only | intra attenuation removes the added-in-post grain on Nocturne |
+| both off by default | neither is neutral everywhere. `--nr` doesn't help film grain; `--mcstf` loses on foreman_cif (+4.1) and riverbed (+4.2) and costs 10-13% of the instructions |
+| `--nr-inter 100` as the setting to use | neutral on the HD band (median -0.04; ducks -0.60, crowd_run -0.56, shields -0.30), with every clean clip byte-identical. Its worst clip, pedestrian_1080p at +0.45, stays under the per-clip bar. `--nr 100` with intra on fails it there (+0.81) |
+| inter only | intra attenuation removes the added-in-post grain on Nocturne: noct_a reads +1.20 with intra on, against +0.76 inter only |
 | per-position basis-gain weight in `--nr` | the unweighted form lost on both clips it was read on |
-| spatial gate at 0.75 for `--nr` | ungated, it strips structure from clean sources: sintel +7.58, akiyo +1.19, samsung +1.03. All three read under 0.65 |
-| `--mcstf` range 1 | the only setting with no clip worse than +0.00 at 60 frames, at half the search of range 2 |
+| spatial gate at 0.75 for `--nr` | ungated, it strips structure from clean sources: akiyo +15.7, sintel +11.1, samsung +2.1 on the standard band. All three read under 0.65 |
+| `--mcstf` range 1 | on VMAF-NEG, the only setting with no clip worse than +0.00 at 60 frames, at half the search of range 2 |
 | `--mcstf` temporal gate, not spatial | a spatial reading can't separate the grain titles (1.38-1.44 at 720p) from foreman_cif (1.19-1.44), and reads a pillarboxed 1924 scan at 0.50 |
 
-`--mcstf` on the content it's for, 120 frames:
+`--mcstf` on the content it's for, 120 frames on the HD band's CRF 23-35 ladder:
 
-| clip | one thread | 12 threads |
+| clip | one thread | three threads |
 |---|--:|--:|
-| touchdown_420 | -17.1 | |
-| lash_a_720p (1924 scan) | -2.84 | -2.81 |
-| fourpeople_720p | -2.20 | -2.37 |
-| shields_720p | -2.24 | -1.73 |
-| foreman_cif | +1.20 (standard band) | +0.33 |
-| lash_b_720p | +1.43 | |
+| noct_a_720p | -8.01 | |
+| lash_a_720p (1924 scan) | -4.52 | -2.59 |
+| lash_b_720p | -1.52 | |
+| noct_b_720p | -0.63 | |
+| fourpeople_720p | -1.35 | -1.47 |
+| shields_720p | -1.31 | -1.53 |
+| foreman_cif | +4.11 (standard band) | +3.07 |
 
-touchdown's gain is real: 11-24% fewer bits per rung for 0.05-0.34 VMAF-NEG.
+touchdown_420 isn't fit for a BD reading ([corpus-sources.md](corpus-sources.md)),
+so we read it per rung. At matched CRF on the standard band, `--mcstf` takes up
+to 16% fewer bits there and scores slightly higher on every rung.
 
 In instructions retired at one thread and medium, `--nr` costs +1.2% to +2.3%
 and `--mcstf` costs +10% to +13%. With every picture gated out, `--mcstf` still
@@ -100,7 +106,7 @@ costs +5.6% because the gate's own neighbor searches run.
 ## Open questions
 
 `--nr` needs a gate that tells grain from detail. The spatial gate gives up
-the grain win on lash_a, which reads -1.07 ungated, because the 1924 scan reads
+the grain win on lash_a, which reads -1.49 ungated, because the 1924 scan reads
 clean. Any gate that arms there also has to stay off sintel_720p.
 
 `--mcstf` needs to tell noise from untracked motion. foreman's temporal reading
@@ -127,5 +133,5 @@ The grain clips are 120-frame excerpts the scripts don't fetch:
 
 Run `scripts/hd_band.py` with a near-null control arm, `Y264_MBT_DEPFLOOR=16`,
 beside the tool. The control needs a dev_knobs build. On the grain clips the
-control's own spread reaches +0.5, as large as several of the tool's per-clip
-readings.
+control's own spread reaches 0.9 (lash_a -0.87), as large as several of the
+tool's per-clip readings.
