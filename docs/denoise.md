@@ -9,8 +9,7 @@ encode without the tool, and animation is the case that matters most.
 The quality numbers here are BD-rate on VMAF v1 of the tool against the
 shipped default on the same binary and CRF ladder, where negative is better.
 The `--mcstf` range row is the exception: it's still on VMAF-NEG (earlier
-metric). Every reading is scored against the original source, never the
-filtered one.
+metric). We score against the original source, never the filtered one.
 
 ## When to use which
 
@@ -82,8 +81,8 @@ in the corpus reads above 0.75. The code lives in `src/encoder/mcstf.c`.
 | shields_720p | -1.31 | -1.53 |
 | foreman_cif | +4.11 (standard band) | +3.07 |
 
-touchdown_420 isn't fit for a BD reading ([corpus-sources.md](corpus-sources.md)),
-so we read it per rung. At matched CRF on the standard band, `--mcstf` takes up
+touchdown_420 isn't fit for a BD reading ([corpus-sources.md](corpus-sources.md)).
+We read it per rung instead. At matched CRF on the standard band, `--mcstf` takes up
 to 16% fewer bits there and scores slightly higher on every rung.
 
 In instructions retired at one thread and medium, `--nr` costs +1.2% to +2.3%

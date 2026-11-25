@@ -13,7 +13,8 @@ and up run full RD on every partition and keep RDOQ in every trial. The rest
 of this page describes medium unless it says otherwise. [B-frames](b-frames.md)
 covers direct mode, B_8x8 and the B skip decision.
 
-Quality figures on this page are on VMAF-NEG (earlier metric).
+Quality figures on this page are BD-rate on VMAF v1, self-A/Bs on the CRF
+band at one thread unless a row says otherwise.
 
 ## How it works
 
@@ -31,7 +32,7 @@ a hex vertex. We call four things together the hex-parity features: the
 richer seeds, the lowres field, the square, and rounding seeds to the nearest
 whole pel. They're on exactly when hex is the primary search: with
 `--me hex`, or in the auto tiers at medium and faster. On that path medium
-reads -0.48% BD-rate VMAF-NEG against x264 medium.
+reads -4.4% median against x264 medium on the CRF band's seven CIF clips.
 
 The uneven-cross and multi-hexagon grid (UMH) runs after the hex at
 `--subme 8` and up or with `--me umh`. It reaches out to `--merange`, which
@@ -162,20 +163,20 @@ off.
 
 | choice | why |
 |---|---|
-| Hex with the parity features at medium, UMH from `--subme 8` | -0.48% VMAF-NEG against x264 medium without the wide grid's cost |
-| No UMH on 8x8 and smaller | about 6-7% faster single-threaded. BD is near neutral on the motion clips: stefan -0.75%, bus +0.21% |
-| Seed early-out, K 48 sub-16x16 and 4 at 16x16 | 2-3% of wall at 12 threads for a CRF-band median of +0.12% |
+| Hex with the parity features at medium, UMH from `--subme 8` | -4.4% median against x264 medium on the CIF clips without the wide grid's cost |
+| No UMH on 8x8 and smaller | about 6-7% faster single-threaded. Under `--me umh` it costs 0.2-0.7% on the four CIF motion clips: stefan +0.41%, bus +0.46% |
+| Seed early-out, K 48 sub-16x16 and 4 at 16x16 | 2-3% of wall at 12 threads for a CRF-band median of +0.15% |
 | Capped diamond sub-pel at medium | a speed trade. Slower presets keep the square |
-| Adaptive partition margin plus importance rescue (mode 4) | the rescue buys back 0.63 points of the margin's 1.32% band cost for 1-3 points of its 4.33% wall saving |
-| `--p-part-gate 400` | holds quality on every clip of the 12-clip HD band. It removes the P tournament's most numerous searches |
-| Ref-0 exit at K=1200 | against K=600, shields (the worst clip on wall) is 8.4% faster at one thread. The 14-clip CRF band median is +0.16 to +0.26% |
+| Adaptive partition margin plus importance rescue (mode 4) | against no early termination the margin alone costs a 0.46% band median and mode 4 costs 0.37%. The rescue buys back that 0.09 for 1-3 points of the margin's 4.33% wall saving |
+| `--p-part-gate 400` | holds quality on every clip of the 12-clip HD band: no clip moves by more than 0.32%. It removes the P tournament's most numerous searches |
+| Ref-0 exit at K=1200 | against K=600, shields (the worst clip on wall) is 8.4% faster at one thread. The CRF band median is 0.00%, because the exit doesn't run at CIF, but fourpeople pays +1.90% and touchdown +1.83% |
 | Intra admission at 1.5x (P) and 0.75x (B) | 1.5x is BD-neutral for 1.06x CIF and 1.11x 720p in pure C. Because B intra wins a few dozen macroblocks in 300,000, its margin is tighter |
-| RDOQ on the winner only at medium (`--trellis 1`) | 1.18x faster at CIF and 1.29x at 720p in pure C, for +1.42% VMAF-NEG |
-| Viterbi RDOQ under CABAC at medium | -0.24% VMAF-NEG on seven clips and 1.1-1.3x faster than the greedy search |
+| RDOQ on the winner only at medium (`--trellis 1`) | 1.18x faster at CIF and 1.29x at 720p in pure C, for a +0.36% CRF-band median (sintel +3.87% is the worst clip) |
+| Viterbi RDOQ under CABAC at medium | -1.94% median against the greedy search on the CRF band, and 1.1-1.3x faster |
 | Intra RDOQ lambda ramped to zero below a source variance of 8 | without it RDOQ drops the small levels in smooth gradients. The I frame then bands |
 | Round-to-nearest RDOQ seed | a deadzone seed drops would-be level-1 coefficients with no RD look. Round-to-nearest gained on the corpus mean, most on park_joy, with no clip worse |
-| Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable. That's a different tool. Above 3 the results are flat: all eight shapes are within 0.13% |
-| 4x4 tail `3,2,2,1,1,1,1,1` | at or slightly ahead of every alternative on both bands, CRF -0.07% and deep +0.01%. No speed or size cost, and 254/254 conformance |
+| Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable. That's a different tool. Above 3 the results are flat: the shapes we re-read are within 0.2% of each other on the median |
+| 4x4 tail `3,2,2,1,1,1,1,1` | a free choice on a flat plateau. The shorter tail `3,2,2,1,1,1` reads 0.19% better on the CRF band median and the same on the deep band (median 0.00%, every clip inside the deep band's noise of about 1 point), so neither band separates them. No speed or size cost, and 254/254 conformance |
 
 ## What didn't work
 
@@ -184,15 +185,15 @@ off.
 | Gate UMH on the lowres oracle (hex cost and distance against the lookahead's prediction) | UMH improves 40-58% of motion-clip searches. Its gains aren't concentrated where the oracle flags trouble. No skip region is BD-safe |
 | An 8-point square refine in place of UMH, without richer seeds | captures most of UMH's small near-hex gains and still loses clearly on bus and stefan. The quality comes from the rare distant finds |
 | Cap sub-pel iterations on the square path | hpel and qpel converge in two iterations 96-99% of the time. A cap saves about 0.3% |
-| 4-point diamond to convergence in place of the square (`--subpel 1`) | foreman +1.67%, mobile +0.51% VMAF-NEG |
-| Constant-threshold partition early termination | +0.38% mean, mobile +0.54%, for 1-2% speed. Retuning the slack trades BD for speed one to one |
-| Constant threshold plus heterogeneity and importance guards (mode 2) | still +0.60% mean. The guards protect so many blocks that only 2-4% speed is left |
+| 4-point diamond to convergence in place of the square (`--subpel 1`) | foreman +0.92%, mobile +0.76% |
+| Constant-threshold partition early termination | +0.53% mean, mobile +1.57%, for 1-2% speed. Retuning the slack trades BD for speed one to one |
+| Constant threshold plus heterogeneity and importance guards (mode 2) | still +0.42% mean. The guards protect so many blocks that only 2-4% speed is left |
 | Seed partition searches from the 16x16 and sibling winners | no speed gain, since the seeds are already saturated, and bus loses |
 | Hex iteration cap | near zero: the hex already exits on convergence |
-| `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: pedestrian +3.67% / +4.30%. The SAD-cheapest vector isn't the one that codes best |
-| A 9/8 intra admission margin | +0.48% BD. 18/16 costs tempete +2.44% on its own |
-| Decimate head weight 2 | +2.29%: lets an adjacent nonzero pair be dropped |
-| Decimate threshold 4 with the shipped table, or thresholds 6/4 | +2.37% at 4. RDOQ already drops marginal coefficients, so 6/4 over-decimates |
+| `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: against `--me umh`, pedestrian +5.3% / +5.6%. The SAD-cheapest vector isn't the one that codes best |
+| A 9/8 intra admission margin | it lost on the earlier metric. On VMAF v1 it reads neutral against 1.5x (median 0.00%, worst sintel +0.29%), so a tighter margin is open again as a speed question |
+| Decimate head weight 2 | +1.09% mean, sintel +9.6%: lets an adjacent nonzero pair be dropped |
+| Decimate threshold 4 with the shipped table, or thresholds 6/4 | +0.92% mean at 4, sintel +9.1%. RDOQ already drops marginal coefficients, so 6/4 over-decimates |
 | A top-1 SATD gate between 16x16 Bi and uni | bus loses. Co-clustered modes need to both reach RD |
 
 ## Open questions
@@ -214,5 +215,9 @@ The `Y264_*` variables here are read only in a build configured with
   shifts mb-tree. Score BD against x264 medium with
   `scripts/bdcompare.py --vmaf --no-cache`, or at matched rate with
   `scripts/bd_at_rate.py`. Don't score it against yah264 alone.
+- At `--threads 1` the seed early-out and the partition early termination are
+  off, because single-thread encodes take the quality order. A one-thread
+  A/B of either reads byte-identical. Set `Y264_STQ=0` on both sides, as the
+  rows above were read, or run at two or three threads.
 - Measure several arms in one interleaved batch. Arms run one invocation at a
   time come out non-monotonic in the gate's own strength.
