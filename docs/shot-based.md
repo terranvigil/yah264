@@ -117,7 +117,7 @@ frame count.
 |---|---|
 | the encoder owns the QP axis; resolution and the ladder live above it | The lookahead already computes the costs. A ladder needs a scaler, a decode and a metric. An encoder that scored itself with the metric it's judged on would be grading its own homework. |
 | `--shot-crf` and `--cut-split` opt-in | Both move GOP boundaries and change the stream. |
-| shot CRF from the qcomp form at shot level, clamped at 4 QP | It takes one pass with no trial encodes. Against plain CRF on ten 1080p real titles it reads -3.6% median BD-VMAF v1 and -5.1% median BD-PSNR-Y. |
+| shot CRF from the qcomp form at shot level, clamped at 4 QP | It takes one pass with no trial encodes. Against plain CRF on ten 1080p real titles it reads -3.6% median BD-VMAF v1 and -5.1% median BD-PSNR-Y (mean of per-frame values). |
 | no demuxer in the library or CLI | Real inputs are compressed mezzanines, so "mp4 support" means taking on libavformat and libavcodec. Pipe from ffmpeg instead. |
 | shot modes read a file twice instead of buffering it | Memory stays at a plain encode's. A whole-input buffer was 38 GB for ten minutes of 1080p. |
 | gates against our own flat CRF, plus a per-shot floor | Equal CRF isn't equal quality across encoders. A mode that wins the average by starving one shot is a visible regression. |
@@ -128,8 +128,8 @@ Measured against plain CRF at the same setting, over CRF 21 to 33,
 
 | content | BD-rate, VMAF | BD-rate, PSNR-Y |
 |---|---:|---:|
-| ten real titles at 1080p: three 2-minute segments and seven 10-minute excerpts | -3.6% median on v1, 9 of 10 better | -5.1% median, 9 of 10 better |
-| the three 2-minute segments | -7.4% median on v1, 2 of 3 better | -5.7% median, 3 of 3 better |
+| ten real titles at 1080p: three short segments (two of 2 minutes, Meridian's of 90 s) and seven 10-minute excerpts | -3.6% median on v1, 9 of 10 better | -5.1% median, 9 of 10 better |
+| the three short segments | -7.4% median on v1, 2 of 3 better | -5.7% median, 3 of 3 better |
 | the seven 10-minute excerpts | -3.5% median on v1, 7 of 7 better | -4.4% median, 6 of 7 better |
 | three five-shot sequences at CIF, 720p and 1080p | -1 to -4% on VMAF-NEG | |
 
@@ -163,9 +163,11 @@ Joining one cell's segments reproduced that cell's encode byte for byte.
   agrees when it's averaged over frames and disagrees when it's pooled over
   the whole clip. Which reading a service cares about decides whether the hard
   shots can give up that much.
-- The pre-scan's inter cost misreads animated pans: `--shot-crf` loses 2.6% to
-  flat CRF on the Big Buck Bunny window. Measure before trusting it on
-  animation.
+- On the Big Buck Bunny window above, scored on VMAF-NEG, `--shot-crf` reads
+  2.6% worse than flat CRF. That points at the pre-scan's inter cost misreading
+  animated pans. On v1, every animated title in the ten-title set wins,
+  Big Buck Bunny's 10-minute excerpt included. Re-score that window on v1
+  before treating pans as a weakness.
 - Because CRF works in whole QP steps, shot offsets move bitrate in jumps of
   about 12%. Fractional QP is a separate item.
 - The measured hull with a resolution ladder hasn't run. It would use sparse
