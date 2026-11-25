@@ -191,7 +191,7 @@ off.
 | Seed partition searches from the 16x16 and sibling winners | no speed gain, since the seeds are already saturated, and bus loses |
 | Hex iteration cap | near zero: the hex already exits on convergence |
 | `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: against `--me umh`, pedestrian +5.3% / +5.6%. The SAD-cheapest vector isn't the one that codes best |
-| A 9/8 intra admission margin | it lost on the earlier metric. On VMAF v1 it reads neutral against 1.5x (median 0.00%, worst sintel +0.29%), so a tighter margin is open again as a speed question |
+| A 9/8 intra admission margin | no quality gain: it reads neutral against 1.5x (median 0.00%, worst sintel +0.29%). Whether its speed is worth taking is open |
 | Decimate head weight 2 | +1.09% mean, sintel +9.6%: lets an adjacent nonzero pair be dropped |
 | Decimate threshold 4 with the shipped table, or thresholds 6/4 | +0.92% mean at 4, sintel +9.1%. RDOQ already drops marginal coefficients, so 6/4 over-decimates |
 | A top-1 SATD gate between 16x16 Bi and uni | bus loses. Co-clustered modes need to both reach RD |
