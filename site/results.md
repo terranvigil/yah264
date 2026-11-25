@@ -103,12 +103,13 @@ a point worse on the instance, the VBR figures here are, if anything, on the low
 side for yah264. The instance decoded its source frames in software. On 30 ladders it
 coded its own decode of the title instead of this machine's frames.
 
-We also swept our lookahead over 30, 40 and 50 frames against x264's default of
-40. That sweep was scored with VMAF-NEG (earlier metric). Most ladders moved
-less than the 0.4-point run-to-run spread. Some did best at 50 in at least one
-mode: Big Buck Bunny at 1080p and 4K, Chimera at 4K, Meridian at 1080p and 4K,
-and Sol Levante at 4K. Sintel at 4K and Sol Levante at 1080p did best at 40 in
-at least one mode. Every other figure on this page uses 40.
+We also swept our lookahead over 30, 40 and 50 frames against x264 at its
+default of 40. The sweep ran each encoder on three threads over the 720p and
+1080p real titles in both modes on the same rungs. It doesn't cover the 4K titles.
+On most ladders the three depths read within the 0.4-point run-to-run spread.
+Four did best at 50: Big Buck Bunny at 1080p in both modes, Sintel at 720p CRF
+and the 10-minute Meridian excerpt in VBR. The largest gain over 40 is 0.7
+points, on Big Buck Bunny CRF. Every other figure on this page uses 40.
 
 In capped VBR every rung of every ladder came within 5% of its target.
 Goal 3 read between 0.45 and 0.67 on every VBR cell.
