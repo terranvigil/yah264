@@ -1,16 +1,14 @@
 # SIMD
 
 Every hot pixel loop in yah264 has a plain C reference and one or more SIMD
-kernels beside it. The kernels are C11 intrinsics on all architectures, with
-no hand-written assembly. At run time the encoder reads the CPU's feature word
-once and picks the widest kernel the chip supports. Each kernel must produce
-exactly the bytes its C twin produces, so changing tier never changes the
-output at one thread.
+kernels written in C11 intrinsics, with no hand-written assembly. At run time
+the encoder reads the CPU's feature word once and picks the widest kernel the
+chip supports. Each kernel matches its C twin byte for byte, so the tier never
+changes the output at one thread.
 
-The published [Architectures](https://terranvigil.github.io/yah264/architectures.html)
-page is the general reader's version. It lists the supported processors and
-each tier's kernel count, with speed readings against x264. This doc is the
-developer's view of how the tiers are built, dispatched and tested.
+The [Architectures](https://terranvigil.github.io/yah264/architectures.html)
+page lists the supported processors and each tier's kernel count and speed
+against x264. This doc covers how the tiers are built and tested.
 
 ## How it works
 
@@ -19,22 +17,22 @@ developer's view of how the tiers are built, dispatched and tested.
 | tier | architecture | what it covers | runs when |
 |---|---|---|---|
 | NEON | aarch64 | every kernel family | always on aarch64 |
-| NEON + dot product | aarch64 | SAD 16x16 and 8x16, 16x16 variance, SSD | the CPU reports dotprod (Apple M1 and later, Graviton2 and later) |
-| SVE | aarch64 Linux | SATD at 16x16, 16x8 and 8x8, averaged SATD at 16x16 and 16x8, SA8D and texture/AC at 16x16, SATD x4 at 8x8, and the forward quant | the CPU reports SVE with vectors of 256 bits or wider (Graviton3) |
+| NEON + dot product | aarch64 | SAD 16x16 and 8x16, 16x16 variance, SSD | the CPU reports dotprod: Apple M1 and later, Graviton2 and later |
+| SVE | aarch64 Linux | some pixel metrics and the forward quant, listed below | the CPU reports SVE at 256 bits or wider, as Graviton3 does |
 | SSE4.2 | x86-64 | every kernel family | the x86 floor |
-| AVX2 (with FMA3, BMI2) | x86-64 | every kernel family | the main x86 tier |
-| AVX-512 (F, BW, VL) | x86-64 | pixel metrics only | the CPU reports all three |
+| AVX2 with FMA3 and BMI2 | x86-64 | every kernel family | the main x86 tier |
+| AVX-512 F, BW and VL | x86-64 | pixel metrics only | the CPU reports all three |
 
-The tiers above work on 8-bit lanes. The 10-bit library has its own tiers
-on 16-bit lanes, covered under [The 10-bit tiers](#the-10-bit-tiers): NEON on
-aarch64, and SSE4.2 and AVX2 on x86-64.
+These tiers work on 8-bit lanes. The 10-bit library has its own NEON, SSE4.2
+and AVX2 tiers on 16-bit lanes, covered in [The 10-bit
+tiers](#the-10-bit-tiers).
 
-Like dot product, SVE lives inside the NEON tier. `y264_cpu_tier()` still
-answers NEON on a Graviton3. Because the SVE entries overwrite the NEON ones
-in the pixel table and behind the NEON quant's call sites, no dispatch site
-had to change. The SVE kernels are vector-length agnostic and exact at any
-length, although they're installed only at 256 bits or more. Graviton4 runs
-the NEON code because its SVE2 is 128 bits wide.
+Dot product and SVE live inside the NEON tier: `y264_cpu_tier()` answers NEON
+on a Graviton3. SVE needs no dispatch sites of its own because its entries
+overwrite the NEON ones in the pixel table and behind the NEON quant's call
+sites. The SVE kernels are vector-length agnostic and exact at any length.
+They're installed only at 256 bits or more. Graviton4's SVE2 is 128 bits wide,
+and Graviton4 runs NEON.
 
 ### Which families each tier vectorizes
 
@@ -46,45 +44,55 @@ the NEON code because its SVE2 is 128 bits wide.
 | intra prediction: 8x8, 16x16, chroma | yes | | yes | yes | |
 | deblock: strength, luma edges, chroma horizontal edges | yes | | yes | yes | |
 
-The AVX-512 kernels are:
+The partial tiers have these kernels:
 
-- texture/AC 16x16
-- SATD and averaged SATD at 16x16 and 16x8, SA8D 16x16, and SATD x4 at 8x8
-- batched SAD with three or four candidates at 16x16, 16x8, 8x16 and 8x8, and
-  with two at all of those but 8x8
+| kernel | SVE | AVX-512 |
+|---|---|---|
+| SATD | 16x16, 16x8, 8x8 | 16x16, 16x8 |
+| averaged SATD | 16x16, 16x8 | 16x16, 16x8 |
+| SA8D | 16x16 | 16x16 |
+| texture/AC | 16x16 | 16x16 |
+| SATD x4 | 8x8 | 8x8 |
+| batched SAD, three or four candidates | | 16x16, 16x8, 8x16, 8x8 |
+| batched SAD, two candidates | | 16x16, 16x8, 8x16 |
+| forward quant | yes | |
 
-AVX-512 has no horizontal add, so the Hadamard's last stage uses
+Because AVX-512 has no horizontal add, its Hadamard's last stage uses
 `|x+y| + |x-y| = 2·max(|x|, |y|)`. The single 8x8 SATD, the 8x8 SAD pair and
 motion compensation stay on AVX2. The AVX-512 MC file
-(`src/dsp/x86/interp_avx512.c`) is empty until an MC kernel measures faster
-on both vendors.
+(`src/dsp/x86/interp_avx512.c`) stays empty until an MC kernel beats AVX2 on
+both AMD and Intel.
 
-These stay C on all tiers:
+These stay C on every tier:
 
-- SAD at 8x4, 4x8 and 4x4, and `sad_quad` at 4x8 and 4x4
-- the chroma DC transforms (2x2, 2x4 for 4:2:2) and their quant
-- quant and dequant with a custom quant matrix (the kernels take the flat
-  matrix only)
-- the vertical chroma deblock edge and all 4:4:4 chroma deblocking
-- intra 4x4 prediction, and intra 8x8 horizontal, DC, diagonal-down-left and
-  horizontal-up (the compiler vectorizes those well enough)
-- chroma MC at width 2 or odd heights, and intra chroma at 4:4:4
-
-Outside `src/dsp`, the lowres downscale, the lowres sub-pel planes, plane
-padding, the mb-tree propagate and the entropy coders are C. The entropy
-coders, trellis and RDOQ aren't vectorizable in any useful sense.
+| code | note |
+|---|---|
+| SAD at 8x4, 4x8 and 4x4; `sad_quad` at 4x8 and 4x4 | |
+| chroma DC transforms and their quant | 2x2, and 2x4 for 4:2:2 |
+| quant and dequant with a custom quant matrix | the kernels take the flat matrix only |
+| vertical chroma deblock edge, all 4:4:4 chroma deblocking | |
+| intra 4x4 prediction; intra 8x8 horizontal, DC, diagonal-down-left and horizontal-up | the compiler vectorizes these well enough |
+| chroma MC at width 2 or odd heights; intra chroma at 4:4:4 | |
+| outside `src/dsp`: lowres downscale, lowres sub-pel planes, plane padding, mb-tree propagate | |
+| entropy coders, trellis, RDOQ | not vectorizable in any useful sense |
 
 ### The 10-bit tiers
 
-The 10-bit library's NEON kernels live in `src/dsp/arm/<family>_neon10.c`.
-They compile into that library only, behind `Y264_HAVE_NEON10`. Each takes its
-8-bit twin's name, and `src/common/symbols10.h` gives it a `_10` suffix. That
-lets `arch.h` declare both depths with the same prototypes, while
-`symbol_check.sh` keeps the two apart. The tier answers `Y264_TIER_NEON` and
-takes the same `YAH264_NO_ASM`, `Y264_ASM_OFF` and `Y264_SIMD_FORCE` escapes.
-Because at most one of `Y264_HAVE_NEON` and `Y264_HAVE_NEON10` is set in a
-translation unit, the 8-bit build preprocesses as it would without the 10-bit
-tier.
+The 10-bit kernels build into the 10-bit library only and take the same
+`YAH264_NO_ASM`, `Y264_ASM_OFF` and `Y264_SIMD_FORCE` escapes as 8 bits.
+
+| | NEON | SSE4.2 and AVX2 |
+|---|---|---|
+| source | `src/dsp/arm/<family>_neon10.c` | `src/dsp/x86/<family>_sse4_10.c` and `<family>_avx2_10.c`, with shared 128-bit bodies in `<family>_x86_10.h` |
+| build macro | `Y264_HAVE_NEON10` | `Y264_HAVE_SSE4_10`, `Y264_HAVE_AVX2_10` |
+| tier it answers | `Y264_TIER_NEON` | `Y264_TIER_SSE4`, `Y264_TIER_AVX2` |
+| build | inside the 10-bit library | one static library per tier with the 10-bit library's arguments plus the tier's `-m` flags; the tier libraries fold into `libyah264_10` |
+
+Each NEON kernel takes its 8-bit twin's name, and `src/common/symbols10.h`
+adds a `_10` suffix. That lets `arch.h` declare both depths with one set of
+prototypes while `symbol_check.sh` keeps them apart. A translation unit sets
+at most one of `Y264_HAVE_NEON` and `Y264_HAVE_NEON10`. The 8-bit build
+preprocesses as if the 10-bit tier didn't exist.
 
 | family | 10-bit NEON | stays C |
 |---|---|---|
@@ -94,43 +102,34 @@ tier.
 | deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | as on 8 bits |
 | intra prediction | 16x16, 8-wide chroma, the routed 8x8 modes, the six-mode 8x8 form, the lowres four-mode builder | as on 8 bits |
 
-The half-pel plane rows exist at 10 bits only, for a band too short for the
-whole-band kernel. At 8 bits each band fits that kernel.
+The half-pel row kernel exists only at 10 bits, for a band too short for the
+whole-band kernel. At 8 bits every band fits.
 
-Since a coefficient is an int32 at 10 bits, the transforms run on int32 lanes.
-The other kernels handle the wider samples in their own ways:
+The wider samples change the lane arithmetic:
 
-- The pixel, intra and deblock kernels keep int16 lanes and widen where 1023
-  pushes a sum past them, as in the intra plane modes. Each kernel states its
-  bounds.
-- The six-tap luma and whole-band kernels keep u16 lanes. An offset makes
-  each filter sum non-negative and comes off after the shift.
-- The chroma bilinear and its fused bi-prediction form keep u16 lanes too.
-  With weights that sum to 64, no sum of 10-bit samples reaches 65536.
-- The lowres half-pel row keeps the lowres planes' 8-bit scale. It rounds each
-  pair mean to that scale and saturates at 255.
-- The directional intra modes split their 16-bit table into low and high
-  bytes, because a table lookup reaches 64 bytes.
+| kernels | lanes | how they stay in range |
+|---|---|---|
+| transforms | int32 | a 10-bit coefficient is an int32 |
+| pixel, intra, deblock | int16 | widen where 1023 pushes a sum past int16, as in the intra plane modes; each kernel states its bounds |
+| six-tap luma, whole-band half-pel | u16 | an offset makes each filter sum non-negative and comes off after the shift |
+| chroma bilinear and its fused bi-prediction form | u16 | with weights that sum to 64, no sum of 10-bit samples reaches 65536 |
+| lowres half-pel row | 8-bit scale | rounds each pair mean to the lowres planes' 8-bit scale and saturates at 255 |
+| directional intra modes | | split the 16-bit table into low and high bytes, because a table lookup reaches 64 bytes |
 
-The boundary-strength kernel reads no samples. Both libraries build it from
-one source (`src/dsp/arm/loopfilter_bs_neon.c`).
+Both libraries build the boundary-strength kernel from one source
+(`src/dsp/arm/loopfilter_bs_neon.c`) because it reads no samples.
 
-On x86-64 the 10-bit kernels live in `src/dsp/x86/<family>_sse4_10.c` and
-`<family>_avx2_10.c`. The 128-bit bodies they share are in
-`<family>_x86_10.h`. Each tier compiles into its own static library, which
-folds into `libyah264_10`. The tier libraries build with the 10-bit library's
-arguments plus the tier's `-m` flags. The macros are `Y264_HAVE_SSE4_10` and
-`Y264_HAVE_AVX2_10`. Because the kernels take the 8-bit x86 names, `arch.h`'s
-x86 declarations and most dispatch sites are text the two depths share. The
-tiers answer `Y264_TIER_SSE4` and `Y264_TIER_AVX2` and take the same escapes.
-With no AVX-512 form at 10 bits, the 10-bit library runs AVX2 on an AVX-512
-machine.
+The x86 kernels take the 8-bit x86 names. Both depths therefore share the
+text of `arch.h`'s x86 declarations and most dispatch sites. With no 10-bit
+AVX-512 form, an AVX-512 machine runs AVX2.
 
-At one thread on rented Intel and AMD machines, the AVX2 tier takes less CPU
-time than x264's 10-bit build with its assembly. Where the machine exposes the
-counters, it also retires fewer instructions. The C build does the same
-against x264's fair C build. The SSE4.2 tier is ahead of x264's
-assembly on most clips and within about 10% on the rest.
+At one thread on rented Intel and AMD machines, against x264's 10-bit build:
+
+| yah264 10-bit | against x264 | result |
+|---|---|---|
+| AVX2 | with its assembly | less CPU time, and fewer instructions where the machine exposes the counters |
+| C | its fair C build | less CPU time, and fewer instructions where the machine exposes the counters |
+| SSE4.2 | with its assembly | ahead on most clips, within about 10% on the rest |
 
 | family | 10-bit SSE4.2 and AVX2 | stays C |
 |---|---|---|
@@ -140,86 +139,82 @@ assembly on most clips and within about 10% on the rest.
 | deblock | strength, 16-line luma edges, 4:2:0 chroma edges, horizontal chroma edge | as on 8 bits |
 | intra prediction | 16x16, 8-wide chroma, the routed 8x8 modes and their edge, the six-mode 8x8 forms, the lowres four-mode builder | as on 8 bits |
 
-A 16-wide row of 10-bit samples fills exactly one AVX2 register. The AVX2
-files widen the 16-wide shapes to it and fold 8-wide blocks two rows per
-register. The narrow shapes use the 128-bit bodies, VEX-encoded. The bounds
-follow the NEON tier's where the arithmetic matches. On x86 these differ:
+A 16-wide row of 10-bit samples fills one AVX2 register. The AVX2 files use
+the whole register for 16-wide blocks, pack 8-wide blocks two rows to a
+register and run narrower blocks on the VEX-encoded 128-bit bodies. Bounds
+follow the NEON tier's except here:
 
-- There's no 16-bit absolute-difference sum, so SAD accumulates `abs(a - b)`
-  in 16-bit lanes and widens once.
-- The four SATD magnitudes that meet in a lane are four coefficients of one
-  tile. The tile's energy bounds them to 32736, so they add in int16 before
-  one widening multiply-add.
-- Because an 8x8 Hadamard coefficient reaches 65472, the row transform takes
-  its last stage as 2 * max(|x|, |y|).
-- The quant forms `|c| * mf + f` in 32 bits. It hands any block with a
-  coefficient at or above 2^17 to the C loop.
-- Reconstruction clips to 1023 through `packus_epi32` and a min, never the
-  byte pack.
+| kernel | x86 handling |
+|---|---|
+| SAD | with no 16-bit absolute-difference sum, it accumulates `abs(a - b)` in 16-bit lanes and widens once |
+| SATD | the four magnitudes meeting in a lane are coefficients of one tile, whose energy bounds them to 32736; they add in int16 before one widening multiply-add |
+| 8x8 Hadamard | because a coefficient reaches 65472, the row transform's last stage is 2 * max(\|x\|, \|y\|) |
+| quant | forms `\|c\| * mf + f` in 32 bits and hands any block with a coefficient at or above 2^17 to the C loop |
+| reconstruction | clips to 1023 through `packus_epi32` and a min, never the byte pack |
 
-The boundary-strength and per-lane deblock bodies are one header that both
-depths' x86 files include (`src/dsp/x86/loopfilter_x86_core.h`).
+Both depths' x86 files include one header for the boundary-strength and
+per-lane deblock bodies (`src/dsp/x86/loopfilter_x86_core.h`).
 
 ### Dispatch
 
-Detection lives in `src/common/cpu.c`. On x86-64 it reads CPUID for SSE2
-through AVX2, FMA3, BMI2, AVX-512 and VNNI. On aarch64 Linux it reads HWCAP,
-including the SVE vector length, once. The result is cached in one word and
+Detection lives in `src/common/cpu.c`. It reads CPUID on x86-64 for SSE2
+through AVX2, FMA3, BMI2, AVX-512 and VNNI. On aarch64 Linux it reads HWCAP
+once, including the SVE vector length. The result is cached in one word and
 read with an inlined acquire load.
 
-There are two dispatch mechanisms:
-
-- **Pixel metrics** go through a function-pointer table, `y264_dsp`, filled
-  once by `y264_dsp_init` in tier order. A wider tier overwrites a narrower
-  one's entry.
-- **Everything else** (MC, half-pel build, transforms, quant, scan, intra
-  prediction, deblock, SSD) checks `y264_asm_on(class)` or `y264_cpu_tier()`
-  at the call site. Hot per-block loops have batched entry points like
-  `y264_sub_dct4_blocks` that run the check once per 16-block grid.
-
-All kernel prototypes are in `src/dsp/arch.h`.
+Pixel metrics go through `y264_dsp`, a function-pointer table that
+`y264_dsp_init` fills once in tier order, so a wider tier overwrites a
+narrower one's entry. Everything else (MC, half-pel build, transforms, quant,
+scan, intra prediction, deblock, SSD) checks `y264_asm_on(class)` or
+`y264_cpu_tier()` at the call site. Batched entry points such as
+`y264_sub_dct4_blocks` check once per 16-block grid. All kernel prototypes
+are in `src/dsp/arch.h`.
 
 ### Build options
 
-The SIMD options in `meson_options.txt` decide what gets compiled into the
-binary. The CPU decides what runs.
+The options in `meson_options.txt` decide what's compiled in. The CPU decides
+what runs.
 
 | option | values | default | effect |
 |---|---|---|---|
-| `simd` | `auto`, `none`, `sse4`, `avx2`, `avx512` | `auto` | Highest tier compiled. `auto` builds every tier the architecture has kernels for. `none` builds a pure-C binary. The x86 names are a cap, so `-Dsimd=sse4` on an AVX2 box builds and runs SSE4.2 alone. On aarch64 only `auto` and `none` are accepted. |
+| `simd` | `auto`, `none`, `sse4`, `avx2`, `avx512` | `auto` | Highest tier compiled. `auto` builds every tier the architecture has kernels for, and `none` builds a pure-C binary. The x86 names are a cap: `-Dsimd=sse4` on an AVX2 box builds and runs SSE4.2 alone. aarch64 accepts only `auto` and `none`. |
 | `avx512` | `true`, `false` | `true` | Compile the AVX-512 tier. `-Dsimd=avx512 -Davx512=false` is an error. |
 | `sve` | `auto`, `enabled`, `disabled` | `auto` | Build the SVE tier. `auto` means aarch64 Linux with a compiler that has the SVE intrinsics. Never on macOS, since no Apple part has SVE. |
 
 Each x86 tier's files (`src/dsp/x86/<family>_<tier>.c`) compile into their own
-static library with that tier's `-m` flags and fold into the 8-bit library as
-objects. The flags are `-msse4.2` for SSE4.2, `-mavx2 -mfma -mbmi2` for AVX2
-and `-mavx512f -mavx512bw -mavx512vl` for AVX-512. The SVE files
-(`src/dsp/arm/*_sve.c`) select SVE with a target pragma and leave the
-dispatching files at baseline armv8-a. `scripts/hygiene_check.sh`
+static library and fold into the 8-bit library as objects.
+
+| tier | flags |
+|---|---|
+| SSE4.2 | `-msse4.2` |
+| AVX2 | `-mavx2 -mfma -mbmi2` |
+| AVX-512 | `-mavx512f -mavx512bw -mavx512vl` |
+
+The SVE files (`src/dsp/arm/*_sve.c`) select SVE with a target pragma and
+leave the dispatching files at baseline armv8-a. `scripts/hygiene_check.sh`
 refuses inline assembly under `src/dsp/x86/` and any `-march=` in a meson
 file.
 
 ### Runtime overrides
 
-These variables are read only in a build configured with `-Ddev_knobs=true`.
-`YAH264_NO_ASM` is the exception.
+Only `-Ddev_knobs=true` builds read these, except `YAH264_NO_ASM`.
 
 | variable | effect |
 |---|---|
-| `Y264_SIMD_FORCE` | Caps one binary at a lower tier. On x86-64 the values are `none`, `sse4`, `avx2` and `avx512`. On aarch64 they're `neon` (no SVE), `sve128` (dispatch as a 128-bit part would), `sve` and `sve2`. Names for the other architecture are inert. An unknown value changes nothing, so a typo can't silently drop to C. |
+| `Y264_SIMD_FORCE` | Caps one binary at a lower tier. On x86-64 the values are `none`, `sse4`, `avx2` and `avx512`. On aarch64 they're `neon` (no SVE), `sve128` (dispatch as a 128-bit part would), `sve` and `sve2`. Names for the other architecture are inert. An unknown value changes nothing. A typo can't silently drop to C. |
 | `YAH264_NO_ASM` | Any value forces the C reference everywhere. |
 | `Y264_ASM_OFF` | Comma list of classes to turn off: `pixel`, `dct`, `quant`, `mc`, `hpel`, `pred`, `deblock`, `ssd`, `scan`, `all`. |
 
-One build tests each of its tiers through `Y264_SIMD_FORCE`. The output must
-not move from one tier to the next.
+Tests walk one build through its tiers with `Y264_SIMD_FORCE`, and the output
+must not change between tiers.
 
 ### checkasm
 
 `tools/checkasm` runs every kernel against its C reference on random and
-adversarial inputs. It calls each kernel by symbol and bypasses the
-dispatcher, so turning SIMD off can't make a test compare C against C. Outputs
-get a poisoned border and inputs a guard page at both ends. A load or store
-sized to the register instead of the block then faults.
+adversarial inputs. It calls kernels by symbol, not through the dispatcher,
+so turning SIMD off can't make a test compare C with C. Outputs get a
+poisoned border and inputs a guard page at both ends. A load or store sized
+to the register instead of the block then faults.
 
 ```sh
 ./build/tools/checkasm/checkasm --list          # every group and the ISA it needs
@@ -227,26 +222,25 @@ sized to the register instead of the block then faults.
 ./build/tools/checkasm/checkasm --bench mc      # correctness, then timings for a family
 ```
 
-`--isa` takes `neon`, `sve`, `sve2`, `sse4`, `avx2`, `avx512` or `all`.
-The registration table is per architecture. An x86 build and an arm64 build
-list different groups. One file per family (`metrics.c`, `interp.c`,
-`transform.c`, `intrapred.c`, `loopfilter.c`) writes each group body once and
-takes the kernel as an argument. checkasm runs in `make test`.
+`--isa` takes `neon`, `sve`, `sve2`, `sse4`, `avx2`, `avx512` or `all`. The
+registration table is per architecture. One file per family (`metrics.c`,
+`interp.c`, `transform.c`, `intrapred.c`, `loopfilter.c`) writes each group
+body once and takes the kernel as an argument. checkasm runs in `make test`.
 
-A kernel ships when it's bit-exact under checkasm, the SIMD build's output
-matches the plain-C build on the board clips, the fast conformance pass is
-green, and CI is green. The `--bench` multiple is recorded but decides
-nothing; encoder-level speed on real hardware decides.
+A kernel ships when it's bit-exact under checkasm, the SIMD build matches the
+plain-C build on the board clips, and fast conformance and CI are green. The
+`--bench` multiple is recorded but decides nothing. Encoder-level speed on
+real hardware decides.
 
 ### Testing tiers the Mac can't run
 
-`scripts/x86-docker.sh` (image in `docker/x86/`) runs the x86 battery as
-linux/amd64 on an Apple Silicon Mac. The matrix is {Rosetta, QEMU} x {none,
-SSE4.2, AVX2} x {`make test` with checkasm, fast conformance, an identity
-check against the `none` tier on the board clips}. The matrix also has a
-10-bit build whose unit leg runs checkasm over the 10-bit tiers. Neither
-emulator has AVX-512. The script asserts that out loud so nobody reads an
-emulated pass as AVX-512 coverage.
+| script | runs | covers |
+|---|---|---|
+| `scripts/x86-docker.sh` (image in `docker/x86/`) | linux/amd64 on an Apple Silicon Mac, under Rosetta and QEMU | tiers none, SSE4.2 and AVX2, with legs for `make test` with checkasm, fast conformance and an identity check against `none` on the board clips; a 10-bit build whose unit leg runs checkasm over the 10-bit tiers |
+| `scripts/sve-docker.sh` (image in `docker/sve/`) | a native arm64 container, SVE legs under QEMU user mode | Neoverse V1 with SVE at 256 bits like Graviton3; Neoverse N2 with SVE2 at 128 bits like Graviton4; `max` at 512 bits; a native leg with no SVE as the negative control |
+
+Neither emulator has AVX-512. The x86 script says so out loud so nobody
+reads an emulated pass as AVX-512 coverage.
 
 ```sh
 scripts/x86-docker.sh                       # Rosetta, all three tiers
@@ -254,45 +248,34 @@ scripts/x86-docker.sh --backend qemu        # the final gate
 scripts/x86-docker.sh --build-image         # rebuild the image first
 ```
 
-`scripts/sve-docker.sh` (image in `docker/sve/`) runs a native arm64
-container. Its SVE legs run under QEMU user mode at three CPU models:
+For real hardware, `scripts/cloud/` holds the rented-machine kit. Cloud runs
+use spot instances under a price cap.
 
-- Neoverse V1, with SVE at 256 bits like Graviton3
-- Neoverse N2, with SVE2 at 128 bits like Graviton4
-- `max` at 512 bits
-
-The native leg, which detects no SVE, is the negative control.
-
-For real hardware, `scripts/cloud/` holds the rented-machine kit:
-
-- `bootstrap.sh` builds a bare instance into a measurable state. It writes
-  `bootstrap.ok` with the CPU name, flags, kernel and compiler.
-- `campaign.sh` reads that file and runs the measurements: the boards at one
-  pinned core and at full threads, per-tier checkasm timings, instruction
-  counts, identity md5s and the AVX-512 against AVX2 A/B on one binary.
-- `lib.sh` holds what the other two share. That's the PASS/SKIP/FAIL stage
-  table, the bucket location, when a clock may be read and the wall-time
-  budget.
-
-Cloud runs use spot instances under a price cap.
+| script | does |
+|---|---|
+| `bootstrap.sh` | builds a bare instance into a measurable state and writes `bootstrap.ok` with the CPU name, flags, kernel and compiler |
+| `campaign.sh` | reads that file and runs the boards at one pinned core and at full threads, per-tier checkasm timings, instruction counts, identity md5s and the AVX-512 against AVX2 A/B on one binary |
+| `lib.sh` | what the other two share: the PASS/SKIP/FAIL stage table, the bucket location, when a clock may be read and the wall-time budget |
 
 CI builds `-Dsimd=auto` and `-Dsimd=sse4` on Ubuntu on every push that touches
-code, runs checkasm per tier and checks tier identity. The macOS job is manual.
+code, then runs checkasm per tier and checks tier identity. The macOS job is
+manual.
 
 ## What we chose and why
 
 | choice | why |
 |---|---|
 | Intrinsics, no assembly | Reviewable as C. One source compiles for SSE4.2 and AVX2 with different flags. Hand assembly may still win on a few kernels once timings point at them. |
-| SSE4.2 as the x86 floor, AVX2 as the main tier | AVX2 only pays where the data is at least 16 lanes wide. Short rows leave half the register idle, so those kernels match SSE4.2. |
-| AVX-512 built by default | On one binary it takes 0.966x AVX2's one-thread CPU time on an AMD EPYC 9R14 and 0.964x on an Intel Xeon 8488C. The output is identical. |
+| SSE4.2 as the x86 floor, AVX2 as the main tier | AVX2 pays only where the data is at least 16 lanes wide. Short rows leave half the register idle, so those kernels match SSE4.2. |
+| AVX-512 built by default | On one binary with identical output, it takes 0.966x AVX2's one-thread CPU time on an AMD EPYC 9R14 and 0.964x on an Intel Xeon 8488C. |
 | AVX-512 limited to pixel metrics | The pixel kernels win on both vendors. MC has no AVX-512 kernel yet. |
 | SVE only at 256 bits or wider | At 128 bits it did no better than NEON. On Graviton3 it takes 0.976x NEON's CPU time on one binary. |
 | Unaligned loads everywhere | Frame planes are plain `malloc` with a border offset. Nothing promises alignment. |
-| Per-class `Y264_ASM_OFF` bits | Lets a profile in a dev_knobs build price one kernel family without a rebuild. |
+| Per-class `Y264_ASM_OFF` bits | A profile in a dev_knobs build can price one kernel family without a rebuild. |
 | Tier cap at build time and run time | `-Dsimd=none` gives a truly pure-C binary. In a dev_knobs build, `Y264_SIMD_FORCE` lets one binary on one machine test every tier. |
 
-One-thread readings on rented machines, CRF 23, against x264 at medium:
+One-thread ratios against x264 at medium on rented machines, at CRF 23. The
+ranges span sunflower 1080p and crowd_run 4K.
 
 | machine | tier | instructions | CPU time |
 |---|---|--:|--:|
@@ -302,59 +285,61 @@ One-thread readings on rented machines, CRF 23, against x264 at medium:
 | Intel Xeon 8488C | AVX-512 | 0.78 to 0.82 | 0.84 to 0.97 |
 | AWS Graviton3 | SVE | 0.62 to 0.67 | 0.65 to 0.74 |
 
-The ranges span sunflower 1080p and crowd_run 4K.
-
 ## What didn't work
 
 | idea | why not |
 |---|---|
-| SME/SME2 for transforms and SATD | 512-bit streaming vectors buy 1.08x over NEON. Per-block use is impossible because `smstart` plus `smstop` costs 9.6 ns against a 3.7 ns SATD 8x8. Whole-frame SATD batched through the ZA engine reads 0.21x NEON. Closed on every form. |
+| SME/SME2, 512-bit streaming vectors for transforms and SATD | 1.08x over NEON. Closed on every form. |
+| SME/SME2 per block | Impossible: `smstart` plus `smstop` costs 9.6 ns against a 3.7 ns SATD 8x8. Closed on every form. |
+| SME/SME2 whole-frame SATD batched through the ZA engine | 0.21x NEON. Closed on every form. |
 | SVE at 128 bits | No better than NEON. |
-| SVE batched 16-wide SAD | NEON's loads post-increment and SVE's don't, so it executes more instructions than NEON. |
+| SVE batched 16-wide SAD | More instructions than NEON, because NEON's loads post-increment and SVE's don't. |
 | Batched 4x4 inverse transform | The whole 4x4 inverse is 0.047% of an encode. All-zero and DC-only blocks already shortcut it. A coded macroblock runs 3.5 to 11.5 of its 16. |
 | NEON intra 4x4 prediction builder | Slower than C by measurement. |
 | Kernel for the lowres sub-pel planes | Measured null twice. The compiler already vectorizes the C. |
-| Wider SAD x4 and the vertical chroma deblock edge | The data's shape doesn't fill a register. x86 leaves them out for the same reason as NEON. |
+| Wider SAD x4 and the vertical chroma deblock edge | The data's shape doesn't fill a register, on x86 as on NEON. |
 | Rounding average in the intra 8x8 edge filter on x86 | Wrong result. The filter needs a truncating halving add. |
 
 ## Open questions
 
-- x86 threading at high core counts. At the default thread count on a
-  32-vCPU Intel Xeon we're 4% behind x264 on wall time at 1080p and 10% ahead
-  at 4K. On a 32-vCPU AMD EPYC we lose at 1080p even though we retire fewer
-  instructions. The loss is in thread coordination, not kernels.
-- The AVX-512 MC file stays empty until a kernel beats AVX2 on both AMD and
-  Intel.
+- x86 threading at high core counts loses in thread coordination, not
+  kernels. At default threads on 32-vCPU machines:
+
+  | machine | wall time against x264 |
+  |---|---|
+  | Intel Xeon, 1080p | 4% behind |
+  | Intel Xeon, 4K | 10% ahead |
+  | AMD EPYC, 1080p | behind, despite fewer instructions retired |
+
 - Several AVX2 kernels re-encode the SSE4.2 body and could use the whole
   register on 16-wide blocks.
-- Nobody knows whether an AVX-512 form would pay at 10 bits. The 10-bit
-  library has none, and x264's 10-bit build retires the same instructions
-  with its AVX-512 paths as without them.
+- Would an AVX-512 form pay at 10 bits? x264's 10-bit build retires the same
+  instructions with its AVX-512 paths as without them.
 
 ## Measuring it
 
-- **Emulators check correctness only.** A wall time or instruction count under
-  Rosetta or QEMU measures the emulator. All x86 and SVE speed comes from
+- **Emulators check correctness only.** Wall time or instruction counts under
+  Rosetta or QEMU measure the emulator. All x86 and SVE speed comes from
   rented machines.
 - **Use Rosetta for routine Docker runs and QEMU for an item's final gate.**
   QEMU is several times slower. Emulated runs are real CPU load, so keep them
-  away from a timed run.
-- **The Docker kit leaves the VM's interpreter alone.** Its QEMU legs name the
-  image's own `qemu-x86_64` on the command line for each binary. One
-  session's run can't change what another session's containers run under.
-  Within one worktree, a lock keeps two runs apart.
-- **Compare the two encoders on the same quiet machine.** Build x264 twice:
-  with its assembly, and with assembly off but its C free to vectorize. The
-  second is the fair match for `-Dsimd=none`.
-- **Pin one-thread runs to a core and log the clock.** The cloud kit logs
-  MHz beside each table and repeats a run that drifts more than 3%.
-- **perf needs to be readable.** A stock Linux kernel ships
-  `kernel.perf_event_paranoid` at 2 or higher. At that setting
-  `scripts/instr-ratio.sh` prints `NO-COUNTER`. Set it to 1 or use a privileged
-  container.
+  away from timed runs.
+- **The Docker kit leaves the VM's interpreter alone.** Because its QEMU legs
+  name the image's own `qemu-x86_64` for each binary, one session's run can't
+  change what another's containers run under. A lock keeps two runs in one
+  worktree apart.
+- **Compare the encoders on the same quiet machine.** Build x264 twice: with
+  its assembly, and with assembly off but its C free to vectorize. The second
+  is the fair match for `-Dsimd=none`.
+- **Pin one-thread runs to a core and log the clock.** The cloud kit logs MHz
+  beside each table and repeats a run that drifts more than 3%.
+- **perf counters need permission.** Stock Linux ships
+  `kernel.perf_event_paranoid` at 2 or higher, where `scripts/instr-ratio.sh`
+  prints `NO-COUNTER`. Set it to 1 or use a privileged container.
 - **gcc's ThreadSanitizer needs `vm.mmap_rnd_bits=28`** on recent Linux
   kernels. That's machine setup, not a code bug.
 - **GitHub's runner CPUs vary,** and some have AVX-512. A CI job that relies
-  on AVX-512 must check the features it actually got.
+  on AVX-512 must check the features it got.
 - `scripts/instr-ratio.sh N` gives the instruction ratio against x264 beside
-  the wall ratio. The [instruments catalog](instruments.md) has more.
+  the wall ratio. For other tools, see the [instruments
+  catalog](instruments.md).
