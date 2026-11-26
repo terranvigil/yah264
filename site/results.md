@@ -14,8 +14,8 @@ and without `-fno-tree-vectorize` so the compiler vectorizes both alike. Goal 3
 runs what each ships: our NEON against x264's hand-written assembly.
 
 Quality is [VMAF v1](https://github.com/terranvigil/yah264/blob/main/docs/vmaf.md),
-which also sees banding, chroma loss and blocking. Pictures smaller than
-1920x1080 are scaled up to fit before scoring. A small encode is then judged
+which also sees banding, chroma loss and blocking. On both sides, pictures
+smaller than 1920x1080 in both dimensions are scaled up to fit before scoring. A small encode is then judged
 the way it would be watched.
 
 These figures were timed on one 18-core Apple M5 Max. A group passes when its
