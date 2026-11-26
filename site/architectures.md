@@ -6,9 +6,9 @@ description: Which processors and instruction sets yah264 is tuned for today, wh
 # Architectures
 
 yah264 is at parity with x264 on Apple silicon. It also runs on x86-64 and on
-ARM servers. We check it for correctness and time it there on rented machines.
-This page lists what runs where. It also explains where an encoder's speed
-comes from, for readers who have never worked on a codec.
+ARM servers, where we check and time it on rented machines. This page lists
+what runs where and explains, for readers new to codecs, where an encoder's
+speed comes from.
 
 ## Where the speed comes from
 
@@ -89,14 +89,15 @@ instruction counts match:
 
 With every core busy on the Intel machine, we take 4% longer than x264 on a
 1080p clip and 10% less time on a 4K one. Threading at high core counts is the
-open x86 item. The results page has the details.
+[open x86 item](results.md#by-processor).
 
 **AVX-512** is built into each x86-64 build by default and runs only on chips
 that report it. `-Davx512=false` leaves it out. It doubles the register width
 again over AVX2. Some chips also lower the clock while it's in use, so a kernel
-can do less work and still take longer. The AVX-512 kernels so far cover pixel
-comparison. On one binary they take about 2% to 4% less CPU time than AVX2 on
-both an AMD EPYC and an Intel Xeon, at one thread and with all cores busy. Motion compensation and the transforms still run on AVX2.
+can do less work and still take longer. The AVX-512 kernels cover pixel
+comparison only. They take about 2% to 4% less CPU time than AVX2 in the same
+binary on both an AMD EPYC and an Intel Xeon, at one thread and with all cores
+busy. Motion compensation and the transforms still run on AVX2.
 
 ## What the tiers leave out
 
