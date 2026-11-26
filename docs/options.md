@@ -244,9 +244,9 @@ alongside it is dropped with a warning.
 `--aq-strength` has two defaults. It's 0.4 under CRF, ABR and two-pass, and 0.0
 under constant QP. An explicit value, including an explicit `0`, always wins.
 0.4 is this encoder's own measured value and differs from x264 medium's 1.0. On
-seven CIF clips in VMAF v1, 0.2 reads a median -2.6% BD-rate against 0.4 and 0.3
-reads -0.1%. 0.5 and 0.6 lose. On those clips the optimum sits at 0.2 or below,
-under the shipped default. Why it comes out so far below the
+seven CIF clips in VMAF v1, the lowest value tried, 0.2, reads best: a median
+-2.6% BD-rate against 0.4, although it still loses +0.33% on stefan. 0.3 reads
+-0.1%, and 0.5 and 0.6 lose. Why it comes out so far below the
 reference's default is an open question.
 
 ### GOP structure
@@ -477,9 +477,9 @@ nothing here suggests moving it from 0.
 | `-t`, `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
 | `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. Under rate control at subme 7 (medium), the default on a picture 1920 or more on its longer side drops `p8x8` and `b8x8`, leaving `i4x4` (and `i8x8` with the 8x8 transform). A list you give is kept. A shape outside the list is never searched and never coded. The macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule. See below. |
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when three things hold: the 16x16 result already costs less than this many lambdas, the neighborhood is homogeneous, and nothing downstream depends on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
-| `--b-preme-skip` | 0..4 | 0 (off); 2 at medium when the longer side is 1920 or more | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. Below a longer side of 1920, at any subme other than 7 and under CQP, it's off, because the largest speed gain left costs up to 0.9% BD-VMAF v1 on a detailed 1080p clip. Under rate control at subme 7 (medium), a picture whose longer side is 1920 or more runs mode 2 unless the option is given. Inert at `--subme` 9 and above. See below. |
+| `--b-preme-skip` | 0..4 | 0 (off); 2 at medium when the longer side is 1920 or more | End a B macroblock at skip before its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. Below a longer side of 1920, at any subme other than 7 and under CQP, it's off. On the 720p half of the HD band, mode 1's worst clip reads +0.21% BD-VMAF v1, at medium's +0.2% per-clip bar, and mode 2's reads +0.43%, over it. Under rate control at subme 7 (medium), a picture whose longer side is 1920 or more runs mode 2 unless the option is given. That default costs +0.86% on sunflower_1080p, which is over the same bar. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
-| `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar, and on at `faster` and below. Under rate control at subme 7 (medium), on a picture whose longer side is 3840 or more, a 0 becomes 2 unless the option is given. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
+| `--lr-settle` | SAD/pixel | preset (1 at `faster` and below, 0 from `fast` up) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. It's off at `fast` and above, where it misses the bar. It's on at `faster` and below, where the band can't resolve that tier's bar (see below). Under rate control at subme 7 (medium), on a picture whose longer side is 3840 or more, a 0 becomes 2 unless the option is given. It's inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
 | `--b-intra-band` | 16ths | 0 (off) | Skip both the B intra SATD screen and the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. The verdict is per band instead of per macroblock. It's taken once per frame from fields the lookahead already built. Off, with the number below. `--no-b-intra-band` is 0. |
@@ -577,7 +577,7 @@ it. On a 1080p clip at the rate it ships at, 38% of the B macroblocks that end
 as skip have run a full motion search first. These three flags each end one of
 those searches earlier. Each trades bits for speed, so each is read in
 BD-VMAF v1 at five shared CRF rungs on a band of twelve 720p and 1080p clips.
-The one that's on costs no more than 0.32% on any clip of that band.
+The one that's on is the one that costs least.
 
 `--p-part-gate` is that one. Where the 16x16 search has already found a cheap
 answer, it searches none of the splits. Cheap is measured in lambdas, so the
@@ -587,8 +587,9 @@ lowres-cost field must not be dispersed, because dispersion marks a motion or
 texture boundary. That's exactly where one vector for the whole macroblock
 shouldn't be trusted. The mb-tree offset also must not say that other frames
 depend on this one. The gate saturates against those interlocks: raising the
-threshold from 400 to 1200 buys almost nothing. That's also why its quality
-holds.
+threshold from 400 to 1200 buys almost nothing. On VMAF v1 it's over medium's
++0.2% per-clip bar on one or two clips of the band. Turning it off reads -0.32%
+raw on ducks, and -0.46% on park_joy referenced to the control.
 
 `--b-preme-skip` is the costliest one to leave off. A coded
 macroblock pays at least its own mb_type and cbp syntax, so no coded mode can
@@ -598,12 +599,16 @@ trials and the subpartitions after it only confirm it. Modes 1 and 2 differ in
 whether reference B slices may use it, because a reference picture's errors
 travel into the pictures that read it.
 
-What keeps it off elsewhere is the shape of the bound, not the idea. A
+What keeps it off below 1920 is the shape of the bound, not the idea. A
 distortion measured in lambdas widens as lambda grows. Lambda grows as the rate
 falls, so the gate is most generous exactly where a wrong skip costs most. On
-the band's hardest 1080p clip it takes nothing at the top of the ladder. At the
-bottom it scores a third of a VMAF v1 point lower on 3% more bytes, and the
-whole ladder reads +0.9%. Modes 3 and 4 read the same distortion as an
+the 720p clips, mode 1's worst clip reads +0.21% with a median of -0.01%. Mode
+2's worst reads +0.43% with a median of -0.15%. Mode 1 sits at medium's +0.2%
+per-clip bar and mode 2 is over it. On the band's hardest 1080p clip, sunflower,
+neither mode costs anything at the top of the ladder. At the bottom, mode 1
+scores a third of a VMAF v1 point lower on 3.4% more bytes, and mode 2 scores
+0.42 points lower on 2.2% more. Over the whole ladder mode 1 reads +0.92%
+against off, and mode 2 reads +0.86%. Modes 3 and 4 read the same distortion as an
 absolute bound that can't widen. They move the damage between clips without
 removing it. Both stay reachable with their numbers recorded.
 
@@ -647,17 +652,18 @@ is above anything the control does. That clip is why it's refused at medium.
 
 Below medium the same threshold ships at `faster` and `veryfast`. Those tiers
 allow +0.5% per clip. The arm is read against that preset's own baseline. At
-`veryfast` the worst clip reads +0.66% and the median +0.03%. At `faster` the
-worst clip reads +0.65% and the median -0.02%. Those two worst clips, both
-fourpeople, are over the tier's bar on the raw reading. Neither is larger than the
-worst clip the control arm below reads at the same tier: +0.69% at `faster`
-and +0.83% at `veryfast`. Because the band can't tell them from noise, it stays
-on at both. At `fast` a worst clip of +0.73% keeps it off. `superfast` and
+`faster` the worst clip reads +0.65% raw and the median -0.02%. At `veryfast`
+the worst reads +0.66% and the median +0.03%. Referenced to the control
+arm clip by clip, the worst clip reads +0.81% at `faster` and +0.90% at
+`veryfast`. Both readings are over the +0.5% bar at both tiers. Because the
+control alone reaches about +0.7% to +0.8% on single clips at these two tiers,
+this band can't resolve a 0.5% bar there. The setting stays on at both until a
+tighter null can read it. At `fast` a worst clip of +0.73% keeps it off. `superfast` and
 `ultrafast` run no lookahead window and are byte-identical either way.
 
 The control is a deliberately near-null arm. It shows how little the instrument
-can resolve. It spans -0.62% to +0.26% at medium and grows at the
-faster tiers. Each arm is read beside the
+can resolve. It spans -0.62% to +0.26% at medium and reaches
++0.69% at `faster` and +0.83% at `veryfast`. Each arm is read beside the
 control's own number on the same clip.
 
 A cheaper lowres search is hard to get. Taking the field down to the plain
@@ -1162,7 +1168,7 @@ An unknown preset name is an error.
 
 | Tune | Effect |
 | --- | --- |
-| `grain` | psy-trellis 1.0, psy-rd 1.5. The default is 2.0, so the tune lowers psy-rd. On five grain clips, 1.5 reads a median -0.2% BD-VMAF v1 against 2.0 and is ahead on four of them. The tune as a whole reads +1.2% to +2.2% against no tune on three of those clips and -1% on the two Nocturne excerpts. |
+| `grain` | psy-trellis 1.0, psy-rd 1.5. The default is 2.0, so the tune lowers psy-rd. On four grain excerpts and touchdown, 1.5 reads a median -0.2% BD-VMAF v1 against 2.0 and is ahead on four of the five. The tune as a whole reads +1.2% to +2.2% against no tune on three of those clips and -1% on the two Nocturne excerpts. |
 | `film` | psy-trellis 0.5. psy-rd left at the 2.0 default. The film value has not been BD-measured for want of a film clip. |
 | `animation` | 4 more B frames, only when `--bframes` isn't given and the preset's count is under 8. psy-trellis and AQ stay at the preset's values. Raising one and lowering the other measured as a coin flip across two cartoon clips. |
 | `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. With psy off, the size-based chroma QP and deblocking offsets stay at 0. |
