@@ -1,15 +1,13 @@
 # Denoise
 
-yah264 has two denoising tools for grainy and noisy sources, and neither is
-on by default. `--nr` takes a learned offset off transform coefficients before
-quantization. `--mcstf` filters the source in time before the lookahead sees
-it. A noise gate in each tool keeps clean content byte-identical to an encode
-without it. Animation is the case where that matters most.
+yah264's two denoising tools, for grainy and noisy sources, are off by
+default. `--nr` takes a learned offset off transform coefficients. `--mcstf`
+filters the source in time before the lookahead. A noise gate keeps clean
+content, animation above all, byte-identical.
 
-The quality numbers here are BD-rate on VMAF v1 of the tool against the
-shipped default on the same binary and CRF ladder, where negative is better.
-The `--mcstf` range row is the exception: it's on VMAF-NEG (earlier metric).
-We score against the original source, never the filtered one.
+Numbers are BD-rate on VMAF v1 against the shipped default on the same binary
+and ladder, scored on the original source. Negative is better. The
+`--mcstf` range row is on VMAF-NEG (earlier metric).
 
 ## When to use which
 
@@ -19,43 +17,41 @@ We score against the original source, never the filtered one.
 | film grain | `--mcstf` | off |
 | clean digital, animation | neither, since both gate themselves off anyway | off |
 
-Don't combine them. On the four grain excerpts plus shields and fourpeople,
-the pair reads a median of -1.26 against -1.44 for `--mcstf` alone.
+Don't combine them. On the grain excerpts plus shields and fourpeople, the
+pair reads a median of -1.26 against -1.44 for `--mcstf` alone.
 
 ## How it works
 
 ### Coefficient noise reduction with `--nr`
 
-`--nr N` sets both block classes, and `--nr-intra` and `--nr-inter` set one
-each. Each takes 0 to 2000 and defaults to 0. Over blocks already quantized,
-the encoder keeps a running mean of |coefficient| per transform position and
-per category: intra or inter, luma or chroma, 4x4 or 8x8. Each coefficient is
-pulled toward zero by `strength * w / (mean + 1)`, bounded by that mean.
-Because H.264's integer transforms aren't orthonormal, `w` is the position's
-squared basis gain, which we measured once by pushing impulses through the C
-transform. One block in four is tallied and the statistics fold in coding
-order, so `--threads 1` repeats byte for byte. The subtraction runs in NEON.
+`--nr N` (0 to 2000, default 0) sets intra and inter blocks. `--nr-intra` and
+`--nr-inter` set one. The encoder keeps a running mean
+of |coefficient| per transform position and category (intra or inter, luma or
+chroma, 4x4 or 8x8). Each coefficient is pulled toward zero by
+`strength * w / (mean + 1)`, bounded by that mean. `w` is the position's
+squared basis gain, since H.264's integer transforms aren't orthonormal. We
+measured it with impulses through the C transform. One block in
+four is tallied, in coding order, so `--threads 1` repeats byte for byte. The
+subtraction runs in NEON.
 
-A spatial noise gate reads a Laplacian percentile of each source picture,
-skipping near-black and near-white blocks. Pictures under its bar get zero
-offsets. The code lives in `src/encoder/nr.c`.
+The gate reads a Laplacian percentile of each picture and skips near-black
+and near-white blocks. Pictures under its bar get no offset. The code is
+`src/encoder/nr.c`.
 
 ### Motion-compensated temporal filter with `--mcstf`
 
-The filter is a queue in front of the lookahead. Every fourth picture is
+Every fourth picture, the anchor spacing at the default `--bframes 3`, is
 replaced by a weighted average of itself and its motion-compensated neighbors.
-Four is the anchor spacing at the default `--bframes 3`. `--mcstf-range` sets
-how many neighbors it uses per side. It takes 1 to 4 and defaults to 1. The weight
-combines temporal distance, block match error and a per-sample photometric
-weight 6 levels wide. Everything downstream, the lookahead included, sees the
-filtered picture.
+`--mcstf-range` sets the neighbors per side, 1 to 4, default 1. The weight
+combines temporal distance, block match error and a photometric weight 6
+levels wide.
 
-This gate reads temporal noise. It takes the 25th percentile of the nearest
-neighbors' block match errors, again skipping near-black and near-white
-blocks. It reads from the quieter side so a cut doesn't trip it. Pictures
-under its bar pass through untouched. The code lives in `src/encoder/mcstf.c`.
+The gate takes the 25th percentile of the nearest neighbors' block match
+errors and skips near-black and near-white blocks. It reads the quieter side
+so a cut doesn't trip it. Pictures under its bar pass through. The code is
+`src/encoder/mcstf.c`.
 
-The two gates and what they read, in levels:
+Gate readings, in levels:
 
 | gate | bar | readings |
 |---|--:|---|
@@ -74,7 +70,7 @@ The two gates and what they read, in levels:
 | `--mcstf` range 1 | on VMAF-NEG, the only setting with no clip worse than +0.00 at 60 frames, at half the search of range 2 |
 | `--mcstf` temporal gate, not spatial | a spatial reading can't separate the grain titles from foreman_cif. It also reads the pillarboxed 1924 scan as clean |
 
-`--mcstf` on the content it's for, 120 frames on the HD band's CRF 23-35 ladder:
+`--mcstf` on grain and noise, 120 frames on the HD band's CRF 23-35 ladder:
 
 | clip | one thread | three threads |
 |---|--:|--:|
@@ -86,13 +82,12 @@ The two gates and what they read, in levels:
 | shields_720p | -1.31 | -1.53 |
 | foreman_cif | +4.11 (standard band) | +3.07 |
 
-touchdown_420 isn't fit for a BD reading ([corpus-sources.md](corpus-sources.md)).
-We read it per rung instead. At matched CRF on the standard band, `--mcstf` takes up
-to 16% fewer bits there and scores slightly higher on every rung.
+touchdown_420 [can't take a BD reading](corpus-sources.md). At matched CRF on
+the standard band, `--mcstf` takes up to 16% fewer bits there and scores
+slightly higher on every rung.
 
-`--mcstf` costs instructions even when its gate passes every picture through,
-because the gate's own neighbor searches still run. In instructions retired at
-one thread and medium:
+Instructions retired at one thread and medium. The gate's searches run even
+when every picture passes through:
 
 | tool | cost |
 |---|--:|
@@ -115,18 +110,16 @@ one thread and medium:
 
 ## Open questions
 
-`--nr` needs a gate that tells grain from detail. The spatial gate gives up
-the grain win on lash_a, which reads -1.49 ungated, because the 1924 scan reads
-clean. Any gate that arms there also has to stay off sintel_720p.
+`--nr` needs a gate that tells grain from detail. The spatial gate reads the
+1924 scan as clean and gives up lash_a's ungated -1.49. A gate that arms there
+must stay off sintel_720p.
 
-`--mcstf` needs to tell noise from untracked motion. foreman's temporal
-reading sits just below Nocturne's. The gate has to separate "the match error
-is noise" from "the match error is motion the search couldn't follow".
-Riverbed, which is water, is the same problem.
+`--mcstf` needs a gate that tells noise from motion the search couldn't
+follow. foreman reads just below Nocturne, and riverbed's water is the same
+case.
 
-Nobody has measured the `--mcstf` wall share at high thread counts. The filter
-runs serially on the driver ahead of the lookahead, so its share of wall grows
-with threads. Read it before putting `--mcstf` in any preset.
+The filter runs serially ahead of the lookahead, so its share of wall grows
+with threads. Measure it before putting `--mcstf` in a preset.
 
 ## Measuring it
 
@@ -141,7 +134,7 @@ The grain clips are 120-frame excerpts the scripts don't fetch:
 
     ffmpeg -ss <off> -i <mov> -frames:v 120 -vf scale=W:H:flags=lanczos,format=yuv420p
 
-Run `scripts/hd_band.py` with a near-null control arm, `Y264_MBT_DEPFLOOR=16`,
-beside the tool. The control needs a dev_knobs build. On the grain clips the
-control's own spread reaches 0.9 (lash_a -0.87), as large as several of the
-tool's per-clip readings.
+Run `scripts/hd_band.py` with a near-null control arm beside the tool:
+`Y264_MBT_DEPFLOOR=16`, in a dev_knobs build. On the grain clips the
+control's spread reaches 0.9 (lash_a -0.87), as large as several tool
+readings.
