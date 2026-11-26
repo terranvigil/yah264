@@ -114,8 +114,8 @@ beside the wall ratio. It reads `/usr/bin/time -l` on macOS and
   `YAH264_NO_ASM=1` is the control, and `none` is its twin. The x86 names are
   inert on aarch64.
 
-Because neither moves a byte, both are identity-cmp axes. Meson's `-Dsimd=` is the
-build-time twin.
+Because neither moves a byte, both are identity-cmp axes. Meson's `-Dsimd=` is
+the build-time twin.
 
 ### Motion search, B modes and direct
 
@@ -148,17 +148,18 @@ build-time twin.
   `--direct temporal` reading under it says nothing.
 - `Y264_DIRECT_LRVOTE=1|2`: which direct derivation the lookahead would pick
   per B frame (`=1` by lowres MV distance, `=2` by lowres bi-pred SATD).
-  Prints `lrvote poc= col= past= T= S= n=`. **Dedupe by POC**, since overlapping
-  mb-tree windows print a frame several times. **Closed negative**: mode 2 doesn't predict new
-  clips. Keep it as the baseline.
+  Prints `lrvote poc= col= past= T= S= n=`. **Dedupe by POC**, since
+  overlapping mb-tree windows print a frame several times. md5-identical on/off.
+  **Closed negative**: mode 2 doesn't predict new clips. Keep it as the
+  baseline.
 - `Y264_DIRECT_SCORE=1`: per B frame, the direct prediction's SSD and
   macroblock count. Run once per `--direct` mode and diff. **The signal is
   weak** (better prediction can code worse), so treat it as a bound, never a
   selector. t1, md5-identical.
 - `Y264_BSKIP_SCREEN=2`: checks the exact B skip screen against the full
   strict probe and aborts on any disagreement, printing probes, accept rate,
-  4x4 blocks and chroma planes proven, and 4x4 transforms before and after the screen. Any thread count,
-  output identical to `=0`/`=1`.
+  4x4 blocks and chroma planes proven, and 4x4 transforms before and after the
+  screen. Any thread count, output identical to `=0`/`=1`.
 
 ### The RD-trial rate estimator
 
@@ -168,7 +169,8 @@ build-time twin.
   `/usr/bin/time -l`, not wall.
 - `Y264_EST_SCRTRACE=1`: a `(site, frame, mb, dist, j, lb_j)` trace per trial,
   to price admissible screens offline by replaying each tournament. A bound
-  built on stored candidate nnz overcounts what the estimator codes. t1 only.
+  built on stored candidate nnz overcounts what the estimator codes. t1 only,
+  md5-identical on/off.
 
 ## 2. What would a perfect version of X buy? (bounds and oracles)
 
@@ -196,8 +198,8 @@ Each must pass its own byte-identity check.
   - **The recording binary must replay every slice QP EXACT.**
     `rc_replay.py` checks 18 configurations.
   - `PLAY_BIN`/`PLAY_ENV` replay another controller. Moved slices are scaled
-    by the 1/qscale law (`Y264_RC_PLAY_K` scales the exponent), and a leaky-bucket VBV estimate
-    prints for both sides. The Annex C
+    by the 1/qscale law (`Y264_RC_PLAY_K` scales the exponent), and a
+    leaky-bucket VBV estimate prints for both sides. The Annex C
     gate stays `hrd_check.py`.
   - A new pixel-derived input must go through `RCR_VAL`, or the replay reads
     `order differs`.
@@ -243,11 +245,11 @@ Each must pass its own byte-identity check.
     worse than +0.5%. `EARLY_STOP=0` reads all. The ABR band and runs against
     the reference never stop early.
 - `ARM='<env>' python3 scripts/band_at_rate.py`: **the CRF band at matched
-  achieved bitrate**, the gate for any arm that moves the operating point (`run_band.py BANDS=crf`
-  would measure ladder placement). It
-  drives `bd_at_rate.py` per clip with `run_band.py`'s ladders, `ARM` /
-  `ARM_ARGS` and `EARLY_STOP`, `JOBS` clips at a time, ending in a median,
-  mean and worst.
+  achieved bitrate**, the gate for any arm that moves the operating point
+  (`run_band.py BANDS=crf` would measure ladder placement). It drives
+  `bd_at_rate.py` per clip with `run_band.py`'s ladders, `ARM` / `ARM_ARGS`
+  and `EARLY_STOP`, `JOBS` clips at a time, ending in a median, mean and
+  worst. Once the arm is refused, clips not yet started are dropped.
 - `BANDS=deep` on the same script: **the deep band (VMAF v1 37-66)** at
   matched rate. Its ladders (`ladders_deep.json`) come from
   `scripts/calibrate_deep.py --write`. foreman is dropped. `BANDS=all` runs
@@ -369,9 +371,10 @@ default.
 - `Y264_QP_TRACE=1` with `scripts/multishot_bd.py`: **where the bits go
   across shots**, a gap the single-shot board can't see. The trace prints each
   frame's slice, coded and intended QP with the mb-tree offset and CRF DC
-  term. `multishot_bd.py` encodes `local/corpus/ms_*.y4m` (plus `.cuts`) at CRF
-  22-34 for any arms and prints BD on VMAF v1 plus per-shot VMAF and bit
-  shares.
+  term. On a skip-heavy shot the coded mean hides the allocation, so read the
+  intended QP. `multishot_bd.py` encodes `local/corpus/ms_*.y4m` (plus
+  `.cuts`) at CRF 22-34 for any arms and prints BD on VMAF v1 plus per-shot
+  VMAF and bit shares.
 - `python3 scripts/m4_label.py --src-dir <dir> --out <jsonl>`: **per-sequence
   arm labels on an external corpus.** Each row has every M4 arm's BD against
   the default at matched rate and the features `tdiff`, `flat`, `tex` and
@@ -381,8 +384,9 @@ default.
   480x272 sequence. See [content-selection.md](content-selection.md).
 - `scripts/shot_determinism.sh [input.y4m]`: **the per-shot re-encode
   contract** ([engine-interface.md](engine-interface.md)). Re-encodes each GOP
-  alone and compares bytes. Gated at `T=1`. Threaded mismatches WARN
-  (`STRICT=1` fails). K and CRF come from the environment.
+  alone with the same pinned frame threads and compares bytes. Gated at
+  `T=1`. Threaded mismatches WARN (`STRICT=1` fails). K and CRF come from the
+  environment.
 - `scripts/cvbr_compliance.sh`, `scripts/vbv_check.py`: VBV and capped-VBR
   violation counts and buffer traces.
 
@@ -449,7 +453,8 @@ both encoders run as libraries in ONE ffmpeg process. It agrees with
   skips it.
 - **Size-match guard**: `RC=crf` and `RC=abrm` rows are rate-matched, so a
   dsize median outside +/-2% or any clip outside +/-5% prints
-  `INVALID: sizes unmatched` and exits 2. `RC=abr` is exempt (see its
+  `INVALID: sizes unmatched` and exits 2. The median bar flags a moved scale,
+  the per-clip bar a solve that didn't converge. `RC=abr` is exempt (see its
   `n rate` / `x rate`). `Y264_DSIZE_TOL` and `Y264_DSIZE_TOL_MAX` move the
   bars. Setting the first also arms the guard at `RC=abr`.
 - **Header check**: the build writes `git hash-object include/yah264.h` to
@@ -592,7 +597,7 @@ byte.**
     PAFF, slices, 4:2:2, 4:4:4, 10-bit (from foreman_cif), 720p, 1080p and
     threads. About 45 s at `BUDGET=4`.
   - t1 cells are final. Threaded cells rerun `REPEAT` times and read VARIES
-    when a side doesn't repeat.
+    (a warning, not a failure) when a side doesn't repeat.
   - A control cell must read DIFF. An encode that never ran can't pass.
   - It clears every `Y264_*`. `ARM_A`/`ARM_B` set env per side.
 
@@ -619,7 +624,8 @@ byte.**
   requires?** It checks frame size, MB/s, DPB, bitrate/CPB (from the HRD or
   `--bitrate`) and the vertical MV bound (a failure only under
   `--strict-mv`). `--exact` demands the declared level EQUAL the pick.
-  `--y4m SRC` supplies a frame rate. There's no default one. Table A-1 is
+  `--y4m SRC` supplies a frame rate when the stream has no VUI timing. There's
+  no default one. Table A-1 is
   transcribed independently, on purpose.
 - `scripts/hdr_check.sh meta`: **do players see the same HDR signaling from
   us as from the reference?** HDR10 on two clips, HLG and SDR-compatible HLG,
@@ -633,8 +639,8 @@ byte.**
   recovery point SEI says?** It decodes from the cut with the parameter sets
   pasted in and compares the LAST `n - k` frames with `--dump-recon`.
   **The cut decode passes `-flags2 +showall`, and the floor is ffmpeg 6.1**,
-  since display policy differs by version (6.1.1 stops two short at end of
-  stream, and asked for all matches 9.0.1). Exit 0 clean, 1 mismatch,
+  since display policy differs by version. 6.1.1 stops two short of draining
+  at end of stream. With `+showall` it matches 9.0.1. Exit 0 clean, 1 mismatch,
   **2 no recovery point**, which fails an `--open-gop` encode.
 - `scripts/h264_syntax.py`: not a gate. The Annex-B / SPS / SEI and slice
   HEADER reader the checkers share, with no entropy decode. `--probe STREAM`
@@ -664,7 +670,7 @@ accessor) or an **unconditional store** in a warm function
 Run it after adding a knob. `make test` and both CI jobs run
 `env_gate_audit.py --self-test` and the audit. Lazy gates in headers are
 refused. An `env-audit-ok: <reason>` marker waives a misjudged gate. A marker
-needs a reason. It counts only in comment text:
+with no reason is an error. The marker counts only in comment text:
 
 - in a comment ending on the line above the definition, with no code on its
   lines (a block comment may open higher, and the reason may start on the next
@@ -712,8 +718,9 @@ SEPARATE slot: a flag passed to `env(1)` fails every run, and the empty
 outputs have matching md5s.
 
 **Kill by PID and VERIFY, never with `kill %N`.** Job-spec kills can fail
-silently in non-interactive shells and leave spinners. **Check `uptime` before timing.**
-Matched-rate band and BD reads are load-immune. Walls and tables aren't.
+silently in non-interactive shells and leave spinners. **Check `uptime`
+before timing.** Matched-rate band and BD reads are load-immune. Walls and
+tables aren't.
 
 ### Conformance beyond the default path
 
@@ -770,7 +777,7 @@ on (no source edits). A stock `--disable-asm` build is a scalar strawman. It
 lives at `~/src/build/x264cli-purec-<rev>/x264`, from the same revision as the
 SIMD CLI. A published pure-C row says so.
 
-**Which reference binary**: say which build produced each number.
+Say **which reference binary** produced each number:
 
 | harness | reference |
 |---|---|
@@ -779,7 +786,8 @@ SIMD CLI. A published pure-C row says so.
 | `scripts/multishot_bd.py` | that checkout's CLI |
 | the dev box's installed x264 | 0.165.3222 (Homebrew) |
 
-Clips come from `scripts/fetch_corpus.sh` ([corpus-sources.md](corpus-sources.md)).
+Clips come from `scripts/fetch_corpus.sh`
+([corpus-sources.md](corpus-sources.md)).
 Notes on instrumenting the reference encoder stay out of the public tree.
 
 ## 7. Traps that have each cost a round
@@ -807,7 +815,8 @@ Notes on instrumenting the reference encoder stay out of the public tree.
   rung moves about 13% of rate, so a fresh solve can land elsewhere. The point
   is PINNED in `tests/.crfpin` per (clip, args, target, tier), resolved before
   the solve cache and part of its key. `Y264_CRF_PIN=0` bypasses it. Each solve
-  prints `pin_state` and `pin_drift_pct`. **Read `pin_drift_pct` before dVMAF**: nonzero means the rate curve moved.
+  prints `pin_state` and `pin_drift_pct`. **Read `pin_drift_pct` before
+  dVMAF**: nonzero means the rate curve moved.
 - **BD reads are sweep-dependent.** Check the saturation flag. A flat reference
   curve makes the number meaningless (touchdown's rows have read absurd
   values).
@@ -867,7 +876,8 @@ Notes on instrumenting the reference encoder stay out of the public tree.
 - **Verify the probe is in the binary you time.** A probe-less build gives a
   clean null.
 - **A guard on an unpopulated signal disables what it guards** and prints
-  a `+0.00%` meaning "never ran". The tell is output identical to baseline, not to the unguarded arm.
+  a `+0.00%` meaning "never ran". The tell is output identical to baseline,
+  not to the unguarded arm.
 - **Check what a substituted field means.** `mb_qp_pre` is the COMBINED offset
   (AQ included). Substituting the mb-tree term alone inflated a result over 2x.
 - **Keying on POC silently UNIONS GOPs**, because POC restarts at every IDR.
@@ -895,8 +905,8 @@ Notes on instrumenting the reference encoder stay out of the public tree.
   `stair_determ.sh` compares across thread counts and `w2_canary.sh` against a
   reference build. A nondeterministic default turns every md5 gate into a
   lottery.
-- **A "byte-identical by construction" argument isn't a gate.** Run it, under load,
-  against the escape.
+- **A "byte-identical by construction" argument isn't a gate.**
+  Run it, under load, against the escape.
 - **TSan can miss a publish-before-write**, a ready flag set before the data
   is computed. The repeated-run md5 loop catches it.
 - **TSan is silent on a stack overflow.** If variance survives every
@@ -909,8 +919,8 @@ Notes on instrumenting the reference encoder stay out of the public tree.
 
 - **SME/SME2 is closed. Don't reopen it.** It needs `-mcpu=apple-m4` or
   `native` (`-march=armv9-a+sme2` SIGILLs). Streaming 512-bit vectors buy 1.08x
-  over 128-bit NEON. `smstart` plus `smstop` costs 9.6 ns against a 3.7 ns satd8x8,
-  and a whole-frame ZA batched SATD reads 0.21x NEON.
+  over 128-bit NEON. `smstart` plus `smstop` costs 9.6 ns against a 3.7 ns
+  satd8x8, and a whole-frame ZA batched SATD reads 0.21x NEON.
 - **Every Metal-armed arm pays the 12-17 ms bring-up floor per table cell.**
   Dispatch latency is fine (0.24-0.26 ms per frame of 720p lookahead work).
   The inter-round idle gap and the DVFS ramp close the route: hot-clock numbers
