@@ -14,7 +14,8 @@ of x264 medium, while with B-frames on the same clips spread from well ahead
 to well behind. We made `--direct auto` the default because the direct-mode
 choice is the largest single cause.
 
-Quality figures on this page are BD-rate on VMAF v1.
+Quality figures on this page are BD-rate on VMAF v1, except the rate-charge
+and B_8x8 SATD-folding rows, which are on VMAF-NEG (earlier metric).
 
 ## How it works
 
@@ -143,8 +144,8 @@ RD on all combinations.
 | Per-macroblock temporal legality | the clause applies to each derivation. Enforcing it per frame wasted the mode on almost every frame |
 | No slice-level guard under auto | adding it lost on every clip it touched, station2 worst |
 | B_8x8 on, behind QGATE=10 | better on 8 of 13 clips on the CRF band for 1.1-1.3% of single-thread wall (median -0.24%, worst sintel +0.37%). The board's quality leg rests on it |
-| QGATE 10 over 6 | 6 costs 2-4% of wall where 10 costs 1.1-1.3%. It buys about twice the gain (a further -0.35% median), which is more than the quality bar needs. 16 is past the knee: it costs a +0.26% median and every clip but akiyo loses |
-| The rate charge with the gate | without it the gate costs half a BD point at its mildest setting. With it the cost is three hundredths |
+| QGATE 10 over 6 | 6 costs 2-4% of wall where 10 costs 1.1-1.3%. It buys about 2.5x the gain (a further -0.35% median), which is more than the quality bar needs. 16 is past the knee: it costs a +0.26% median, and every clip but akiyo and touchdown, which doesn't change, loses |
+| The rate charge with the gate | on the earlier metric, without it the gate costs half a BD point at its mildest setting. With it the cost is three hundredths |
 | B_8x8 searched after the skip exit | searching before the exit throws away 19-30% of all quadrant searches. Quality is the same either way |
 | No 16x8/8x16 at medium by default | on VMAF v1 it helps every band clip but costs 13-21% more instructions |
 | Mid-exit on non-reference B's only | errors in a reference B propagate. Against the full tournament it's within 0.02% on the CRF band except sintel, +0.51%. It's within 0.15% on the ABR band |
@@ -172,7 +173,7 @@ corpus operating points over 150 frames. Both encoders ran at three threads.
 | idea | why not |
 |---|---|
 | Cost-driven B placement (pairwise, path-cost at integer and half pel) | all three demoted too many B-frames and lost clearly. The lowres diamond starts from zero and overestimates the longest-distance leg |
-| `--b-bias` below 0 | -50 removes most B-frames and costs 10-51% on the HD band's ladder |
+| `--b-bias` below 0 | -50 removes most B-frames and costs 10-51% on four clips at the HD band's CRF 23-35 ladder ([options.md](options.md)) |
 | Predict the better direct mode from prediction SSD | coastguard predicts better under temporal but codes worse. samsung does the reverse |
 | Predict it from the direct share | the share barely moves, 86.4% against 86.7%, while BD moves by several points |
 | Decide direct mode per shot in the lookahead, on lowres bi-prediction SATD | it predicted well in sample and not at all out of sample, where it picked the wrong mode on stockholm, shields and parkrun |
@@ -184,7 +185,7 @@ corpus operating points over 150 frames. Both encoders ran at three threads.
 | Propagation-guarded mid-exit for reference B's (`Y264_B_SKIP_EXIT=3`) | quality-neutral (worst akiyo +0.20%) but buys only 0.3-0.5% of wall |
 | `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls. On sunflower it reads the same as the absolute form, and both cost 0.85% against no early skip, 0.4 points on the bottom rung. The absolute form moves the damage between clips. Medium still runs mode 2 on pictures 1920 or more on the longer side |
 | `--rd-surv-rank` (RD only the top-ranked survivors) | +0.63% HD-band median, pedestrian +1.78% |
-| Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. It gives back over a third of the B_8x8 gain |
+| Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. On the earlier metric it gives back over a third of the B_8x8 gain |
 
 ## Open questions
 

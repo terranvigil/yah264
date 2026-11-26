@@ -8,8 +8,7 @@ encode without the tool, and animation is the case that matters most.
 
 The quality numbers here are BD-rate on VMAF v1 of the tool against the
 shipped default on the same binary and CRF ladder, where negative is better.
-The `--mcstf` range row is the exception: it's still on VMAF-NEG (earlier
-metric). We score against the original source, never the filtered one.
+The `--mcstf` range row is the exception: it's on VMAF-NEG (earlier metric). We score against the original source, never the filtered one.
 
 ## When to use which
 

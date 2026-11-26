@@ -164,19 +164,19 @@ off.
 | choice | why |
 |---|---|
 | Hex with the parity features at medium, UMH from `--subme 8` | -4.4% median against x264 medium on the CIF clips without the wide grid's cost |
-| No UMH on 8x8 and smaller | about 6-7% faster single-threaded. Under `--me umh` it costs 0.2-0.7% on the four CIF motion clips: stefan +0.41%, bus +0.46% |
+| No UMH on 8x8 and smaller | about 6-7% faster single-threaded. Under `--me umh` it costs 0.2-0.7% on the four CIF motion clips: foreman +0.66%, bus +0.46%, stefan +0.41% |
 | Seed early-out, K 48 sub-16x16 and 4 at 16x16 | 2-3% of wall at 12 threads for a CRF-band median of +0.15% |
 | Capped diamond sub-pel at medium | a speed trade. Slower presets keep the square |
 | Adaptive partition margin plus importance rescue (mode 4) | against no early termination the margin alone costs a 0.46% band median and mode 4 costs 0.37%. The rescue buys back that 0.09 for 1-3 points of the margin's 4.33% wall saving |
 | `--p-part-gate 400` | holds quality on every clip of the 12-clip HD band: no clip moves by more than 0.32%. It removes the P tournament's most numerous searches |
-| Ref-0 exit at K=1200 | against K=600, shields (the worst clip on wall) is 8.4% faster at one thread. The CRF band median is 0.00%, because the exit doesn't run at CIF, but fourpeople pays +1.90% and touchdown +1.83% |
+| Ref-0 exit at K=1200 | against K=600, shields (the worst clip on wall) is 8.4% faster at one thread. The CRF band median is 0.00%, because the exit doesn't run at CIF, but fourpeople pays +1.90% |
 | Intra admission at 1.5x (P) and 0.75x (B) | 1.5x is BD-neutral for 1.06x CIF and 1.11x 720p in pure C. Because B intra wins a few dozen macroblocks in 300,000, its margin is tighter |
 | RDOQ on the winner only at medium (`--trellis 1`) | 1.18x faster at CIF and 1.29x at 720p in pure C, for a +0.36% CRF-band median (sintel +3.87% is the worst clip) |
 | Viterbi RDOQ under CABAC at medium | -1.94% median against the greedy search on the CRF band, and 1.1-1.3x faster |
 | Intra RDOQ lambda ramped to zero below a source variance of 8 | without it RDOQ drops the small levels in smooth gradients. The I frame then bands |
 | Round-to-nearest RDOQ seed | a deadzone seed drops would-be level-1 coefficients with no RD look. Round-to-nearest gained on the corpus mean, most on park_joy, with no clip worse |
-| Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable. That's a different tool. Above 3 the results are flat: the shapes we re-read are within 0.2% of each other on the median |
-| 4x4 tail `3,2,2,1,1,1,1,1` | a free choice on a flat plateau. The shorter tail `3,2,2,1,1,1` reads 0.19% better on the CRF band median and the same on the deep band (median 0.00%, every clip inside the deep band's noise of about 1 point), so neither band separates them. No speed or size cost, and 254/254 conformance |
+| Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable. That's a different tool. Above 3 the results are flat: the shapes measured are within 0.2% of each other on the median |
+| 4x4 tail `3,2,2,1,1,1,1,1` | a free choice on a flat plateau. The shorter tail `3,2,2,1,1,1` reads 0.19% better on the CRF band median and the same on the deep band (median 0.00%, every clip within the v1 deep band's measured null of about ±1.0 per clip), so neither band separates them. No speed or size cost, and 254/254 conformance |
 
 ## What didn't work
 
@@ -190,7 +190,7 @@ off.
 | Constant threshold plus heterogeneity and importance guards (mode 2) | still +0.42% mean. The guards protect so many blocks that only 2-4% speed is left |
 | Seed partition searches from the 16x16 and sibling winners | no speed gain, since the seeds are already saturated, and bus loses |
 | Hex iteration cap | near zero: the hex already exits on convergence |
-| `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: against `--me umh`, pedestrian +5.3% / +5.6%. The SAD-cheapest vector isn't the one that codes best |
+| `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: against the hex default, pedestrian reads +11.0% / +11.3%, where `--me umh` reads +5.4%. The SAD-cheapest vector isn't the one that codes best |
 | A 9/8 intra admission margin | no quality gain: it reads neutral against 1.5x (median 0.00%, worst sintel +0.29%). Whether its speed is worth taking is open |
 | Decimate head weight 2 | +1.09% mean, sintel +9.6%: lets an adjacent nonzero pair be dropped |
 | Decimate threshold 4 with the shipped table, or thresholds 6/4 | +0.92% mean at 4, sintel +9.1%. RDOQ already drops marginal coefficients, so 6/4 over-decimates |

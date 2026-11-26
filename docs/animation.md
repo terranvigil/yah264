@@ -8,7 +8,7 @@ CGI and slightly behind on hand-drawn.
 
 All numbers here are BD-rate on VMAF v1, where negative is better. Self-A/Bs
 are against yah264's shipped default on the same binary, read at CRF 30 to 42
-on 180-frame windows with both sides at two threads. Cross-encoder numbers are
+on 180- and 140-frame windows with both sides at two threads. Cross-encoder numbers are
 against x264 medium.
 
 ## What yah264 does

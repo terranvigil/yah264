@@ -8,10 +8,13 @@ A general per-clip selector over the content-split constants doesn't work with
 frame-level features. The prize is real, although a small minority of
 sequences holds it.
 
-All numbers are BD-rate on VMAF v1 against the shipped default at matched
-achieved bitrate unless noted. Negative is better. The 239-sequence BVI-AOM
-labels and everything derived from them are still on VMAF-NEG (earlier metric),
-and the page says so where they appear.
+All numbers are BD-rate on VMAF v1 against the shipped default. Negative is
+better. The gate-corpus ceiling, the `flat < 1` read and the psy flat gate are
+at matched achieved bitrate. The other rows share CRF points between the two
+sides: `--direct auto` at per-clip CRF sets and two threads, the AQ and psy-rd
+rows on CRF ladders. The 239-sequence BVI-AOM labels and everything derived
+from them are on VMAF-NEG (earlier metric), and the page says so where they
+appear.
 
 ## What ships
 
@@ -63,9 +66,8 @@ luck. The best rule from `flat`/`tex` picks the stronger mb-tree when
 `flat < 1`. Held out on the BVI-AOM labels (VMAF-NEG), it scores -0.29%
 against a -1.43% ceiling. On the 29 sequences it fires on it wins 14 and
 loses 12. That's a coin flip with a few big winners. On the gate corpus it
-fires on coastguard and ducks and loses overall. We re-read that same fixed
-rule on VMAF v1 with no refit, and it still loses: +0.25% mean over the twelve
-clips, because ducks loses more than coastguard gains.
+fires on coastguard and ducks and loses overall: +0.25% mean over the twelve
+clips on VMAF v1, because ducks loses more than coastguard gains.
 
 Other content-split constants point the same way. We refused each as a global
 default because it's narrow:
