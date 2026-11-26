@@ -1,122 +1,105 @@
 # B-frames
 
-B-frames hold most of the macroblocks in a yah264 stream. Because adaptive
-placement fills every run on the board clips at the default `--bframes 3`,
-about three pictures in four are B. This page covers where B-frames go, how a
-B macroblock picks a mode and how the encoder decides that a B macroblock is
-a skip. The modes are direct, the 16x16 list modes and B_8x8.
-[Motion search and mode decision](motion-and-modes.md) covers motion search
-and the shared RD machinery.
+About three pictures in four are B, because adaptive placement fills every
+run on the board clips at the default `--bframes 3`. This page covers B
+placement, mode choice and skips. See [motion search and mode
+decision](motion-and-modes.md) for the shared machinery.
 
-yah264's results vary more with content on the B path than anywhere else.
-With `--bframes 0` every 1080p clip in the corpus sits within a few percent
-of x264 medium, while with B-frames on the same clips spread from well ahead
-to well behind. We made `--direct auto` the default because the direct-mode
-choice is the largest single cause.
+Results vary with content most on the B path. At
+`--bframes 0` every 1080p corpus clip is within a few percent of x264 medium.
+With B-frames they range from well ahead to well behind, mostly because of
+the direct-mode choice. That's why `--direct auto` is the default.
 
-Quality figures on this page are BD-rate on VMAF v1, except the rate-charge
-and B_8x8 SATD-folding rows, which are on VMAF-NEG (earlier metric).
+Quality figures are BD-rate on VMAF v1. The rate-charge and B_8x8
+SATD-folding rows are on VMAF-NEG (earlier metric).
 
 ## How it works
 
 ### Placement
 
-With `--b-adapt 1` the lookahead decides frame by frame. For each candidate,
-each 8x8 lowres block takes the cheapest of three costs: inter against the
-previous frame, inter against the next one, or intra. The candidate stays a B
-while that sum is under 0.77 of its total intra cost. Otherwise it becomes an
-anchor. The run limit (`--bframes`), the key-frame interval and scene cuts
-are hard limits on top of that. `--b-adapt 0` codes a fixed cadence.
+With `--b-adapt 1` the lookahead decides frame by frame. A candidate stays a B
+while the sum of its 8x8 lowres blocks' cheapest costs (inter from either
+neighbor, or intra) is under 0.77 of its total intra cost. `--bframes`, the
+key-frame interval and scene cuts are hard limits. `--b-adapt 0` codes a
+fixed cadence.
 
-With `--bframes 2` or more, `--b-pyramid normal` codes the run as a pyramid.
-The middle B is a reference picture that the leaves on either side read.
+With `--bframes 2` or more, `--b-pyramid normal` makes the middle B a
+reference that the leaves on either side read.
 
-`--b-bias` moves the 0.77 line linearly. The line reaches 1.0 at +100 and
-drops to 0 at -100. It's a dial for trading B-frames away. See
-[why it isn't a quality setting](options.md#--b-bias-is-a-tuning-dial).
+`--b-bias` moves the 0.77 line linearly, to 1.0 at +100 and 0 at -100. It's a
+dial for trading B-frames away. See [why it isn't a quality
+setting](options.md#--b-bias-is-a-tuning-dial).
 
 ### The B macroblock at medium
 
-At `--subme 8` and below, a B macroblock goes through these steps in order:
+At `--subme 8` and below, a B macroblock goes through these steps:
 
 1. **Direct prediction.** The slice's direct mode, spatial or temporal,
-   derives a vector pair. Temporal can refuse a macroblock, as the next
-   section explains. That macroblock then has no direct mode.
-2. **Early B_Skip.** A strict probe tests whether the direct residual
-   quantizes to nothing. It rounds to nearest where the P probe uses a
-   deadzone. When the residual vanishes, the macroblock is a skip before any
-   search. An exact SSD screen in front of the probe (`Y264_BSKIP_SCREEN`)
-   proves most answers without the transforms.
-3. **Searches.** List 0 searches all active references and counts reference
-   bits in the cost. List 1 searches one reference. Bi reuses the list-0
-   winner's reference. Each list's search is seeded with the spatial
-   neighbors' vectors and the lowres pair vectors. The direct vector joins
-   them only when its derivation succeeded.
-4. **SATD phase.** The direct, L0, L1 and Bi 16x16 predictions are built once
-   and ranked by SATD plus vector rate. A mode survives to full RD when it's
-   within `best * 17/16 + 1`, or 18/16 with psy-rd on. That usually means two
-   to four RD trials. Bi and uni both stay in when they're close.
+   derives a vector pair. A macroblock that temporal refuses has no direct
+   mode.
+2. **Early B_Skip.** If the direct residual quantizes to nothing under a
+   strict round-to-nearest probe (the P probe uses a deadzone), the
+   macroblock skips before any search. An exact SSD screen
+   (`Y264_BSKIP_SCREEN`) settles most answers without transforms.
+3. **Searches.** List 0 searches all active references, counting reference
+   bits. List 1 searches one. Bi reuses the list-0 winner's. Seeds are the
+   spatial neighbors' vectors, the lowres pair vectors and, when derived, the
+   direct vector.
+4. **SATD phase.** The direct, L0, L1 and Bi 16x16 predictions are ranked by
+   SATD plus vector rate. Modes within `best * 17/16 + 1`, or 18/16 with
+   psy-rd, go to full RD. That's usually two to four. Bi and uni both stay in when they're
+   close.
 5. **Mid-tournament skip exit** (`Y264_B_SKIP_EXIT=1`). After the 16x16 RD
-   trials, a non-reference B commits skip here when skip still has the best
-   cost and direct's SATD is within 33/32 of the best searched 16x16. Nothing
-   after this point runs.
-6. **B_8x8**, behind the quadrant gate described below.
-7. **Intra screen.** I_16x16 SATD must be under 0.75x the best inter SATD
-   before intra gets an RD trial.
+   trials, a non-reference B commits skip when skip still has the best cost
+   and direct's SATD is within 33/32 of the best searched 16x16.
+6. **B_8x8**, behind the quadrant gate below.
+7. **Intra screen.** Intra gets an RD trial only when I_16x16 SATD is under
+   0.75x the best inter SATD.
 8. **Commit.** The winner is re-encoded with RDOQ (`--trellis 1`).
 
-At `--subme 9` and up the full tournament runs, with none of the gates, screens
-or exits above. Each 16x16 mode gets RD. The encoder also searches 16x8 and
-8x16.
+`--subme 9` and up skip these gates, screens and exits. Every 16x16 mode gets
+RD, and 16x8 and 8x16 are searched.
 
 ### Direct mode and `--direct auto`
 
-The spatial direct vector is normative. Clause 8.4.1.2.2 derives it from the
-neighbors and the co-located block. Because the decoder derives the same
-vector, the encoder can't improve it. All the encoder chooses is the slice's
-mode flag and whether a given macroblock uses direct at all.
+Because clause 8.4.1.2.2 fixes the spatial direct vector, the encoder only
+chooses the slice's mode flag and whether each macroblock uses direct.
 
-Temporal legality is checked per macroblock. Clause 8.4.1.2.3 requires the
-picture that a co-located block refers to to be in the current list 0. The
-requirement holds where the derivation runs, not at the slice header. A
-macroblock with an unresolvable co-located reference loses direct for itself
-and nothing else. That costs a median of about 1.7% of macroblocks, where a
-frame-wide check would have demoted almost nine frames in ten to spatial.
+Temporal legality is checked per macroblock, since clause 8.4.1.2.3 requires
+the co-located block's reference to be in list 0 at each derivation. A
+failing macroblock loses direct for itself only, a median of about 1.7% of
+macroblocks. A frame-wide check would have demoted almost nine frames in ten
+to spatial.
 
-Auto chooses the mode for each slice by vote. On a diagonal sample of one
-macroblock in eight, the encoder derives both direct modes, runs the strict
-skip probe on each and counts how many macroblocks each mode would make
-skippable. Those counts fold into a running score in coding order that decays
-by 9/10 whenever the total passes the sampled macroblock count. Each new B
-slice takes the mode with the higher score. The fold is deterministic at
-every thread count.
+Auto picks each slice's mode by vote. On a diagonal sample of one macroblock
+in eight, the encoder derives both modes and counts how many macroblocks each
+would make skippable under the strict probe. The counts fold into a running
+score in coding order, decaying by 9/10 whenever the total passes the sampled
+count. Each new B slice takes the higher score, deterministically at any thread
+count.
 
-The staircase stays on with auto (`Y264_STAIR_TDIR=1`). It holds the derived
-list-1 vector to the same row bound as the list-1 searches. A macroblock
-whose vector would exceed the bound drops direct.
+With auto, the staircase (`Y264_STAIR_TDIR=1`) drops direct where the
+derived list-1 vector exceeds the list-1 searches' row bound.
 
-`--direct temporal` fixes the mode to temporal and adds a slice-level guard.
-The slice uses temporal only when the co-located picture's own first list-0
-picture is this slice's first list-0 picture. Under the default pyramid the
-guard sends 37 of 111 B slices per 150 frames to spatial. We left the guard
-out of auto because the vote already refuses temporal where the interval
+`--direct temporal` adds a slice-level guard: temporal only when the
+co-located picture's first list-0 picture is this slice's. Under the default
+pyramid it sends 37 of 111 B slices per 150 frames to spatial. Auto leaves the
+guard out because the vote already refuses temporal where the interval
 mismatch hurts.
 
 ### B_8x8
 
-B_8x8 splits the macroblock into four independently predicted 8x8 quadrants.
-Each quadrant picks B_Direct_8x8, B_L0_8x8, B_L1_8x8 or B_Bi_8x8. The 8x4,
-4x8 and 4x4 sub-partitions aren't implemented. Each quadrant is searched from
-the 16x16 winner per list and held to its list-0 reference, because a cold
-search over all references would make the mode unaffordable.
+B_8x8 splits the macroblock into four quadrants that pick direct, L0, L1 or
+Bi. The 8x4, 4x8 and 4x4 sub-partitions aren't implemented. A quadrant
+is searched from the 16x16 winner per list and held to its list-0
+reference.
 
-Three things keep B_8x8 cheap. The quadrant gate (`Y264_B8_QGATE=10`) runs
-four `satd8x8` on the winning 16x16 prediction to decide whether the eight
-quadrant searches run at all. A split only pays where the quadrants want
-different motion. The gate admits a macroblock when its worst quadrant holds
-more than `1 + n/16` of an even share: `qmax * 4 * 16 > qsum * (16 + n)`.
+Three things keep B_8x8 cheap. First, the quadrant gate (`Y264_B8_QGATE=10`)
+runs four `satd8x8` on the winning 16x16 prediction. The eight quadrant
+searches run only when the worst quadrant holds more than `1 + n/16` of an
+even share: `qmax * 4 * 16 > qsum * (16 + n)`.
 
-The quadrant sum is then charged B_8x8's own mb_type and sub_mb_type rate in
+Second, the quadrant sum is charged B_8x8's mb_type and sub_mb_type rate in
 the SATD domain:
 
 | part | bits |
@@ -126,19 +109,17 @@ the SATD domain:
 | an L0 or L1 quadrant | 3 |
 | a Bi quadrant | 5 |
 
-Last, B_8x8 faces the same RD screen as the other candidates. Its trial runs
-only when the quadrant sum is within the tournament's threshold. Because the
-search runs after the skip exit, macroblocks that leave as skips never pay
-for it.
+Third, the RD trial runs only when the quadrant sum is within the
+tournament's threshold. The search runs after the skip exit, so skips never
+pay for it.
 
 ### 16x8 and 8x16
 
-Medium searches no rectangular split by default. With `Y264_B_RECT=1`, a B
-macroblock that reaches the RD stage tries the one orientation that splits
-the 16x16 winner's error most unevenly. That search is seeded from the 16x16
-vectors. The knob needs the b8x8 partitions, which medium's automatic set
-leaves out from 1080p up. `--subme 9` and up search both orientations and run
-RD on all combinations.
+Medium searches no rectangular split by default. `Y264_B_RECT=1` tries the
+orientation that splits the 16x16 winner's error most unevenly, seeded from
+its vectors, on macroblocks that reach RD. It needs the b8x8 partitions,
+which medium drops from 1080p up. `--subme 9` and up search both
+orientations and run RD on all combinations.
 
 ## What we chose and why
 
@@ -165,13 +146,11 @@ The quadrant gate settings, on the CRF band:
 | 10 (shipped) | 1.1-1.3% of single-thread wall | -0.24% median against B_8x8 off, worst sintel +0.37% |
 | 16 | | +0.26% median against 10. Every clip but akiyo and touchdown loses, and touchdown doesn't change |
 
-These modes are expensive in any encoder. On four of our clips, x264 spends
-4.6-10.6% of its wall on the same B partition set. With the quadrant gate at
-4, our cost came to between 0.8x and 1.4x of x264's.
+On four of our clips x264 spends 4.6-10.6% of its wall on the same B
+partitions. With the gate at 4, our cost was 0.8x to 1.4x of x264's.
 
-The table below compares fixed temporal with fixed spatial direct and the
-shipped vote. All three are BD-rate against x264 medium, rate-anchored on the
-corpus operating points over 150 frames. Both encoders ran at three threads.
+Direct mode against x264 medium, rate-anchored at the corpus operating points
+over 150 frames. Both encoders ran at three threads.
 
 | clip | spatial | temporal | auto |
 |---|--:|--:|--:|
@@ -203,58 +182,52 @@ corpus operating points over 150 frames. Both encoders ran at three threads.
 ## Open questions
 
 - The skip decision is settled. Nothing built reaches the 1.088x and 1.104x
-  that a perfect B skip decision after the ref-0 searches is worth on the
-  low-rate cells. The remaining prize is making the tournament itself
-  cheaper.
-- Most B_8x8 quadrant searches lose. Past its gate, the RD trial beats the
-  running best in 4.5-11% of trials. A gate that predicts "B_8x8 will win here"
-  better than four `satd8x8` would save searches at equal quality. Measure the
-  predictor's precision on the real population first, because the same argument
-  underdelivered for the skip decision.
-- The propagation guard reads the wrong quantity. `mbtree_off` is the
-  combined AQ and propagation offset. It doesn't isolate the propagation term.
-  A guard on `mbtree_off >= 0` is right for the wrong reason. It'll move if
-  `--aq-strength` or offset centering changes.
-- Whole-run placement exists as an off-by-default arm with three cost
-  corrections. It hasn't shipped.
-- Temporal direct's availability depends on how often the co-located
-  picture's references fall in the current list 0. We haven't costed
-  reference-list construction under the pyramid as a way to raise it.
+  a perfect B skip after the ref-0 searches is worth on the low-rate cells.
+  The remaining prize is a cheaper tournament.
+- Past the gate, B_8x8 beats the running best in only 4.5-11% of RD trials.
+  A better predictor than four `satd8x8` would save searches. Measure its
+  precision on the real population first, since the same argument
+  underdelivered for skips.
+- The propagation guard reads `mbtree_off`, the combined AQ and propagation
+  offset. A guard on `mbtree_off >= 0` is right for the wrong reason and will
+  move if `--aq-strength` or offset centering changes.
+- Whole-run placement is an unshipped, off-by-default arm with three cost
+  corrections.
+- Temporal direct is available only when the co-located picture's references
+  are in list 0. Reference-list construction under the pyramid could raise
+  that. We haven't costed it.
 
 ## Measuring it
 
-The `Y264_*` variables here are read only in a build configured with
-`-Ddev_knobs=true`.
+The `Y264_*` variables need a `-Ddev_knobs=true` build.
 
 - `Y264_DIRECT_WHY=1` prints each B slice's list 0, the co-located reference
-  POCs with a star on unresolvable ones, a hash of the co-located field and
-  the auto vote. `Y264_DIRECT_SCORE=2` logs both modes' skippable counts per
-  frame. Neither changes the output.
+  POCs (starred when unresolvable), a hash of the co-located field and the
+  vote. `Y264_DIRECT_SCORE=2` logs both modes' skippable counts per frame.
+  Neither changes the output.
 - `Y264_B8_STAT=1` counts B_8x8 searches, RD trials, wins and skip-exit
-  waste. `Y264_BPROF=1` bins B tournament wall by stage and final verdict.
-  Both keep their counts in plain globals, so run them at `--threads 1`.
+  waste. `Y264_BPROF=1` bins B tournament wall by stage and verdict. Both use
+  plain globals, so run them at `--threads 1`.
 - `scripts/b_census.py` gives the decoder-side B mode census.
-- Anchor 1080p comparisons to the calibrated rate with
-  `scripts/bd_at_rate.py`, or name the band. The page on
-  [where the corpus comes from](corpus-sources.md) says where the calibrated
-  points live. A shared CRF point set puts clips of different difficulty in
-  different places. Several 1080p claims turned out to be band artifacts.
+- Anchor 1080p comparisons to the [calibrated rate](corpus-sources.md) with
+  `scripts/bd_at_rate.py`, or name the band. A shared CRF point set places
+  clips of different difficulty differently. Several 1080p claims were band
+  artifacts.
 - Resampling doesn't validate a rare positive class. The per-shot direct
   selector passed leave-one-out on two positives and failed all three new
   ones.
 - Run `scripts/determ_repeat.sh` and `scripts/stair_determ.sh` under load for
   anything touching B analysis order. Recon-match can't see run-to-run
-  nondeterminism, because each run decodes to what it built.
-- `temporal_direct` returns 0 from inside its four-block loop and leaves its
-  output partly written. `analyze_b_mb` zeros the struct first and seeds the
-  searches with the direct vector only on success. An uninitialized seed
-  there made threaded output vary between runs without touching the recon.
-  Neither TSan nor ASan sees it.
+  nondeterminism, since each run decodes to what it built.
+- `temporal_direct` returns 0 mid-loop with its output partly written.
+  `analyze_b_mb` zeros the struct first and seeds with the direct vector only
+  on success. An uninitialized seed there made threaded output vary between
+  runs without touching the recon, invisible to TSan and ASan.
 - Clause 9.3.3.1.1.6 sets a B_Direct_8x8 neighbor's `refIdx` condTermFlag to
-  0 under CABAC, whatever its derived reference. The case only shows with
-  `--ref` above 1 and mixed sub-types.
-- `y264_me_mc_luma` writes a stride-16 destination. An 8x8 caller must give
-  it a 16-wide buffer.
+  0 under CABAC, whatever its derived reference. It only shows with `--ref`
+  above 1 and mixed sub-types.
+- `y264_me_mc_luma` writes a stride-16 destination. An 8x8 caller needs a
+  16-wide buffer.
 - Reproduce the B_8x8 arm:
 
   ```
