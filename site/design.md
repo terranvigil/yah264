@@ -55,16 +55,23 @@ concurrency before coordination costs more than the work it buys. At 352 by
 1080p frame has far more to give.
 
 We pick the thread count in two steps. Auto takes the smaller of the core
-count and 16. Then the picture caps it: 12 threads for CIF, 21 for 720p, 32 for
-1080p. Under auto only the CIF-and-smaller caps ever bite. The others apply when a caller
-asks for a count, which we honor and then clamp.
+count and 16, and then the picture caps it:
 
-Nobody measured a knee at 16. It's a safe default on an unknown machine
-because wavefront scaling hits the picture's critical path well before it runs
-out of cores. The critical path is the longest chain of work that has to run in
-order. On a chip with two kinds of core, the last workers go to the slow ones
-and lengthen that chain. The one measurement behind the default is at CIF, where 18 threads read
-6 to 11% worse than 8. Runs on rented 32- and 96-vCPU machines are on the
+| picture | thread cap |
+|---|--:|
+| CIF | 12 |
+| 720p | 21 |
+| 1080p | 32 |
+
+Under auto only the CIF-and-smaller caps ever bite. The others apply when a
+caller asks for a count, which we honor and then clamp.
+
+Nobody measured a knee at 16. It's a safe default on an unknown machine. Wavefront
+scaling hits the picture's critical path, the longest chain of work that has to
+run in order, well before it runs out of cores. On a chip with two kinds of
+core, the last workers go to the slow ones and lengthen that chain. The one
+measurement behind the default is at CIF, where 18 threads read 6 to 11% worse
+than 8. Runs on rented 32- and 96-vCPU machines are on the
 [results page](results.md#by-processor).
 
 The [interactive threading page](threading.html) walks through the model with
@@ -87,14 +94,15 @@ error that the encoder uses to choose between two ways of coding a block.
 Adjusting it per block accounts for much of our quality lead over x264.
 
 Under capped CRF the encoder codes to the quality target. The buffer can only
-take bits away. It models what a decoder could have received by the time it
-needs each frame. Respecting it keeps a stream playable. If the cap never
-bites, you get exactly the CRF encode you asked for at the same thread count.
-Once it bites, everything after it changes. Every later GOP opens on a
-half-full buffer, which costs a few bits. Where the cap is tight, a per-frame
-budget pulls the buffer back toward half full. Nothing else under CRF watches
-the bit count. Without that budget the buffer would drain until a prediction
-error became an underflow.
+take bits away. The buffer models what a decoder could have received by the
+time it needs each frame, so respecting it keeps a stream playable. If the cap
+never bites, you get exactly the CRF encode you asked for at the same thread
+count. Once it bites, everything after it changes. Every later GOP opens on a
+half-full buffer, which costs a few bits.
+
+Where the cap is tight, a per-frame budget pulls the buffer back toward half
+full. Nothing else under CRF watches the bit count. Without that budget the
+buffer would drain until a prediction error became an underflow.
 
 The buffer compliance test runs six clips at three caps through both VBV paths.
 We pass 29 of its 36 cells. The seven we fail are tight caps and mid-stream
@@ -105,13 +113,12 @@ cover. The two counts aren't one ratio.
 
 Across shots, the base quantizer under CRF is flat per frame type and moves with
 the frame mean of the per-macroblock offsets. That mean holds the
-macroblock-tree boost and the adaptive quantization's energy term. We apply the
-energy term's frame mean on the anchor frame's base QP. That mean is scaled by 1.3
-under uncapped CRF and 1.04 under a VBV cap or a bitrate target. Because B
-frames predict from an earlier and a later picture, they inherit the shift
-through the offsets under the anchor. A busy shot then codes a little cheaper
-and a quiet one a little better. The term's within-frame part keeps the gentler
-strength that won on single-shot clips.
+macroblock-tree boost and adaptive quantization's energy term. We put the
+energy term's frame mean on the anchor frame's base QP, scaled by 1.3 under
+uncapped CRF and 1.04 under a VBV cap or a bitrate target. B frames inherit the
+shift through the offsets under the anchor. A busy shot then codes a little
+cheaper and a quiet one a little better. The term's within-frame part keeps the
+gentler strength that won on single-shot clips.
 
 On file input, `--cut-split` puts an IDR on every cut the pre-scan finds.
 Nothing after a cut predicts across it. `--shot-crf` gives each shot its own
@@ -147,20 +154,21 @@ how far each pixel ends up from the source. `--tune psnr` turns the term off.
 ## The SIMD tier
 
 SIMD instructions do the same arithmetic on many pixels at once. We write them
-as intrinsics rather than hand assembly. Intrinsics are C functions that map
-one for one onto the instructions. The cost is that the compiler schedules instructions and
-allocates registers, which is where hand assembly can still win a kernel. Every kernel
-is checked against the plain C version of the same routine and benchmarked
-through checkasm.
+as intrinsics, C functions that map one for one onto the instructions, instead
+of hand assembly. The compiler then schedules instructions and allocates
+registers, which is where hand assembly can still win a kernel. Every kernel is
+checked against the plain C version of the same routine and benchmarked through
+checkasm.
 
-NEON, the ARM form, came first because Apple silicon is the development
-machine. It's about 4,000 lines in five files. The same kernel families now
-exist for SSE4.2 and AVX2 on x86-64, picked at run time. AVX-512 kernels cover
-the pixel comparisons. They beat AVX2 on both an AMD and an Intel machine.
-Every x86-64 build includes them and uses them where the chip has AVX-512. On
-Linux ARM servers with 256-bit SVE, such as AWS Graviton3, SVE kernels take
-over the widest NEON ones. The [SIMD notes](https://github.com/terranvigil/yah264/blob/main/docs/simd.md)
-have the plan and the order the kernel families shipped in.
+| tier | where it runs | coverage |
+|---|---|---|
+| NEON | ARM, including the Apple silicon development machine | about 4,000 lines in five files |
+| SSE4.2, AVX2 | x86-64, picked at run time | the same kernel families as NEON |
+| AVX-512 | x86-64 chips that have it, included in every x86-64 build | pixel comparisons. They beat AVX2 on both an AMD and an Intel machine. |
+| SVE | Linux ARM servers with 256-bit SVE, such as AWS Graviton3 | replaces the widest NEON kernels |
+
+The [SIMD notes](https://github.com/terranvigil/yah264/blob/main/docs/simd.md)
+have the plan.
 
 ## Decoder
 
