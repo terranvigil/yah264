@@ -297,12 +297,12 @@ clips held most of the gain.
 <div class="aside">
 <p class="aside-title">Two ways to fool yourself</p>
 <p>Two mistakes make an encoder measure better than it is. One is tuning on
-the clips you test with. Tune on a different set of clips and a result can move
-by ten percent. That's why anything we fit is trained on other people's video
-and tested on ours. The other is comparing at the same setting instead of the
-same size. A change that only shifts how a quality setting maps to bits produces
-a bigger file with better scores and passes for an improvement. For that reason
-every comparison here is made at the same achieved bitrate.</p>
+the clips you test with. Tune on a different set and a result can move by ten
+percent. Anything we fit is trained on other people's video and tested on ours.
+The other is comparing at the same setting instead of the same size. A change
+that only shifts how a quality setting maps to bits makes a bigger file with
+better scores, which passes for an improvement. Every comparison here is made at
+the same achieved bitrate.</p>
 </div>
 
 ## Rate control
@@ -337,14 +337,14 @@ CRF holds *perceived* quality roughly steady and lets the bitrate go where it
 must. QP still moves with the content. It moves much less than the complexity
 does because the eye can't follow detail in fast motion.
 
-That's why CRF is the right default whenever file size isn't capped. Because
-constant QP holds the quantizer steady instead of the look, it overspends on
-frames nobody is scrutinizing and starves the still ones where errors show.
-Single-pass ABR chases a bitrate number through a feedback loop. Its quality
-wobbles most at the scene changes a viewer is likeliest to notice. CRF chases
-nothing and pays what each scene actually costs. At the same bits, that buys a
-steadier picture than single-pass ABR. Two-pass also reaches a steady picture
-for the price of a second pass. Use it when you need a known output size.
+CRF is the right default whenever file size isn't capped. Constant QP holds the
+quantizer steady instead of the look. It overspends on frames nobody is
+scrutinizing and starves the still ones where errors show. Single-pass ABR
+chases a bitrate through a feedback loop. Its quality wobbles most at the
+scene changes a viewer is likeliest to notice. CRF pays what each scene costs,
+which at the same bits gives a steadier picture than single-pass ABR. Two-pass
+also reaches a steady picture, for the price of a second pass. Use it when you
+need a known output size.
 
 CRF gives you no say over how big the file comes out. The next mode adds that.
 
@@ -357,17 +357,16 @@ encode you asked for, bit for bit. Above it the frame is bounded and stays
 deliverable.
 
 You get constant quality's cheapness on the easy half of a catalog and a buffer
-constraint's safety on the hard half. Single-pass ABR is now rare in
-on-demand work.
+constraint's safety on the hard half. Single-pass ABR is rare in on-demand
+work.
 
 ### Average bitrate
 
 ABR must hit a number over the whole file. It runs a feedback controller that
 tightens when it has overspent so far and relaxes when it has underspent.
 Feedback alone only learns about a hard section *after* paying for its first
-frames. The controller overshoots into the cut and over-corrects afterward.
-Quality lurches on either side of the scene change. That lurch is the
-rate-control failure viewers notice.
+frames. The controller overshoots into the cut and over-corrects afterward, so
+quality lurches on either side of the scene change. Viewers notice that lurch.
 
 A lookahead fixes this. The encoder keeps a queue of the next few dozen frames
 and studies them before coding. It learns where the scene cuts are, which
@@ -472,9 +471,9 @@ report. SSIM compares local structure and does better.
 model trained on MOS scores to predict them. It has become the standard the
 streaming industry judges quality by.
 
-VMAF is the metric this project runs on. We read every comparison against x264,
-every tuning decision and every quality gate on it. We use VMAF v1. Its cap on
-enhancement gain means sharpening tricks can't inflate the score. PSNR stays
+Every comparison against x264, tuning decision and quality gate in this
+project reads VMAF v1. Its cap on enhancement gain means sharpening tricks
+can't inflate the score. PSNR stays
 underneath as a floor. A change can't buy VMAF by making the picture less
 accurate.
 
