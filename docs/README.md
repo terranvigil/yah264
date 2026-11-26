@@ -1,7 +1,8 @@
 # yah264 docs
 
 Each subsystem doc covers what yah264 does and why, what didn't work, and
-what's open. Current numbers are on the [results page](https://terranvigil.github.io/yah264/results.html).
+what's open. Current numbers are on the
+[results page](https://terranvigil.github.io/yah264/results.html).
 
 ## Start here
 

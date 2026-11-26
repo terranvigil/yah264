@@ -34,11 +34,10 @@ mismatch. The GOP-parallel path is off because the hardware has its own
 parallelism.
 
 Our scene-cut runs causally on each arriving frame with the lookahead's lowres
-costs and decision rule. It forces an IDR on a cut with no added latency. Because
-it has no lookahead, there's no flash guard: a one-frame flash costs an extra
-IDR.
-`--no-scenecut` turns it off. The hardware's keyframe interval is the
-backstop.
+costs and decision rule. It forces an IDR on a cut with no added latency.
+Because it has no lookahead, there's no flash guard: a one-frame flash costs an
+extra IDR. `--no-scenecut` turns it off. The hardware's keyframe interval is
+the backstop.
 
 ## What maps and what doesn't
 
@@ -62,19 +61,19 @@ table, so text and behavior can't drift apart.
 | `--ref`, `--min-keyint`, `--b-adapt`, `--b-bias`, `--direct`, `--zones`, `--qpfile`, `--pass`, `--stats`, `--abr-model`, `--crf-max`, `--ratetol`, `--qcomp`, `--rc-lookahead`, `--sync-lookahead`, `--preset`, other tunes, `--threads`, `--aq-strength`, `--psy-rd`, `--psy-trellis`, `--trellis`, the deadzones, the `--cqm` family, `--me`, `--merange`, `--subme`, `--subpel`, `--partitions`, `--no-mixed-refs`, `--no-chroma-me`, `--transform-8x8`, `--cll`, `--mastering-display`, `--alternative-transfer`, `--frame-stats` | nothing | ignored |
 | `--dump-recon`, `--slices` above 1, anything but 4:2:0, input above 8 bits | nothing | refused |
 
-At each CRF point the hardware spends what yah264 spends. The table is linear
-between points.
+At each CRF point the hardware spends what yah264 spends, as a median over
+six clips. The table is linear between points.
 
 | CRF | 20 | 24 | 28 | 32 | 36 |
 |---|--:|--:|--:|--:|--:|
 | quality | 0.69 | 0.59 | 0.50 | 0.41 | 0.30 |
 
-Each point is the median over six clips. The per-clip spread is about 0.1,
-and at CRF 28 the hardware comes within 16% of our rate.
+The per-clip spread is about 0.1, and at CRF 28 the hardware comes within 16%
+of our rate.
 
-At open the CLI prints one block naming each option the user set that's
-ignored or approximated. Defaults print nothing. `--hw-strict` makes that
-block an error.
+At open the CLI prints one block naming each option the user set that's ignored
+or approximated, with its note. Defaults print nothing. `--hw-strict` makes
+that block an error.
 
 ## The trade
 

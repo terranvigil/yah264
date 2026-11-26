@@ -45,7 +45,7 @@ ffmpeg -i in.y4m -vf setparams=color_primaries=bt2020:color_trc=smpte2084:colors
 ```
 
 `-color_primaries` and `-color_trc` alone don't reach the encoder.
-`-colorspace` and `-color_range` do.
+`-colorspace` and `-color_range` do, because ffmpeg negotiates those.
 
 An 8-bit build takes yuv420p, yuv422p and yuv444p, and a 10-bit build their
 10-bit forms. The wrapper is compiled for one depth and refuses a library of
@@ -61,12 +61,14 @@ packet's pts is the display index the encoder reports
 
 dts trails pts by the stream's reorder depth only:
 
-| mode | dts offset |
+| mode | reorder depth |
 |---|---|
 | B pyramid | the pyramid depth |
 | flat B | 1 |
 | no B frames | 0 |
-| ABR and VBV | the lookahead delay plus the B count, because those modes can emit anchors early |
+
+ABR and VBV keep a wider margin, the lookahead delay plus the B count,
+because those modes can emit anchors early.
 
 ### Headers
 
@@ -116,7 +118,7 @@ moved field means wrong settings.
 | from ABI 3 on, the parameter struct records its own size and open refuses a mismatch | a wrapper one field behind the library compiled, loaded and encoded garbage settings with no error |
 | soname = ABI version | an ffmpeg built against an older ABI can't load a newer install at all |
 | depth in pkg-config Cflags, and `yah264_bit_depth()` checked at init | a consumer compiled for the wrong depth links fine and reads every plane at the wrong stride |
-| `-refs` applied only when explicitly set | ffmpeg's default of 1 looks like a real value. Treating it as a choice ran every encode at one reference. In exchange, an explicit `-refs 1` reads as unset, and at medium with a longer side of 3840 an explicit `-refs 3` becomes 2 |
+| `-refs` applied only when explicitly set | ffmpeg's default of 1 looks like a real value. Treating it as a choice ran every encode at one reference. In exchange, an explicit `-refs 1` reads as unset, and at medium with a longer side of 3840 or more an explicit `-refs 3` becomes 2 |
 | extradata holds SPS and PPS only | MP4 and Matroska rebuild extradata as a decoder configuration record with no room for SEI. Mastering display and light level SEI written there never reached the file |
 | HDR10 metadata read from the codec context at init, not from frames | the encoder takes it at open, before the first frame. Side data that only appears on a later frame can't reach the stream |
 | threads passed through unchanged | core counting and clamping are the encoder's policy |
@@ -136,7 +138,7 @@ moved field means wrong settings.
 | question | detail |
 |---|---|
 | mapping ffmpeg's mid-stream changes onto [live control](live-control.md) | not done yet. A forced I frame would become a keyframe event on that frame. A bitrate, maxrate or buffer-size change would become a rate event on the next frame |
-| which ffmpeg release to pin the fork to | and when to submit upstream |
+| which ffmpeg release to pin, and when to go upstream | not decided |
 | exposing the recon callback (`yah264_encoder_set_recon_cb`) | would let the recon-match gate run in-process |
 | a 10-bit wrapper | the fork's configure asks pkg-config for `yah264`, the 8-bit library, and can't yet point at `yah264_10`. Until it can, put first on `PKG_CONFIG_PATH` a directory holding a copy of `yah264_10.pc` renamed `yah264.pc`, with its `Name:` line changed to match |
 

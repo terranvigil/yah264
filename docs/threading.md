@@ -81,7 +81,7 @@ analysis. Two rules keep the split sound:
 
 Lookahead, frame typing, scene cuts and mb-tree run serially in input order on
 lowres data and hand the wavefront finished per-macroblock maps. Rate control
-updates once per frame in coding order and never reads a peer's in-flight
+updates once per frame in coding order. Nothing reads a peer's in-flight
 size estimate.
 
 The pool is `ntp_` in `src/common/threadpool.c`. It sees geometry, counters and
@@ -156,7 +156,8 @@ the first GOP is written leaves bytes on disk. The exit code reports it.
 
 The cut-aware split (`--cut-split`, `--shot-crf`, or a `--plan` or `--qpfile`
 that forces a keyframe) reads a file twice. A scan pass keeps one byte per
-frame and drops the pixels. Then the normal streaming encode runs on the GOP table it found.
+frame and drops the pixels. Then the normal streaming encode runs on the GOP
+table it found.
 `--scan-out` and `--scan-in` reuse a scan. A pipe can't be read twice, so
 these modes hold piped input whole up to the memory limit (half of physical
 RAM, `Y264_MAX_INPUT_MB`) and refuse past it.
@@ -170,10 +171,10 @@ Every streamed path writes the same bitstream a whole-input read would:
 
 ### Repeatability
 
-Two runs at `--threads 1` must be byte-identical. That's a hard gate. Above
-one thread, output may differ across runs and thread counts, and checks on it
-only warn. The correctness gate stays hard at every thread count: the
-reconstruction matches the reference decoders.
+Two runs of one configuration at `--threads 1` must be byte-identical. That's a
+hard gate. Above one thread, output may differ across runs and thread counts,
+and checks on it only warn. The correctness gate stays hard at every thread
+count: the reconstruction matches the reference decoders.
 
 Threaded output differs from serial by design: at `--threads 1` the encoder
 turns on a single-thread quality mode (`stq` in `src/encoder/mbcode.h`) that
@@ -224,7 +225,8 @@ nothing promises it, an optimization that breaks the repeat can still ship.
 
 ## Measuring it
 
-- **Print cores next to wall.** An encode stuck on one core just looks slow. A harness that always passes
+- **Print cores next to wall.** An encode stuck on one core just looks slow.
+  It gives correct output with no error. A harness that always passes
   `-threads` never runs the default path, so test the default too.
 - **`Y264_GOP_FORCE_G` and `Y264_GOP_FORCE_K` change the bytes,** because a
   GOP's bits depend on its share. A forced split is a different stream as well

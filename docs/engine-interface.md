@@ -1,7 +1,8 @@
 # What an orchestrator needs from an encoder
 
-All three sibling encoders implement this interface. One orchestration
-layer, in its own repository, can then drive yah264, yah265 or yaav1. The yah264
+This interface is written for all three sibling encoders to implement, so
+one orchestration layer, in its own repository, can drive yah264, yah265 or
+yaav1. The yah264
 side is built, per-frame forces included. Nothing here names an H.264
 concept the other two lack.
 

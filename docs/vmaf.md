@@ -5,8 +5,9 @@ with VMAF v1: libvmaf 3.x and Netflix's v1.0.16 models.
 `VMAF_GATE=VMAF-NEG` remains only to reproduce older numbers.
 
 v1 sees what v0.6.1 couldn't: banding through CAMBI, chroma, and blockiness
-through an additive-impairment term. Because its detail feature keeps
-VMAF-NEG's enhancement-gain cap of 1.0, a NEG score adds nothing.
+through an additive-impairment term. Its detail feature keeps VMAF-NEG's
+enhancement-gain cap of 1.0. Because sharpening past the source earns nothing
+under that cap, a separate NEG score would add nothing.
 
 ## Scoring settings
 
@@ -22,7 +23,7 @@ VMAF-NEG's enhancement-gain cap of 1.0, a NEG score adds nothing.
 ## Limits
 
 - v1's CAMBI ignores very dark areas. `band_check.py` gates on CAMBI without
-  it, plus dark-area statistics.
+  that dark-area threshold and adds its own dark-area statistics.
 - BD loses resolving power above about 98. bdcompare flags those clips.
 - Scores from different resolutions aren't comparable. Each comparison
   uses one clip at one size.

@@ -24,14 +24,15 @@ against x264. This doc covers how the tiers are built and tested.
 | AVX-512 F, BW and VL | x86-64 | pixel metrics only | the CPU reports all three |
 
 These tiers work on 8-bit lanes. The 10-bit library has its own NEON, SSE4.2
-and AVX2 tiers on 16-bit lanes, covered in [The 10-bit tiers](#the-10-bit-tiers).
+and AVX2 tiers on 16-bit lanes, covered in [The 10-bit
+tiers](#the-10-bit-tiers).
 
 Dot product and SVE live inside the NEON tier: `y264_cpu_tier()` answers NEON
 on a Graviton3. SVE needs no dispatch sites of its own because its entries
 overwrite the NEON ones in the pixel table and behind the NEON quant's call
-sites. The SVE kernels are vector-length agnostic and exact at any length. They're
-installed only at 256 bits or more. Graviton4's SVE2 is 128 bits wide, and
-Graviton4 runs NEON.
+sites. The SVE kernels are vector-length agnostic and exact at any length.
+They're installed only at 256 bits or more. Graviton4's SVE2 is 128 bits wide,
+and Graviton4 runs NEON.
 
 ### Which families each tier vectorizes
 
@@ -289,8 +290,8 @@ ranges span sunflower 1080p and crowd_run 4K.
 | idea | why not |
 |---|---|
 | SME/SME2, 512-bit streaming vectors for transforms and SATD | 1.08x over NEON. Closed on every form. |
-| SME/SME2 per block | Impossible: `smstart` plus `smstop` costs 9.6 ns against a 3.7 ns SATD 8x8. |
-| SME/SME2 whole-frame SATD batched through the ZA engine | 0.21x NEON. |
+| SME/SME2 per block | Impossible: `smstart` plus `smstop` costs 9.6 ns against a 3.7 ns SATD 8x8. Closed on every form. |
+| SME/SME2 whole-frame SATD batched through the ZA engine | 0.21x NEON. Closed on every form. |
 | SVE at 128 bits | No better than NEON. |
 | SVE batched 16-wide SAD | More instructions than NEON, because NEON's loads post-increment and SVE's don't. |
 | Batched 4x4 inverse transform | The whole 4x4 inverse is 0.047% of an encode. All-zero and DC-only blocks already shortcut it. A coded macroblock runs 3.5 to 11.5 of its 16. |
@@ -323,10 +324,10 @@ ranges span sunflower 1080p and crowd_run 4K.
 - **Use Rosetta for routine Docker runs and QEMU for an item's final gate.**
   QEMU is several times slower. Emulated runs are real CPU load, so keep them
   away from timed runs.
-- **The Docker kit leaves the VM's interpreter alone.** Because its QEMU legs name
-  the image's own `qemu-x86_64` for each binary, one session's run can't
-  change what another's containers run under. A lock keeps two runs in one worktree
-  apart.
+- **The Docker kit leaves the VM's interpreter alone.** Because its QEMU legs
+  name the image's own `qemu-x86_64` for each binary, one session's run can't
+  change what another's containers run under. A lock keeps two runs in one
+  worktree apart.
 - **Compare the encoders on the same quiet machine.** Build x264 twice: with
   its assembly, and with assembly off but its C free to vectorize. The second
   is the fair match for `-Dsimd=none`.
@@ -336,8 +337,9 @@ ranges span sunflower 1080p and crowd_run 4K.
   `kernel.perf_event_paranoid` at 2 or higher, where `scripts/instr-ratio.sh`
   prints `NO-COUNTER`. Set it to 1 or use a privileged container.
 - **gcc's ThreadSanitizer needs `vm.mmap_rnd_bits=28`** on recent Linux
-  kernels.
+  kernels. That's machine setup, not a code bug.
 - **GitHub's runner CPUs vary,** and some have AVX-512. A CI job that relies
   on AVX-512 must check the features it got.
 - `scripts/instr-ratio.sh N` gives the instruction ratio against x264 beside
-  the wall ratio. For other tools, see the [instruments catalog](instruments.md).
+  the wall ratio. For other tools, see the [instruments
+  catalog](instruments.md).

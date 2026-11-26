@@ -111,8 +111,8 @@ into its subsystem doc's "What didn't work" table.
 
 ### Memory and input
 
-15. GOP worker memory, about 0.5 GB each at 1080p. Shrink the lookahead ring,
-    the lowres sets and the per-frame decision records.
+15. GOP worker memory, about 0.5 GB each at 1080p. The lookahead ring, the
+    lowres sets and the per-frame decision records are where to shrink it.
 16. `--cut-split` and `--shot-crf` on piped input hold the input up to the
     memory limit. A bounded version would rate shots against a running
     average. Its output would then differ from a file encode.

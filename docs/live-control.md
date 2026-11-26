@@ -7,10 +7,10 @@ frame's `--frame-stats` line. A recorded log of events replays to the same
 bytes. A status call reports what is queued inside the encoder and what the
 rate control has to spend, so a service sees backpressure before a stall.
 
-yah265 and yaav1 share this contract. Event kinds, error codes, log grammar
-and the replay guarantee are the same in all three. Only the name prefix
-differs. All three build the same log parser file (`cli/ctl_log.c`). Live control builds on the
-zones and frame stats in the [engine interface](engine-interface.md).
+yah265 and yaav1 share this contract. Event kinds, error codes, log grammar and
+the replay guarantee are the same in all three. Only the name prefix differs.
+All three build the same log parser file (`cli/ctl_log.c`). Live control builds
+on the zones and frame stats in the [engine interface](engine-interface.md).
 
 ## What is supported
 
@@ -132,8 +132,9 @@ room.
 | 4096 | events naming frames after the next one to be handed in |
 | 1 << 20 | events waiting to land and applied records waiting to be drained, together |
 
-Events for the next frame count only toward the second bound. That keeps
-room to queue what is due now and to record each queued event.
+Events for the next frame count only toward the second bound, so an event
+due now can always be queued, and every queued event has room for its
+record.
 
 ## From the command line
 
@@ -173,8 +174,8 @@ was:
 | queue overflow | a log the encoder's queue couldn't hold: more than 65536 events on one frame, or more than 262144 rate and CRF events within 4096 frames |
 
 The events then reach the encoder as frames go by. Each is queued before
-its frame is handed in, and up to 1024 ahead of that. Events for a frame the stream never
-reaches are reported at the end.
+its frame is handed in, and up to 1024 ahead of that. Events for a frame the
+stream never reaches are reported at the end.
 
 ### Reading events while the encode runs
 
@@ -201,7 +202,8 @@ kind not yet queued. Checking a log in frame order up front is linear.
 named, as a `--control` log: the record of a live run.
 
 Live control runs one encoder instance, so `--threads` goes to its row
-wavefront and lookahead rather than to parallel GOPs.
+wavefront and lookahead rather than to parallel GOPs: an event names a frame
+of the whole stream, and the ledger it retargets is one encoder's.
 
 ### The echo
 
@@ -235,7 +237,8 @@ if (r != YAH264_CTL_OK)
 | `yah264_encoder_control_check()` | runs the same checks over a list of events, each as if the ones before it had been queued. Queues nothing; returns the first refusal's code and index |
 | `yah264_encoder_controls_applied()` | drains the events that took effect, in the order they were applied, each with `applied_frame` set. After the flush, an event whose frame never arrived comes back with `applied_frame` -1. Returns -1 once if records were lost, which only an allocation failure causes; the events themselves still took effect |
 
-All three are called between encode calls, from the thread that calls encode.
+These and `yah264_encoder_status()` are called between encode calls, from
+the thread that calls encode.
 
 | code | meaning |
 |---|---|

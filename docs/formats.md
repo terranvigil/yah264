@@ -5,7 +5,7 @@ recon-match ffmpeg's decoder across I, P and B frames on both entropy coders.
 One `y264` binary handles both depths and picks the encoder from the input.
 
 The tuned path is 8-bit 4:2:0. The 10-bit path keeps the 8-bit
-rate-distortion trades, so 8-bit content coded at 10 bits gets the frame types
+rate-distortion trades, and 8-bit content coded at 10 bits gets the frame types
 of its 8-bit encode. On the 1080p HDR10 test clips the 10-bit path beats x264
 High 10 on coding efficiency (see the HDR ladder under "Measuring it").
 
@@ -22,7 +22,7 @@ from `Y264_BIT_DEPTH`. That makes two encoder libraries:
 | `dctcoef` (coefficients, transform intermediates) | `int16_t` | `int32_t`, because the residual reaches ±1023 and the transform butterflies overflow 16 bits |
 | `PIXEL_MAX` | 255 | 1023 |
 | `Y264_QP_BD_OFFSET` | 0 | 12 |
-| QP range | 0 to 51 | -12 to 51 |
+| QP_Y range (spec) | 0 to 51 | -12 to 51 |
 | profile at 4:2:0 | Baseline, Main or High, per options | High 10, profile_idc 110 |
 | SIMD | every tier ([simd.md](simd.md)) | NEON on aarch64; SSE4.2 and AVX2 on x86-64 ([simd.md](simd.md)) |
 | GPU offload | available, off ([gpu.md](gpu.md)) | stubbed out |
@@ -32,8 +32,8 @@ Only true image samples use `pixel`. Bitstream bytes, nonzero counts, mode ids
 and flags stay `uint8_t`.
 
 Every build compiles both libraries. The 10-bit one force-includes
-`src/common/symbols10.h`, whose `_10` suffix on its symbols lets both link
-into one program. `scripts/symbol_check.sh` checks this in `make test`, because a
+`src/common/symbols10.h`, whose `_10` suffix on its symbols lets both link into
+one program. `scripts/symbol_check.sh` checks this in `make test`, because a
 name defined in both would resolve by link order and show up only as wrong
 pixels.
 
@@ -81,9 +81,10 @@ chroma macroblock size all derive from those two. The shared geometry has no
 | scaling lists in the SPS | 8 | 8 | 12 |
 | CABAC contexts | 460 | 460 | 1024 |
 
-At 4:4:4, Cb and Cr are coded exactly like luma, in three residual passes
-that all use the luma context categories. Their CABAC context ranges initialize by
-copying luma's, which matches the spec's init tables.
+At 4:4:4, Cb and Cr are coded exactly like luma, in three residual passes,
+each plane with its own copy of the luma context categories. Their CABAC
+context ranges initialize by copying luma's, which matches the spec's init
+tables.
 
 | limit outside 4:2:0 | behavior |
 |---|---|
@@ -141,7 +142,8 @@ scale in five places:
 ### The 10-bit board
 
 `scripts/board10.sh` runs both encoders at their default preset with
-`--threads 4` on `CLIPS_P10` from `scripts/parity-clips.sh`.
+`--threads 4`. Its clip list and rate targets are `CLIPS_P10` in
+`scripts/parity-clips.sh`.
 `scripts/bd_at_rate.py` solves each clip onto five shared byte targets. x264
 needs `--output-depth 10` as well as `--profile high10`, because the profile
 alone still writes 8-bit samples.
@@ -204,9 +206,10 @@ A run started while another holds the same work directory stops at once.
 
 `make conformance` runs recon-match for every format. By hand, decode the
 `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare `framemd5` hash
-columns, Y4M against Y4M. ffmpeg treats a framemd5 taken straight off the
-`.264` differently. Only the hash column matters, because `--dump-recon`
-keeps the source frame rate where the decode defaults to 25.
+columns, Y4M against Y4M. Don't compare a Y4M's framemd5 with one taken
+straight off the `.264`, because ffmpeg treats them differently. Only the hash
+column matters, because `--dump-recon` keeps the source frame rate where the
+decode defaults to 25.
 
 Check output size first. A crashed encode gives `decode_errors=0` on a
 26-byte file. ffmpeg conceals desync, so grepping for "error while decoding"
