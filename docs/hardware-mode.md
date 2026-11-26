@@ -1,50 +1,49 @@
 # Hardware mode
 
 `--hw videotoolbox` encodes with the Mac's fixed-function H.264 engine through
-the VideoToolbox API, driven by yah264's options. Those options map onto the
-hardware's settings as far as they go. Our scene-cut decides the keyframes.
-At open the CLI names each option the hardware can't honor, once.
+the VideoToolbox API. yah264's options map onto the hardware's settings where
+they can. Our scene-cut decides the keyframes. At open the CLI names each
+option the hardware can't honor, once.
 
-The stream is Apple's. Recon-match, conformance, determinism, the quality
-bands and the parity goals don't apply to it. It never appears in their rows
-and has its own row on the site, labeled as hardware.
-
-GPU compute inside our own encoder is a separate route. See [gpu.md](gpu.md).
+The stream is Apple's, so recon-match, conformance, determinism, the quality
+bands and the parity goals don't apply. It has its own row on the site,
+labeled as hardware. GPU compute inside our own encoder is a separate route
+([gpu.md](gpu.md)).
 
 ## How it works
 
-`--hw off|auto|videotoolbox` picks the mode. The default is `off`. The
-library takes the mode at open (`yah264_encoder_open_hw`), not in the
-parameter struct. `yah264_encoder_backend` names what actually opened.
-`Y264_HW` sets the mode for the test scripts. The meson option `videotoolbox`
-is on by default on macOS. Elsewhere a stub's open returns NULL with a reason.
-Callers need no ifdefs.
+| control | what it does |
+|---|---|
+| `--hw off\|auto\|videotoolbox` | picks the mode. The default is `off` |
+| `yah264_encoder_open_hw` | the library takes the mode at open, not in the parameter struct |
+| `yah264_encoder_backend` | names what actually opened |
+| `Y264_HW` | sets the mode for the test scripts |
+| meson `videotoolbox` | on by default on macOS. Elsewhere a stub's open returns NULL with a reason, so callers need no ifdefs |
 
-The session requires the hardware encoder and never accepts VideoToolbox's
-software encoder. If the hardware session fails or won't confirm it's
-hardware, it's refused. Under `videotoolbox` a refusal fails the encode.
-Under `auto` it prints one line naming why and falls back to yah264's own encoder.
+Only the hardware encoder is accepted, never VideoToolbox's software one. A
+session that fails or won't confirm it's hardware is refused. Under
+`videotoolbox` that fails the encode. Under `auto` the CLI prints one line
+naming why and falls back to yah264's own encoder.
 
 Each input frame is copied into a buffer from the session's pool, because the
-session holds frames past the call and the caller reuses its planes. On the
-session's thread, the output callback converts each sample from
-length-prefixed to Annex B. The encode call drains the samples in decode
-order. SPS and PPS go out ahead of the first slice. At the end the stream
-flushes. Since the session can drop a frame, the CLI counts the frames that
-came back instead of the frames sent and flags a mismatch. The CLI's
-GOP-parallel path is off in this mode because the hardware has its own
+session holds frames past the call while the caller reuses its planes. The
+output callback converts samples to Annex B on the session's thread. The
+encode call drains them in decode order, SPS and PPS first. Because the
+session can drop frames, the CLI counts the frames that came back and flags a
+mismatch. The GOP-parallel path is off because the hardware has its own
 parallelism.
 
-Our scene-cut runs causally on each frame as it arrives, using the same lowres
-costs and decision rule as the lookahead, and forces an IDR on a cut with no
-added latency. It has no frame of lookahead, so there's no flash guard: a
-one-frame flash costs an extra IDR. `--no-scenecut`
-turns it off. The hardware's keyframe interval stays the backstop.
+Our scene-cut runs causally on each arriving frame with the lookahead's lowres
+costs and decision rule. It forces an IDR on a cut with no added latency. Because
+it has no lookahead, there's no flash guard: a one-frame flash costs an extra
+IDR.
+`--no-scenecut` turns it off. The hardware's keyframe interval is the
+backstop.
 
 ## What maps and what doesn't
 
-The map is one C table in `src/hw/vt_map.c`. Because the CLI's warnings read the
-same table, the text and the behavior can't drift apart.
+The map is one C table in `src/hw/vt_map.c`. The CLI's warnings read the same
+table, so text and behavior can't drift apart.
 
 | yah264 | on the hardware | class |
 |---|---|---|
@@ -63,24 +62,24 @@ same table, the text and the behavior can't drift apart.
 | `--ref`, `--min-keyint`, `--b-adapt`, `--b-bias`, `--direct`, `--zones`, `--qpfile`, `--pass`, `--stats`, `--abr-model`, `--crf-max`, `--ratetol`, `--qcomp`, `--rc-lookahead`, `--sync-lookahead`, `--preset`, other tunes, `--threads`, `--aq-strength`, `--psy-rd`, `--psy-trellis`, `--trellis`, the deadzones, the `--cqm` family, `--me`, `--merange`, `--subme`, `--subpel`, `--partitions`, `--no-mixed-refs`, `--no-chroma-me`, `--transform-8x8`, `--cll`, `--mastering-display`, `--alternative-transfer`, `--frame-stats` | nothing | ignored |
 | `--dump-recon`, `--slices` above 1, anything but 4:2:0, input above 8 bits | nothing | refused |
 
-The CRF table is rate-matched. At each point the hardware spends what yah264
-spends at that CRF. Between points the table is linear.
+At each CRF point the hardware spends what yah264 spends. The table is linear
+between points.
 
 | CRF | 20 | 24 | 28 | 32 | 36 |
 |---|--:|--:|--:|--:|--:|
 | quality | 0.69 | 0.59 | 0.50 | 0.41 | 0.30 |
 
-Each point is the median over six clips. The per-clip spread is about 0.1.
-At CRF 28 the hardware comes within 16% of our rate over the six clips.
+Each point is the median over six clips. The per-clip spread is about 0.1,
+and at CRF 28 the hardware comes within 16% of our rate.
 
-At open, the CLI prints one block listing each option the user set that's
-ignored or approximated, with its note. Defaults print nothing. `--hw-strict`
-turns that block into an error, for scripted use.
+At open the CLI prints one block naming each option the user set that's
+ignored or approximated. Defaults print nothing. `--hw-strict` makes that
+block an error.
 
 ## The trade
 
-The hardware saves CPU and pays for it in quality. On all ten board clips it
-scores below us at the same bitrate.
+The hardware saves CPU and pays in quality, scoring below us at the same
+bitrate on all ten board clips. Use it when CPU matters more than bits.
 
 | clip | wall, hardware / ours | CPU, ours / hardware | VMAF v1, hardware minus ours |
 |---|--:|--:|--:|
@@ -101,22 +100,14 @@ scores below us at the same bitrate.
 | wall time | about the same |
 | VMAF v1 | 7.8 points lower |
 
-The hardware is faster on high-rate clips and most HD. On CIF and fourpeople
-it's slower, because opening the session is a large share of a short run.
-Use hardware mode when CPU matters more than bits.
+The hardware is faster on high-rate clips and most HD. It's slower on CIF and
+fourpeople, where opening the session is a large share of a short run.
 
-How to read the table:
-
-- The clips run at their ABR targets. Wall and CPU are the median of five
-  timed runs per side on a quiet machine. Our encoder ran those at auto
-  threads.
-- VMAF v1 was read with our encoder at three threads.
-- The hardware comes within about 6% of its rate target on eight clips. On
-  bus and stefan every encoder undershoots the 400 kbit/s target.
-- The hardware spends more bits than we do on seven of ten clips. That favors
-  it in the quality column.
-- CPU counts the encoder process only and leaves out work the hardware does
-  elsewhere.
+| about the table | |
+|---|---|
+| rate | clips run at their ABR targets. The hardware comes within about 6% of target on eight clips. On bus and stefan every encoder undershoots the 400 kbit/s target |
+| wall and CPU | median of five timed runs per side on a quiet machine, ours at auto threads. CPU counts the encoder process only, not work the hardware does elsewhere |
+| VMAF v1 | read with our encoder at three threads. The hardware spends more bits than we do on seven of ten clips, which favors it here |
 
 ## What we chose and why
 
@@ -139,20 +130,19 @@ How to read the table:
 
 ## Open questions
 
-- CRF emulation: run our lookahead and set the average bitrate per shot so the
-  hardware tracks what our CRF would spend. It's the only form that would make
-  two-pass mean anything on the hardware. Not built.
-- `--level` and `--sar` are accepted without a warning even though the session
-  sets neither. The map table should either apply them or list them as ignored.
+- CRF emulation (not built): run our lookahead and set the average bitrate
+  per shot so the hardware tracks what our CRF would spend. Only this would
+  make two-pass mean anything on the hardware.
+- `--level` and `--sar` are accepted silently though the session sets
+  neither. The map should apply them or list them as ignored.
 
 ## Measuring it
 
-- The hardware isn't byte-stable run to run. Across five runs on the board
-  its VMAF moved by up to 0.6 points. Ours repeated to within about 0.2.
-- `scripts/regress.py` draws `--hw auto` in a quarter of its cells and gates
-  only on "encodes, decodes, frame count matches". It doesn't assert determinism there.
-- A raw `.264` from the hardware has no VUI timing. A decoder guesses the
-  rate. Align frames by index when scoring, or the PSNR filter pairs the wrong
-  frames.
-- `tools/vtprobe` prints the hardware's supported property dictionary for
-  H.264 on the machine it runs on. Check the map against it on a new macOS.
+- The hardware isn't byte-stable. Across five runs on the board its VMAF
+  moved by up to 0.6 points, where ours repeated to within about 0.2.
+- `scripts/regress.py` draws `--hw auto` in a quarter of its cells and checks
+  only "encodes, decodes, frame count matches", not determinism.
+- A raw `.264` from the hardware has no VUI timing. Align frames by index
+  when scoring, or the PSNR filter pairs the wrong frames.
+- `tools/vtprobe` prints the hardware's supported H.264 properties. Check the
+  map against it on a new macOS.
