@@ -1,82 +1,84 @@
 # Bit depth and chroma formats
 
-yah264 encodes 8-bit and 10-bit video at 4:2:0, 4:2:2 or 4:4:4. Each depth
-and each chroma format recon-matches ffmpeg's decoder across I, P and B frames
-on both entropy coders. One `y264` binary handles both depths and picks the
+yah264 encodes 8-bit and 10-bit video at 4:2:0, 4:2:2 or 4:4:4. All of them
+recon-match ffmpeg's decoder across I, P and B frames on both entropy
+coders. One `y264` binary handles both depths and picks the
 encoder from the input.
 
 The tuned path is 8-bit 4:2:0. The 10-bit path keeps the 8-bit
-rate-distortion trades, and when 8-bit content is coded at 10 bits it gets
-the frame types of its 8-bit encode. On the HDR10 test clips at 1080p the
-10-bit path is ahead of x264 High 10 on coding efficiency, by the HDR ladder
-in "Measuring it".
+rate-distortion trades, so 8-bit content coded at 10 bits gets the frame types
+of its 8-bit encode. On the 1080p HDR10 test clips the 10-bit path beats x264
+High 10 on coding efficiency (see the HDR ladder under "Measuring it").
 
 ## How it works
 
 ### Both depths in one binary
 
 Because the sample width is a compile-time type, there are two encoder
-libraries. `src/common/bitdepth.h` sets the width from `Y264_BIT_DEPTH`:
+libraries.
+`src/common/bitdepth.h` sets the width from `Y264_BIT_DEPTH`:
 
 | | 8-bit | 10-bit |
 |---|---|---|
 | `pixel` | `uint8_t` | `uint16_t` |
 | `dctcoef` (coefficients, transform intermediates) | `int16_t` | `int32_t` |
 | `PIXEL_MAX` | 255 | 1023 |
-| `Y264_QP_BD_OFFSET` | 0 | 12 (QP range -12 to 51) |
-| profile at 4:2:0 | per options (Baseline/Main/High) | 110, High 10 |
+| `Y264_QP_BD_OFFSET` | 0 | 12 |
+| QP range | 0 to 51 | -12 to 51 |
+| profile at 4:2:0 | Baseline, Main or High, per options | High 10, profile_idc 110 |
 | SIMD | every tier ([simd.md](simd.md)) | NEON on aarch64; SSE4.2 and AVX2 on x86-64 ([simd.md](simd.md)) |
 | GPU offload | available, off ([gpu.md](gpu.md)) | stubbed out |
 | library | `libyah264`, `yah264.pc` | `libyah264_10`, `yah264_10.pc` |
 
-The coefficients widen at 10 bits because the residual reaches ±1023 and the
-transform butterflies overflow 16 bits. Only true image samples use `pixel`.
-Bitstream bytes, nonzero counts, mode ids and flags stay `uint8_t`.
+Coefficients widen at 10 bits because the
+residual reaches ±1023 and the transform butterflies overflow 16 bits. Only
+true image samples use `pixel`. Bitstream bytes, nonzero counts, mode ids and
+flags stay `uint8_t`.
 
-Every build directory compiles both libraries. The 10-bit one force-includes
-`src/common/symbols10.h`, which gives every symbol a `_10` suffix. Both
-archives then link into one program without a name resolving into the wrong
-one. `scripts/symbol_check.sh` gates that in `make test`, because a name
-defined in both would resolve by link order and the only symptom would be
-wrong pixels.
+Every build compiles both libraries. The 10-bit one force-includes
+`src/common/symbols10.h`. That header adds a `_10` suffix to each 10-bit
+symbol so the two archives can link into one program. `scripts/symbol_check.sh` checks this in
+`make test`, because a name defined in both would resolve by link order and
+show up only as wrong pixels.
 
 The public header has no `pixel` type. Picture planes are `void*` with a
-stride in samples. Each `.pc` file sets `Y264_BIT_DEPTH` in its `Cflags`, so a
-caller's `yah264_encoder_open()` resolves to the library it configured
-against.
+stride in samples. Because each `.pc` file sets `Y264_BIT_DEPTH` in its
+`Cflags`, a caller's `yah264_encoder_open()` resolves to the library it
+configured against.
 
-The meson `bit_depth` option doesn't decide what the CLI can encode. It
-defaults to 8 and picks the depth that checkasm, the unit tests and the
-in-tree tools are built at. CI also builds `-Dbit_depth=10` and runs the unit
-tests there.
+The meson `bit_depth` option defaults to 8 and doesn't limit what the CLI
+encodes.
+It sets the depth that checkasm, the unit tests and the in-tree tools build
+at. CI also builds `-Dbit_depth=10` and runs the unit tests there.
 
 ### Choosing the depth
 
 - A Y4M input's `C` tag picks the library: `C420` goes to 8-bit, `C420p10` to
   High 10. The same holds for 4:2:2 and 4:4:4.
-- Raw input has no tag. Its `--input-csp` names the depth along with the
-  format: `i420`, `i422` or `i444`, optionally with `p10`.
+- Raw input has no tag, so `--input-csp` names the depth with the format:
+  `i420`, `i422` or `i444`, optionally with `p10`.
 - `--output-depth 10` on 8-bit input shifts each sample left by 2 and codes
   High 10.
 - `--output-depth 8` on 10-bit input is refused. Dropping bits is a
   conversion, and that's ffmpeg's job.
-- The encode is refused with exit status 1 when a 16-bit input sample is
-  above the depth's maximum. Such a file isn't 10-bit video.
+- A 16-bit input sample above the depth's maximum fails the encode with exit
+  status 1. Such a file isn't 10-bit video.
 
 The [ffmpeg wrapper](ffmpeg.md) makes the same choice from the input
 `pix_fmt`.
 
 ### Chroma formats
 
-The encoder context holds `cf_idc` along with `sub_w` and `sub_h`, the
-spec's SubWidthC and SubHeightC. Plane sizes, strides, padding, the nonzero
-grid and the chroma macroblock size all derive from those two. That leaves no
-4:2:0 constants in the shared geometry.
+The encoder context holds `cf_idc` and the spec's SubWidthC and SubHeightC
+(`sub_w`, `sub_h`). Plane sizes, strides, padding, the nonzero grid and the
+chroma macroblock size all derive from those two. The shared geometry has no
+4:2:0 constants.
 
 | | 4:2:0 | 4:2:2 | 4:4:4 |
 |---|---|---|---|
 | `chroma_format_idc` | 1 | 2 | 3 |
-| profile_idc | per options | 122 (High 4:2:2) | 244 (High 4:4:4 Predictive) |
+| profile | per options | High 4:2:2 | High 4:4:4 Predictive |
+| profile_idc | per options | 122 | 244 |
 | chroma macroblock | 8x8 | 8x16 | 16x16 |
 | chroma DC | 2x2 Hadamard, 4 coefficients | 2x4 transform, 8 coefficients | none, except a luma-style 4x4 DC per plane inside I_16x16 |
 | intra chroma prediction | chroma modes, 8x8 | chroma modes, 8x16 | inherited from the co-located luma block, not signaled |
@@ -86,67 +88,64 @@ grid and the chroma macroblock size all derive from those two. That leaves no
 | deblock | chroma filter, edges 0 and 4 | chroma filter, horizontal edges 0, 4, 8, 12 | luma-strength filter, edges like luma |
 | scaling lists in the SPS | 8 | 8 | 12 |
 
-At 4:4:4 the Cb and Cr planes are coded exactly like luma: three residual
-passes, the luma context categories per plane, and CABAC extended from 460 to
-1024 contexts. The Cb and Cr context ranges initialize by copying luma's.
-The spec's init tables give the same values.
+At 4:4:4 the Cb and Cr planes are coded exactly like luma, with three
+residual passes and the luma context categories per plane. CABAC grows from
+460 to 1024 contexts. The Cb and Cr context ranges initialize by
+copying luma's, which gives the same values as the spec's init tables.
 
-A few things stay 4:2:0 only or are limited at the other formats:
+Limits outside 4:2:0:
 
 - 4:4:4 never uses the 8x8 transform. `--transform-8x8` drops to 4x4 at
   open. The 4:4:4 chroma 8x8 quant-matrix keys are accepted and unused.
 - Field coding (`--tff`/`--bff`) is 4:2:0 only. An explicit request on
   4:2:2 or 4:4:4 is refused. An interlaced Y4M tag is ignored with a warning.
-- Some chroma work has no SIMD: the vertical chroma deblock edge, all 4:4:4
-  chroma deblocking and intra chroma at 4:4:4 run in C.
+- Some chroma work runs in C with no SIMD: the vertical chroma deblock edge,
+  all 4:4:4 chroma deblocking, and intra chroma at 4:4:4.
 - There's no I400, NV12, YV12 or packed input. Convert with ffmpeg first.
 
-Threading is format-agnostic. The GOP-parallel reader reads the subsampling
-from the Y4M `C` tag the same way the serial path does.
+Threading doesn't depend on the format. The GOP-parallel reader takes the
+subsampling from the Y4M `C` tag just as the serial path does.
 
 ### Keeping 10-bit on the 8-bit trades
 
-We do all the tuning at 8 bits. To keep the 8-bit trades, the 10-bit path
-puts its costs on the 8-bit scale in five places:
+We tune at 8 bits. The 10-bit path puts its costs back on the 8-bit scale in
+five places:
 
 - **Lambdas.** The mode, trellis and motion lambdas are read at the QP plus
-  the depth's QP offset. Because a 10-bit sample's error is four times the
-  8-bit one, SATD grows 4x and SSD 16x. An offset of six QP per extra bit
-  scales the lambdas by the same factors. The psy terms scale with the
-  sample scale for the same reason.
+  the depth's QP offset. A 10-bit sample's error is four times the 8-bit one,
+  so SATD grows 4x and SSD 16x. Six QP per extra bit scales the lambdas by
+  the same factors. The psy terms scale with the sample scale too.
 - **The lookahead.** Its lowres planes hold 8-bit samples at every depth.
-  B placement, scene cuts, mb-tree and CRF's complexity therefore read the
-  costs their constants were fitted on, and 8-bit content coded at 10 bits
-  gets the frame types of its 8-bit encode.
-- **Rate-control complexity.** The full-resolution intra SATD that opens a
-  bitrate-target encode and prices its I frames is divided by 4 at 10
-  bits, so the opening fits read it on the scale they were fitted on.
-- **Adaptive quantization.** Every AQ path reads a macroblock's energy as
-  `log2(variance + floor)` after dividing the variance by 4 per extra bit.
-  The floors, the anchor and B-frame levels and the frame DC then see the
-  values they were fitted on. The flat psy-trellis gate's variance limit is
-  raised by the same factor.
-- **Fixed thresholds.** The I_16x16 screen counts a P or B macroblock as flat
-  under a variance limit that is raised by the same factor, so 8-bit content
-  coded at 10 bits gets the verdict of its 8-bit encode. The motion search's
-  per-pixel early-out bound doubles per extra bit, like the SAD it's
-  compared with.
+  B placement, scene cuts, mb-tree and CRF's complexity read the costs their
+  constants were fitted on.
+- **Rate-control complexity.** A bitrate-target encode opens with a
+  full-resolution intra SATD that also prices its I frames. At 10 bits that
+  SATD is divided by 4 to match the scale the opening fits expect.
+- **Adaptive quantization.** Every AQ path divides a macroblock's variance by
+  4 per extra bit before reading its energy as `log2(variance + floor)`. The
+  floors, the anchor and B-frame levels and the frame DC then see 8-bit
+  values. The flat psy-trellis gate raises its variance limit by the same
+  factor.
+- **Fixed thresholds.** The I_16x16 screen's flatness limit for P and B
+  macroblocks rises by the same factor, so 8-bit content coded at 10 bits
+  gets the verdict of its 8-bit encode. The motion search's per-pixel
+  early-out bound doubles per extra bit, like the SAD it's compared with.
 
 ## What we chose and why
 
 | choice | why |
 |---|---|
-| Bit depth as a compile-time type | Keeps the hot path branch-free and lets each depth get its own SIMD. A runtime-depth `pixel` would put a branch or a wider type in every 8-bit kernel. |
-| Both libraries in every build, one binary | The input picks 10-bit, with no rebuild. 8-bit output is byte-identical to the single-library build on the ten board clips at CRF, CQP and ABR, at one and eight threads. |
+| Bit depth as a compile-time type | Keeps the hot path branch-free and gives each depth its own SIMD. A runtime-depth `pixel` would put a branch or a wider type in every 8-bit kernel. |
+| Both libraries in every build, one binary | The input picks 10-bit with no rebuild. 8-bit output is byte-identical to the single-library build on the ten board clips at CRF, CQP and ABR, at one and eight threads. |
 | `--output-depth 8` on 10-bit input refused | Rounding samples away is a conversion. Silent truncation would hide it. |
 | The pixel-type change before any SIMD work | Widening `pixel` and `dctcoef` is the one change that would invalidate 8-bit kernels. Doing it first meant each kernel is written once per depth. |
 | 10-bit SIMD as its own tiers | Each kernel is written for the depth's lanes and checked against the 10-bit C reference. The 8-bit kernels are untouched. |
-| Recon-match against ffmpeg as the gate for each format | A format is accepted at open only once its whole chain decodes bit-exact. 4:2:0 output stayed byte-identical while each format went in. |
+| Recon-match against ffmpeg as the gate for each format | A format opens only once its whole chain decodes bit-exact. 4:2:0 output stayed byte-identical while each format went in. |
 
 The two-library dispatch costs the 8-bit path +0.3% to 0.6% wall time at one
 thread on foreman CIF and park_joy 720p. That's inside same-binary run-to-run
-spread. Because the cost doesn't scale with the CLI's share of the work,
-binary layout is a likelier cause than the dispatch itself.
+spread. The cost doesn't scale with the CLI's share of the work, so binary
+layout is a likelier cause than the dispatch.
 
 ## What didn't work
 
@@ -165,69 +164,87 @@ binary layout is a likelier cause than the dispatch itself.
 
 ## Measuring it
 
-The 10-bit board is `scripts/board10.sh`. Its clip list and rate targets are
-`CLIPS_P10` in `scripts/parity-clips.sh`. Both encoders run at their default
-preset and `--threads 4`. `scripts/bd_at_rate.py` solves each clip onto five
-shared byte targets. x264 needs both `--profile high10` and
-`--output-depth 10`, because the profile alone still writes 8-bit samples.
+### The 10-bit board
 
-The board's clips are short. 64 frames at 480x272 is below the project's
-120-frame rule for a BD sweep, so read the board as a smoke check.
+`scripts/board10.sh` runs the board. Its clips and rate targets are
+`CLIPS_P10` in `scripts/parity-clips.sh`. The board runs both encoders at
+their default preset with `--threads 4`. `scripts/bd_at_rate.py` solves each clip onto five
+shared byte targets. x264 needs `--output-depth 10` as well as
+`--profile high10`, because the profile alone still writes 8-bit samples.
+
+Treat the board as a smoke check. Its clips are 64 frames at 480x272, below
+the project's 120-frame rule for a BD sweep.
 
 Decode with `-fps_mode passthrough`. An Annex-B stream records its rate in the
-VUI. When the Y4M muxer picks a different one, ffmpeg drops frames to fit.
-The 120 fps clips once decoded 15 of 64 frames. VMAF scored those against
-the first 15 of the reference.
+VUI. When the Y4M muxer picks a different one, ffmpeg drops frames to fit. On the
+120 fps clips only 15 of 64 frames survived. VMAF paired them with the first
+15 reference frames.
 
-HDR clips score on VMAF v1's HDR models, `hdr_vmaf_v1.1.8`, and never on its
-SDR models. The SDR models score PQ pictures as if they were SDR without a
-warning. The HDR model follows the picture:
+### Scoring HDR
 
-- 3d0h up to a height of 1080
-- 1d5h_2160 above that, so 3840x1600 and 4096x2160 score on it
-- the hfr variant at 50 fps and up
+HDR clips score on VMAF v1's HDR models (`hdr_vmaf_v1.1.8`), never the SDR
+ones. The SDR models score PQ pictures as if they were SDR, with no warning.
 
-Tag both sides limited range, BT.2020 primaries and matrix, and PQ transfer.
-Under the project's rule, a picture smaller than 1920x1080 in both dimensions
-is scaled up on both sides to fit 1920x1080 with its aspect kept, and anything
-else scores at its own size, 1080p and 2160p included. Read PSNR-Y on the
-10-bit code values too. Before reading a BD figure, check that the two ladders
-overlap in quality.
+| picture | HDR model |
+|---|---|
+| height up to 1080 | 3d0h |
+| height above 1080, such as 3840x1600 and 4096x2160 | 1d5h_2160 |
+| 50 fps and up | the hfr variant of either |
 
-The HDR ladder is `scripts/hdr_ladder.py SRC.y4m`. It runs CRF 18-34 on
-yah264 and on x264 High 10 at medium. Both streams are tagged HDR10: BT.2020,
-PQ and limited range. The source is a progressive, limited range C420p10
-HDR10 Y4M of any even size, and the 1080p test spans are 120 frames. Each
-rung scores as above. When a source is scaled up, CAMBI is told the coded
-size. The script prints BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over the
-quality range both ladders cover. Each rung's CAMBI prints beside it.
+- Tag both sides limited range, BT.2020 primaries and matrix, and PQ transfer.
+- A picture smaller than 1920x1080 in both dimensions is scaled up on both
+  sides to fit 1920x1080, aspect kept. Anything else scores at its own size,
+  1080p and 2160p included. This is the project's rule.
+- Read PSNR-Y on the 10-bit code values too.
+- Before reading a BD figure, check that the two ladders overlap in quality.
 
-Before running it, set `VMAF_HDR` and `VMAF_HDR_MODELS` and make sure each
-tool path names a binary, since a wrapper script won't do. The script keeps
-each rung's stream and score. It keys the stream on the encoder binary, its
-libraries, the command line, the `Y264_*` and `YAH264_*` environment and the
-source file. It keys the score on the scorer chain and the script. When the
-scorer changes, the kept stream is rescored and the rung prints "rescored".
-A reused rung prints "cached". A run started while another holds the same
-work directory stops at once. The options:
+### The HDR ladder
+
+`scripts/hdr_ladder.py SRC.y4m` runs CRF 18-34 on yah264 and on x264 High 10
+at medium. Both streams are tagged HDR10, meaning BT.2020, PQ and limited
+range. The source is a progressive, limited-range C420p10 HDR10 Y4M of any
+even size. The 1080p test spans are 120 frames. Rungs score as in "Scoring
+HDR".
+When a source is scaled up, CAMBI is told the coded size. The script prints
+BD-rate by HDR VMAF, PSNR-Y and PSNR-YUV over the quality range both ladders
+cover, with each rung's CAMBI beside it.
+
+Set `VMAF_HDR` and `VMAF_HDR_MODELS` first. Each tool path must name a
+binary, since a wrapper script won't do.
+
+The script keeps each rung's stream and score:
+
+- The stream is keyed on the encoder binary, its libraries, the command line,
+  the `Y264_*` and `YAH264_*` environment and the source file.
+- The score is keyed on the scorer chain and the script. When the scorer
+  changes, the kept stream is rescored and the rung prints "rescored". A
+  reused rung prints "cached".
+- A run started while another holds the same work directory stops at once.
+
+Options:
 
 - `--max-crf` drops the top rungs.
 - `--fresh` ignores the cache.
-- `--vbr` runs a VBR ladder at the listed targets. Both encoders get a
-  maxrate of 1.5x the target, a buffer of 2x the target and an initial fill
-  of 0.9. Each rung prints its rate error and the VBV checker's verdict. A
-  rate error outside the parity spec's +-10% bar is flagged.
-- `--encoders x264` runs one side alone, such as the reference's CRF ladder that
-  sets the VBR targets.
-- `--yah-lookahead` (at most 64) and `--x264-lookahead` (0 to 250) set each
-  side's depth. Every reading prints the depth each side ran with.
+- `--vbr` runs a VBR ladder at the listed targets. Each rung prints its rate
+  error and the VBV checker's verdict. A rate error outside the parity spec's
+  +-10% bar is flagged. Both encoders get the same VBV settings:
+  - maxrate 1.5x the target
+  - buffer 2x the target
+  - initial fill 0.9
+- `--encoders x264` runs one side alone, such as the reference's CRF ladder
+  that sets the VBR targets.
+- `--yah-lookahead` and `--x264-lookahead` set each side's depth: at most 64
+  for yah264, 0 to 250 for x264. Every reading prints the depth each side ran
+  with.
 
-Recon-match runs for every format under `make conformance`. To check by
-hand, decode the `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare the
-`framemd5` hash columns, Y4M against Y4M. Don't compare a Y4M's framemd5 with
-one taken straight off the `.264`, because ffmpeg treats them differently.
-Because `--dump-recon` keeps the source frame rate where the decode defaults
-to 25, only the hash column matters.
+### Recon-match
+
+`make conformance` runs recon-match for every format. To check by hand,
+decode the `.264` to a Y4M (`ffmpeg -i x.264 dec.y4m`) and compare the
+`framemd5` hash columns, Y4M against Y4M. Don't compare against a framemd5
+taken straight off the `.264`, because ffmpeg treats the two differently.
+Only the hash column matters, because `--dump-recon` keeps the source frame
+rate where the decode defaults to 25.
 
 Check output size first. A crashed encode gives `decode_errors=0` on a
 26-byte file.

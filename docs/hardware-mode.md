@@ -9,13 +9,12 @@ The stream is Apple's. Recon-match, conformance, determinism, the quality
 bands and the parity goals don't apply to it. It never appears in their rows
 and has its own row on the site, labeled as hardware.
 
-GPU compute over our own encoder is a separate route, covered in
-[gpu.md](gpu.md).
+GPU compute inside our own encoder is a separate route. See [gpu.md](gpu.md).
 
 ## How it works
 
 `--hw off|auto|videotoolbox` picks the mode. The default is `off`. The
-library takes the mode at open (`yah264_encoder_open_hw`) instead of in the
+library takes the mode at open (`yah264_encoder_open_hw`), not in the
 parameter struct. `yah264_encoder_backend` names what actually opened.
 `Y264_HW` sets the mode for the test scripts. The meson option `videotoolbox`
 is on by default on macOS. Elsewhere a stub's open returns NULL with a reason.
@@ -23,8 +22,8 @@ Callers need no ifdefs.
 
 The session requires the hardware encoder and never accepts VideoToolbox's
 software encoder. If the hardware session fails or won't confirm it's
-hardware, it's refused. Under `videotoolbox` a refusal fails the encode. Under `auto` it
-prints one line naming why and falls back to yah264's own encoder.
+hardware, it's refused. Under `videotoolbox` a refusal fails the encode.
+Under `auto` it prints one line naming why and falls back to yah264's own encoder.
 
 Each input frame is copied into a buffer from the session's pool, because the
 session holds frames past the call and the caller reuses its planes. On the
@@ -64,14 +63,15 @@ same table, the text and the behavior can't drift apart.
 | `--ref`, `--min-keyint`, `--b-adapt`, `--b-bias`, `--direct`, `--zones`, `--qpfile`, `--pass`, `--stats`, `--abr-model`, `--crf-max`, `--ratetol`, `--qcomp`, `--rc-lookahead`, `--sync-lookahead`, `--preset`, other tunes, `--threads`, `--aq-strength`, `--psy-rd`, `--psy-trellis`, `--trellis`, the deadzones, the `--cqm` family, `--me`, `--merange`, `--subme`, `--subpel`, `--partitions`, `--no-mixed-refs`, `--no-chroma-me`, `--transform-8x8`, `--cll`, `--mastering-display`, `--alternative-transfer`, `--frame-stats` | nothing | ignored |
 | `--dump-recon`, `--slices` above 1, anything but 4:2:0, input above 8 bits | nothing | refused |
 
-The CRF table is rate-matched. Each point is the quality at which the
-hardware spends what yah264 spends at that CRF, as the median over six clips.
-The per-clip spread is about 0.1. Between points the table is linear. At
-crf 28 the hardware comes within 16% of our rate over the six clips.
+The CRF table is rate-matched. At each point the hardware spends what yah264
+spends at that CRF. Between points the table is linear.
 
 | CRF | 20 | 24 | 28 | 32 | 36 |
 |---|--:|--:|--:|--:|--:|
 | quality | 0.69 | 0.59 | 0.50 | 0.41 | 0.30 |
+
+Each point is the median over six clips. The per-clip spread is about 0.1.
+At CRF 28 the hardware comes within 16% of our rate over the six clips.
 
 At open, the CLI prints one block listing each option the user set that's
 ignored or approximated, with its note. Defaults print nothing. `--hw-strict`
@@ -79,10 +79,8 @@ turns that block into an error, for scripted use.
 
 ## The trade
 
-The table covers the ten board clips at their ABR targets. The wall and CPU
-columns are the median of five timed runs per side on a quiet machine. Our
-encoder ran those at auto threads. The quality column is VMAF v1, read with our
-encoder at three threads.
+The hardware saves CPU and pays for it in quality. On all ten board clips it
+scores below us at the same bitrate.
 
 | clip | wall, hardware / ours | CPU, ours / hardware | VMAF v1, hardware minus ours |
 |---|--:|--:|--:|
@@ -97,18 +95,28 @@ encoder at three threads.
 | pedestrian_1080p | 0.80 | 27 | -5.3 |
 | riverbed_1080p | 0.32 | 46 | -12.6 |
 
-At the median the hardware uses about an eighteenth of our CPU and about the
-same wall time. It's faster on high-rate clips and most HD. On CIF and
-fourpeople it's slower, because opening the session is a large share of a
-short run.
+| at the median | hardware against ours |
+|---|---|
+| CPU | about an eighteenth |
+| wall time | about the same |
+| VMAF v1 | 7.8 points lower |
 
-Quality pays for the savings. The hardware scores below us at the same bitrate
-on all ten clips, by 7.8 points at the median. It comes within about 6% of its
-rate target on eight clips. On bus and stefan every encoder undershoots the
-400 kbit/s target. The hardware spends more bits than we do on seven of ten,
-which favors it in the quality column. CPU counts the encoder process only and
-leaves out work the hardware does elsewhere. Use hardware mode when CPU
-matters more than bits.
+The hardware is faster on high-rate clips and most HD. On CIF and fourpeople
+it's slower, because opening the session is a large share of a short run.
+Use hardware mode when CPU matters more than bits.
+
+How to read the table:
+
+- The clips run at their ABR targets. Wall and CPU are the median of five
+  timed runs per side on a quiet machine. Our encoder ran those at auto
+  threads.
+- VMAF v1 was read with our encoder at three threads.
+- The hardware comes within about 6% of its rate target on eight clips. On
+  bus and stefan every encoder undershoots the 400 kbit/s target.
+- The hardware spends more bits than we do on seven of ten clips. That favors
+  it in the quality column.
+- CPU counts the encoder process only and leaves out work the hardware does
+  elsewhere.
 
 ## What we chose and why
 
@@ -139,8 +147,8 @@ matters more than bits.
 
 ## Measuring it
 
-- The hardware isn't byte-stable run to run. Its VMAF moved by up to 0.6
-  points across five runs on the board. Ours repeated to within about 0.2.
+- The hardware isn't byte-stable run to run. Across five runs on the board
+  its VMAF moved by up to 0.6 points. Ours repeated to within about 0.2.
 - `scripts/regress.py` draws `--hw auto` in a quarter of its cells and gates
   only on "encodes, decodes, frame count matches". It doesn't assert determinism there.
 - A raw `.264` from the hardware has no VUI timing. A decoder guesses the
