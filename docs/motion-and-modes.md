@@ -76,16 +76,20 @@ At `--subme 8` and below, a P macroblock goes through these steps in order:
    nothing under the seed quantizer, the macroblock commits skip before any
    search. `--no-fast-pskip` turns the probe off.
 
-   With `--weightp 1` or `2`, the probe also refuses some skips. In a picture
-   whose mean moved against reference 0 by a quarter code or more, it refuses
-   a skip on a flat macroblock whose residual would keep a level in the
-   Intra16x16 DC transform. Flat means variance under the AQ field's floor.
-   Because the DC transform sums the whole macroblock, it codes a small even
-   step that every 4x4 deadzone drops, such as one frame of a fade. The probe
-   leaves the skip alone when the step goes against the picture's shift, when
-   it's smaller than the block's own noise, when it buys less distortion than
-   8 bits cost at the mode lambda, and on dark blocks that aren't black, where
-   intra plateaus over a smooth gradient band worse than the skip.
+   With `--weightp 1` or `2`, the probe also refuses some skips.
+   Because the Intra16x16 DC transform sums the whole macroblock, it can code
+   a small even step that every 4x4 deadzone drops, such as one frame of a
+   fade. In a picture whose mean moved against reference 0 by a quarter code
+   or more, the probe refuses a skip on a flat macroblock whose residual
+   would keep a level in that DC transform. Flat means variance under the AQ
+   field's floor. The probe still leaves the skip alone in four cases:
+
+   - the step goes against the picture's shift
+   - the step is smaller than the block's own noise
+   - the step buys less distortion than 8 bits cost at the mode lambda
+   - the block is dark but not black, where intra plateaus over a smooth
+     gradient band worse than the skip
+
    `Y264_FLAT_SKIP_DC=0` turns the check off in a dev_knobs build.
 2. **16x16 search** over the active references.
 3. **Ref-0 exit**, on pictures of at least 1200 macroblocks. When the ref-0
@@ -153,11 +157,13 @@ off.
 
 After quantization, a 4x4 inter block whose levels are all +-1 gets a score.
 Each nonzero coefficient adds a weight looked up by the run of zeros before
-it, and below the threshold the whole block is zeroed. The 4x4 table is
-`3,2,2,1,1,1,1,1,0...` with threshold 3. The 8x8 table is
-`3,3,3,3,2,2,2,2,1,...` (eight ones, then zeros) with threshold 2. Any level
-of magnitude 2 or more forces a keep. `--no-dct-decimate` turns decimation
-off.
+it. Below the threshold the whole block is zeroed. Any level of magnitude 2 or
+more forces a keep. `--no-dct-decimate` turns decimation off.
+
+| block | weight by preceding zero run | threshold |
+|---|---|--:|
+| 4x4 | `3,2,2,1,1,1,1,1`, then zeros | 3 |
+| 8x8 | `3,3,3,3,2,2,2,2`, then eight ones, then zeros | 2 |
 
 ## What we chose and why
 
@@ -167,16 +173,25 @@ off.
 | No UMH on 8x8 and smaller | about 6-7% faster single-threaded. Under `--me umh` it costs 0.2-0.7% on the four CIF motion clips: foreman +0.66%, bus +0.46%, stefan +0.41% |
 | Seed early-out, K 48 sub-16x16 and 4 at 16x16 | 2-3% of wall at 12 threads for a CRF-band median of +0.15% |
 | Capped diamond sub-pel at medium | a speed trade. Slower presets keep the square |
-| Adaptive partition margin plus importance rescue (mode 4) | against no early termination the margin alone costs a 0.46% band median and mode 4 costs 0.37%. The rescue buys back that 0.09 for 1-3 points of the margin's 4.33% wall saving |
+| Adaptive partition margin plus importance rescue (mode 4) | the lowest BD cost of the early-termination variants in the table below. The rescue buys back 0.09 of the margin's loss for part of its wall saving |
 | `--p-part-gate 400` | holds quality on every clip of the 12-clip HD band: no clip moves by more than 0.32%. It removes the P tournament's most numerous searches |
-| Ref-0 exit at K=1200 | against K=600, shields (the worst clip on wall) is 8.4% faster at one thread. The CRF band median is 0.00%, because the exit doesn't run at CIF, but fourpeople pays +1.90% |
+| Ref-0 exit at K=1200 | against K=600, shields, the worst clip on wall, is 8.4% faster at one thread. fourpeople pays +1.90%. The CRF band median reads 0.00% because the exit doesn't run at CIF |
 | Intra admission at 1.5x (P) and 0.75x (B) | 1.5x is BD-neutral for 1.06x CIF and 1.11x 720p in pure C. Because B intra wins a few dozen macroblocks in 300,000, its margin is tighter |
 | RDOQ on the winner only at medium (`--trellis 1`) | 1.18x faster at CIF and 1.29x at 720p in pure C, for a +0.36% CRF-band median (sintel +3.87% is the worst clip) |
 | Viterbi RDOQ under CABAC at medium | -1.94% median against the greedy search on the CRF band, and 1.1-1.3x faster |
 | Intra RDOQ lambda ramped to zero below a source variance of 8 | without it RDOQ drops the small levels in smooth gradients. The I frame then bands |
 | Round-to-nearest RDOQ seed | a deadzone seed drops would-be level-1 coefficients with no RD look. Round-to-nearest gained on the corpus mean, most on park_joy, with no clip worse |
 | Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable. That's a different tool. Above 3 the results are flat: the shapes measured are within 0.2% of each other on the median |
-| 4x4 tail `3,2,2,1,1,1,1,1` | a free choice on a flat plateau. The shorter tail `3,2,2,1,1,1` reads 0.19% better on the CRF band median and the same on the deep band (median 0.00%, every clip within the v1 deep band's measured null of about ±1.0 per clip), so neither band separates them. No speed or size cost, and 254/254 conformance |
+| 4x4 tail `3,2,2,1,1,1,1,1` | a free choice on a flat plateau, because neither band separates it from the shorter tail `3,2,2,1,1,1`. The shorter tail reads 0.19% better on the CRF band median. On the deep band it reads a 0.00% median, with every clip inside the v1 deep band's measured null of about ±1.0 per clip. It has no speed or size cost and passes 254/254 conformance |
+
+Partition early termination on the CRF band, against none:
+
+| variant | BD cost | speed |
+|---|--:|--:|
+| constant threshold | +0.53% mean, mobile +1.57% | 1-2% |
+| constant threshold plus guards (mode 2) | +0.42% mean | 2-4% |
+| adaptive margin alone | +0.46% median | 4.33% of wall |
+| adaptive margin plus importance rescue (mode 4, shipped) | +0.37% median | 1-3 points under the margin alone |
 
 ## What didn't work
 
@@ -186,8 +201,8 @@ off.
 | An 8-point square refine in place of UMH, without richer seeds | captures most of UMH's small near-hex gains and still loses clearly on bus and stefan. The quality comes from the rare distant finds |
 | Cap sub-pel iterations on the square path | hpel and qpel converge in two iterations 96-99% of the time. A cap saves about 0.3% |
 | 4-point diamond to convergence in place of the square (`--subpel 1`) | foreman +0.92%, mobile +0.76% |
-| Constant-threshold partition early termination | +0.53% mean, mobile +1.57%, for 1-2% speed. Retuning the slack trades BD for speed one to one |
-| Constant threshold plus heterogeneity and importance guards (mode 2) | still +0.42% mean. The guards protect so many blocks that only 2-4% speed is left |
+| Constant-threshold partition early termination | costs more than the shipped margin for less speed. Retuning the slack trades BD for speed one to one |
+| Constant threshold plus heterogeneity and importance guards (mode 2) | the guards protect so many blocks that little speed is left |
 | Seed partition searches from the 16x16 and sibling winners | no speed gain, since the seeds are already saturated, and bus loses |
 | Hex iteration cap | near zero: the hex already exits on convergence |
 | `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: against the hex default, pedestrian reads +11.0% / +11.3%, where `--me umh` reads +5.4%. The SAD-cheapest vector isn't the one that codes best |
