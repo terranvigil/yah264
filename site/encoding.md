@@ -16,9 +16,9 @@ H.264 adds.</p>
 ## The bit budget
 
 A second of uncompressed 1080p60 video in 8-bit 4:2:0 is about 187 megabytes.
-A good-quality stream of the same second is about 6 Mbit. That's 99.6% of the
-bits thrown away. Nobody notices. The rest of this page is about how the
-encoder chooses what to discard.
+A good-quality stream of the same second is about 6 Mbit, so 99.6% of the bits
+are thrown away and nobody notices. This page is about how the encoder chooses
+what to discard.
 
   <figure>
     <svg viewBox="0 0 700 158" width="100%" role="img" aria-label="A bar for one second of raw video, with the delivered stream as a sliver at its left edge">
@@ -54,13 +54,13 @@ encoder chooses what to discard.
 
 ## Four kinds of redundancy
 
-All compression comes down to finding redundancy and not paying for it twice.
-Every standardized codec chases the same four kinds.
+Compression means not paying twice for redundancy. Every standardized codec
+chases the same four kinds.
 
 <ul>
 <li><strong>Spatial.</strong> Neighboring pixels look alike. Predict a block from pixels already
 decoded above and to the left, then code only the difference.</li>
-<li><strong>Temporal.</strong> Frame x+1 is mostly frame x but displaced. We record the motion
+<li><strong>Temporal.</strong> Frame x+1 is mostly frame x, displaced. Record the motion
 instead of the image.</li>
 <li><strong>Statistical.</strong> After prediction, transform and quantization, most of
 what's left is zeros. Common values get short codes and rare ones get long codes.</li>
@@ -71,25 +71,22 @@ gradients than to fine texture. Spend bits where they are seen.</li>
 <div class="aside">
 <p class="aside-title">Where the loss actually happens</p>
 <p>
-The first three lose nothing. A motion vector is exact, the prediction error
-left after it (the residual) is exact, and entropy coding is reversible.
-Quantization is where data gets thrown away: it rounds the residual before
-coding it.
+The first three lose nothing: motion vectors, the prediction error left after
+them (the residual) and entropy coding are all exact. Quantization throws data
+away by rounding the residual before coding it.
 </p>
 <p>
-The fourth kind is the interesting one because it rests on a judgment about
-human vision. When two encoders differ at the same bitrate, part of the gap is
-one predicting better than the other. The rest is that they disagree about
-vision. Viewers settle that part. A
-<a href="https://en.wikipedia.org/wiki/Mean_opinion_score">MOS</a> panel is how
-you ask them, and <a href="#measuring-it">Measuring it</a> below covers MOS.
+The fourth kind rests on a judgment about human vision. When two encoders
+differ at the same bitrate, part of the gap is better prediction and the rest
+is disagreement about vision, which only viewers can settle. A
+<a href="https://en.wikipedia.org/wiki/Mean_opinion_score">MOS</a> panel asks
+them, as <a href="#measuring-it">Measuring it</a> covers.
 </p>
 </div>
 
 ## The encode loop
 
-The encoder codes a frame one block at a time. Every block goes around the
-same loop.
+The encoder codes a frame one block at a time, sending every block around the same loop.
 
   <div class="fig bleed">
     <header>
@@ -136,18 +133,16 @@ same loop.
 
 ## Motion estimation
 
-Repetition from frame to frame is the biggest saving on offer. The encoder asks
-*where did this block go?* millions of times a second. It takes a block from
-the frame it's coding, slides it around the previous frame and keeps the
-position where the pixels differ least. The difference measure is the sum of
-absolute differences, or SAD.
+Repetition between frames is the biggest saving on offer. Millions of times a
+second the encoder asks *where did this block go?* It slides the block around
+the previous frame and keeps the position with the smallest sum of absolute
+differences, or SAD.
 
   <div class="fig bleed">
     <header>
       <h4>Stepping through a motion search</h4>
-      <p class="look">The figure runs in three steps: the block and the window it may
-      search, the search working through that window one position at a time,
-      and the winner. Press <b>Step</b> to go one step at a time.</p>
+      <p class="look">Three steps: the block and its search window, the search
+      trying each position, then the winner. Press <b>Step</b> to advance.</p>
     </header>
     <div class="bd">
       <div class="me">
@@ -163,9 +158,9 @@ absolute differences, or SAD.
         <div><h5>What is left to code</h5><canvas id="meres" role="img" aria-label="The residual left to code, before and after the motion search"></canvas>
           <p class="cap"><b id="meres0">—</b> per pixel with no motion,
           <b id="meres1">—</b> after the search. Darker red is more to code.</p></div>
-        <div class="me-hint">Every block in the frame moves by the same few pixels because the
-        camera pans across a still image. That's the easiest case a search ever gets. Even so,
-        it takes hundreds of comparisons for one block.</div>
+        <div class="me-hint">Because the camera pans across a still image, every block
+        moves the same few pixels. Even this easiest case takes hundreds of
+        comparisons per block.</div>
       </div>
       <p class="phase" id="mephase"></p>
       <div class="ctrls">
@@ -183,17 +178,16 @@ absolute differences, or SAD.
     </div>
   </div>
 
-Dark violet on the cost map marks a good match. The basin around it is why a
-shortcut like the hexagon pattern works. The cost changes smoothly enough that a
-pattern walking downhill usually finds the same minimum as testing every
-position. The percentage in the last box is what the shortcut costs you when it
-doesn't. Choosing that trade is most of what a preset is.
+Dark violet on the cost map marks a good match. Because the cost changes
+smoothly around it, a shortcut like the hexagon pattern can walk downhill and
+usually find the same minimum as an exhaustive search. The last box shows what
+the shortcut costs when it doesn't. Choosing that trade is most of what a preset
+is.
 
 ## Quantization
 
-Prediction, transform and entropy coding are all reversible. Quantization is the
-one step that destroys information. [Rate control](#rate-control) below covers
-how it works and the knob that sets it.
+Quantization is the one step that destroys information.
+[Rate control](#rate-control) below covers how it works and what sets it.
 
   <div class="fig bleed">
     <header>
@@ -205,10 +199,9 @@ how it works and the knob that sets it.
       <div class="quant">
         <div><canvas id="qcv" role="img" aria-label="A video frame, quantized live at the QP you choose"></canvas>
           <p class="credit">Sintel © Blender Foundation, CC BY 3.0, one frame from
-          <code>tests/corpus/sintel_720p.y4m</code>. Your browser transforms, quantizes and inverts both
-          luma and chroma. Chroma gets a coarser step, as in a real encoder. The
-          transform here is the generic 8&times;8 DCT. Part two covers H.264's own
-          4&times;4 and 8&times;8 transforms.</p>
+          <code>tests/corpus/sintel_720p.y4m</code>. Your browser transforms, quantizes and inverts luma
+          and chroma, with a coarser step on chroma as in a real encoder. The
+          transform is the generic 8&times;8 DCT. Part two covers H.264's own.</p>
         </div>
         <div><h5>4× detail</h5><canvas id="qzoom" role="img" aria-label="A four times detail crop of the quantized frame"></canvas></div>
       </div>
@@ -222,31 +215,27 @@ how it works and the knob that sets it.
     </div>
   </div>
 
-When compression is pushed too hard, the image breaks up into visible squares
-along the transform's own grid. "Blocking" is one of the more common
-artifacts viewers notice and complain about. Every codec adds a deblocking
-filter inside the decoding loop because of it.
+Pushed too hard, the image breaks into squares along the transform grid.
+Viewers notice this "Blocking" more than most artifacts. Every codec puts a
+deblocking filter inside the decoding loop because of it.
 
 ## The decision
 
-So far every stage has had one obvious way to work. Past this point, encoding
-is a choice. A block can be skipped, predicted with one motion vector, split into
-four blocks with four vectors, or coded from scratch. The cheaper a choice is to
-describe, the worse it usually looks. So the encoder prices both sides together
-as distortion plus lambda times rate, `cost = D + lambda x R`. It picks the
-option with the lowest cost.
+From here on, encoding is a choice. A block can be skipped, predicted with one
+motion vector, split into four with four vectors, or coded from scratch. Because the
+cheaper a choice is to describe, the worse it usually looks, the encoder picks
+the lowest `cost = D + lambda x R`: distortion plus lambda times rate.
 
-Lambda is the price of a bit in that trade. When lambda is small, bits are cheap
-and the encoder spends them to cut error. When it's large, bits are dear and the
-encoder accepts more error to save them. Because the quantizer sets lambda,
-that one number steers every decision in the encoder at once. Drag λ in the
-figure to watch the trade move.
+Lambda is the price of a bit. When it's small the encoder spends bits to cut
+error, and when it's large the encoder accepts error to save bits. Because the
+quantizer sets lambda, that one number steers every decision. Drag λ to watch
+the trade move.
 
   <div class="fig bleed">
     <header>
       <h4>Costing four candidate modes</h4>
-      <p class="look">D is measured on a real block. R is what each mode costs to describe. The winner
-      changes under you as λ moves.</p>
+      <p class="look">D is measured on a real block, R is each mode's cost to describe.
+      The winner changes as λ moves.</p>
     </header>
     <div class="bd rd">
       <div id="rdrows"></div>
@@ -257,150 +246,113 @@ figure to watch the trade move.
 
 <div class="aside">
 <p class="aside-title">Where the encoders differ</p>
-<p>Every encoder computes that same cost. Three things separate them.</p>
+<p>Every encoder computes that cost. They differ in:</p>
 <ul>
-<li>Which candidates they decide to try.</li>
-<li>How accurately they guess what a block will cost in bits, before they have
-actually coded it.</li>
-<li>Whether the quality-against-bits trade stays fixed for a whole frame or
-shifts with what is coming next.</li>
+<li>which candidates they try</li>
+<li>how well they guess a block's bits before coding it</li>
+<li>whether the trade stays fixed for a frame or shifts with what's coming</li>
 </ul>
 </div>
 
 ## The constants
 
-Every encoder has constants that someone tuned by hand. The lambda law
-behind the decision above traces to the Lagrange-multiplier work of the late
-1990s and early 2000s. Its authors swept lambda against QP on the test clips of
-the day and fit a curve through the pairs that won. Every H.264-era encoder,
-ours included, inherited that fit. The constants around it were swept once on
-small sets of clips and then frozen.
+Encoders run on hand-tuned constants. The lambda law above comes from
+Lagrange-multiplier work of the late 1990s and early 2000s, a curve fit to the
+lambda-QP pairs that won on the test clips of the day. Every H.264-era encoder,
+ours included, inherited it. The constants around it were swept once on small
+clip sets and frozen.
 
-The usual assumption is that one setting suits all content. To test it, we
-flipped six settings we already ship one at a time across the whole test set
-and read the results clip by clip. Each setting was best for some clips and
-wrong for others.
+One setting doesn't suit all content. We flipped six settings we ship, one at a
+time, across the test set: each was best for some clips and wrong for others.
+The average hides it, because a talking head and a handheld street scene want
+different settings. Picking per clip would save about 1.3% on our twelve clips.
 
-The average over the test set hides this because a talking head and a handheld
-street scene want different settings. Picking the right setting for each clip
-would save about 1.3% on our twelve clips.
-
-The encoder doesn't pick per clip yet. The closest it comes is a check that
-spots flat, cartoon-like frames and raises the psychovisual strength for them.
-It fires on only one clip in the test set.
-
-A cheap measurement that predicts the right setting is hard to find. We labeled
-239 clips from an outside set and tested four features. None of them predicts.
-Most clips probably have nothing to win anyway. On that set, a tenth of the
-clips held most of the gain.
+The encoder doesn't pick per clip yet. Its nearest step raises psychovisual
+strength on flat, cartoon-like frames, which fires on one test clip. A cheap
+predictor is hard to find: on 239 labeled clips from an outside set, none of
+four features predicted the right setting. Most clips probably have nothing to
+win, since a tenth of that set held most of the gain.
 
 <div class="aside">
 <p class="aside-title">Two ways to fool yourself</p>
-<p>Two mistakes make an encoder measure better than it is. One is tuning on
-the clips you test with. Tune on a different set and a result can move by ten
-percent. Anything we fit is trained on other people's video and tested on ours.
-The other is comparing at the same setting instead of the same size. A change
-that only shifts how a quality setting maps to bits makes a bigger file with
-better scores, which passes for an improvement. Every comparison here is made at
-the same achieved bitrate.</p>
+<p>One is tuning on the clips you test with. On a different set a result can
+move by ten percent, which is why we fit on other people's video and test on
+ours. The other is comparing at the same setting instead of the same size. A
+change that only remaps a quality setting to more bits scores better and passes
+for an improvement. Every comparison here is at the same achieved bitrate.</p>
 </div>
 
 ## Rate control
 
 Quantization divides each transform coefficient by a step size and rounds it.
-A bigger step means fewer bits and more loss.
+A bigger step means fewer bits and more loss. Rate control picks the step per
+block, thousands of times a second, to hit a bitrate without seeing far enough
+ahead to plan. Viewers only see its failures: a blurry face or a stall.
 
-The step can change per block. Rate control picks it thousands of times a
-second. It has to hit a bitrate target without seeing far enough ahead to plan
-for it. Viewers never see rate control working, only its failures: a
-blurry face or a video that stalls.
-
-Because an encoder can't fix quality and bitrate at the same time, you pick one
-and let the other adjust. A talking head sitting still is cheap to compress. A detailed
-action scene is expensive. Lock in the quality and the bitrate jumps around with
-what is on screen. Lock in the bitrate and the quality takes the hit instead.
-Each mode below chooses which one to let go.
+An encoder can't fix quality and bitrate at once. A still talking head is cheap
+and an action scene expensive, so locking quality makes the bitrate swing while
+locking bitrate makes quality take the hit. Each mode below picks one to let go.
 
 ### Constant QP
 
-QP sets the quantization step. In H.264 it runs from 0 to 51. Each rise of six
-doubles the step size.
-
-Constant QP sets one QP and never changes it. Quality stays even. The bitrate
-follows the content and runs up to five times higher in the action than in the
-calm. It's rarely used for delivery, although encoder experiments get measured
-with it.
+QP sets the quantization step. In H.264 it runs from 0 to 51. Each rise of
+six doubles the step. Constant QP never changes it. The bitrate follows the
+content, up to five times higher in action than in calm. It's rare in delivery
+but common in encoder experiments.
 
 ### CRF
 
 CRF holds *perceived* quality roughly steady and lets the bitrate go where it
-must. QP still moves with the content. It moves much less than the complexity
-does because the eye can't follow detail in fast motion.
+must. QP still moves with the content, but less than the complexity does,
+because the eye can't follow detail in fast motion.
 
-CRF is the right default whenever file size isn't capped. Constant QP holds the
-quantizer steady instead of the look. It overspends on frames nobody is
-scrutinizing and starves the still ones where errors show. Single-pass ABR
-chases a bitrate through a feedback loop. Its quality wobbles most at the
-scene changes a viewer is likeliest to notice. CRF pays what each scene costs,
-which at the same bits gives a steadier picture than single-pass ABR. Two-pass
-also reaches a steady picture, for the price of a second pass. Use it when you
-need a known output size.
-
-CRF gives you no say over how big the file comes out. The next mode adds that.
+CRF is the right default when file size isn't capped. Constant QP overspends on
+frames nobody scrutinizes and starves the still ones where errors show.
+Single-pass ABR wobbles most at the scene changes viewers notice. Two-pass also
+gets a steady picture at the cost of a second pass. Use it when you need a
+known size. CRF alone gives no say over size.
 
 ### Capped CRF
 
-Capped CRF puts a buffer ceiling on top of a quality target. It's a common
-choice for VOD ladders. Quality leads: an easy title codes cheaply and comes out
-small. The cap only ever takes bits away. Below it you get exactly the CRF
-encode you asked for, bit for bit. Above it the frame is bounded and stays
-deliverable.
-
-You get constant quality's cheapness on the easy half of a catalog and a buffer
-constraint's safety on the hard half. Single-pass ABR is rare in on-demand
-work.
+Capped CRF, common for VOD ladders, puts a buffer ceiling on a quality target.
+The cap only takes bits away. Below it you get exactly the CRF encode, and above
+it the frame is bounded and stays deliverable. Easy titles come out small while
+hard ones stay safe. Single-pass ABR is rare in on-demand work.
 
 ### Average bitrate
 
-ABR must hit a number over the whole file. It runs a feedback controller that
-tightens when it has overspent so far and relaxes when it has underspent.
-Feedback alone only learns about a hard section *after* paying for its first
-frames. The controller overshoots into the cut and over-corrects afterward, so
-quality lurches on either side of the scene change. Viewers notice that lurch.
+ABR must hit a number over the whole file, through a feedback controller that
+tightens after overspending and relaxes after underspending. Feedback only
+learns about a hard section *after* paying for its first frames, so quality
+lurches on either side of a scene change.
 
-A lookahead fixes this. The encoder keeps a queue of the next few dozen frames
-and studies them before coding. It learns where the scene cuts are, which
-stretches will be expensive and which blocks later frames will copy from. With
-that it picks frame types, holds bits back for a spike and spends extra where it
-pays off.
+A lookahead fixes this by studying the next few dozen frames before coding:
+where the cuts are, which stretches are expensive, which blocks later frames
+copy. It then picks frame types, holds bits back for spikes and spends where it
+pays.
 
-Two-pass fixes it another way. A first pass encodes the whole file only to learn
-how hard each part is. Because the second pass plans the budget knowing the
-whole file, the total comes out exact and no scene catches it off guard.
-Because two-pass needs a second encode and an input you can seek in, it can't
-run live.
+Two-pass fixes it another way. Once a first pass has learned how hard each part
+is, the second plans the budget for the whole file and the total comes out
+exact. Because it needs a second encode and a seekable input, it can't run
+live.
 
 ### VBV
 
-A decoder reads from a buffer that fills at the channel rate and empties by one
-frame's worth each time a frame is decoded. If a frame needs more bits than the
-buffer holds at that moment, playback stalls. VBV makes that constraint explicit:
-no frame may take more than the buffer holds when its turn comes. A big frame is
-allowed only if the frames before it left room. The frames after it then have to
-stay small until the buffer refills. So the cap is on a run of frames as long as
-the buffer, usually one to two seconds, and not on each frame alone.
+A decoder reads from a buffer that fills at the channel rate and empties one
+frame at a time. A frame bigger than the buffer holds stalls playback. VBV
+forbids that. A big frame needs room left by the frames before it. The
+frames after it stay small until the buffer refills. The cap therefore covers a
+run of frames as long as the buffer, usually one to two seconds.
 
-Through a hard section the quality dips instead of the stream breaking.
-Broadcast profiles require VBV. Most adaptive-streaming authoring specs ask for
-it too. That's why a live encode of a hard scene looks worse than the same scene
-encoded offline.
+Through a hard section quality dips instead of the stream breaking. Broadcast
+profiles require VBV, as do most adaptive-streaming specs. That's why a live
+encode of a hard scene looks worse than the same scene offline.
 
   <div class="fig bleed">
     <header>
       <h4>Rate control comparison</h4>
-      <p class="look">Every mode codes the same 160 frames, the same complexity in
-      each: an action scene between two calm ones. Watch what each policy
-      chooses to let move.</p>
+      <p class="look">Each mode codes the same 160 frames: an action scene between
+      two calm ones. Watch what each lets move.</p>
     </header>
     <div class="bd">
       <div class="rc-modes" id="rcmodes">
@@ -428,61 +380,45 @@ encoded offline.
 
 ### VBV and HRD
 
-People use the two names for each other, although they mean different things.
-
-The hypothetical reference decoder (HRD) is the model in the H.264
-specification: an idealized decoder with a buffer in front of it. Conformance
-is defined against that model. A stream conforms when it never overflows or
-underflows the buffer. The model's parameters can also be written into the
+The two names get swapped although they describe one constraint from opposite ends.
+The hypothetical reference decoder (HRD) is the H.264 specification's model: an
+idealized decoder with a coded picture buffer in front. A stream conforms when
+it never overflows or underflows that buffer. Its parameters can go in the
 sequence header to tell a real decoder what buffering to expect.
 
-The video buffering verifier (VBV) is the encoder side of the same constraint.
-It's the buffer simulation a rate controller runs while encoding so that it
-never emits a frame the model couldn't decode. The name is MPEG-1 and MPEG-2's
-own term for their buffer model. H.264 specifies its own model instead: the
-HRD, with a coded picture buffer at its front. Encoders kept the older name for
-the option.
+The video buffering verifier (VBV) is the encoder's simulation of that buffer.
+It keeps the encoder from emitting a frame the model couldn't decode. The name comes from MPEG-1
+and MPEG-2's buffer model and survives as the option name.
 
-The two describe one constraint from opposite ends: VBV is what you configure
-and HRD is what the decoder cares about.
-
-yah264 and x264 both write HRD parameters into the sequence header only when you
-ask for them with `--nal-hrd`. A stream constrained by `--vbv-maxrate` and
-`--vbv-bufsize` alone has no signaled buffer. For most delivery nobody notices.
-Broadcast profiles that require signaled buffering, such as Blu-ray and ATSC,
-reject a stream that has none even when the encode itself was properly
-constrained.
+yah264 and x264 write HRD parameters only when asked with `--nal-hrd`. A stream
+constrained by `--vbv-maxrate` and `--vbv-bufsize` alone has no signaled buffer.
+Most delivery doesn't care, but profiles that require one, such as Blu-ray and
+ATSC, reject it even when the encode was properly constrained.
 
 ## Measuring it
 
-The only real measure of video quality is a person watching it. The ground
-truth in this field is the mean opinion score, or MOS. A panel of viewers is seated
-in a controlled room and shown clips in a randomized order. Each viewer rates
-what they saw from 1 (bad) to 5 (excellent). The average of those scores is the
-MOS for that clip at that bitrate.
-[ITU-R BT.500](https://www.itu.int/rec/R-REC-BT.500) and ITU-T P.910
-standardize the procedure down to the room lighting and the viewing distance.
+The real measure of quality is people watching. The ground truth is the mean
+opinion score, or MOS: a panel in a controlled room rates randomized clips from
+1 (bad) to 5 (excellent). The average is the MOS for that clip at that
+bitrate. [ITU-R BT.500](https://www.itu.int/rec/R-REC-BT.500) and ITU-T P.910
+standardize it down to the lighting and viewing distance.
 
-MOS is also slow, expensive, and impossible to put in a build. Every metric we
-use stands in for it by predicting what viewers would say without asking them.
-PSNR measures squared error. It's cheap and only loosely tracks what viewers
-report. SSIM compares local structure and does better.
-[VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) is a
-model trained on MOS scores to predict them. It has become the standard the
-streaming industry judges quality by.
+MOS is slow, expensive and impossible to put in a build, so metrics predict it.
+PSNR measures squared error, cheaply and loosely. SSIM compares local structure
+and does better.
+[VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion), a
+model trained on MOS scores, is the streaming industry's standard.
 
-Every comparison against x264, tuning decision and quality gate in this
-project reads VMAF v1. Its cap on enhancement gain means sharpening tricks
-can't inflate the score. PSNR stays
-underneath as a floor. A change can't buy VMAF by making the picture less
-accurate.
+This project's comparisons, tuning and quality checks all read VMAF v1. Its cap
+on enhancement gain stops sharpening tricks from inflating the score. PSNR stays
+underneath as a floor, which means a change can't buy VMAF with a less accurate
+picture.
 
 <div class="aside" id="bd-rate">
 <p class="aside-title">BD-rate</p>
-<p>BD-rate compares two encoders in one number. It's the average difference in
-the bits they need for the same quality over a range of bitrates. A BD-rate of
-&minus;5% means an encoder reached the same quality as the one it's measured
-against while spending 5% fewer bits.</p>
+<p>BD-rate compares two encoders in one number: the average difference in bits
+for the same quality over a range of bitrates. &minus;5% means the same quality
+for 5% fewer bits.</p>
 </div>
 
 ## On to H.264
