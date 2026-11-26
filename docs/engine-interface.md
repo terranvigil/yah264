@@ -1,48 +1,42 @@
 # What an orchestrator needs from an encoder
 
-This is the engine interface all three sibling encoders implement. With it,
-one orchestration layer in its own repository can drive yah264, yah265 or
-yaav1. The yah264 side is built, per-frame forces included. Nothing below
-names an H.264 concept the other two codecs lack.
+All three sibling encoders implement this interface. One orchestration
+layer, in its own repository, can then drive yah264, yah265 or yaav1. The yah264
+side is built, per-frame forces included. Nothing here names an H.264
+concept the other two lack.
 
 ## Why an interface at all
 
-Per-shot encoding in the Netflix style is a search that runs above the
-encoder. It encodes every shot at several operating points, measures them
-and builds each shot's rate-quality curve. Then it picks one point per shot
-so the whole title sits at one quality-per-bit slope before it produces the
-final stream. The encoder's part is small and exact. The search depends on
-three promises:
+Per-shot encoding in the Netflix style is a search above the encoder. It
+encodes each shot at several operating points, measures them and builds the
+shot's rate-quality curve. It then picks one point per shot so the title
+sits at one quality-per-bit slope, and produces the final stream. The search
+needs three promises from the encoder:
 
 1. **It tells the orchestrator where the shots are and what they cost,
    without a trial encode.** The orchestrator must not run its own analysis
-   pass to learn costs the encoder's lookahead already computes. The shot
-   table comes from an analysis pass over the whole input before the encode
-   starts. Because that pass keeps one byte per frame instead of the
-   pictures, it costs a second read of the file but never holds the whole
-   file in memory. Its answer can be saved and reused. The promise holds for
-   files only, since a pipe can't be read twice.
-2. **It takes a plan.** The plan holds forced keyframes and per-frame-range
-   operating-point offsets inside one encode. The orchestrator doesn't have
-   to split the input into files.
+   pass for costs the lookahead already computes. The shot table comes from
+   an analysis pass over the whole input before the encode, keeping one byte
+   per frame instead of the pictures. That costs a second read of the file
+   but never holds the file in memory. The table can be saved and reused.
+   Files only: a pipe can't be read twice.
+2. **It takes a plan** of forced keyframes and per-frame-range
+   operating-point offsets inside one encode, without splitting the input.
 3. **A shot encoded alone is byte-identical to that shot inside the full
    encode**, given the same parameters *and the same pinned frame-thread
    count*. Without a pinned count, a GOP instance is sized from the
    whole-machine budget and the bytes move. Without the promise, a title
-   assembled from each shot's probes is a different stream. Every partial
+   assembled from the shots' probes is a different stream. Each partial
    re-encode would then be a full one.
 
-The third promise is guaranteed at `--threads 1`. With more threads it's best
-effort, because byte-exact repeatable output isn't required there.
-`T=1 scripts/shot_determinism.sh` fails on a mismatch, while the threaded
-default only reports one. With threads, an orchestrator must treat a
-re-encoded shot as a valid drop-in segment with its own parameter sets, not
-as identical bytes.
+Promise 3 is guaranteed at `--threads 1` and best effort with more threads,
+where byte-exact output isn't required. With threads, an orchestrator must
+treat a re-encoded shot as a valid drop-in segment with its own parameter
+sets.
 
-Two conveniences also matter. One is per-frame decisions such as type and QP
-without decoding the stream. The other is output already split at the plan's
-keyframes, which lets a packager or a partial re-encode address a shot as a
-file.
+Two conveniences also matter: per-frame type and QP without decoding, and
+output already split at the plan's keyframes so a packager or partial
+re-encode can address a shot as a file.
 
 ## The contract
 
@@ -68,42 +62,25 @@ yah264 implements the contract like this:
 
 Rules the orchestrator can rely on:
 
-- Frame indices count input frames from zero, in input order, everywhere:
-  shot table, plan, stats and segments.
-- A plan keyframe always starts a new GOP, so segments and zones align. A
-  zone's QP offset applies to whole frames and needs no alignment.
-- Inside a zone the encoder runs its own rate control, CRF's per-frame terms
-  included, and adds the offset after it. A shot's rate-quality curve is then
-  a function of the offset alone.
-- A forced QP is the other kind of message and doesn't compose with an
-  offset. It's the coded slice QP. The zone offset, the frame-type
-  cascade and the buffer all act before it and can't move it. An orchestrator
-  that wants a curve uses zones. One replaying a decision it already made
-  uses forces.
-- A force is refused, never approximated. A B frame the lookahead can't place
-  fails the encode with the frame number on stderr. Four placements fail:
-  the first frame of the stream, a frame the key-frame interval has claimed,
-  the last frame and one past the B-run limit. A forced anchor on a key
-  frame's own slot yields to the key frame. That's the one case where the
-  encoder's answer is a superset of what was asked for.
-- Parameter sets repeat per segment. Concatenating the segments in order
-  gives a valid stream equal to the unsplit output.
-- A library caller creates its parameters with `yah264_param_default()`. The
-  struct records its own size, and `yah264_encoder_open()` refuses one whose
-  size isn't the library's. An orchestrator built against an older header
-  fails at open instead of encoding with shifted fields.
-- Nothing here changes the default stream. With no plan and no pinning, the
-  output is byte-identical to the encoder without these hooks.
+| rule | detail |
+|---|---|
+| frame indices | count input frames from zero, in input order, everywhere: shot table, plan, stats and segments |
+| plan keyframes | always start a new GOP, so segments and zones align. A zone's QP offset applies to whole frames and needs no alignment |
+| zone offsets | the encoder runs its own rate control inside a zone, CRF's per-frame terms included, and adds the offset after it. A shot's rate-quality curve is a function of the offset alone |
+| forced QP | the coded slice QP; doesn't compose with an offset. The zone offset, the frame-type cascade and the buffer act before it and can't move it. Use zones for a curve, forces to replay a decision already made |
+| refused forces | never approximated. A B frame the lookahead can't place fails the encode with the frame number on stderr. Four placements fail: the first frame of the stream, a frame the key-frame interval has claimed, the last frame and one past the B-run limit |
+| anchor on a key frame's slot | yields to the key frame, the one case where the answer is a superset of the request |
+| segments | repeat the parameter sets. Concatenated in order, they give a valid stream equal to the unsplit output |
+| parameter struct | created with `yah264_param_default()`. It records its own size. `yah264_encoder_open()` refuses a size that isn't the library's. A caller built against an older header fails at open instead of encoding with shifted fields |
+| default stream | unchanged. With no plan and no pinning, the output is byte-identical to the encoder without these hooks |
 
 ## What we left out of the interface on purpose
 
-- Resolution switching inside one encode. A rung is one encode of the plan at
-  one resolution. The orchestrator owns the scaler and the ladder.
-- A quality metric. The encoder reports bits and decisions. The orchestrator
-  scores the decode with the metric it's optimizing.
-- Trial encodes inside the encoder. The plan is the whole message. The
-  pre-scan behind the shot table is a second read of the input, as promise 1
-  says, and doesn't count as a trial encode.
+| left out | why |
+|---|---|
+| resolution switching inside one encode | a rung is one encode of the plan at one resolution. The orchestrator owns the scaler and the ladder |
+| a quality metric | the encoder reports bits and decisions. The orchestrator scores the decode with the metric it's optimizing |
+| trial encodes inside the encoder | the plan is the whole message. The pre-scan behind the shot table is a second read of the input and doesn't count as a trial encode |
 
 ## Checklist for yah265 and yaav1
 

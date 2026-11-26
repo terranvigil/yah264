@@ -1,21 +1,19 @@
 # ffmpeg integration
 
-`libyah264` is an encoder wrapper in a fork of ffmpeg, so `-c:v libyah264`
-works the way `-c:v libx264` does. Decode, encode and mux run in one process
-instead of three piped together. The fork is `github.com/terranvigil/FFmpeg`,
-branch `yah264`. Because the wrapper is LGPL code inside libavcodec, it
-can't live in this repository. This repo supplies the installable library: a shared
-object, the public header and pkg-config files.
-
-The speed board in `scripts/ffboard.py` uses it to run both encoders as
-libraries inside one ffmpeg process.
+`libyah264` is an encoder wrapper in a fork of ffmpeg
+(`github.com/terranvigil/FFmpeg`, branch `yah264`) that makes
+`-c:v libyah264` work like `-c:v libx264`, with decode, encode and mux in one
+process instead of three piped together. It's LGPL code inside libavcodec,
+so it lives in the fork. This repo supplies the installable library: a
+shared object, the public header and pkg-config files. The speed board
+(`scripts/ffboard.py`) uses it to run both encoders in one ffmpeg process.
 
 ## How it works
 
 The wrapper uses ffmpeg's receive-packet encoder API and declares
-`AV_CODEC_CAP_OTHER_THREADS`, which stops ffmpeg from adding its own frame
-threads. At init it builds a parameter struct with `yah264_param_default`,
-applies the preset, maps the options below and opens the encoder.
+`AV_CODEC_CAP_OTHER_THREADS`, so ffmpeg adds no frame threads of its own. At
+init it builds a parameter struct with `yah264_param_default`, applies the
+preset, maps the options below and opens the encoder.
 
 | ffmpeg | yah264 | note |
 |---|---|---|
@@ -37,8 +35,8 @@ applies the preset, maps the options below and opens the encoder.
 The wrapper has no `-tune`, no free-form parameter string and no way to ask
 for the alternative transfer SEI yet.
 
-ffmpeg takes an encoder's primaries and transfer from its input frames, and
-Y4M has no field for them. Tag an untagged input on the frames:
+ffmpeg takes primaries and transfer from the input frames, and Y4M can't
+carry them, so tag an untagged input on the frames:
 
 ```
 ffmpeg -i in.y4m -vf setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv \
@@ -47,18 +45,18 @@ ffmpeg -i in.y4m -vf setparams=color_primaries=bt2020:color_trc=smpte2084:colors
 ```
 
 `-color_primaries` and `-color_trc` alone don't reach the encoder.
-`-colorspace` and `-color_range` do, because ffmpeg negotiates those.
+`-colorspace` and `-color_range` do.
 
-An 8-bit build takes yuv420p, yuv422p and yuv444p. A 10-bit build takes their
-10-bit forms. The wrapper is compiled for one depth and checks
-`yah264_bit_depth()` at init to refuse a library of the other.
+An 8-bit build takes yuv420p, yuv422p and yuv444p, and a 10-bit build their
+10-bit forms. The wrapper is compiled for one depth and refuses a library of
+the other at init (`yah264_bit_depth()`).
 
 ### Packets and timestamps
 
-One encode call can return the NAL units of several coded frames, in coding
-order. The wrapper splits them on slice boundaries into one
-packet per frame. Parameter sets and SEI go with the slice they precede. Each
-packet's pts comes from the display index the encoder reports
+One encode call can return several coded frames' NAL units in coding
+order. The wrapper splits them on slice boundaries into one packet per
+frame, with parameter sets and SEI attached to the slice they precede. Each
+packet's pts is the display index the encoder reports
 (`yah264_encoder_frame_order`).
 
 dts trails pts by the stream's reorder depth only:
@@ -72,19 +70,19 @@ dts trails pts by the stream's reorder depth only:
 
 ### Headers
 
-With `AV_CODEC_FLAG_GLOBAL_HEADER`, the SPS and PPS go to extradata and any
-SEI from the headers goes in-band ahead of the first packet. Without the
-flag, all of them go in-band ahead of the first packet so raw Annex-B output
-decodes. The SPS and PPS are also repeated ahead of every later IDR. That
-lets a transport stream be joined or seeked there. The encoder writes its HDR
-SEI in-band itself, ahead of every IDR and recovery point.
+| case | where the headers go |
+|---|---|
+| `AV_CODEC_FLAG_GLOBAL_HEADER` set | SPS and PPS to extradata; any SEI from the headers in-band ahead of the first packet |
+| flag not set | all of them in-band ahead of the first packet, which lets raw Annex-B output decode |
+| every later IDR | SPS and PPS repeated, letting a transport stream be joined or seeked there |
+| HDR SEI | written in-band by the encoder, ahead of every IDR and recovery point |
 
 ## Building it
 
-The CLI and the in-tree tools link the static library. What gets installed
-is the shared library, one copy per bit depth under different names. Each
-copy has its own pkg-config file, `yah264` or `yah264_10`, whose Cflags set
-`-DY264_BIT_DEPTH`. Its soname is the ABI version, currently 4.
+The CLI and in-tree tools link the static library. The shared library is
+installed as one copy per bit depth. Each copy has its own pkg-config file
+(`yah264` or `yah264_10`) whose Cflags set `-DY264_BIT_DEPTH`. Its soname is
+the ABI version, currently 4.
 
 ```
 FFB=$(cd .. && pwd)/build/ffboard
@@ -102,12 +100,12 @@ git -C /path/to/yah264 hash-object include/yah264.h > yah264-header.sha
 
 `--enable-gpl` is required because the library is GPL-2.0-or-later. Products
 that can't ship a GPL ffmpeg take the commercial license. For `ffboard.py`,
-also configure `--enable-libx264` against the reference builds, using the
-fair-build recipe in [instruments.md](instruments.md).
+also configure `--enable-libx264` against the reference builds
+([fair-build recipe](instruments.md)).
 
 **Rebuild the fork whenever `include/yah264.h` changes**, and rewrite
-`yah264-header.sha`. The wrapper reads the parameter struct by offset. After
-a field moves, the library reads the wrong settings.
+`yah264-header.sha`. The wrapper reads the parameter struct by offset. A
+moved field means wrong settings.
 
 ## What we chose and why
 
@@ -135,25 +133,18 @@ a field moves, the library reads the wrong settings.
 
 ## Open questions
 
-- The wrapper doesn't map ffmpeg's mid-stream changes onto the encoder's
-  [live control](live-control.md) yet. A forced I frame would become a
-  keyframe event on that frame. A change of bitrate, maxrate or buffer size
-  would become a rate event on the next frame.
-- Which ffmpeg release to pin the fork to, and when to submit upstream.
-- Whether to expose the recon callback (`yah264_encoder_set_recon_cb`)
-  through the wrapper. That would let the recon-match gate run in-process.
-- The fork's configure asks pkg-config for `yah264`, the 8-bit library. It
-  can't yet point a 10-bit wrapper at `yah264_10`. Until it can, build the
-  10-bit wrapper with a directory first on `PKG_CONFIG_PATH` that holds a
-  copy of `yah264_10.pc` renamed `yah264.pc`, with its `Name:` line changed
-  to match.
+| question | detail |
+|---|---|
+| mapping ffmpeg's mid-stream changes onto [live control](live-control.md) | not done yet. A forced I frame would become a keyframe event on that frame. A bitrate, maxrate or buffer-size change would become a rate event on the next frame |
+| which ffmpeg release to pin the fork to | and when to submit upstream |
+| exposing the recon callback (`yah264_encoder_set_recon_cb`) | would let the recon-match gate run in-process |
+| a 10-bit wrapper | the fork's configure asks pkg-config for `yah264`, the 8-bit library, and can't yet point at `yah264_10`. Until it can, put first on `PKG_CONFIG_PATH` a directory holding a copy of `yah264_10.pc` renamed `yah264.pc`, with its `Name:` line changed to match |
 
 ## Measuring it
 
-The ffmpeg board is a control for the CLI speed board, whose numbers are the
-ones we report. At the same operating points the two agree within noise on
-every clip. That tells us the CLI's Y4M input path isn't where speed gaps
-live.
+The ffmpeg board is a control for the CLI speed board, whose numbers we
+report. At the same operating points the two agree within noise on every
+clip, so speed gaps don't live in the CLI's Y4M input path.
 
 | setting | meaning |
 |---|---|
@@ -162,16 +153,10 @@ live.
 | `X264LIB`, `Y264LIB` | the libraries to load; no defaults, on purpose |
 
 The board refuses to run when `$Y264LIB/include/yah264.h` doesn't match
-`yah264-header.sha`. It prints INVALID when the two encoders' sizes don't
-match.
+`yah264-header.sha`, and prints INVALID when the two encoders' sizes differ.
 
-Traps:
-
-- Delete the wrapper's `.o` and `.d` before `make`. After installing to a new
-  prefix, the `.d` still names the old header. Make sees nothing to do, exits
-  0 and leaves the old wrapper in the binary.
-- Set `PKG_CONFIG_PATH` explicitly. A stray pkg-config entry for another
-  architecture resolves and then fails to link. `otool -L ffmpeg` should name
-  only the prefixes under `../build/ffboard`.
-- A clean build of the fork after an ABI bump shows the wrapper is current.
-  Expect a small wrapper fix per bump.
+| trap | what to do |
+|---|---|
+| after installing to a new prefix, the wrapper's `.d` still names the old header, so make exits 0 and keeps the old wrapper | delete the wrapper's `.o` and `.d` before `make` |
+| a stray pkg-config entry for another architecture resolves, then fails to link | set `PKG_CONFIG_PATH` explicitly; `otool -L ffmpeg` should name only the prefixes under `../build/ffboard` |
+| an ABI bump | expect a small wrapper fix; a clean build of the fork shows the wrapper is current |
