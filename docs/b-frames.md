@@ -32,9 +32,8 @@ With `--bframes 2` or more, `--b-pyramid normal` codes the run as a pyramid.
 The middle B is a reference picture that the leaves on either side read.
 
 `--b-bias` moves the 0.77 line linearly. The line reaches 1.0 at +100 and
-drops to 0 at -100. It's a dial for trading B-frames away. The
-[options page](options.md#--b-bias-is-a-tuning-dial) explains why it isn't a
-quality setting.
+drops to 0 at -100. It's a dial for trading B-frames away. See
+[why it isn't a quality setting](options.md#--b-bias-is-a-tuning-dial).
 
 ### The B macroblock at medium
 
@@ -118,8 +117,14 @@ different motion. The gate admits a macroblock when its worst quadrant holds
 more than `1 + n/16` of an even share: `qmax * 4 * 16 > qsum * (16 + n)`.
 
 The quadrant sum is then charged B_8x8's own mb_type and sub_mb_type rate in
-the SATD domain. The split costs 9 bits. A direct quadrant costs 1, L0 and
-L1 quadrants cost 3 and a Bi quadrant costs 5.
+the SATD domain:
+
+| part | bits |
+|---|--:|
+| the split itself | 9 |
+| a direct quadrant | 1 |
+| an L0 or L1 quadrant | 3 |
+| a Bi quadrant | 5 |
 
 Last, B_8x8 faces the same RD screen as the other candidates. Its trial runs
 only when the quadrant sum is within the tournament's threshold. Because the
@@ -143,8 +148,8 @@ RD on all combinations.
 | Per-slice vote over a fixed mode | fixed temporal ranges from -14.3% to +12.1% against x264 medium depending on the clip, as the table below shows. The vote follows spatial on sunflower and pedestrian, and station2 still gains (-11.5% against spatial's -3.1%) |
 | Per-macroblock temporal legality | the clause applies to each derivation. Enforcing it per frame wasted the mode on almost every frame |
 | No slice-level guard under auto | adding it lost on every clip it touched, station2 worst |
-| B_8x8 on, behind QGATE=10 | better on 8 of 13 clips on the CRF band for 1.1-1.3% of single-thread wall (median -0.24%, worst sintel +0.37%). The board's quality leg rests on it |
-| QGATE 10 over 6 | 6 costs 2-4% of wall where 10 costs 1.1-1.3%. It buys about 2.5x the gain (a further -0.35% median), which is more than the quality bar needs. 16 is past the knee: it costs a +0.26% median, and every clip but akiyo and touchdown, which doesn't change, loses |
+| B_8x8 on, behind QGATE=10 | better on 8 of 13 clips on the CRF band. The board's quality leg rests on it |
+| QGATE 10 over 6 | 6 buys more gain than the quality bar needs, for more wall. 16 is past the knee |
 | The rate charge with the gate | on the earlier metric, without it the gate costs half a BD point at its mildest setting. With it the cost is three hundredths |
 | B_8x8 searched after the skip exit | searching before the exit throws away 19-30% of all quadrant searches. Quality is the same either way |
 | No 16x8/8x16 at medium by default | on VMAF v1 it helps every band clip but costs 13-21% more instructions |
@@ -152,9 +157,17 @@ RD on all combinations.
 | Direct-competitive precondition on the exit | without it the exit skips too often at low ABR rates, and akiyo and park_joy lose |
 | B intra margin 0.75x | against 1.5x, median 0.00% on the CRF band with sintel the worst clip at +1.28%, for 0.5-2.5% of wall at 12 threads. A tighter margin buys nothing more |
 
+The quadrant gate settings, on the CRF band:
+
+| QGATE | B_8x8 wall | BD-rate |
+|---|--:|---|
+| 6 | 2-4% | a further -0.35% median against 10, about 2.5x its gain |
+| 10 (shipped) | 1.1-1.3% of single-thread wall | -0.24% median against B_8x8 off, worst sintel +0.37% |
+| 16 | | +0.26% median against 10. Every clip but akiyo and touchdown loses, and touchdown doesn't change |
+
 These modes are expensive in any encoder. On four of our clips, x264 spends
-4.6-10.6% of its wall on the same B partition set. The quadrant gate ships at
-10. With it at 4, our cost came to between 0.8x and 1.4x of x264's.
+4.6-10.6% of its wall on the same B partition set. With the quadrant gate at
+4, our cost came to between 0.8x and 1.4x of x264's.
 
 The table below compares fixed temporal with fixed spatial direct and the
 shipped vote. All three are BD-rate against x264 medium, rate-anchored on the
@@ -183,7 +196,7 @@ corpus operating points over 150 frames. Both encoders ran at three threads.
 | Commit B_Skip before motion search on a motion signal (lowres-static, mb-tree leaf, neighbor-skip) | every such gate also admits 10-95% of macroblocks whose searches then win by 8-25% SATD |
 | Staged skip decision (neighbor admission, graded probe, commit after the ref-0 search) | built in full. It commits 6-16% of B macroblocks. The wall is a wash against a +3% bar |
 | Propagation-guarded mid-exit for reference B's (`Y264_B_SKIP_EXIT=3`) | quality-neutral (worst akiyo +0.20%) but buys only 0.3-0.5% of wall |
-| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls. On sunflower it reads the same as the absolute form, and both cost 0.85% against no early skip, 0.4 points on the bottom rung. The absolute form moves the damage between clips. Medium still runs mode 2 on pictures 1920 or more on the longer side |
+| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls. The absolute form moves the damage between clips. On sunflower both cost 0.85% against no early skip, 0.4 points of it on the bottom rung. Medium still runs mode 2 on pictures 1920 or more on the longer side |
 | `--rd-surv-rank` (RD only the top-ranked survivors) | +0.63% HD-band median, pedestrian +1.78% |
 | Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. On the earlier metric it gives back over a third of the B_8x8 gain |
 
@@ -191,8 +204,8 @@ corpus operating points over 150 frames. Both encoders ran at three threads.
 
 - The skip decision is settled. Nothing built reaches the 1.088x and 1.104x
   that a perfect B skip decision after the ref-0 searches is worth on the
-  low-rate cells. The tournament's cost is still open. The remaining prize is
-  making the tournament itself cheaper.
+  low-rate cells. The remaining prize is making the tournament itself
+  cheaper.
 - Most B_8x8 quadrant searches lose. Past its gate, the RD trial beats the
   running best in 4.5-11% of trials. A gate that predicts "B_8x8 will win here"
   better than four `satd8x8` would save searches at equal quality. Measure the
