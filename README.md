@@ -72,13 +72,13 @@ On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD b
 
 Most video is a sequence of shots. Each shot wants different settings. yah264 can adapt per shot in a single pass. It also exposes what an external tool needs to run a full per-shot search.
 
-`--cut-split` scans the source for scene cuts first and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot can then be seeked to, packaged or replaced on its own. It costs no compression, because predicting across a cut gains nothing. The default scene-cut detection is different. It only turns a sudden change into an intra frame inside the lookahead and knows nothing about shots.
+`--cut-split` scans the source for scene cuts first and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot can then be seeked to, packaged or replaced on its own. It costs no compression, because predicting across a cut gains nothing. The default scene-cut detection only turns a sudden change into an intra frame inside the lookahead and knows nothing about shots.
 
-`--shot-crf` uses the same scan to give each shot its own quality setting. Hard shots get a higher CRF and easy ones a lower one, so bits move from the hardest shots to the rest. It's still one encode with no trial encodes. On ten real titles at 1080p it needs a median 3.6% fewer bits for the same VMAF v1 score and wins on nine of them. PSNR-Y averaged over frames agrees. Pooled over the whole clip, PSNR-Y reads the other way, because the hardest shots are where quality drops.
+`--shot-crf` uses the same scan to give each shot its own quality setting in one encode, with no trial encodes. Hard shots get a higher CRF and easy ones a lower one, which moves bits from the hardest shots to the rest. On ten real titles at 1080p it needs a median 3.6% fewer bits for the same VMAF v1 score and wins on nine of them. PSNR-Y averaged over frames agrees. Pooled over the whole clip, PSNR-Y reads the other way, because the hardest shots are where quality drops.
 
 Neither option re-encodes anything. The scan reads the source once before the encode starts. It needs a file as input and won't take a pipe.
 
-For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Because each shot starts on its own keyframe, a shot encoded alone matches the full encode exactly. That's guaranteed at one thread and usual with more. Trials are exact previews. Any shot can be redone later. Both options are off by default. [The engine interface](docs/engine-interface.md) has the details.
+For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Because each shot starts on its own keyframe, a shot encoded alone matches the full encode exactly, which makes trials exact previews and lets any shot be redone later. That match is guaranteed at one thread and usual with more. Both options are off by default. See [the engine interface](docs/engine-interface.md).
 
 ## Up next
 
