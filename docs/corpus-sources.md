@@ -1,24 +1,21 @@
 # Where the test and tuning material comes from
 
-We keep two corpora, and keeping them apart is a rule.
+We keep two corpora apart, as a rule.
 
 ## The gate corpus is test-only
 
-The gate corpus is TEST-ONLY, permanently. Nothing that tunes a constant, and
-nothing that trains a model, may see a clip that a gate scores. A model that has
-been shown the gate produces a number nobody can interpret. Everything still
-runs when that happens. The number just stops meaning what it says.
+The gate corpus is TEST-ONLY, permanently. Nothing that tunes a constant or
+trains a model may see a clip a gate scores. If it does, everything still
+runs. The number just stops meaning anything.
 
-Most of our gate clips came from Xiph's derf collection. Training material taken
-from derf is where an accidental overlap would come from.
+Most gate clips came from Xiph's derf collection, so training material from
+derf is where an accidental overlap would come from.
 
 ## Gate clips in `tests/corpus/`
 
-Each clip's class is in `tests/corpus/CLASSES`. The speed board's clips and
-their calibrated operating points are in `scripts/parity-clips.sh`. The HD
-band keeps its own in `scripts/hd_band.py`. The fetch script
-`scripts/fetch_corpus.sh` downloads them on the user's own machine. Nothing is
-redistributed.
+Classes are in `tests/corpus/CLASSES`. The speed board's clips and
+calibrated operating points are in `scripts/parity-clips.sh`, and the HD
+band's in `scripts/hd_band.py`. `scripts/fetch_corpus.sh` fetches them locally. Nothing is redistributed.
 
 | clip | res | class | source |
 |---|---|---|---|
@@ -32,18 +29,17 @@ redistributed.
 | bbb_720p | 720p | animation (3D CGI) | Big Buck Bunny, Blender, CC BY 3.0. It comes from the 30 fps 1080p remaster, and `scripts/fetch_corpus.sh --review` cuts it. The 450 frames from 9m45s are the window with the most sustained motion that isn't also a night scene |
 | sita_720p | 720p | animation (hand-drawn 2D) | Sita Sings the Blues, Public Domain Mark 1.0, archive.org item `sita-sings-the-blues_202403`. The 140 frames from 35m are the longest cut-free run in a flat-color sequence |
 
-We hold both animation kinds on purpose because they disagree sharply
-against x264. We lead on CGI and trail on hand-drawn. Name the kind when you
-quote a result, never just "animation" ([animation notes](animation.md)).
+We hold both [animation](animation.md) kinds because we lead x264 on CGI and
+trail on hand-drawn. Name the kind in every result, never just "animation".
 
-samsung_720p appears in older records and the legacy board set. It's vendor
-material with no license that can't be fetched.
+samsung_720p, in older records and the legacy board set, is unlicensed vendor
+material that can't be fetched.
 
 ### The resolution-balance set
 
-`scripts/fetch_corpus.sh --res` fetches this set, about 12 GB. It stops a
-"corpus median" from being a CIF decision. It also means the 1080p class
-doesn't rest on one clip.
+`scripts/fetch_corpus.sh --res` fetches this set, about 12 GB. It keeps a
+"corpus median" from being a CIF decision and the 1080p class from resting
+on one clip.
 
 | clip | res | class | what it is | source set | on the ten-clip speed board or HD band |
 |---|---|---|---|---|---|
@@ -59,63 +55,54 @@ doesn't rest on one clip.
 | sunflower_1080p | 1080p | static | smooth close-up | TUM 1080p25 | speed board, HD band |
 | crowd_run_1080p | 1080p | crowd | dense motion at 50 fps | SVT HD Multi Format | HD band |
 
-All of them are native resolution, 8-bit 4:2:0, from Xiph's derf host. Like
-the CIF gate clips, they come under research-use terms instead of a Creative
-Commons license. Promotion is an owner call, because adding a clip to a band
-ladder re-medians every published number.
+All are native resolution, 8-bit 4:2:0, from Xiph's derf host, under
+research-use terms like the CIF clips. Promotion is an owner call, because a
+new clip in a band ladder re-medians every published number.
 
-We left two groups out on purpose.
-
-The Netflix 4K set on the same host is off limits for gate use, and so is
-anything Harmonics-derived. The ML training corpus (BVI-AOM) draws on
-BVI-Texture, IRIS, Harmonics, Videvo, SJTU, MCL-JCV, LIVE-Netflix and Yonsei
-material. A gate clip that is also in the training set breaks the train/test
-split without any error. None of the SVT, TUM or class-E sequences appears
-among the 178 BVI-AOM source names.
+Two groups are left out on purpose. The Netflix 4K set on the same host and
+anything Harmonics-derived are off limits for gates, because the BVI-AOM
+training corpus draws on BVI-Texture, IRIS, Harmonics, Videvo, SJTU, MCL-JCV,
+LIVE-Netflix and Yonsei material. An overlap breaks the train/test split
+silently. None of the SVT, TUM or class-E sequences is among the 178 BVI-AOM
+source names.
 
 The aspen / red_kayak / speed_bag / snow_mnt / west_wind_easy /
-rush_field_cuts / controlled_burn group is also absent. `touchdown_pass` comes
-from that set. It's the 4:2:2 clip already in this tree. Treat the whole group
-as suspect until a header says otherwise.
+rush_field_cuts / controlled_burn group is also out. `touchdown_pass`, the
+4:2:2 clip already here, comes from it. Treat the group as suspect until a
+header says otherwise.
 
-The calibrated operating points come from `scripts/parity-clip-calib.sh`,
-run on 6-second windows at preset medium and one thread. Each one is the
-lowest ABR target that puts us in VMAF 88-94 while our own rate error stays
-inside a few percent. Any new gate clip gets its operating point the same way.
-Don't pick a bitrate by hand.
+Operating points come from `scripts/parity-clip-calib.sh` on 6-second
+windows at medium and one thread. Each is the lowest ABR target that puts us
+in VMAF 88-94 with our rate error within a few percent. Calibrate new clips
+the same way, never by hand.
 
-The current points were chosen on the earlier metric, VMAF v0.6.1, although
-the script now scores v1. They stay as they are so the board's speed columns remain
-comparable. They move to v1 with the next timed board.
+The current points were chosen on VMAF v0.6.1 (the earlier metric), though
+the script now scores v1. They stay put to keep the board's speed columns
+comparable, until the next timed board moves them to v1.
 
-old_town and stockholm have no calibrated point, because no point on either
-ladder has a clean rate. Our ABR runs 4-11% over target across the middle of
-both ladders. ABR rate error depends on content for both encoders. Window
-length and thread count move it too, so name them whenever you quote a rate
-error.
+old_town and stockholm have no point. Our ABR runs 4-11% over target across
+the middle of both ladders. Rate error depends on content, window length and
+thread count for both encoders. Name all three when you quote one.
 
-An ABR calibration point isn't a quality verdict. At a matched ABR target, x264
-can read 4-7 VMAF ahead on stockholm, shields and blue_sky, even though the CRF
-BD curve puts us well ahead on them. That gap comes from ABR allocation and
-says nothing about compression.
+A calibration point isn't a quality verdict. At matched ABR targets x264 can
+read 4-7 VMAF ahead on stockholm, shields and blue_sky, where our CRF BD
+curve is well ahead. That gap comes from ABR allocation and says nothing
+about compression.
 
 ### Windows that are timed, not scored
 
-`tests/corpus` also holds cuts that we only time, at a matched CRF point,
-through `scripts/ffboard.py`: `bbb{10,15,30}s_1080p_o120` and
-`perseverance_{1080p,720p}`. Because none of them is a gate clip, they have no
-class and no calibrated operating point. To promote one, run
-`scripts/parity-clip-calib.sh` first, the same as for any other candidate.
+`scripts/ffboard.py` times `bbb{10,15,30}s_1080p_o120` and
+`perseverance_{1080p,720p}` at a matched CRF point. As non-gate clips they
+have no class or operating point. Promote one only after
+`scripts/parity-clip-calib.sh`. We make no BD claim because both sources are
+already-compressed H.264. A speed ratio is fine, since both encoders see the same
+input.
 
-We make no BD claim on them because both sources are already-compressed H.264.
-They're fine for a speed ratio because both encoders see the same input.
-
-The `perseverance_*` clips are NASA/JPL-Caltech and public domain. They come
-from `Perseverance-landing-1080p.mp4`, [SVS item 31250](https://svs.gsfc.nasa.gov/31250/).
-`scripts/fetch_corpus.sh --review` fetches the file and cuts both windows.
-
-The window covers the touchdown inside the file's only cut-free run and has
-no dark stretch. The 720p file is the same window, scaled with Lanczos.
+The `perseverance_*` clips are NASA/JPL-Caltech, public domain, from
+`Perseverance-landing-1080p.mp4` ([SVS item 31250](https://svs.gsfc.nasa.gov/31250/)).
+`scripts/fetch_corpus.sh --review` fetches it and cuts both windows. The
+window covers the touchdown in the file's only cut-free run. The 720p file
+is the same window, scaled with Lanczos.
 
 | perseverance window | value |
 |---|---|
@@ -127,32 +114,27 @@ no dark stretch. The 720p file is the same window, scaled with Lanczos.
 
 ### Pulling a clip out of a long source
 
-ffmpeg can take a window out of a large master by HTTP range request, without
-downloading the whole file. We cut `sita_720p` out of a 16 GB master this way:
+ffmpeg can cut a window from a remote master by HTTP range request. We cut
+`sita_720p` from a 16 GB master this way:
 
     ffmpeg -ss <seconds> -i <https-url> -frames:v N -vf scale=1280:720 ...
 
-Pick the window by measuring, not by eye. Look at the flat-block share and the mean luma.
-Mean luma keeps you out of night scenes. Count scene cuts from frame-to-frame
-luma jumps.
+Pick windows by measurement: flat-block share, mean luma to avoid night
+scenes, and luma jumps between frames to count cuts.
 
 ## Training corpus, `/Volumes/seagate/media/train-corpus/bvi-aom/`
 
-The training corpus is BVI-AOM, from the University of Bristol. Its 956
-sequences are 239 unique 4K sources downsampled with Lanczos-3 into four
-resolution classes. Each sequence is 64 frames of 10-bit 4:2:0 with no scene
-cuts. Because the sequences are losslessly compressed in H.264, ffmpeg
-extracts them raw. The license is a UoB custom grant for coding-standards development,
-training and evaluation. The paper is arXiv 2408.03265, and the
+BVI-AOM, from the University of Bristol, is 956 sequences: 239 unique 4K
+sources downsampled with Lanczos-3 into four resolution classes. Each is 64
+frames of 10-bit 4:2:0 with no scene cuts, losslessly compressed in H.264, so
+ffmpeg extracts them raw. The license is a UoB grant for coding-standards
+development, training and evaluation. The paper is arXiv 2408.03265, and the
 [BVI-AOM index](https://github.com/fan-aaron-zhang/bvi-aom) lists the
 sequences.
 
-We hold the D tier, which has every unique source at the lowest pixel cost.
-One of its sequences already yields far more labeled macroblocks than a model
-of this size needs. The higher tiers hold the same scenes.
-
-The dataset ships one tarball per resolution class, so a higher tier is one
-file:
+We hold the D tier: every source at the lowest pixel cost, and far more
+labeled macroblocks than a model this size needs. Each higher tier is one
+tarball of the same scenes:
 
 | file | size | class |
 |---|--:|---|
@@ -162,26 +144,26 @@ file:
 | `2176p_part_a..f.tar.gz` | about 92 GB | A, 3840x2176 |
 
 Use the path-style S3 endpoint. The vanity hostname
-`download.opencontent.netflix.com` doesn't resolve from every network. Some
-clients get an empty response from it. The bucket answers fine as:
+`download.opencontent.netflix.com` fails to resolve on some networks and
+returns empty responses to some clients:
 
     https://s3.amazonaws.com/download.opencontent.netflix.com/bvi_aom_dataset/<file>
 
 List it with `?list-type=2&prefix=bvi_aom_dataset/`. When a hostname fails,
-try the service's own endpoint form before you decide the host is unreachable.
+try the service's own endpoint form before giving up on the host.
 
 ## Long-form, multi-shot: `local/corpus/longform/` (`fetch_corpus.sh --longform`)
 
-These are whole films for the [shot-based](shot-based.md) and orchestration
-work. By construction, the gate corpus and the ten-clip board hold single shots.
-The multi-shot concatenations from `scripts/make_multishot.py` have five hard
-cuts each. A per-shot allocator or a hull orchestrator needs hundreds of shots
-of one title with real editing, from sources anyone can fetch by URL. The films
-stay out of `tests/corpus/` and out of every gate. Nothing here may tune a
-default that the gate corpus then judges.
+Whole films for [shot-based](shot-based.md) and orchestration work, which
+need hundreds of shots of one title with real editing from sources anyone can
+fetch. The gate corpus and the ten-clip board are single shots, and
+`scripts/make_multishot.py` concatenations have five hard cuts each. The films
+stay out of `tests/corpus/` and every gate, and may not tune a default the
+gate corpus judges.
 
-Each entry is CC BY or freer. Windows, tone-maps and results can be published
-with attribution. The fetch script pins each SHA256 and verifies it.
+Each entry is CC BY or freer, so windows, tone-maps and results can be
+published with attribution. The fetch script verifies a pinned SHA256 for
+each.
 
 | title | what it is | frames / length | master we fetch | size | license |
 |---|---|---|---|---|---|
@@ -216,17 +198,16 @@ Listed, not fetched by default:
 | UVG | 16 x 4K, 8 at 120 fps and 8 at 50 fps, 2.5-12 s each, single shots | `https://ultravideo.fi/dataset.html` | | CC BY-NC (owner accepted for this project) |
 | AWCY `objective-1` | the AOM/NETVC benchmark set, short clips | `https://media.xiph.org/video/derf/` | 13 GB | open test material |
 
-Our numbers can sit next to published work because it draws on the same
-titles. Dynamic-optimizer and convex-hull papers evaluate on the Netflix
-titles El Fuente, with its 96 shots, Chimera and Meridian. The VMAF public
-dataset is short clips that include BigBuckBunny, ElFuente and Seeking. The AV1 common test conditions
-take short excerpts of Chimera and El Fuente.
+Published work uses the same titles. Dynamic-optimizer and convex-hull
+papers use El Fuente (96 shots), Chimera and Meridian. The VMAF public dataset
+includes short clips of BigBuckBunny, ElFuente and Seeking. The AV1 common
+test conditions take short excerpts of Chimera and El Fuente.
 
 Our `ducks`, `park_joy`, `in_to_tree` and `old_town` are the SVT 2006 set.
-Sintel is also the source of the gate clip `sintel_720p`. A study on the whole
-film must leave that window out of anything it tunes.
+Sintel is the source of the gate clip `sintel_720p`, so a whole-film study
+must leave that window out of anything it tunes.
 
-These recipes are fixed so results reproduce.
+Fixed recipes for reproducible results:
 
 - Netflix bucket access goes through the path-style endpoint
   `https://s3.amazonaws.com/download.opencontent.netflix.com/<key>`. Adding
@@ -234,20 +215,18 @@ These recipes are fixed so results reproduce.
 - To decode a frame-accurate window from a Y4M or MP4:
   `ffmpeg -v error -ss <s> -i <src> -frames:v <n> -vf format=yuv420p -f yuv4mpegpipe out.y4m`.
   Stream the xz Y4Ms: `xz -dc big_buck_bunny_720p24.y4m.xz | y264 --input-y4m - ...`.
-- Tone-map the Netflix HDR masters to 8-bit BT.709. It's the only lossy step,
-  and it's identical for everyone. The MP4s are 8-bit H.264 with a PQ signal and
-  NO color tags, so declare the tags first. Without them zimg reports
-  "no path between colorspaces". The command needs an ffmpeg built with
-  libzimg (`zscale`):
+- Tone-map the Netflix HDR masters to 8-bit BT.709, the only lossy step and
+  the same for everyone. The MP4s are 8-bit H.264 with a PQ signal and NO
+  color tags. Declare the tags first, or zimg reports
+  "no path between colorspaces". It needs ffmpeg with libzimg (`zscale`):
   `ffmpeg -v error -i <hdr.mp4> -vf "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=1920:-2:flags=lanczos" -f yuv4mpegpipe out.y4m`
   The frame rate is left alone. Add `-r 29.97` only when a study says so.
-- Decode Meridian in windows, never the whole title. At 1080p59.94 it's
-  134 GB as Y4M. A 600-frame window at 2:00 encodes to a 5-shot table at
-  CRF 26. For the visual check, use the frame at 2:08. It shows a lit office
-  where the window highlights hold and skin tones stay neutral.
-- For shot boundaries, run `y264 --shot-table` on the window. It prints the
-  shot boundaries the encoder itself will use. `scripts/multishot_bd.py` takes any `.cuts`
-  file.
+- Decode Meridian in windows. At 1080p59.94 the whole title is 134 GB as
+  Y4M. A 600-frame window at 2:00 encodes to a 5-shot table at CRF 26. For
+  the visual check, the frame at 2:08 shows a lit office where window
+  highlights hold and skin tones stay neutral.
+- `y264 --shot-table` prints the shot boundaries the encoder will use.
+  `scripts/multishot_bd.py` takes any `.cuts` file.
 
 ## Libraries worth pulling from next
 
@@ -260,10 +239,8 @@ Assessed but not held, in order of usefulness:
 | BVI-DVC | 800 sequences | research use only | the set BVI-AOM replaced; skip, its terms are worse |
 | Xiph / derf | assorted, SD-heavy | mostly free | our gate came from here. Training draws need the explicit no-overlap check |
 
-We already hold Netflix Open Content and the Blender films. They're in the
-long-form section above.
+We hold Netflix Open Content and the Blender films already.
 
-Two gaps are known. The training set has no hand-drawn 2D source at all,
-which matters because hand-drawn is where we measurably lose. The second gap
-is Sol Levante, from Netflix Open Content under CC BY 4.0. It's the only true
-hand-drawn anime master we found. Try it through the path-style endpoint.
+The training set has no hand-drawn 2D source, where we measurably lose. Sol
+Levante (Netflix Open Content, CC BY 4.0) is the only true hand-drawn anime
+master we found. Try it through the path-style endpoint.
