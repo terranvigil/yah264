@@ -68,7 +68,7 @@ coin flip with a few big winners:
 | where the `flat < 1` rule was read | result |
 |---|---|
 | held out on the BVI-AOM labels (VMAF-NEG) | -0.29% against a -1.43% ceiling |
-| the 29 BVI-AOM sequences it fires on | wins 14, loses 12 |
+| the 29 BVI-AOM sequences it fires on (VMAF-NEG) | wins 14, loses 12 |
 | the gate corpus (VMAF v1) | fires on coastguard and ducks. +0.25% mean over the twelve clips, because ducks loses more than coastguard gains |
 
 Other content-split constants we refused as global defaults:

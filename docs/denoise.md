@@ -1,9 +1,10 @@
 # Denoise
 
 yah264's two denoising tools, for grainy and noisy sources, are off by
-default. `--nr` takes a learned offset off transform coefficients. `--mcstf`
-filters the source in time before the lookahead. A noise gate keeps clean
-content, animation above all, byte-identical.
+default. `--nr` takes a learned offset off transform coefficients before
+quantization. `--mcstf` filters the source in time before the lookahead. A
+noise gate in each keeps clean content, animation above all, byte-identical
+to an encode without the tool.
 
 Numbers are BD-rate on VMAF v1 against the shipped default on the same binary
 and ladder, scored on the original source. Negative is better. The
@@ -17,8 +18,9 @@ and ladder, scored on the original source. Negative is better. The
 | film grain | `--mcstf` | off |
 | clean digital, animation | neither, since both gate themselves off anyway | off |
 
-Don't combine them. On the grain excerpts plus shields and fourpeople, the
-pair reads a median of -1.26 against -1.44 for `--mcstf` alone.
+Don't combine them. On the four grain excerpts plus shields and fourpeople,
+`--mcstf` plus `--nr-inter 100` reads a median of -1.26 against -1.44 for
+`--mcstf` alone.
 
 ## How it works
 
@@ -30,8 +32,8 @@ of |coefficient| per transform position and category (intra or inter, luma or
 chroma, 4x4 or 8x8). Each coefficient is pulled toward zero by
 `strength * w / (mean + 1)`, bounded by that mean. `w` is the position's
 squared basis gain, since H.264's integer transforms aren't orthonormal. We
-measured it with impulses through the C transform. One block in
-four is tallied, in coding order, so `--threads 1` repeats byte for byte. The
+measured it with impulses through the C transform. One block in four is
+tallied, in coding order, so `--threads 1` repeats byte for byte. The
 subtraction runs in NEON.
 
 The gate reads a Laplacian percentile of each picture and skips near-black
@@ -44,7 +46,8 @@ Every fourth picture, the anchor spacing at the default `--bframes 3`, is
 replaced by a weighted average of itself and its motion-compensated neighbors.
 `--mcstf-range` sets the neighbors per side, 1 to 4, default 1. The weight
 combines temporal distance, block match error and a photometric weight 6
-levels wide.
+levels wide. Everything downstream, the lookahead included, sees the filtered
+picture.
 
 The gate takes the 25th percentile of the nearest neighbors' block match
 errors and skips near-black and near-white blocks. It reads the quieter side
@@ -118,8 +121,9 @@ must stay off sintel_720p.
 follow. foreman reads just below Nocturne, and riverbed's water is the same
 case.
 
-The filter runs serially ahead of the lookahead, so its share of wall grows
-with threads. Measure it before putting `--mcstf` in a preset.
+Nobody has measured the `--mcstf` wall share at high thread counts. The
+filter runs serially on the driver ahead of the lookahead, so its share of
+wall grows with threads. Measure it before putting `--mcstf` in a preset.
 
 ## Measuring it
 
@@ -132,7 +136,8 @@ The grain clips are 120-frame excerpts the scripts don't fetch:
 | lash_a_720p | lash_of_the_whip_1924 | 40 s | 1280x960 (pillarboxed 4:3) |
 | lash_b_720p | lash_of_the_whip_1924 | 600 s | 1280x960 |
 
-    ffmpeg -ss <off> -i <mov> -frames:v 120 -vf scale=W:H:flags=lanczos,format=yuv420p
+    ffmpeg -ss <off> -i <mov> -frames:v 120 \
+        -vf scale=W:H:flags=lanczos,format=yuv420p
 
 Run `scripts/hd_band.py` with a near-null control arm beside the tool:
 `Y264_MBT_DEPFLOOR=16`, in a dev_knobs build. On the grain clips the

@@ -6,7 +6,7 @@ We keep two corpora apart, as a rule.
 
 The gate corpus is TEST-ONLY, permanently. Nothing that tunes a constant or
 trains a model may see a clip a gate scores. If it does, everything still
-runs. The number just stops meaning anything.
+runs. The gate's score just stops meaning anything.
 
 Most gate clips came from Xiph's derf collection, so training material from
 derf is where an accidental overlap would come from.
@@ -15,7 +15,8 @@ derf is where an accidental overlap would come from.
 
 Classes are in `tests/corpus/CLASSES`. The speed board's clips and
 calibrated operating points are in `scripts/parity-clips.sh`, and the HD
-band's in `scripts/hd_band.py`. `scripts/fetch_corpus.sh` fetches them locally. Nothing is redistributed.
+band's in `scripts/hd_band.py`. `scripts/fetch_corpus.sh` downloads them on
+the user's own machine. Nothing is redistributed.
 
 | clip | res | class | source |
 |---|---|---|---|
@@ -80,8 +81,9 @@ The current points were chosen on VMAF v0.6.1 (the earlier metric), though
 the script now scores v1. They stay put to keep the board's speed columns
 comparable, until the next timed board moves them to v1.
 
-old_town and stockholm have no point. Our ABR runs 4-11% over target across
-the middle of both ladders. Rate error depends on content, window length and
+old_town and stockholm have no calibrated point. No point in the band has a
+clean rate: our ABR runs 4-11% over target across the middle of both
+ladders. Rate error depends on content, window length and
 thread count for both encoders. Name all three when you quote one.
 
 A calibration point isn't a quality verdict. At matched ABR targets x264 can
@@ -91,12 +93,12 @@ about compression.
 
 ### Windows that are timed, not scored
 
-`scripts/ffboard.py` times `bbb{10,15,30}s_1080p_o120` and
-`perseverance_{1080p,720p}` at a matched CRF point. As non-gate clips they
-have no class or operating point. Promote one only after
-`scripts/parity-clip-calib.sh`. We make no BD claim because both sources are
-already-compressed H.264. A speed ratio is fine, since both encoders see the same
-input.
+`tests/corpus` also holds cuts that `scripts/ffboard.py` only times, at a
+matched CRF point: `bbb{10,15,30}s_1080p_o120` and
+`perseverance_{1080p,720p}`. As non-gate clips they have no class or
+operating point. Promote one only after `scripts/parity-clip-calib.sh`. We
+make no BD claim because both sources are already-compressed H.264. A speed
+ratio is fine, since both encoders see the same input.
 
 The `perseverance_*` clips are NASA/JPL-Caltech, public domain, from
 `Perseverance-landing-1080p.mp4` ([SVS item 31250](https://svs.gsfc.nasa.gov/31250/)).
@@ -114,7 +116,8 @@ is the same window, scaled with Lanczos.
 
 ### Pulling a clip out of a long source
 
-ffmpeg can cut a window from a remote master by HTTP range request. We cut
+ffmpeg can cut a window from a remote master by HTTP range request, without
+downloading the whole file. We cut
 `sita_720p` from a 16 GB master this way:
 
     ffmpeg -ss <seconds> -i <https-url> -frames:v N -vf scale=1280:720 ...
@@ -132,9 +135,9 @@ development, training and evaluation. The paper is arXiv 2408.03265, and the
 [BVI-AOM index](https://github.com/fan-aaron-zhang/bvi-aom) lists the
 sequences.
 
-We hold the D tier: every source at the lowest pixel cost, and far more
-labeled macroblocks than a model this size needs. Each higher tier is one
-tarball of the same scenes:
+We hold the D tier: every source at the lowest pixel cost. One sequence
+already yields far more labeled macroblocks than a model this size needs.
+Each higher tier holds the same scenes in one tarball, or six parts for A:
 
 | file | size | class |
 |---|--:|---|
@@ -239,8 +242,10 @@ Assessed but not held, in order of usefulness:
 | BVI-DVC | 800 sequences | research use only | the set BVI-AOM replaced; skip, its terms are worse |
 | Xiph / derf | assorted, SD-heavy | mostly free | our gate came from here. Training draws need the explicit no-overlap check |
 
-We hold Netflix Open Content and the Blender films already.
+We already hold Netflix Open Content and the Blender films. See the
+long-form section above.
 
-The training set has no hand-drawn 2D source, where we measurably lose. Sol
-Levante (Netflix Open Content, CC BY 4.0) is the only true hand-drawn anime
-master we found. Try it through the path-style endpoint.
+Two gaps are known. The training set has no hand-drawn 2D source, which is
+where we measurably lose. We don't hold Sol Levante (Netflix Open Content,
+CC BY 4.0), the only true hand-drawn anime master we found. Try it through
+the path-style endpoint.

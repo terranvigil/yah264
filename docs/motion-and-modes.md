@@ -23,8 +23,8 @@ lookahead's lowres motion field. Hex is the search at medium and
 faster, or with `--me hex`.
 
 Below `--subme 8`, hex iterates to convergence and a terminal 8-point square
-catches minima diagonally off a vertex. The hex-parity features are on whenever
-hex is the primary search: richer seeds, the lowres field, the square and
+catches minima diagonally off a vertex. The hex-parity features are on exactly
+when hex is the primary search: richer seeds, the lowres field, the square and
 whole-pel seed rounding. Medium on that path reads -4.4% median against x264
 medium on the CRF band's seven CIF clips.
 
@@ -52,9 +52,9 @@ the 8-neighbor square to convergence in SATD.
 Two rules keep candidates out of quarter-pel. At `--subme 7` and below, a
 candidate skips it when its half-pel cost times 7/8 exceeds the macroblock's
 best. `Y264_QPEL_SKIPQ` skips it when the half-pel winner is the integer
-vector and costs at most 96 x lambda x area / 256. The quantizer would drop
-that residual anyway. On pictures 1920 wide and up, B list 0 refines only the
-winning reference at quarter-pel.
+vector and costs at most 96 x lambda x area / 256, because the quantizer
+would discard the residual quarter-pel could improve. On pictures 1920 wide
+and up, B list 0 refines only the winning reference at quarter-pel.
 
 ### P-macroblock decision
 
@@ -90,7 +90,8 @@ At `--subme 8` and below, a P macroblock goes through these steps:
 5. **Partition early termination** (`Y264_PART_EARLYTERM=4`). 8x8 is searched
    next. 16x8 and 8x16 follow only when the 8x8's raw SATD beats the 16x16's
    by less than the vector rate of the two halves a rectangle would merge.
-   Blocks mb-tree marks important always keep them.
+   The margin is per macroblock, so static blocks prune hard and real motion
+   keeps its rectangles. Blocks mb-tree marks important always keep them.
 6. **SATD picks the shape.** RD scores the SATD winner and, as insurance
    against over-splitting at low rates, the 16x16. That's one or two RD
    encodes instead of four.
@@ -99,11 +100,12 @@ At `--subme 8` and below, a P macroblock goes through these steps:
    on B macroblocks.
 
 With [`--weightp`](options.md), a slice can hold a plain copy of reference 0
-for letterbox bars. At any `--subme`, a macroblock in the bars refuses skip
-when the plain copy predicts its bar samples better, and searches reference 0
-alone. Partitions at least half in the bars get the
-plain copy. One that only clips a bar's edge takes the better copy. Bars that
-fade with the picture keep the weighted copy and skip.
+for letterbox bars. At any `--subme`, a macroblock that reaches into the bars
+refuses skip when the plain copy predicts its bar samples better, because
+skip would predict through the weighted copy. It searches reference 0 alone.
+Partitions at least half in the bars get the plain copy. One that only clips
+a bar's edge takes the better copy. Bars that fade with the picture keep the
+weighted copy and skip.
 
 CABAC P macroblocks price intra trials with the CABAC rate estimate at any
 `--subme`.
@@ -130,8 +132,8 @@ On very smooth intra blocks the RDOQ lambda ramps from full at source variance
 ### Coefficient decimation
 
 A 4x4 inter block with only +-1 levels scores a weight per nonzero
-coefficient, by the zero run before it. Below the threshold it's zeroed. Any level of 2 or more forces a keep.
-`--no-dct-decimate` disables it.
+coefficient, by the zero run before it. Below the threshold it's zeroed. Any
+level of 2 or more forces a keep. `--no-dct-decimate` disables it.
 
 | block | weight by preceding zero run | threshold |
 |---|---|--:|
@@ -146,7 +148,7 @@ coefficient, by the zero run before it. Below the threshold it's zeroed. Any lev
 | No UMH on 8x8 and smaller | about 6-7% faster single-threaded. Under `--me umh` it costs 0.2-0.7% on the four CIF motion clips: foreman +0.66%, bus +0.46%, stefan +0.41% |
 | Seed early-out, K 48 sub-16x16 and 4 at 16x16 | 2-3% of wall at 12 threads for a CRF-band median of +0.15% |
 | Capped diamond sub-pel at medium | a speed trade. Slower presets keep the square |
-| Adaptive partition margin plus importance rescue (mode 4) | the lowest BD cost of the early-termination variants in the table below. The rescue buys back 0.09 of the margin's loss for part of its wall saving |
+| Adaptive partition margin plus importance rescue (mode 4) | against no early termination the margin alone costs a 0.46% CRF-band median and mode 4 costs 0.37%. The rescue buys back that 0.09 for 1-3 points of the margin's 4.33% wall saving |
 | `--p-part-gate 400` | holds quality on every clip of the 12-clip HD band: no clip moves by more than 0.32%. It removes the P tournament's most numerous searches |
 | Ref-0 exit at K=1200 | against K=600, shields, the worst clip on wall, is 8.4% faster at one thread. fourpeople pays +1.90%. The CRF band median reads 0.00% because the exit doesn't run at CIF |
 | Intra admission at 1.5x (P) and 0.75x (B) | 1.5x is BD-neutral for 1.06x CIF and 1.11x 720p in pure C. Because B intra wins a few dozen macroblocks in 300,000, its margin is tighter |
@@ -157,7 +159,9 @@ coefficient, by the zero run before it. Below the threshold it's zeroed. Any lev
 | Decimate head weight 3, thresholds 3 and 2 | a head weight below the threshold makes an adjacent pair of +-1s droppable. That's a different tool. Above 3 the results are flat: the shapes measured are within 0.2% of each other on the median |
 | 4x4 tail `3,2,2,1,1,1,1,1` | a free choice on a flat plateau, because neither band separates it from the shorter tail `3,2,2,1,1,1`. The shorter tail reads 0.19% better on the CRF band median. On the deep band it reads a 0.00% median, with every clip inside the v1 deep band's measured null of about ±1.0 per clip. It has no speed or size cost and passes 254/254 conformance |
 
-Partition early termination on the CRF band, against none:
+Partition early termination on the CRF band, against none. The
+constant-threshold rows are means and the margin rows are medians, so read
+each row on its own:
 
 | variant | BD cost | speed |
 |---|--:|--:|
@@ -174,8 +178,8 @@ Partition early termination on the CRF band, against none:
 | An 8-point square refine in place of UMH, without richer seeds | captures most of UMH's small near-hex gains and still loses clearly on bus and stefan. The quality comes from the rare distant finds |
 | Cap sub-pel iterations on the square path | hpel and qpel converge in two iterations 96-99% of the time. A cap saves about 0.3% |
 | 4-point diamond to convergence in place of the square (`--subpel 1`) | foreman +0.92%, mobile +0.76% |
-| Constant-threshold partition early termination | costs more than the shipped margin for less speed. Retuning the slack trades BD for speed one to one |
-| Constant threshold plus heterogeneity and importance guards (mode 2) | the guards protect so many blocks that little speed is left |
+| Constant-threshold partition early termination | +0.53% mean, mobile +1.57%, for 1-2% speed. Retuning the slack trades BD for speed one to one |
+| Constant threshold plus heterogeneity and importance guards (mode 2) | still +0.42% mean. The guards protect so many blocks that only 2-4% speed is left |
 | Seed partition searches from the 16x16 and sibling winners | no speed gain, since the seeds are already saturated, and bus loses |
 | Hex iteration cap | near zero: the hex already exits on convergence |
 | `--me esa` / `tesa` as a quality setting | 3-8x the CPU and worse on HD: against the hex default, pedestrian reads +11.0% / +11.3%, where `--me umh` reads +5.4%. The SAD-cheapest vector isn't the one that codes best |
@@ -204,5 +208,5 @@ The `Y264_*` variables need a `-Ddev_knobs=true` build.
   and partition early termination. A one-thread A/B of either is
   byte-identical. Set `Y264_STQ=0` on both sides, as the rows were read, or
   use two or three threads.
-- Interleave arms in one batch. Run one at a time, they come out
-  non-monotonic in the gate's strength.
+- Run several arms in one interleaved batch. Arms run one invocation at a
+  time come out non-monotonic in the gate's own strength.

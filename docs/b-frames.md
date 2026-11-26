@@ -7,8 +7,9 @@ decision](motion-and-modes.md) for the shared machinery.
 
 Results vary with content most on the B path. At
 `--bframes 0` every 1080p corpus clip is within a few percent of x264 medium.
-With B-frames they range from well ahead to well behind, mostly because of
-the direct-mode choice. That's why `--direct auto` is the default.
+With B-frames they range from well ahead to well behind. The largest single
+cause is the direct-mode choice. That's why `--direct auto` is the
+default.
 
 Quality figures are BD-rate on VMAF v1. The rate-charge and B_8x8
 SATD-folding rows are on VMAF-NEG (earlier metric).
@@ -47,8 +48,8 @@ At `--subme 8` and below, a B macroblock goes through these steps:
    direct vector.
 4. **SATD phase.** The direct, L0, L1 and Bi 16x16 predictions are ranked by
    SATD plus vector rate. Modes within `best * 17/16 + 1`, or 18/16 with
-   psy-rd, go to full RD. That's usually two to four. Bi and uni both stay in when they're
-   close.
+   psy-rd, go to full RD, usually two to four RD trials. Bi and uni both stay
+   in when they're close.
 5. **Mid-tournament skip exit** (`Y264_B_SKIP_EXIT=1`). After the 16x16 RD
    trials, a non-reference B commits skip when skip still has the best cost
    and direct's SATD is within 33/32 of the best searched 16x16.
@@ -78,8 +79,8 @@ score in coding order, decaying by 9/10 whenever the total passes the sampled
 count. Each new B slice takes the higher score, deterministically at any thread
 count.
 
-With auto, the staircase (`Y264_STAIR_TDIR=1`) drops direct where the
-derived list-1 vector exceeds the list-1 searches' row bound.
+The staircase (`Y264_STAIR_TDIR=1`) stays on with auto and drops direct
+where the derived list-1 vector exceeds the list-1 searches' row bound.
 
 `--direct temporal` adds a slice-level guard: temporal only when the
 co-located picture's first list-0 picture is this slice's. Under the default
@@ -90,14 +91,15 @@ mismatch hurts.
 ### B_8x8
 
 B_8x8 splits the macroblock into four quadrants that pick direct, L0, L1 or
-Bi. The 8x4, 4x8 and 4x4 sub-partitions aren't implemented. A quadrant
-is searched from the 16x16 winner per list and held to its list-0
-reference.
+Bi. The 8x4, 4x8 and 4x4 sub-partitions aren't implemented. A quadrant is
+searched from the 16x16 winner per list and held to its list-0 reference,
+because a cold search over all references would make the mode unaffordable.
 
 Three things keep B_8x8 cheap. First, the quadrant gate (`Y264_B8_QGATE=10`)
-runs four `satd8x8` on the winning 16x16 prediction. The eight quadrant
-searches run only when the worst quadrant holds more than `1 + n/16` of an
-even share: `qmax * 4 * 16 > qsum * (16 + n)`.
+runs four `satd8x8` on the winning 16x16 prediction, because a split only
+pays where the quadrants want different motion. The eight quadrant searches
+run only when the worst quadrant holds more than `1 + n/16` of an even share:
+`qmax * 4 * 16 > qsum * (16 + n)`.
 
 Second, the quadrant sum is charged B_8x8's mb_type and sub_mb_type rate in
 the SATD domain:
@@ -142,7 +144,7 @@ The quadrant gate settings, on the CRF band:
 
 | QGATE | B_8x8 wall | BD-rate |
 |---|--:|---|
-| 6 | 2-4% | a further -0.35% median against 10, about 2.5x its gain |
+| 6 | 2-4% | a further -0.35% median against 10, about 2.5x the total gain of 10 |
 | 10 (shipped) | 1.1-1.3% of single-thread wall | -0.24% median against B_8x8 off, worst sintel +0.37% |
 | 16 | | +0.26% median against 10. Every clip but akiyo and touchdown loses, and touchdown doesn't change |
 
@@ -175,7 +177,7 @@ over 150 frames. Both encoders ran at three threads.
 | Commit B_Skip before motion search on a motion signal (lowres-static, mb-tree leaf, neighbor-skip) | every such gate also admits 10-95% of macroblocks whose searches then win by 8-25% SATD |
 | Staged skip decision (neighbor admission, graded probe, commit after the ref-0 search) | built in full. It commits 6-16% of B macroblocks. The wall is a wash against a +3% bar |
 | Propagation-guarded mid-exit for reference B's (`Y264_B_SKIP_EXIT=3`) | quality-neutral (worst akiyo +0.20%) but buys only 0.3-0.5% of wall |
-| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls. The absolute form moves the damage between clips. On sunflower both cost 0.85% against no early skip, 0.4 points of it on the bottom rung. Medium still runs mode 2 on pictures 1920 or more on the longer side |
+| `--b-preme-skip` (skip before search when distortion is under the cheapest coded rate) | a lambda bound widens as rate falls. On sunflower it reads the same as the absolute form: both cost 0.85% against no early skip, 0.4 points on the bottom rung. The absolute form moves the damage between clips. Medium still runs mode 2 on pictures 1920 or more on the longer side |
 | `--rd-surv-rank` (RD only the top-ranked survivors) | +0.63% HD-band median, pedestrian +1.78% |
 | Folding B_8x8's SATD into the RD screen | screens out 16x16 candidates that go on to win RD. On the earlier metric it gives back over a third of the B_8x8 gain |
 

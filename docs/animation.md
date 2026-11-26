@@ -31,8 +31,8 @@ Per clip, against the shipped default:
 | `--ref 6` or `--ref 9` | within 0.4% | -1.6% to -2.0% | +0.6% |
 | psy-trellis 0.5 in the tune | +0.2% | | byte-identical |
 | `Y264_B_SKIP_EXIT=3` | within 0.4% | within 0.4% | within 0.4% |
-| mb-tree strength 2.8 | | +1.0% | |
-| mb-tree strength 4.0 | | +16.6% | |
+| mb-tree strength 2.8, at matched rate | | +1.0% | |
+| mb-tree strength 4.0, at matched rate | | +16.6% | |
 
 ## Where it stands against x264 medium
 
@@ -77,10 +77,11 @@ Sita trails in every configuration but all-intra:
 
 ## Open questions
 
-- Inter coding loses sita's all-intra lead. Nothing we've tried moves the
-  B-frame share.
-- No `--deblock` offset has been swept on animation. Sweep it at the deep
-  band.
+- Why does hand-drawn trail while CGI leads? Inter coding gives back sita's
+  all-intra lead and more. Nothing we've tried moves the B-frame share, and
+  the obvious candidates are in the table above.
+- No `--deblock` offset has been swept on animation. Nothing masks blocking
+  on flat fills, so sweep it at the deep band instead of copying a value.
 - On bbb about half the eventual skips run the full search, against a fifth on
   natural video. That's animation's extra time. Price any fix at 12 threads,
   where most of it overlaps other work.
