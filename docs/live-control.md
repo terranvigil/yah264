@@ -2,16 +2,17 @@
 
 A live service can change an encode's settings mid-stream without closing
 it. The caller hands the encoder control events between frames. Each event
-names the input frame it lands on, takes effect there, and shows up on that
+names the input frame it lands on, takes effect there and shows up on that
 frame's `--frame-stats` line. A recorded log of events replays to the same
 bytes. In the other direction, a status call reports how much is queued
 inside the encoder and what the rate control has to spend, so a service sees
 backpressure before a stall.
 
-The contract is shared with yah265 and yaav1: the same event kinds, error
-codes, log grammar and replay guarantee, with only the name prefix changed.
-The log parser (`cli/ctl_log.c`) is one file all three carry. It builds on the
-zones and frame stats in [engine-interface.md](engine-interface.md).
+The contract is shared with yah265 and yaav1. They have the same event kinds,
+error codes, log grammar and replay guarantee, with only the name prefix
+changed. All three share one log parser file (`cli/ctl_log.c`). Live
+control builds on the zones and frame stats in the
+[engine interface](engine-interface.md).
 
 ## What is supported
 
@@ -23,27 +24,30 @@ zones and frame stats in [engine-interface.md](engine-interface.md).
 | keyframe | `F key` | frame F is an IDR that starts a closed GOP | every mode but two-pass |
 | zone offset | `F zone last=L offset=X` | every frame F to L, offset (whole QPs) added to the rate control's QP | every mode |
 
-Frame rate, preset and resolution changes are in the API's list of kinds and
-are refused as not supported. A frame-rate change needs the rate control to
-learn a new frame interval and the stream's timing to follow it; a preset
-change swaps analysis settings the lookahead and the per-frame state were
-built for; a resolution change needs new parameter sets and buffers at a
-keyframe. None of the three is clean and cheap yet.
+Frame rate, preset and resolution changes are in the API's list of kinds,
+and the encoder refuses them as not supported. None of the three is clean
+and cheap yet:
+
+- A frame-rate change needs the rate control to learn a new frame interval
+  and the stream's timing to follow it.
+- A preset change swaps analysis settings the lookahead and the per-frame
+  state were built for.
+- A resolution change needs new parameter sets and buffers at a keyframe.
 
 ### Where an event lands
 
 An event may name a frame only while that frame hasn't been handed to the
 encoder. After that it's refused as late, however deep the pipeline is,
-because the frame may already be typed and costed in the lookahead. So
-threads, lookahead depth and B-frame reordering never move a landing frame,
+because the frame may already be typed and costed in the lookahead. Threads,
+lookahead depth and B-frame reordering therefore never move a landing frame,
 and the echo reads the same at every thread count.
 
 QP limits, keyframes and zones land on exact input frames. Rate and CRF
 changes land at a rate decision: the first frame in coding order whose number
-is F or later. Every frame from F on is coded under the change, and a B frame
+is F or later. Every frame from F on is coded under the change. A B frame
 numbered below F that is coded after that decision takes it too.
 
-A frame force from `--qpfile` or the frame-force API is absolute and wins
+A frame force from `--qpfile` or the frame-force API is absolute. It wins
 over a zone offset and over the QP limits on its frame.
 
 ### How a rate change is applied
@@ -51,91 +55,113 @@ over a zone offset and over the QP limits on its frame.
 The rate control's ledger is retargeted, not reset. At the landing decision,
 with r the new per-frame target over the old one:
 
-- the bits spent and the bits owed so far are both scaled by r, so an over-
+- The bits spent and the bits owed so far are both scaled by r, so an over-
   or under-spend carries over as the same fraction of the new rate. Frames
   already decided when the change lands, coded or still in flight, count the
-  same way, at r times their size;
-- what the rate control has learned about the content is kept, and the
-  operating point moves by 6 log2(1/r) QP, the move that spends the new
-  target if a frame's bits go as 1/qscale;
-- the slew reference and the intra-frame track move by the same QP step as
-  the operating point, so the slew still limits what the content does and not
-  the step the caller asked for;
-- a buffer keeps its fill as a fraction of its size and refills at the new
-  maxrate from the next frame;
-- the balance carried into the new rate, bits owed minus bits spent, is held
-  to at most one second of the new target, and the rest is forgiven.
-
-In the rate-factor model (B frames or a lookahead on, the default), a step
-of more than 3x either way lands differently, because on real content a
-frame's bits fall faster than 1/qscale: a tenth of the bits is often 9 to
-12 QP away, not 20. Such a step moves the operating point by
-6 log2(1/r) / 1.5 QP, and then reads the content's own slope off the frames
-it codes. Each measured point is a run of whole groups (an anchor and the
-B frames coded against it, a frame's two fields together) holding at least
-a quarter second of frames: one run coded before the step and the first
-run coded after it give the exponent a in bits ~ qscale^-a, and the
-operating point moves again to where that run would have spent the new
-target. A slope outside 1 to 3 means the content changed between the two
-runs, and the last slope (1.5 at first) is used instead. One more run,
-nearer the target, refits once. The means use the frame QP the rate control
-chose, before the adaptive-quantization and mb-tree offsets, and leave out
-I frames. Each run stands as many frames from a QP move as the encoder has
-in flight, and a scene cut in a run or between the two stops the refit,
-leaving the moves already made. So does a run whose frames are mostly held
-at a QP bound (`--qpmin`, `--qpmax`, a live QP-limit event, or the rate
-control's own range): its bits answer the clamp, not the content. For two seconds after refitting ends, the
-rate control's ledger runs on a memory of about a second, so the frames at
-the new rate soon outweigh those coded at the old one. Any later rate
-change, a buffer-only one included, ends a refit in progress. With a
-buffer, only a step down is handled this way; a step up is left to the
-buffer, whose fill already paces it. The per-frame model
-(`--tune zerolatency`, or `--bframes 0` with no lookahead) moves straight
-by 6 log2(1/r) and never refits.
+  same way, at r times their size.
+- What the rate control has learned about the content is kept. The operating
+  point moves by 6 log2(1/r) QP, the move that spends the new target if a
+  frame's bits go as 1/qscale.
+- The slew reference and the intra-frame track move by the same QP step as
+  the operating point. The slew still limits what the content does, not the
+  step the caller asked for.
+- A buffer keeps its fill as a fraction of its size and refills at the new
+  maxrate from the next frame.
+- The balance carried into the new rate (bits owed minus bits spent) is held
+  to at most one second of the new target. The rest is forgiven.
 
 For two seconds after a change the rate control may move its QP a whole step
 per anchor, as it does after the opening, while the content's cost at the
 new rate is still unproven.
 
-With a buffer of about a second, a step lands near its new rate within the
-first second. With no buffer, a step down lands near its new rate within
-the first second and then follows the content as plain ABR does at a steady
-rate, which on content whose cost moves can be a quarter or more off for a
-second or two. A step up with no buffer can still land well off its target,
-over or under, in its first second.
+#### Large steps in the rate-factor model
+
+The rate-factor model is the default: B frames or a lookahead on. In it, a
+step of more than 3x either way lands differently, because on real content a
+frame's bits fall faster than 1/qscale. A tenth of the bits is often 9 to 12
+QP away, not 20. Such a step goes like this:
+
+1. The operating point first moves by 6 log2(1/r) / 1.5 QP.
+2. The rate control then reads the content's own slope off the frames it
+   codes. One run coded before the step and the first run coded after it
+   give the exponent a in bits ~ qscale^-a. The operating point moves again
+   to where that run would have spent the new target.
+3. A slope outside 1 to 3 means the content changed between the two runs.
+   The last slope (1.5 at first) is used instead.
+4. One more run, nearer the target, refits once.
+
+Each measured point is a run of whole groups (an anchor and the B frames
+coded against it, a frame's two fields together) holding at least a quarter
+second of frames. The means use the frame QP the rate control chose, before
+the adaptive-quantization and mb-tree offsets, and leave out I frames. Each
+run stands as many frames from a QP move as the encoder has in flight.
+
+These stop the refit, leaving the moves already made:
+
+- a scene cut in a run or between the two runs
+- a run whose frames are mostly held at a QP bound (`--qpmin`, `--qpmax`, a
+  live QP-limit event, or the rate control's own range), because its bits
+  answer the clamp, not the content
+
+Any later rate change, a buffer-only one included, ends a refit in progress.
+
+For two seconds after refitting ends, the rate control's ledger runs on a
+memory of about a second. The frames at the new rate soon outweigh those
+coded at the old one.
+
+With a buffer, only a step down is handled this way. A step up is left to the
+buffer, whose fill already paces it. The per-frame model
+(`--tune zerolatency`, or `--bframes 0` with no lookahead) moves straight by
+6 log2(1/r) and never refits.
+
+#### How quickly a step settles
+
+| case | in the first second | after that |
+|---|---|---|
+| buffer of about a second | lands near its new rate | |
+| no buffer, step down | lands near its new rate | follows the content as plain ABR does at a steady rate. On content whose cost moves, that can be a quarter or more off for a second or two |
+| no buffer, step up | can still land well off its target, over or under | |
 
 ### What is refused, and why
 
-- An encode opened as CBR (maxrate equal to the bitrate) stays CBR: a bitrate
+- An encode opened as CBR (maxrate equal to the bitrate) stays CBR. A bitrate
   change without a maxrate moves the maxrate with it, and one that would part
   the two is refused. An encode opened as capped VBR keeps maxrate above the
   bitrate.
 - A buffer can't be switched on or off mid-stream.
 - A rate past what the stream's declared level allows is refused. The level
-  is chosen at open from the opening rate, so a stream that will step up
-  should open at its top rate or name a `--level`.
+  is chosen at open from the opening rate. A stream that will step up should
+  open at its top rate or name a `--level`.
 - Under `--nal-hrd vbr` the declaration in the stream never changes. A rate
   change that keeps the bitrate, maxrate and buffer at or below what was
-  declared is accepted: a buffer fed at the declared rate that the stream now
-  spends more slowly can't underflow. Anything above it is refused. Under
-  `--nal-hrd cbr` every rate change is refused, because the declared constant
-  rate would be padded back with filler. A QP ceiling under 51 is refused
-  under either, as it is at open.
-- Two-pass encodes refuse rate, CRF and keyframe events: pass 2 follows its
-  stats file. The CLI refuses `--control` and `--control-fd` with `--pass`
-  outright.
+  declared is accepted, because a buffer fed at the declared rate that the
+  stream now spends more slowly can't underflow. Anything above it is
+  refused.
+- Under `--nal-hrd cbr` every rate change is refused, because the declared
+  constant rate would be padded back with filler.
+- A QP ceiling under 51 is refused under either `--nal-hrd` mode, as it is at
+  open.
+- Two-pass encodes refuse rate, CRF and keyframe events, because pass 2
+  follows its stats file. The CLI refuses `--control` and `--control-fd` with
+  `--pass` outright.
 - An event is judged against the state it would land in: the settings in
   force at its frame once every event queued before it has landed. It's
   refused if it doesn't fit there, or if any event already queued after it
   would no longer fit.
-- The encoder holds at most 4096 events naming frames after the next one to
-  be handed in, and at most 1 << 20 events waiting to land and applied
-  records waiting to be drained together. Events for the next frame count
-  only toward the second bound, so what is due now can always be queued, and
-  every queued event has room for its record. An event past a bound is
-  refused with `YAH264_CTL_EFULL`; draining
-  `yah264_encoder_controls_applied()` frees room.
 - The hardware encoder (`--hw`) takes no events.
+
+The encoder's control queue has two bounds. An event past either is refused
+with `YAH264_CTL_EFULL`. Draining `yah264_encoder_controls_applied()` frees
+room.
+
+| bound | counts |
+|---|---|
+| 4096 | events naming frames after the next one to be handed in |
+| 1 << 20 | events waiting to land and applied records waiting to be drained, together |
+
+Events for the next frame count only toward the second bound. That way what
+is due now can always be queued. Every queued event also has room for its
+record.
 
 ## From the command line
 
@@ -155,48 +181,67 @@ y264 --input-y4m in.y4m --bitrate 3000 --vbv-maxrate 3000 --vbv-bufsize 3000 \
 400 zone last=459 offset=-3
 ```
 
-Frames count from 0 in input order and may not decrease down the file. The
-optional first line names the log's version. A line is `FRAME KIND` and then
-`name=value` arguments; a line whose first character after any spaces is `#`
-is a comment, and a `#` after an event (`5 key # note`) is refused. Numbers
-are plain decimals: no hex, exponent or `inf`; a sign only on the offsets and
-the CRF, which take at most 8 digits before the point and 6 after. Before the first frame the whole file is parsed and
-every event is checked against the encoder in order, as if all were queued:
-an unknown kind or argument, a bad value, a NUL byte, a frame that goes
-backwards, a file that can't be read, or an event the encoder would refuse
-stops the run with the file name, the line number and the reason, and the
-output is left as it was. So does a log the encoder's queue couldn't hold:
-more than 65536 events on one frame, or more than 262144 rate and CRF events
-within 4096 frames. The events then reach the encoder as frames go by: each
-before its frame is handed in, and up to 1024 ahead of that. Events for a
-frame the stream never reaches are reported at the end.
+The log's grammar:
+
+- Frames count from 0 in input order and may not decrease down the file.
+- The optional first line names the log's version.
+- A line is `FRAME KIND`, then `name=value` arguments.
+- A line whose first character after any spaces is `#` is a comment. A `#`
+  after an event (`5 key # note`) is refused.
+- Numbers are plain decimals, with no hex, exponent or `inf`. Only the
+  offsets and the CRF take a sign. They take at most 8 digits before the
+  point and 6 after.
+
+Before the first frame, the whole file is parsed and every event is checked
+against the encoder in order, as if all were queued. Any of these stops the
+run with the file name, the line number and the reason, and leaves the
+output as it was:
+
+- an unknown kind or argument, a bad value or a NUL byte
+- a frame that goes backwards
+- a file that can't be read
+- an event the encoder would refuse
+- a log the encoder's queue couldn't hold: more than 65536 events on one
+  frame, or more than 262144 rate and CRF events within 4096 frames
+
+The events then reach the encoder as frames go by. Each is queued before its
+frame is handed in, and up to 1024 ahead of that. Events for a frame the stream never
+reaches are reported at the end.
+
+### Reading events while the encode runs
 
 `--control-fd N` reads the same lines from an open descriptor while the
-encode runs, taking up to 64 of the lines that have arrived before each
-frame is handed in. The frame may be `next`, the frame about to be handed in.
-A numbered line for a frame that has already gone in, or an event the
-encoder refuses, is skipped with a warning. With `--control` as well, the
-file's events up to a line's frame are queued first, and the line is
-skipped (queue full) if that would take the file more than 1024 events
-ahead; a line that would make one of the file's later events fail is
-skipped too, so the file's events are never refused mid-run. That check
-costs each line time in proportion to the file's events of its kind not yet
-queued; checking a log in frame order up front is linear. A malformed line, a NUL byte or a
-descriptor that can't be read stops the encode; one that isn't open or is
-write-only is refused at startup. An unterminated last line counts. The
-descriptor's flags are put back at exit.
+encode runs. Before each frame is handed in, it takes up to 64 of the lines
+that have arrived.
+
+- The frame may be `next`, the frame about to be handed in.
+- A numbered line for a frame that has already gone in, or an event the
+  encoder refuses, is skipped with a warning.
+- A malformed line, a NUL byte or a descriptor that can't be read stops the
+  encode. A descriptor that isn't open or is write-only is refused at
+  startup.
+- An unterminated last line counts.
+- The descriptor's flags are put back at exit.
+
+With `--control` as well, the file's events up to a line's frame are queued
+first. The line is skipped (queue full) if that would take the file more
+than 1024 events ahead. A line that would make one of the file's later
+events fail is skipped too, so the file's events are never refused mid-run.
+That check costs each line time in proportion to the file's events of its
+kind not yet queued. Checking a log in frame order up front is linear.
 
 `--control-out FILE` writes every event that took effect, with the frame it
 named, as a `--control` log. It's the record of a live run.
 
 Live control runs one encoder instance, so `--threads` goes to its row
-wavefront and lookahead rather than to parallel GOPs: an event names a frame
+wavefront and lookahead rather than to parallel GOPs. An event names a frame
 of the whole stream, and the ledger it retargets is one encoder's.
 
 ### The echo
 
 A frame where an event took effect carries a `control` key on its
-`--frame-stats` line, the events as log lines with the frame each named:
+`--frame-stats` line. The key holds the events as log lines with the frame
+each named:
 
 ```
 {"frame": 122, "gop": 0, "type": "P", "idr": 0, "ref": 1, "qp": 31, "bytes": 4210, "k": 6, "control": ["120 rate bitrate=1000 maxrate=1000"]}
@@ -219,15 +264,19 @@ if (r != YAH264_CTL_OK)
 ```
 
 `yah264_encoder_control()` validates and queues an event, or returns one of
-the codes below and queues nothing. `yah264_encoder_control_check()` runs the
-same checks over a list of events, each as if the ones before it had been
-queued, and queues nothing; it returns the first refusal's code and index. `yah264_encoder_controls_applied()`
-drains the events that took effect, in the order they were applied, each with
-`applied_frame` set. After the flush, an event whose frame never arrived
-comes back with `applied_frame` -1. It returns -1 once if records were lost,
-which only an allocation failure causes; the events themselves still took
-effect. Both are called between encode calls,
-from the thread that calls encode.
+the codes below and queues nothing.
+
+`yah264_encoder_control_check()` runs the same checks over a list of events,
+each as if the ones before it had been queued. It queues nothing and returns
+the first refusal's code and index.
+
+`yah264_encoder_controls_applied()` drains the events that took effect, in
+the order they were applied, each with `applied_frame` set. After the flush,
+an event whose frame never arrived comes back with `applied_frame` -1. The
+call returns -1 once if records were lost, which only an allocation failure
+causes. The events themselves still took effect.
+
+Both are called between encode calls, from the thread that calls encode.
 
 | code | meaning |
 |---|---|
@@ -235,25 +284,30 @@ from the thread that calls encode.
 | `YAH264_CTL_EUNSUPPORTED` | the kind isn't implemented (frame rate, preset, resolution, or a kind this library doesn't know) |
 | `YAH264_CTL_ELATE` | the landing frame has already been handed in |
 | `YAH264_CTL_EMODE` | the kind doesn't fit the encode's rate-control mode |
-| `YAH264_CTL_EHRD` | it would break the signalled HRD |
+| `YAH264_CTL_EHRD` | it would break the signaled HRD |
 | `YAH264_CTL_ELEVEL` | it exceeds the declared level |
 | `YAH264_CTL_ECONFLICT` | the zone overlaps one already set |
 | `YAH264_CTL_ENOMEM` | out of memory |
 | `YAH264_CTL_EFULL` | the control queue is full; resend once events have landed |
 
-`yah264_encoder_status()` fills a `yah264_status_t`: pictures in and frames
-out, the queue depth in frames and in stream time, the next frame an event
-can name, the wall time the oldest queued frame has spent inside, the current
-bitrate and buffer, the buffer's fill after the last frame whose bits the
-rate control has counted (the whole stream once it's flushed), the rate
-ledger's balance (target bits minus bits spent) and the bits the next frame
-may spend. Every field but the
-wall time is a function of the input and the events, so it reads the same on
-a replay at one thread.
+`yah264_encoder_status()` fills a `yah264_status_t` with:
+
+- pictures in and frames out
+- the queue depth, in frames and in stream time
+- the next frame an event can name
+- the wall time the oldest queued frame has spent inside
+- the current bitrate and buffer
+- the buffer's fill after the last frame whose bits the rate control has
+  counted (the whole stream once it's flushed)
+- the rate ledger's balance (target bits minus bits spent)
+- the bits the next frame may spend
+
+Every field but the wall time is a function of the input and the events, so
+it reads the same on a replay at one thread.
 
 Both structs carry their size as their first field and only ever grow at the
-end, so a caller built against an older header keeps working. Neither touches
-`yah264_param_t`.
+end, so a caller built against an older header keeps working. Neither
+touches `yah264_param_t`.
 
 ## What is guaranteed
 
@@ -261,12 +315,13 @@ end, so a caller built against an older header keeps working. Neither touches
   control, in every configuration.
 - The same input, parameters and events with the same landing frames give the
   same bytes at one thread, whenever each event was handed in, as long as it
-  was handed in before its frame. A live run's `--control-out` log, fed back
-  through `--control`, reproduces the live run's stream and stats. With more
-  threads the landing frames and the echo are the same, and byte identity is
-  best effort, as everywhere else. A log replays byte for byte only on a build
-  that applies rate changes the same way; its landing frames and echo are
-  the same on any build.
+  was handed in before its frame.
+- A live run's `--control-out` log, fed back through `--control`, reproduces
+  the live run's stream and stats.
+- With more threads the landing frames and the echo are the same, and byte
+  identity is best effort, as everywhere else.
+- A log replays byte for byte only on a build that applies rate changes the
+  same way. Its landing frames and echo are the same on any build.
 - A stream with events decodes to the encoder's own reconstruction under the
   reference decoders, and under `--nal-hrd vbr` passes the stream's own HRD
   check.
