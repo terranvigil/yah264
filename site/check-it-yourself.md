@@ -16,9 +16,11 @@ scripts/fetch_corpus.sh --review
 X264_ASM=$(command -v x264) make review
 ```
 
-The first line fetches the four test clips, about 250 MB in all. The second
-encodes each clip twice, once with yah264 and once with x264. Both encoders
-aim at the same bitrate. Then it prints how long each took, how big each file came
+The first line downloads two public source videos, about 530 MB, and keeps
+them in `tests/corpus/.src/`. Then it cuts six windows from them as Y4M, about
+7.8 GB on disk, of which `make review` reads four (3.6 GB). The second line
+encodes each of those four clips twice, once with yah264 and once with x264.
+Both encoders aim at the same bitrate. Then it prints how long each took, how big each file came
 out and how good each looked. `make review-720` and `make review-1080` run
 half of it.
 
