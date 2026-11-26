@@ -38,13 +38,17 @@ BD-rate over a solved rate range decides quality. It's measured with full-frame
 v1 at matched achieved bitrates. A change that improves one clip and
 costs two others is a refusal even when the mechanism is elegant.
 
-The table decides speed. It measures our wall time as a ratio to x264's at a
-matched operating point. The bar is that ratio instead of an absolute time. A ratio still doesn't reproduce on any machine you like. Repeating a
-board on the same machine moves a ratio by up to about 0.10. The multi-threaded
-rows depend on the core count. The pure-C rows need an x264 built the way the
-[results](results.md) page describes. The headline board needs an ffmpeg that
-isn't in this repository. For those reasons the results page names the machine
-and the builds.
+The table decides speed. Its bar is our wall time as a ratio to x264's at a
+matched operating point, instead of an absolute time. A ratio still won't
+reproduce on any machine you like:
+
+- Repeating a board on the same machine moves a ratio by up to about 0.10.
+- The multi-threaded rows depend on the core count.
+- The pure-C rows need an x264 built the way the [results](results.md) page
+  describes.
+- The headline board needs an ffmpeg that isn't in this repository.
+
+That's why the results page names the machine and the builds.
 
 Nothing ships on a plausible mechanism. The recurring failure mode of a language
 model is a confident explanation of why an idea should work. I suspect that's
@@ -59,15 +63,14 @@ that already existed under a name nobody remembered. The tree holds about
 eighty harness scripts and about 140 environment knobs. That's well past what
 fits in one context window.
 
-The [instrument catalog](https://github.com/terranvigil/yah264/blob/main/docs/instruments.md)
-is the fix. It catalogs the instruments that have
-produced results, organized by the question each one answers: where did the time
-go, what would a perfect version of X buy, is the idea any good, is it fast, is
-it correct. A census checks the environment knobs listed beside it against the
-source and fails the build when one goes missing. The instrument names are
-checked by hand when the file is edited. Reading it is the first step of any
-measurement task. That rule is written into the project instructions so it
-survives a fresh session.
+The fix is an [instrument catalog](https://github.com/terranvigil/yah264/blob/main/docs/instruments.md)
+of the instruments that have produced results, organized by the question each
+one answers: where did the time go, what would a perfect version of X buy, is
+the idea any good, is it fast, is it correct. A census checks the environment
+knobs listed beside it against the source and fails the build when one goes
+missing. The instrument names are checked by hand when the file is edited.
+Reading the catalog is the first step of any measurement task. The project
+instructions say so, which keeps the rule alive in a fresh session.
 
 ## The ideas that were measured and dropped
 

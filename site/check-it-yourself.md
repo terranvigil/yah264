@@ -16,13 +16,16 @@ scripts/fetch_corpus.sh --review
 X264_ASM=$(command -v x264) make review
 ```
 
-The first line downloads two public source videos, about 530 MB, and keeps
-them in `tests/corpus/.src/`. Then it cuts six windows from them as Y4M, about
-7.8 GB on disk, of which `make review` reads four (3.6 GB). The second line
-encodes each of those four clips twice, once with yah264 and once with x264.
-Both encoders aim at the same bitrate. Then it prints how long each took, how big each file came
-out and how good each looked. `make review-720` and `make review-1080` run
-half of it.
+The first line downloads two public source videos into `tests/corpus/.src/`
+and cuts six Y4M windows from them. The second encodes four of those clips
+twice, once with each encoder at the same bitrate, and prints the comparison.
+`make review-720` and `make review-1080` run half of it.
+
+| download and disk | size |
+|---|--:|
+| the two source videos | about 530 MB |
+| all six Y4M windows | about 7.8 GB |
+| the four that `make review` reads | 3.6 GB |
 
 You need `x264` and `ffmpeg` on your path. You also need a float-enabled
 libvmaf 3.x `vmaf` CLI with Netflix's VMAF v1.0.16 model files. The script
@@ -45,8 +48,8 @@ MEDIAN                      0.82x
 
 These numbers come from one real run on an idle 18-core Apple M5 Max. Each
 clip ran at its own bitrate over a six-second window. Both encoders got twelve
-threads, and x264 ran at its defaults. Your run will differ by a few
-hundredths. Ignore the second decimal.
+threads, with x264 at its defaults. Your run will differ by a few hundredths,
+so ignore the second decimal.
 
 **`time`** is our encode time over x264's. Below 1.00 we're faster: 0.82x
 means we took about four fifths of x264's time.
@@ -81,11 +84,15 @@ for exactly this reason.
 
 ## This page and the results page
 
-This board is the quick check. It runs four HD clips through the two
-encoders as separate programs at twelve threads each, and asks both for a
-bitrate. The results page is the full test. It covers clips from CIF to 4K and
-real titles up to ten minutes, runs each encoder at its own default thread
-count, and compares them at the same file size across a range of rates.
+This board is the quick check. It runs four HD clips through the two encoders
+as separate programs at twelve threads each and asks both for a bitrate. The
+results page is the full test:
+
+| | this board | the results page |
+|---|---|---|
+| clips | four HD clips | CIF to 4K, and real titles up to ten minutes |
+| threads | twelve each | each encoder's own default |
+| compared at | the same requested bitrate | the same file size, across a range of rates |
 
 ## Why these four clips
 
@@ -102,8 +109,8 @@ footage has sensor noise and real motion.
 
 Big Buck Bunny is an open-source animated film. Perseverance is footage from
 NASA's Mars rover. Because each appears at both resolutions, the 720p and
-1080p rows differ by resolution and nothing else. Four clips keeps the run to a few
-minutes. The long titles are on the [results](results.md) page.
+1080p rows differ by resolution and nothing else. Four clips keep the run to a
+few minutes. The long titles are on the [results](results.md) page.
 
 Don't settle anything on one run. A speed ratio moves by up to about 0.10
 between machines and between days.
