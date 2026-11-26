@@ -1,15 +1,11 @@
 # Animation
 
-yah264 treats animation as two classes. Rendered 3D, such as Big Buck Bunny
-and Sintel, behaves differently from hand-drawn 2D, such as Sita Sings the
-Blues. We measure every animation change on both kinds, because a setting that
-helps one kind often costs the other. Against x264 medium we're far ahead on
-CGI and slightly behind on hand-drawn.
+Against x264 medium we're far ahead on rendered 3D (Big Buck Bunny, Sintel)
+and slightly behind on hand-drawn 2D (Sita Sings the Blues). A setting that
+helps one kind often costs the other. We measure every change on both.
 
-All numbers here are BD-rate on VMAF v1, where negative is better. Self-A/Bs
-are against yah264's shipped default on the same binary. Cross-encoder numbers
-are against x264 medium. See [Measuring it](#measuring-it) for the windows
-and CRF points.
+Numbers are BD-rate on VMAF v1, negative is better. Self-A/Bs are against the
+shipped default on the same binary.
 
 ## What yah264 does
 
@@ -45,14 +41,13 @@ Per clip, against the shipped default:
 | bbb_720p | 3D CGI | -37.4% |
 | sita_720p | hand-drawn 2D | +1.9% |
 
-We always quote animation results per clip. A median over the two would read
-about -18% and describe neither clip.
+Quote animation per clip. The median of the two, about -18%, describes
+neither.
 
-On the 10-minute Big Buck Bunny excerpt in the parity tables, yah264 needs 1%
-to 2% fewer bits than x264 at CRF at 720p, 1080p and 4K. At capped VBR the two
-encoders are within 1% of each other.
+On the 10-minute Big Buck Bunny excerpt, yah264 needs 1% to 2% fewer bits than
+x264 at CRF at 720p, 1080p and 4K. At capped VBR the two are within 1%.
 
-Sita trails under every configuration we've tried except all-intra:
+Sita trails in every configuration but all-intra:
 
 | sita_720p configuration | BD-rate vs x264 |
 |---|--:|
@@ -62,8 +57,6 @@ Sita trails under every configuration we've tried except all-intra:
 | our tune plus `--ref 6`, `--psy-rd 0.4` or `--aq-strength 0.6` | +16% to +19% |
 
 ## What doesn't help
-
-The per-clip table above holds the readings.
 
 | idea | why not |
 |---|---|
@@ -84,27 +77,22 @@ The per-clip table above holds the readings.
 
 ## Open questions
 
-- Hand-drawn trails while CGI leads. Because all-intra puts sita well ahead
-  of x264, inter coding gives all of that back and more. Nothing we've found moves
-  the B-frame share yet, and the obvious candidates are in the tables above.
-- Our tune doesn't win on hand-drawn content, even with extra options stacked
-  on it.
-- Nobody has swept a `--deblock` offset on the animation clips yet. Nothing
-  masks blocking on flat fills, so sweep it at the deep band instead of
-  copying a value.
-- Blocks that end up skipped could use a cheaper mode decision. On bbb about
-  half of them run the full search, against about a fifth on natural video.
-  That's where animation's extra time goes. Most of it overlaps with other
-  work at 12 threads, so price any fix at 12 threads.
-- VMAF v1 scores banding through CAMBI. Apart from sintel's dark frames,
-  CAMBI hasn't been read on the animation clips.
+- Inter coding loses sita's all-intra lead. Nothing we've tried moves the
+  B-frame share.
+- No `--deblock` offset has been swept on animation. Sweep it at the deep
+  band.
+- On bbb about half the eventual skips run the full search, against a fifth on
+  natural video. That's animation's extra time. Price any fix at 12 threads,
+  where most of it overlaps other work.
+- CAMBI hasn't been read on the animation clips, apart from sintel's dark
+  frames.
 
 ## Measuring it
 
-Run bbb_720p and sita_720p on every change. Add sintel_720p when AQ or psy
-moves. bbb doesn't saturate on VMAF v1 at these points. It tops out near 90 at
-CRF 30, so the standard points read it. bbb_720p is in the HD band
-(`scripts/hd_band.py`) but not in the standing CRF ladders.
+Run bbb_720p and sita_720p on every change, plus sintel_720p when AQ or psy
+moves. bbb tops out near VMAF 90 at CRF 30, so the standard points read it.
+bbb_720p is in the HD band (`scripts/hd_band.py`) but not the standing
+CRF ladders.
 
 - bbb_720p is a 180-frame window.
 - sita_720p is a 140-frame window, calibrated at 900 kbps.
@@ -115,5 +103,4 @@ scripts/bdcompare.py --a '...yah264...' --b '...x264...' \
     --clips bbb_720p,sita_720p --frames 180 --vmaf --points 30,33,36,39,42
 ```
 
-Never ship an animation change measured on one clip. bbb and sita disagree
-about almost everything.
+Never ship an animation change measured on one clip.
