@@ -33,8 +33,8 @@ redistributed.
 | sita_720p | 720p | animation (hand-drawn 2D) | Sita Sings the Blues, Public Domain Mark 1.0, archive.org item `sita-sings-the-blues_202403`. The 140 frames from 35m are the longest cut-free run in a flat-color sequence |
 
 We hold both animation kinds on purpose because they disagree sharply
-against x264. We lead on CGI and trail on hand-drawn. Name the kind when you quote a result, never just
-"animation" ([animation notes](animation.md)).
+against x264. We lead on CGI and trail on hand-drawn. Name the kind when you
+quote a result, never just "animation" ([animation notes](animation.md)).
 
 samsung_720p appears in older records and the legacy board set. It's vendor
 material with no license that can't be fetched.
@@ -45,30 +45,24 @@ material with no license that can't be fetched.
 "corpus median" from being a CIF decision. It also means the 1080p class
 doesn't rest on one clip.
 
-| clip | res | class | what it is |
-|---|---|---|---|
-| shields_720p, parkrun_720p, stockholm_720p | 720p | detail | the SVT "ter" pans, detail under motion |
-| in_to_tree_720p | 720p | detail | slow zoom into foliage |
-| old_town_720p | 720p | grain | aerial pan over roofs |
-| fourpeople_720p | 720p | static | videoconference |
-| blue_sky_1080p | 1080p | motion | slow rotation over low texture |
-| pedestrian_1080p | 1080p | static | fixed camera, walking people |
-| riverbed_1080p | 1080p | detail | water at the edge of noise, the hardest one here |
-| station2_1080p | 1080p | detail | pan over fine rail detail |
-| sunflower_1080p | 1080p | static | smooth close-up |
-| crowd_run_1080p | 1080p | crowd | dense motion at 50 fps |
+| clip | res | class | what it is | source set | on the ten-clip speed board or HD band |
+|---|---|---|---|---|---|
+| shields_720p | 720p | detail | an SVT "ter" pan, detail under motion | SVT HD Multi Format | speed board, HD band |
+| parkrun_720p, stockholm_720p | 720p | detail | the other SVT "ter" pans | SVT HD Multi Format | |
+| in_to_tree_720p | 720p | detail | slow zoom into foliage | SVT HD Multi Format | |
+| old_town_720p | 720p | grain | aerial pan over roofs | SVT HD Multi Format | |
+| fourpeople_720p | 720p | static | videoconference | JCT-VC class E | speed board, HD band |
+| blue_sky_1080p | 1080p | motion | slow rotation over low texture | TUM 1080p25 | |
+| pedestrian_1080p | 1080p | static | fixed camera, walking people | TUM 1080p25 | speed board, HD band |
+| riverbed_1080p | 1080p | detail | water at the edge of noise, the hardest one here | TUM 1080p25 | speed board, HD band |
+| station2_1080p | 1080p | detail | pan over fine rail detail | TUM 1080p25 | |
+| sunflower_1080p | 1080p | static | smooth close-up | TUM 1080p25 | speed board, HD band |
+| crowd_run_1080p | 1080p | crowd | dense motion at 50 fps | SVT HD Multi Format | HD band |
 
-All of them are native resolution, 8-bit 4:2:0, from Xiph's derf host. Six
-come from the SVT High Definition Multi Format test set: shields, parkrun,
-stockholm, in_to_tree, old_town and crowd_run. The TUM 1080p25 set supplies
-blue_sky, pedestrian, riverbed, station2 and sunflower. Fourpeople is JCT-VC
-class E. Like the CIF gate clips, these come under research-use terms instead
-of a Creative Commons license.
-
-Fourpeople, shields, sunflower, pedestrian and riverbed are on the ten-clip
-speed board, and the HD band uses those five plus crowd_run. Promotion
-is an owner call because adding a clip to a band ladder re-medians every
-published number.
+All of them are native resolution, 8-bit 4:2:0, from Xiph's derf host. Like
+the CIF gate clips, they come under research-use terms instead of a Creative
+Commons license. Promotion is an owner call, because adding a clip to a band
+ladder re-medians every published number.
 
 We left two groups out on purpose.
 
@@ -85,17 +79,20 @@ from that set. It's the 4:2:2 clip already in this tree. Treat the whole group
 as suspect until a header says otherwise.
 
 The calibrated operating points come from `scripts/parity-clip-calib.sh`,
-run on 6-second windows at preset medium and threads 1. Each one is the lowest
-ABR target that puts us in VMAF 88-94 while our own rate error stays inside a
-few percent. The current points were chosen on the earlier metric, VMAF
-v0.6.1. They stay as they are so the board's speed columns remain comparable,
-and they move to v1 with the next timed board. The script scores v1. Any new
-gate clip gets its operating point the same way.
+run on 6-second windows at preset medium and one thread. Each one is the
+lowest ABR target that puts us in VMAF 88-94 while our own rate error stays
+inside a few percent. Any new gate clip gets its operating point the same way.
 Don't pick a bitrate by hand.
 
-old_town and stockholm have no calibrated point. Our ABR runs 4-11% over target
-across the middle of both ladders. No point in the band has a clean rate. ABR rate error depends on content for both encoders. Window length
-and thread count move it too, so name them whenever you quote a rate error.
+The current points were chosen on the earlier metric, VMAF v0.6.1, although
+the script now scores v1. They stay as they are so the board's speed columns remain
+comparable. They move to v1 with the next timed board.
+
+old_town and stockholm have no calibrated point, because no point on either
+ladder has a clean rate. Our ABR runs 4-11% over target across the middle of
+both ladders. ABR rate error depends on content for both encoders. Window
+length and thread count move it too, so name them whenever you quote a rate
+error.
 
 An ABR calibration point isn't a quality verdict. At a matched ABR target, x264
 can read 4-7 VMAF ahead on stockholm, shields and blue_sky, even though the CRF
@@ -117,11 +114,16 @@ The `perseverance_*` clips are NASA/JPL-Caltech and public domain. They come
 from `Perseverance-landing-1080p.mp4`, [SVS item 31250](https://svs.gsfc.nasa.gov/31250/).
 `scripts/fetch_corpus.sh --review` fetches the file and cuts both windows.
 
-The window is 15 s from 168 s. The file has exactly one cut-free run, from 27.5
-to 194 s. Motion in that run stays flat at about 0.4-1.5 until 138 s, then peaks
-at 5.2 over 168-185 s during the touchdown and the dust plume. Mean luma is 80
-and the minimum is 76, so there's no dark stretch. The 720p file is the same
-window, scaled with Lanczos.
+The window covers the touchdown inside the file's only cut-free run and has
+no dark stretch. The 720p file is the same window, scaled with Lanczos.
+
+| perseverance window | value |
+|---|---|
+| window | 15 s from 168 s |
+| the file's one cut-free run | 27.5 s to 194 s |
+| motion until 138 s | flat at about 0.4-1.5 |
+| motion peak | 5.2 over 168-185 s, during the touchdown and the dust plume |
+| luma | mean 80, minimum 76 |
 
 ### Pulling a clip out of a long source
 
@@ -136,19 +138,18 @@ luma jumps.
 
 ## Training corpus, `/Volumes/seagate/media/train-corpus/bvi-aom/`
 
-The training corpus is BVI-AOM, from the University of Bristol: 956 sequences
-from 239 unique 4K sources, downsampled with Lanczos-3 into four resolution
-classes. Each sequence is 64 frames of 10-bit 4:2:0 with no scene cuts, and
-because the sequences are losslessly compressed in H.264, ffmpeg extracts them
-raw. The license is a UoB custom grant for coding-standards development,
+The training corpus is BVI-AOM, from the University of Bristol. Its 956
+sequences are 239 unique 4K sources downsampled with Lanczos-3 into four
+resolution classes. Each sequence is 64 frames of 10-bit 4:2:0 with no scene
+cuts. Because the sequences are losslessly compressed in H.264, ffmpeg
+extracts them raw. The license is a UoB custom grant for coding-standards development,
 training and evaluation. The paper is arXiv 2408.03265, and the
 [BVI-AOM index](https://github.com/fan-aaron-zhang/bvi-aom) lists the
 sequences.
 
-We hold the D tier: 239 sequences at 480x272, 1.46 GB in all. That gives us
-every unique source at the lowest pixel cost. One 64-frame 480x272 sequence
-already yields far more labeled macroblocks than a model of this size needs.
-The higher tiers hold the same 239 scenes.
+We hold the D tier, which has every unique source at the lowest pixel cost.
+One of its sequences already yields far more labeled macroblocks than a model
+of this size needs. The higher tiers hold the same scenes.
 
 The dataset ships one tarball per resolution class, so a higher tier is one
 file:
@@ -158,7 +159,7 @@ file:
 | `272p.tar.gz` | 1.46 GB | D, 480x272 (held) |
 | `544p.tar.gz` | 5.88 GB | C, 960x544 |
 | `1088p.tar.gz` | 23.3 GB | B, 1920x1088 |
-| `2176p_part_a..f.tar.gz` | ~92 GB | A, 3840x2176 |
+| `2176p_part_a..f.tar.gz` | about 92 GB | A, 3840x2176 |
 
 Use the path-style S3 endpoint. The vanity hostname
 `download.opencontent.netflix.com` doesn't resolve from every network. Some
@@ -236,14 +237,14 @@ These recipes are fixed so results reproduce.
 - Tone-map the Netflix HDR masters to 8-bit BT.709. It's the only lossy step,
   and it's identical for everyone. The MP4s are 8-bit H.264 with a PQ signal and
   NO color tags, so declare the tags first. Without them zimg reports
-  "no path between colorspaces":
+  "no path between colorspaces". The command needs an ffmpeg built with
+  libzimg (`zscale`):
   `ffmpeg -v error -i <hdr.mp4> -vf "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=1920:-2:flags=lanczos" -f yuv4mpegpipe out.y4m`
-  The frame rate is left alone. Add `-r 29.97` only when a study says so. The
-  command needs an ffmpeg built with libzimg (`zscale`). Meridian at 1080p59.94
-  is 134 GB as Y4M, so decode windows and never the whole title. A 600-frame
-  window at 2:00 encodes to a 5-shot table at CRF 26. For the visual check, use
-  the frame at 2:08. It shows a lit office where the window highlights hold and
-  skin tones stay neutral.
+  The frame rate is left alone. Add `-r 29.97` only when a study says so.
+- Decode Meridian in windows, never the whole title. At 1080p59.94 it's
+  134 GB as Y4M. A 600-frame window at 2:00 encodes to a 5-shot table at
+  CRF 26. For the visual check, use the frame at 2:08. It shows a lit office
+  where the window highlights hold and skin tones stay neutral.
 - For shot boundaries, run `y264 --shot-table` on the window. It prints the
   shot boundaries the encoder itself will use. `scripts/multishot_bd.py` takes any `.cuts`
   file.
