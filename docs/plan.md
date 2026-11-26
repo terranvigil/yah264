@@ -26,10 +26,16 @@ quality are compared at the same bytes. There are three goals:
 | G2 | plain C | all cores | assembly off, compiler vectorization on |
 | G3 | as shipped (SIMD) | all cores | as shipped |
 
-The test set has four groups: short clips (S), 2-minute segments of real
-titles (M), 10-minute excerpts (L), and content types (C: grain, sports,
-screen content). They span CIF, 720p, 1080p and 2160p. Real-title cells skip
-black openings and stop before the end credits.
+Every group of the test set runs at CIF, 720p, 1080p and 2160p.
+
+| group | what it holds |
+|---|---|
+| S | short clips |
+| M | 2-minute segments of real titles |
+| L | 10-minute excerpts of real titles |
+| C | content types: grain, sports, screen content |
+
+Real-title cells skip black openings and stop before the end credits.
 
 A (class, group, goal) combination passes when:
 
@@ -54,11 +60,9 @@ warn and never fail.
 
 ## Where it stands
 
-yah264 is at full parity with x264 on the Apple M5 Max. Every counted
-combination passes at all three goals, from CIF to 4K and across short clips,
-2-minute segments and 10-minute excerpts. The current tables are on the
-[results page](https://terranvigil.github.io/yah264/results.html). We don't
-copy them here because a copy would go stale.
+yah264 is at full parity with x264 on the Apple M5 Max. The
+[results tables](https://terranvigil.github.io/yah264/results.html) show every
+counted combination passing at all three goals, in every group from CIF to 4K.
 
 The core is feature-complete for High profile and beyond: CAVLC and CABAC,
 4x4 and 8x8 transforms, B-pyramid with adaptive placement, weighted
@@ -71,9 +75,9 @@ VideoToolbox hardware mode and the ffmpeg wrapper. The
 and [hardware mode](hardware-mode.md) docs describe them.
 
 On x86-64 every kernel family has SSE4.2 and AVX2 versions, and AVX-512
-covers the pixel metrics. One thread retires fewer instructions than x264 on
-both AMD and Intel. An SVE tier serves 256-bit ARM parts such as Graviton3.
-The [SIMD doc](simd.md) has the numbers.
+covers the pixel metrics. One thread [retires fewer instructions](simd.md)
+than x264 on both AMD and Intel. An SVE tier serves 256-bit ARM parts such as
+Graviton3.
 
 ## What's open
 
@@ -90,9 +94,9 @@ goes into its subsystem doc's "What didn't work" table.
 
 ### Rate control ([rate-control.md](rate-control.md))
 
-3. Threaded ABR depends on when GOP workers start. The shared rate factor
-   reacts to start timing. That moves output by up to about 9% BD-rate on two
-   short clips. CRF and one-thread output aren't affected.
+3. Threaded ABR output depends on when GOP workers start, because the shared
+   rate factor reacts to start timing. On two short clips it moves by up to
+   about 9% BD-rate. CRF and one-thread output aren't affected.
 4. Quality-target rate control: hold a perceptual score instead of a CRF.
 5. Better coded-size prediction: a fitted model of frame bits from lookahead
    features (intra cost, inter cost, motion spread, QP).
@@ -137,11 +141,11 @@ goes into its subsystem doc's "What didn't work" table.
 
 ### New features
 
-21. A live control plane ([live-control.md](live-control.md)). Built:
-    bitrate and buffer, CRF, QP limits, keyframe and zone events landing on
-    named frames, echoed in the stats, with status out and a replayable log.
-    Left: frame-rate, preset and resolution events, and the ffmpeg wrapper's
-    mapping onto it.
+21. A [live control plane](live-control.md). Built: events for bitrate and
+    buffer, CRF, QP limits, keyframes and zones. Each takes effect on a named frame
+    and shows in the stats. Status goes out and the log replays. Left:
+    frame-rate, preset and resolution events, and the ffmpeg wrapper's
+    mapping onto the plane.
 22. Film grain synthesis via the H.264 film grain SEI, with `--mcstf` as the
     denoiser (see [denoise](denoise.md)). yah265 already has one to port.
 23. Segment output (CMAF/fMP4), then MPEG-TS.
@@ -155,9 +159,9 @@ goes into its subsystem doc's "What didn't work" table.
 
 ### Decoding
 
-27. A fast decoder. The in-tree decoder exists to verify the encoder and has
-    never been timed. The first steps would be a `--decode` mode and a
-    baseline against threaded ffmpeg.
+27. A fast decoder. The in-tree decoder only verifies the encoder and has
+    never been timed. The first steps are a `--decode` mode and a baseline
+    against threaded ffmpeg.
 
 ### Outside the code
 
