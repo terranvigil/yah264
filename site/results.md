@@ -103,16 +103,18 @@ a point worse on the instance, the VBR figures here are, if anything, on the low
 side for yah264. The instance decoded its source frames in software. On 30 ladders it
 coded its own decode of the title instead of this machine's frames.
 
-We also swept our lookahead over 30, 40 and 50 frames against x264 at its
-default of 40. The sweep ran each encoder on three threads over the 720p and
-1080p real titles in both modes on the same rungs. It doesn't cover the 4K titles.
-On most ladders the three depths read within the 0.4-point run-to-run spread.
-Four did best at 50: Big Buck Bunny at 1080p in both modes, Sintel at 720p CRF
-and the 10-minute Meridian excerpt in VBR. The largest gain over 40 is 0.7
-points, on Big Buck Bunny CRF. Every other figure on this page uses 40.
-
-In capped VBR every rung of every ladder came within 5% of its target.
+In capped VBR every rung of the 52 ladders came within 5% of its target.
 Goal 3 read between 0.45 and 0.67 on every VBR cell.
+
+We also swept our lookahead over 30, 40 and 50 frames against x264 at its
+default of 40. The sweep ran each encoder on three threads, in both modes on the
+same rungs. It covers seven of the 720p and 1080p real-title cells: the three
+1080p segments, Tears of Steel, Big Buck Bunny and Meridian at 1080p, and Sintel
+at 720p. The 4K titles aren't part of it. On most swept ladders the three depths
+read within 0.4 points of each other, which is the most a near-null control or a
+repeat run moved a ladder. Big Buck Bunny at 1080p did best at 50 in both modes,
+by 0.7 points over 40 at CRF and 0.4 at VBR. Every other figure on this page
+uses 40.
 
 ## By processor
 

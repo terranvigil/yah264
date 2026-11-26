@@ -195,7 +195,7 @@ bitrate unless a row says v1. Negative is better.
 
 | choice | why |
 |---|---|
-| `--rc-lookahead 40` | On v1, we swept 30, 40 and 50 on the seven 720p and 1080p real-title cells at CRF and VBR, against x264 medium at its own 40. Both encoders ran on three threads. 50 beats 40 by 0.7 points on bbb 1080p CRF, and by 0.2 to 0.4 points on bbb VBR, sintel 720p CRF and meridian 1080p VBR. Everywhere else the three depths are within the 0.4-point run-to-run spread. 30 loses most on bbb, 0.7 points under CRF. The 2160p cells aren't swept on v1. Each frame of depth costs about 22 MiB per instance at 2160p. |
+| `--rc-lookahead 40` | On v1, we swept 30, 40 and 50 at CRF and VBR on seven of the 720p and 1080p real-title cells: the three 1080p segments, tears, bbb and the 10-minute meridian excerpt at 1080p, and sintel at 720p. x264 medium ran at its own 40. Both encoders ran on three threads. 50 beats 40 by 0.7 points on bbb 1080p CRF and 0.4 on bbb VBR. Sintel 720p CRF and the meridian excerpt in VBR also read best at 50. They're only 0.2 ahead of 40, inside the spread. On those two, 30 is what falls behind. Everywhere else the three depths are within 0.4 points. That spread is the most a near-null control or a second VBR run moved one cell's BD. The 2160p cells aren't swept on v1. Each frame of depth costs about 22 MiB per instance at 2160p. |
 | `--aq-strength 0.4` | A seven-clip sweep put the optimum near 0.3. At 1.0, AQ loses about 5% everywhere. |
 | `--aq-mode 2` gain constants | Fitted at matched rate. A spread exponent at or below 0.5 loses 1.3 to 4.0% on sintel. A gain cap above 1.0 costs perseverance and akiyo 0.3 to 1.3%. |
 | floor 2 on mb-tree frames, 16 on non-reference B | Floor 1 costs perseverance 1.3%. The B floor at 16 reads -0.4% on bbb against +1.0% at floor 1. |
@@ -248,9 +248,9 @@ bitrate unless a row says v1. Negative is better.
   One lead is that the field also weights mb-tree's propagation. With those
   weights at 0.4 the mb-tree term is worth far less than at 1.0: bus reads
   -4.6% against -12.4%.
-- Depth 50 is better than 40 on bbb 1080p and never worse beyond the spread
-  at 720p and 1080p. Whether it helps at 2160p, and whether that pays its memory
-  and lookahead time there, is unmeasured.
+- On the seven cells swept, depth 50 is better than 40 on bbb 1080p and never
+  worse beyond the spread. Whether it helps at 2160p, and whether that pays its
+  memory and lookahead time there, is unmeasured.
 - sintel loses 6.8% under CRF with the reference-B mb-tree field on. It's
   reproducible and unexplained.
 - `--tune grain` still sets psy-rd 1.5. That value was measured against an
