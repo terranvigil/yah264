@@ -1,88 +1,75 @@
 # Motion search and mode decision
 
-This page covers the per-macroblock inner loop. It finds motion vectors,
-picks a partition shape and a skip, inter or intra mode, quantizes the
-residual and decides which coefficients survive. Because most of the
-encoder's operation count is spent here, mainly on SAD and SATD probes during
-motion search, most speed work starts here too.
+The per-macroblock inner loop finds motion vectors, picks partition and mode,
+and quantizes the residual. Most of the encoder's operations happen here,
+mainly as motion-search SAD and SATD probes.
 
-The preset sets the effort. Medium is `--subme 7` and `--subpel 2` with three
-reference frames. Everything below `--subme 9` takes the fast path, where
-SATD picks the candidates and full RD runs only on the survivors. `--subme 9`
-and up run full RD on every partition and keep RDOQ in every trial. The rest
-of this page describes medium unless it says otherwise. [B-frames](b-frames.md)
-covers direct mode, B_8x8 and the B skip decision.
+Medium is `--subme 7` and `--subpel 2` with three reference frames. Below
+`--subme 9`, SATD picks candidates and full RD runs only on the survivors.
+`--subme 9` and up run full RD on every partition with RDOQ in every trial.
+This page describes medium unless it says otherwise. See [B-frames](b-frames.md)
+for direct mode, B_8x8 and B skips.
 
-Quality figures on this page are BD-rate on VMAF v1, self-A/Bs on the CRF
-band at one thread unless a row says otherwise.
+Quality figures are BD-rate on VMAF v1, self-A/Bs on the CRF band at one
+thread unless noted.
 
 ## How it works
 
 ### Integer search
 
-Each search starts from a batch of candidates: zero, the median predictor and
-the spatial neighbors' vectors. When hex is the search, the lowres motion
-field from the lookahead joins them. Hex is the search at medium and faster,
-or with `--me hex` at any preset. All the candidates are scored together and
-the best one seeds the pattern.
+Each search scores a batch of seeds and starts from the best: zero, the
+median predictor, the spatial neighbors' vectors and, for hex, the
+lookahead's lowres motion field. Hex is the search at medium and
+faster, or with `--me hex`.
 
-Below `--subme 8`, the pattern is a hexagon iterated to convergence and then
-a terminal 8-point square. The square catches minima that sit diagonally off
-a hex vertex. We call four things together the hex-parity features: the
-richer seeds, the lowres field, the square, and rounding seeds to the nearest
-whole pel. They're on exactly when hex is the primary search: with
-`--me hex`, or in the auto tiers at medium and faster. On that path medium
-reads -4.4% median against x264 medium on the CRF band's seven CIF clips.
+Below `--subme 8`, hex iterates to convergence and a terminal 8-point square
+catches minima diagonally off a vertex. The hex-parity features are on whenever
+hex is the primary search: richer seeds, the lowres field, the square and
+whole-pel seed rounding. Medium on that path reads -4.4% median against x264
+medium on the CRF band's seven CIF clips.
 
-The uneven-cross and multi-hexagon grid (UMH) runs after the hex at
-`--subme 8` and up or with `--me umh`. It reaches out to `--merange`, which
-defaults to 16. UMH never runs on 8x8 or smaller blocks. The wide grid has
-little left to find there, because those blocks are seeded from their
-parent's refined vector. When `--me` isn't given, `--subme` picks the method.
-That makes `--subme 8` a change of search algorithm as well as of effort.
-Pass `--me` to fix the method.
+The uneven-cross multi-hexagon grid (UMH) runs after hex at `--subme 8` and
+up, or with `--me umh`, out to `--merange` (default 16). It skips 8x8 and
+smaller blocks, which start from their parent's refined vector. Pass `--me`
+to stop `--subme 8` from also changing the algorithm.
 
 Three early-outs trim the integer stage without touching sub-pel:
 
 - The seed early-out skips the hex, UMH and finish stages when the best seed
-  already costs at most K per pixel in SAD plus vector rate. K is 48 for
-  sub-16x16 shapes and 4 for 16x16, because a 16x16 starts from a median
-  predictor and needs a near-perfect seed before it's safe to stop.
-- Neighbor agreement (`Y264_ME_AGREE`) applies to pictures 1920 wide and up.
-  When every seed collapses onto the predictor, the search takes one hex step
-  and one finish step.
-- The small-block UMH skip, described above.
+  costs at most K per pixel in SAD plus vector rate. K is 48 below 16x16 and 4
+  at 16x16, where the median-predictor start needs a near-perfect seed.
+- Neighbor agreement (`Y264_ME_AGREE`) takes one hex step and one finish
+  step when every seed collapses onto the predictor, on pictures 1920 wide
+  and up.
+- The small-block UMH skip above.
 
 ### Sub-pel refinement
 
-Medium runs the capped diamond (`--subpel 2`). It's a 4-point diamond with two
-iterations per level. Half-pel is scored in SAD and quarter-pel in SATD. Slow
-and up run the 8-neighbor square to convergence in SATD at both levels.
+Medium runs the capped diamond (`--subpel 2`): a 4-point diamond, two
+iterations per level, half-pel in SAD and quarter-pel in SATD. Slow and up run
+the 8-neighbor square to convergence in SATD.
 
-Two rules decide which candidates get quarter-pel at all. At `--subme 7` and
-below, a candidate skips quarter-pel when its half-pel cost times 7/8 already
-exceeds the best cost seen in this macroblock. Only near-winners pay. The
-second rule (`Y264_QPEL_SKIPQ`) skips quarter-pel when the half-pel winner is
-still the integer vector and costs at most 96 x lambda x area / 256, because
-the quantizer would discard the residual quarter-pel could improve. On
-pictures 1920 wide and up, the B list-0 reference loop searches each
-reference to half-pel and refines only the winning reference at quarter-pel.
+Two rules keep candidates out of quarter-pel. At `--subme 7` and below, a
+candidate skips it when its half-pel cost times 7/8 exceeds the macroblock's
+best. `Y264_QPEL_SKIPQ` skips it when the half-pel winner is the integer
+vector and costs at most 96 x lambda x area / 256. The quantizer would drop
+that residual anyway. On pictures 1920 wide and up, B list 0 refines only the
+winning reference at quarter-pel.
 
 ### P-macroblock decision
 
-At `--subme 8` and below, a P macroblock goes through these steps in order:
+At `--subme 8` and below, a P macroblock goes through these steps:
 
-1. **Fast P-skip probe.** If the skip prediction's residual quantizes to
-   nothing under the seed quantizer, the macroblock commits skip before any
-   search. `--no-fast-pskip` turns the probe off.
+1. **Fast P-skip probe.** If the skip residual quantizes to nothing under the
+   seed quantizer, the macroblock commits skip before any search.
+   `--no-fast-pskip` turns it off.
 
-   With `--weightp 1` or `2`, the probe also refuses some skips.
-   Because the Intra16x16 DC transform sums the whole macroblock, it can code
-   a small even step that every 4x4 deadzone drops, such as one frame of a
-   fade. In a picture whose mean moved against reference 0 by a quarter code
-   or more, the probe refuses a skip on a flat macroblock whose residual
-   would keep a level in that DC transform. Flat means variance under the AQ
-   field's floor. The probe still leaves the skip alone in four cases:
+   With `--weightp 1` or `2`, the probe refuses skip on a flat macroblock
+   whose residual keeps an Intra16x16 DC level, once the picture's mean has
+   moved a quarter code or more against reference 0. Because that transform
+   sums the whole macroblock, it keeps the small even steps of a fade that
+   4x4 deadzones drop. Flat means variance under the AQ floor. Skip is still
+   allowed when:
 
    - the step goes against the picture's shift
    - the step is smaller than the block's own noise
@@ -92,73 +79,59 @@ At `--subme 8` and below, a P macroblock goes through these steps in order:
 
    `Y264_FLAT_SKIP_DC=0` turns the check off in a dev_knobs build.
 2. **16x16 search** over the active references.
-3. **Ref-0 exit**, on pictures of at least 1200 macroblocks. When the ref-0
-   16x16 vector falls within one quarter-pel of the skip vector and its raw
-   SATD is under 1200 lambdas, the encoder skips the other references and all
-   splits. The 16x16 still goes through the RD compare against skip and
-   intra.
-4. **`--p-part-gate 400`.** If the 16x16 costs under 400 lambdas, no split is
-   searched. Two interlocks keep the splits anyway. One is a dispersed 3x3
-   lowres-cost neighborhood, which marks a motion or texture edge. The other
-   is an mb-tree offset saying other frames depend on this block. The gate
-   saturates against those interlocks. Raising the threshold to 1200 buys
-   almost nothing.
-5. **Partition order with early termination** (`Y264_PART_EARLYTERM=4`).
-   The 8x8 split is searched next. 16x8 and 8x16 are searched only when the
-   8x8's raw SATD beats the 16x16's by less than the vector rate of the two
-   8x8 halves a rectangle would merge. That margin is per macroblock: static
-   blocks prune hard and real motion keeps its rectangles. Blocks mb-tree
-   marks as important keep the rectangles regardless.
-6. **SATD picks the shape.** Full RD scores the SATD winner. When the winner
-   isn't 16x16, RD also scores the 16x16 as insurance against SATD
-   over-splitting at low rates. That's one or two RD encodes instead of four.
-7. **Intra screen.** Each I_16x16 mode is predicted and scored by SATD with
-   no transform. Intra gets a full encode and an RD trial only when that cost
-   is under 1.5x the inter winner's SATD. On B macroblocks the margin is
-   0.75x.
+3. **Ref-0 exit**, on pictures of at least 1200 macroblocks. A ref-0 16x16
+   vector within a quarter-pel of the skip vector, with raw SATD under 1200
+   lambdas, ends the search before other references and splits. RD still
+   compares it against skip and intra.
+4. **`--p-part-gate 400`.** Under 400 lambdas, no split is searched, unless
+   the 3x3 lowres-cost neighborhood is dispersed (a motion or texture edge)
+   or mb-tree says other frames depend on the block. Raising it to 1200
+   buys almost nothing because the gate saturates.
+5. **Partition early termination** (`Y264_PART_EARLYTERM=4`). 8x8 is searched
+   next. 16x8 and 8x16 follow only when the 8x8's raw SATD beats the 16x16's
+   by less than the vector rate of the two halves a rectangle would merge.
+   Blocks mb-tree marks important always keep them.
+6. **SATD picks the shape.** RD scores the SATD winner and, as insurance
+   against over-splitting at low rates, the 16x16. That's one or two RD
+   encodes instead of four.
+7. **Intra screen.** I_16x16 modes are scored by SATD without a transform.
+   Intra gets an RD trial only under 1.5x the inter winner's SATD, or 0.75x
+   on B macroblocks.
 
-A slice can hold reference 0 a second time as a plain copy for letterbox bars
-(see `--weightp` on the [options page](options.md)). In such a slice, at any
-`--subme`, a macroblock that reaches into the bars doesn't take skip when the
-plain copy predicts its bar samples better than the weighted one, because
-skip would predict through the weighted copy. It searches reference 0 alone
-and gives the plain copy to each partition with at least half its rows or
-columns in the bars. A partition that only clips a bar's edge keeps
-whichever copy predicts it better. A bar that fades with the picture keeps
-the weighted copy and its skip.
+With [`--weightp`](options.md), a slice can hold a plain copy of reference 0
+for letterbox bars. At any `--subme`, a macroblock in the bars refuses skip
+when the plain copy predicts its bar samples better, and searches reference 0
+alone. Partitions at least half in the bars get the
+plain copy. One that only clips a bar's edge takes the better copy. Bars that
+fade with the picture keep the weighted copy and skip.
 
-At any `--subme`, a CABAC P macroblock prices its intra trial with the CABAC
-rate estimate, as it does its inter candidates.
+CABAC P macroblocks price intra trials with the CABAC rate estimate at any
+`--subme`.
 
-Medium also picks the transform size up front by comparing SA8D against
-SATD. Only that size is encoded. `--subme 9` and up encode both and let RD
-pick.
+Medium picks the transform size up front from SA8D against SATD. `--subme 9`
+and up encode both and let RD pick.
 
 ### RDOQ and trellis placement
 
-`--trellis 1` is the default. At medium, RD trials quantize with the plain
-deadzone and only the winning mode is re-encoded with RDOQ before commit.
-`--trellis 2` runs RDOQ in every trial, which `--subme 9` and up do anyway.
-Under CABAC, medium's RDOQ is a single reverse Viterbi pass with
-transform-domain distortion and running context rate. CAVLC and psy-trellis
-blocks use a greedy search instead. That search makes one toward-zero pass at
-medium and iterates to convergence at `--subme 9` and up.
+With the default `--trellis 1`, medium's RD trials use the plain deadzone.
+Only the winner is re-encoded with RDOQ. `--trellis 2`, and `--subme 9` and
+up, run RDOQ in every trial. Under CABAC, medium's RDOQ is one reverse Viterbi
+pass with transform-domain distortion and running context rate. CAVLC and
+psy-trellis blocks use a greedy search: one toward-zero pass at medium, to
+convergence at `--subme 9` and up.
 
-Because RDOQ seeds each coefficient from round-to-nearest, a marginal
-coefficient always enters the candidate set as {q-1, q}. RD then decides
-whether to keep or drop it.
+Because RDOQ seeds from round-to-nearest, a marginal coefficient always
+enters as {q-1, q}. RD decides whether it stays.
 
-On very smooth intra blocks the RDOQ lambda ramps from full at a source
-variance of 8 down to zero at 2. That keeps the small levels that make up a
-gentle gradient. In a dev_knobs build, `Y264_TREL_SMOOTH=0` turns the ramp
-off.
+On very smooth intra blocks the RDOQ lambda ramps from full at source variance
+8 to zero at 2, keeping the small levels of a gentle gradient.
+`Y264_TREL_SMOOTH=0` turns the ramp off in a dev_knobs build.
 
 ### Coefficient decimation
 
-After quantization, a 4x4 inter block whose levels are all +-1 gets a score.
-Each nonzero coefficient adds a weight looked up by the run of zeros before
-it. Below the threshold the whole block is zeroed. Any level of magnitude 2 or
-more forces a keep. `--no-dct-decimate` turns decimation off.
+A 4x4 inter block with only +-1 levels scores a weight per nonzero
+coefficient, by the zero run before it. Below the threshold it's zeroed. Any level of 2 or more forces a keep.
+`--no-dct-decimate` disables it.
 
 | block | weight by preceding zero run | threshold |
 |---|---|--:|
@@ -213,26 +186,23 @@ Partition early termination on the CRF band, against none:
 
 ## Open questions
 
-- In-search dead-ring termination would stop the UMH grid after k gainless
-  rings. 42-56% of UMH runs gain nothing from all of its roughly 120 probes.
-  Every other way of trimming UMH has paid BD out of proportion, so build one
-  bounded version and expect to park it.
+- Dead-ring termination would stop UMH after k gainless rings. 42-56% of UMH
+  runs gain nothing from their roughly 120 probes. Every other UMH trim cost
+  BD out of proportion, so build one bounded version and expect to park it.
 
 ## Measuring it
 
-The `Y264_*` variables here are read only in a build configured with
-`-Ddev_knobs=true`.
+The `Y264_*` variables need a `-Ddev_knobs=true` build.
 
 - `Y264_ME_ETSTAT=1` buckets searches by seed cost and reports how far the
-  integer stages moved the vector. Read the distance column. The SATD gain is
-  mostly 1-pel moves and doesn't predict BD.
-- Profile and measure BD at `--crf`, never `--qp`, because the `--qp` path
-  shifts mb-tree. Score BD against x264 medium with
-  `scripts/bdcompare.py --vmaf --no-cache`, or at matched rate with
-  `scripts/bd_at_rate.py`. Don't score it against yah264 alone.
-- At `--threads 1` the seed early-out and the partition early termination are
-  off, because single-thread encodes take the quality order. A one-thread
-  A/B of either reads byte-identical. Set `Y264_STQ=0` on both sides, as the
-  rows above were read, or run at two or three threads.
-- Measure several arms in one interleaved batch. Arms run one invocation at a
-  time come out non-monotonic in the gate's own strength.
+  integer stages moved the vector. Read the distance column. The SATD gain,
+  mostly 1-pel moves, doesn't predict BD.
+- Measure at `--crf`, never `--qp`, which shifts mb-tree. Score against x264
+  medium, never yah264 alone, with `scripts/bdcompare.py --vmaf --no-cache`
+  or at matched rate with `scripts/bd_at_rate.py`.
+- `--threads 1` takes the quality order, which turns off the seed early-out
+  and partition early termination. A one-thread A/B of either is
+  byte-identical. Set `Y264_STQ=0` on both sides, as the rows were read, or
+  use two or three threads.
+- Interleave arms in one batch. Run one at a time, they come out
+  non-monotonic in the gate's strength.
