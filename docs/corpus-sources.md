@@ -87,9 +87,10 @@ as suspect until a header says otherwise.
 The calibrated operating points come from `scripts/parity-clip-calib.sh`,
 run on 6-second windows at preset medium and threads 1. Each one is the lowest
 ABR target that puts us in VMAF 88-94 while our own rate error stays inside a
-few percent. The existing points were set on VMAF v0.6.1 (earlier metric). The
-script scores v1 and treats the band as approximate until it's re-derived on
-v1. Any new gate clip gets its operating point the same way.
+few percent. The current points were chosen on the earlier metric, VMAF
+v0.6.1. They stay as they are so the board's speed columns remain comparable,
+and they move to v1 with the next timed board. The script scores v1. Any new
+gate clip gets its operating point the same way.
 Don't pick a bitrate by hand.
 
 old_town and stockholm have no calibrated point. Our ABR runs 4-11% over target
