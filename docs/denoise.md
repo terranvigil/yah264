@@ -1,14 +1,15 @@
 # Denoise
 
-yah264 has two denoising tools, both off by default. `--nr` takes a learned
-offset off transform coefficients before quantization. `--mcstf` filters the
-source in time before the lookahead sees it. Both exist for grainy and noisy
-sources. Each has a noise gate that keeps clean content byte-identical to an
-encode without the tool, and animation is the case that matters most.
+yah264 has two denoising tools for grainy and noisy sources, and neither is
+on by default. `--nr` takes a learned offset off transform coefficients before
+quantization. `--mcstf` filters the source in time before the lookahead sees
+it. A noise gate in each tool keeps clean content byte-identical to an encode
+without it. Animation is the case where that matters most.
 
 The quality numbers here are BD-rate on VMAF v1 of the tool against the
 shipped default on the same binary and CRF ladder, where negative is better.
-The `--mcstf` range row is the exception: it's on VMAF-NEG (earlier metric). We score against the original source, never the filtered one.
+The `--mcstf` range row is the exception: it's on VMAF-NEG (earlier metric).
+We score against the original source, never the filtered one.
 
 ## When to use which
 
@@ -19,8 +20,7 @@ The `--mcstf` range row is the exception: it's on VMAF-NEG (earlier metric). We 
 | clean digital, animation | neither, since both gate themselves off anyway | off |
 
 Don't combine them. On the four grain excerpts plus shields and fourpeople,
-`--mcstf` plus `--nr-inter 100` reads a median of -1.26 against -1.44 for
-`--mcstf` alone.
+the pair reads a median of -1.26 against -1.44 for `--mcstf` alone.
 
 ## How it works
 
@@ -36,9 +36,9 @@ squared basis gain, which we measured once by pushing impulses through the C
 transform. One block in four is tallied and the statistics fold in coding
 order, so `--threads 1` repeats byte for byte. The subtraction runs in NEON.
 
-A spatial noise gate, always at 0.75 levels, reads a Laplacian percentile of
-each source picture and skips near-black and near-white blocks. Pictures
-under the bar get zero offsets. The code lives in `src/encoder/nr.c`.
+A spatial noise gate reads a Laplacian percentile of each source picture,
+skipping near-black and near-white blocks. Pictures under its bar get zero
+offsets. The code lives in `src/encoder/nr.c`.
 
 ### Motion-compensated temporal filter with `--mcstf`
 
@@ -51,10 +51,16 @@ weight 6 levels wide. Everything downstream, the lookahead included, sees the
 filtered picture.
 
 This gate reads temporal noise. It takes the 25th percentile of the nearest
-neighbors' block match errors and skips near-black and near-white blocks. It
-reads from the quieter side so a cut doesn't trip it. Pictures under 0.5
-levels pass through untouched. Animation reads 0.00-0.25. Every natural clip
-in the corpus reads above 0.75. The code lives in `src/encoder/mcstf.c`.
+neighbors' block match errors, again skipping near-black and near-white
+blocks. It reads from the quieter side so a cut doesn't trip it. Pictures
+under its bar pass through untouched. The code lives in `src/encoder/mcstf.c`.
+
+The two gates and what they read, in levels:
+
+| gate | bar | readings |
+|---|--:|---|
+| `--nr` spatial | 0.75 | akiyo, sintel and samsung all under 0.65. On a spatial reading the grain titles read 1.38-1.44 at 720p, foreman_cif 1.19-1.44 and the pillarboxed 1924 scan 0.50 |
+| `--mcstf` temporal | 0.5 | animation 0.00-0.25, every natural clip in the corpus above 0.75, foreman 1.7-1.9, Nocturne 2.0 |
 
 ## What we chose and why
 
@@ -64,9 +70,9 @@ in the corpus reads above 0.75. The code lives in `src/encoder/mcstf.c`.
 | `--nr-inter 100` as the setting to use | neutral on the HD band (median -0.04; ducks -0.60, crowd_run -0.56, shields -0.30), with every clean clip byte-identical. Its worst clip, pedestrian_1080p at +0.45, stays under the per-clip bar. `--nr 100` with intra on fails it there (+0.81) |
 | inter only | intra attenuation removes the added-in-post grain on Nocturne: noct_a reads +1.20 with intra on, against +0.76 inter only |
 | per-position basis-gain weight in `--nr` | the unweighted form lost on both clips it was read on |
-| spatial gate at 0.75 for `--nr` | ungated, it strips structure from clean sources: akiyo +15.7, sintel +11.1, samsung +2.1 on the standard band. All three read under 0.65 |
+| spatial gate at 0.75 for `--nr` | ungated, it strips structure from clean sources: akiyo +15.7, sintel +11.1, samsung +2.1 on the standard band |
 | `--mcstf` range 1 | on VMAF-NEG, the only setting with no clip worse than +0.00 at 60 frames, at half the search of range 2 |
-| `--mcstf` temporal gate, not spatial | a spatial reading can't separate the grain titles (1.38-1.44 at 720p) from foreman_cif (1.19-1.44), and reads a pillarboxed 1924 scan at 0.50 |
+| `--mcstf` temporal gate, not spatial | a spatial reading can't separate the grain titles from foreman_cif. It also reads the pillarboxed 1924 scan as clean |
 
 `--mcstf` on the content it's for, 120 frames on the HD band's CRF 23-35 ladder:
 
@@ -84,9 +90,15 @@ touchdown_420 isn't fit for a BD reading ([corpus-sources.md](corpus-sources.md)
 We read it per rung instead. At matched CRF on the standard band, `--mcstf` takes up
 to 16% fewer bits there and scores slightly higher on every rung.
 
-In instructions retired at one thread and medium, `--nr` costs +1.2% to +2.3%
-and `--mcstf` costs +10% to +13%. With every picture gated out, `--mcstf` still
-costs +5.6% because the gate's own neighbor searches run.
+`--mcstf` costs instructions even when its gate passes every picture through,
+because the gate's own neighbor searches still run. In instructions retired at
+one thread and medium:
+
+| tool | cost |
+|---|--:|
+| `--nr` | +1.2% to +2.3% |
+| `--mcstf` | +10% to +13% |
+| `--mcstf`, every picture gated out | +5.6% |
 
 ## What didn't work
 
@@ -107,9 +119,9 @@ costs +5.6% because the gate's own neighbor searches run.
 the grain win on lash_a, which reads -1.49 ungated, because the 1924 scan reads
 clean. Any gate that arms there also has to stay off sintel_720p.
 
-`--mcstf` needs to tell noise from untracked motion. foreman's temporal reading
-of 1.7-1.9 sits beside Nocturne's 2.0. The gate has to separate "the match
-error is noise" from "the match error is motion the search couldn't follow".
+`--mcstf` needs to tell noise from untracked motion. foreman's temporal
+reading sits just below Nocturne's. The gate has to separate "the match error
+is noise" from "the match error is motion the search couldn't follow".
 Riverbed, which is water, is the same problem.
 
 Nobody has measured the `--mcstf` wall share at high thread counts. The filter
