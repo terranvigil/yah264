@@ -54,8 +54,8 @@ by a few hundredths, so ignore the second decimal.
 | `size` | our file against x264's. Negative means ours is smaller. |
 | `PSNR-Y` | a simpler score in decibels. The site's floor is no clip more than 1 dB behind x264. |
 
-`perseverance_1080p` can dip just past that and print `PSNR-FLOOR FAIL`. Its
-file is about 6% smaller at equal VMAF. Most of the PSNR gap is bits we didn't
+`perseverance_1080p` can dip just past that and print `PSNR-FLOOR FAIL`. Our
+file there is about 6% smaller at equal VMAF. Most of the PSNR gap is bits we didn't
 spend.
 
 ## Reading size and quality together
@@ -74,7 +74,7 @@ This board is the quick check. The results page is the full test:
 | | this board | the results page |
 |---|---|---|
 | clips | four HD clips | CIF to 4K, and real titles up to ten minutes |
-| encoders run as | separate programs | |
+| encoders run as | separate programs | command-line programs for the parity tables, libraries in one ffmpeg for the ten-clip board |
 | threads | twelve each | each encoder's own default |
 | compared at | the same requested bitrate | the same file size, across a range of rates |
 

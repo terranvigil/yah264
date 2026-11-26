@@ -71,16 +71,17 @@ y264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.2
 
 Easy titles encode at CRF 21 and come out small. Because hard titles stay under
 the ceiling, nothing ends up undeliverable. Each GOP after the first assumes a
-half-full buffer. That keeps concatenated segments safe for a few bits. Short
+half-full buffer. That keeps concatenated segments safe at the cost of a few bits. Short
 keyints run hot, so aim the cap low on two-second segments.
 
 Broadcast and live target a rate: pair the VBV flags with `--bitrate`. A cap
 equal to the target gives CBR. A higher cap gives capped VBR.
 
-`--nal-hrd` writes the buffer model into the stream so a receiver can verify it.
-It needs both VBV flags and a frame rate. Under `cbr`, `--filler` is on by
-default. `--no-filler` keeps the CBR headers without the padding, for measuring
-only, never shipping.
+`--nal-hrd vbr` or `--nal-hrd cbr` writes the buffer model into the stream so a
+receiver can verify it. It needs both VBV flags and a frame rate. Under `cbr`,
+`--filler` is already on and pads each access unit up to the rate.
+`--no-filler` removes the padding but keeps the CBR headers. Use it to measure,
+never to ship.
 
 Two-pass is for bitrate targets: `--pass 1` then `--pass 2` with `--bitrate`.
 `--pass 3` reads and rewrites the stats, which lets each further pass refine
@@ -115,7 +116,7 @@ documents every flag, its default and how it differs from x264. Beyond the
 - `--profile` also narrows any tool the preset chose.
 - An interlaced Y4M turns field coding on by itself. `--no-interlaced` refuses
   it.
-- `--constrained-intra` costs bits.
+- `--constrained-intra` costs bits for error resilience.
 - `--deblock A:B` moves the in-loop filter offsets.
 - `--aud` adds an access unit delimiter and `--pic-struct` a pic_timing SEI.
   Neither changes a sample.
@@ -130,7 +131,8 @@ The [design page](design.md) explains the conservative 16 and the caps.
 
 The threaded path streams, writing each GOP as it finishes, so clip length
 isn't the limit. From a file, only a few frames per worker are in memory. From a
-pipe, the reader holds up to `(--threads + 1) x --keyint` frames.
+pipe, the reader holds up to `(--threads + 1) x --keyint` frames. Neither grows
+with the length of the clip.
 
 yah264 prices that window up front. A job needing more than half your RAM fails
 at once, quoting the figure, instead of being killed an hour in. Lower
@@ -143,9 +145,9 @@ stderr says so.
 
 ## Using it from ffmpeg
 
-Piping Y4M into the CLI runs three processes, with the decode alone taking up to
-a third of the machine. A real pipeline calls the encoder as a library inside
-ffmpeg instead:
+Piping Y4M into the CLI runs three processes on one machine, and the decode
+alone can take a third of it. Calling the encoder as a library inside ffmpeg
+removes that overhead, and it's how you'd use yah264 in a real pipeline:
 
 ```
 ffmpeg -i in.mp4 -c:v libyah264 -preset medium -crf 23 out.mp4

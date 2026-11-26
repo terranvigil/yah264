@@ -88,7 +88,8 @@ With every core busy on the Intel machine, we take 4% longer than x264 on a
 only on chips that report it. Some chips lower the clock while it runs, which
 can make a kernel slower despite doing less work. Ours cover pixel comparison
 only and save about 2% to 4% CPU time over AVX2 on AMD EPYC and Intel Xeon, at
-one thread and on all cores.
+one thread and on all cores. Motion compensation and the transforms still run
+on AVX2.
 
 ## What the tiers leave out
 
@@ -148,7 +149,7 @@ assembly leaves both to the author. We chose intrinsics because:
 
 I expect hand assembly to win in a few places: a better order for a given core,
 a register the compiler spilled, a one-block loop unrolled to do four. The x86
-timings will show which.
+timings point at the kernels where that's worth doing.
 
 ## What would make it faster still
 

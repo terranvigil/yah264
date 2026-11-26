@@ -19,7 +19,7 @@ One fun example was the skip check for prediction reuse. After trying a number o
 
 ## Plan
 
-Coding agents explore the design space. Each coding tool is a slot with several candidate algorithms, which we generate, implement and benchmark against an objective metric until the best combination wins:
+We use coding agents to explore the design space. Each coding tool is a slot with several candidate algorithms, which we generate, implement and benchmark against an objective metric until the best combination wins:
 
 1. Build a standard H.264 encoder with x264's feature set and options.
 2. Capture x264's speed and quality baseline on a fixed test set.
@@ -38,7 +38,7 @@ yah264 has passed x264 on speed, compression and quality. The test set runs from
 | 2 | plain C, all cores | 1.37x to 2.08x | 1.33x |
 | 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.28x to 1.92x | 1.12x |
 
-NOTE: Most of the work was on arm64, my Apple M5 development machine. After parity I optimized for other platforms too.
+NOTE: Most of the work was on arm64, because an Apple M5 is my development machine. After parity I optimized for other platforms and instruction sets too.
 
 ## Details
 
@@ -80,7 +80,7 @@ A full search encodes each shot several ways in parallel, keeps the best and joi
 
 ## Up next
 
-Next is speed on cloud servers. The x86-64 kernels are written, verified and tuned. All-core speed is open: we trail x264 on some clips ([SIMD notes](docs/simd.md)). Then come the convex-hull stages in [the plan](docs/plan.md) and [shot-based encoding](docs/shot-based.md).
+Next is speed on cloud servers. The x86-64 kernels are written, verified and tuned twice. All-core speed is open: we trail x264 on some clips ([SIMD notes](docs/simd.md)). Then come the convex-hull stages in [the plan](docs/plan.md) and [shot-based encoding](docs/shot-based.md).
 
 ## Documentation
 
@@ -115,6 +115,6 @@ output is not. `make test` runs the unit tests and `make conformance` the gate.
 ## License
 
 GPL-2.0-or-later, stated per file and in `LICENSE`. Linking yah264 into a
-product puts it under the GPL unless it holds the commercial license, the same
+product puts the product under the GPL unless it holds the commercial license, the same
 arrangement x264 and x265 use.
 Commercial terms: terranvigil@gmail.com.

@@ -78,7 +78,7 @@ away by rounding the residual before coding it.
 <p>
 The fourth kind rests on a judgment about human vision. When two encoders
 differ at the same bitrate, part of the gap is better prediction and the rest
-is disagreement about vision, which only viewers can settle. A
+is disagreement about vision. Viewers settle that part. A
 <a href="https://en.wikipedia.org/wiki/Mean_opinion_score">MOS</a> panel asks
 them, as <a href="#measuring-it">Measuring it</a> covers.
 </p>
@@ -216,8 +216,8 @@ Quantization is the one step that destroys information.
   </div>
 
 Pushed too hard, the image breaks into squares along the transform grid.
-Viewers notice this "Blocking" more than most artifacts. Every codec puts a
-deblocking filter inside the decoding loop because of it.
+This blocking is one of the more common artifacts viewers notice. Every codec
+puts a deblocking filter inside the decoding loop because of it.
 
 ## The decision
 
@@ -287,7 +287,8 @@ for an improvement. Every comparison here is at the same achieved bitrate.</p>
 Quantization divides each transform coefficient by a step size and rounds it.
 A bigger step means fewer bits and more loss. Rate control picks the step per
 block, thousands of times a second, to hit a bitrate without seeing far enough
-ahead to plan. Viewers only see its failures: a blurry face or a stall.
+ahead to plan. Viewers never see rate control working, just its failures: a blurry face or a
+stall.
 
 An encoder can't fix quality and bitrate at once. A still talking head is cheap
 and an action scene expensive, so locking quality makes the bitrate swing while
@@ -306,11 +307,14 @@ CRF holds *perceived* quality roughly steady and lets the bitrate go where it
 must. QP still moves with the content, but less than the complexity does,
 because the eye can't follow detail in fast motion.
 
-CRF is the right default when file size isn't capped. Constant QP overspends on
-frames nobody scrutinizes and starves the still ones where errors show.
-Single-pass ABR wobbles most at the scene changes viewers notice. Two-pass also
-gets a steady picture at the cost of a second pass. Use it when you need a
-known size. CRF alone gives no say over size.
+CRF is the right default when file size isn't capped. Constant QP holds the
+quantizer steady instead of the look, so it overspends on frames nobody
+scrutinizes and starves the still ones where errors show. Single-pass ABR
+chases a bitrate through a feedback loop, so its quality wobbles most at the
+scene changes viewers notice. CRF chases nothing and pays what each scene
+actually costs. At the same bits, that buys a steadier picture than single-pass
+ABR. Two-pass reaches a steady picture too, at the cost of a second pass. Use
+it when you need a known size. CRF alone gives no say over size.
 
 ### Capped CRF
 
@@ -339,7 +343,7 @@ live.
 ### VBV
 
 A decoder reads from a buffer that fills at the channel rate and empties one
-frame at a time. A frame bigger than the buffer holds stalls playback. VBV
+frame at a time. A frame bigger than the buffer holds at that moment stalls playback. VBV
 forbids that. A big frame needs room left by the frames before it. The
 frames after it stay small until the buffer refills. The cap therefore covers a
 run of frames as long as the buffer, usually one to two seconds.
@@ -380,7 +384,7 @@ encode of a hard scene looks worse than the same scene offline.
 
 ### VBV and HRD
 
-The two names get swapped although they describe one constraint from opposite ends.
+People use the two names for each other, although they mean different things.
 The hypothetical reference decoder (HRD) is the H.264 specification's model: an
 idealized decoder with a coded picture buffer in front. A stream conforms when
 it never overflows or underflows that buffer. Its parameters can go in the
@@ -388,7 +392,8 @@ sequence header to tell a real decoder what buffering to expect.
 
 The video buffering verifier (VBV) is the encoder's simulation of that buffer.
 It keeps the encoder from emitting a frame the model couldn't decode. The name comes from MPEG-1
-and MPEG-2's buffer model and survives as the option name.
+and MPEG-2's buffer model and survives as the option name. VBV is what you
+configure. HRD is what the decoder cares about.
 
 yah264 and x264 write HRD parameters only when asked with `--nal-hrd`. A stream
 constrained by `--vbv-maxrate` and `--vbv-bufsize` alone has no signaled buffer.
@@ -404,7 +409,8 @@ bitrate. [ITU-R BT.500](https://www.itu.int/rec/R-REC-BT.500) and ITU-T P.910
 standardize it down to the lighting and viewing distance.
 
 MOS is slow, expensive and impossible to put in a build, so metrics predict it.
-PSNR measures squared error, cheaply and loosely. SSIM compares local structure
+PSNR measures squared error. It's cheap and only loosely tracks what viewers
+report. SSIM compares local structure
 and does better.
 [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion), a
 model trained on MOS scores, is the streaming industry's standard.

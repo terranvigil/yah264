@@ -5,9 +5,8 @@ description: Encode HDR10 and HLG with yah264, see what players read from the st
 
 # HDR
 
-yah264 encodes HDR10 and HLG as 10-bit H.264. ffprobe and MediaInfo read its
-HDR10 output as HDR10.
-We scored it on two open HDR10 masters with Netflix's HDR models for VMAF v1.
+yah264 encodes HDR10 and HLG as 10-bit H.264, and ffprobe and MediaInfo read
+its output as HDR10. We scored it on two open HDR10 masters with Netflix's HDR models for VMAF v1.
 
 ## Supported formats
 
@@ -105,7 +104,8 @@ Sol Levante's light levels sit a little above its 1000-nit grading display
 because its brightest opening frames average about 1020 nits.
 
 An HLG encode reads `Transfer characteristics : HLG`. The SDR-compatible form
-reads `HLG / BT.2020 (10-bit)`, where ffmpeg takes the HLG transfer from the SEI.
+reads `HLG / BT.2020 (10-bit)`. ffmpeg's decoder takes the HLG transfer from the
+SEI.
 
 ## Quality on HDR-VMAF
 
@@ -131,9 +131,10 @@ Sol Levante at 4K reaches HDR-VMAF 87 at 13 Mbit/s with CRF 26. Sparks, with
 film grain under thousands of moving sparks, needs about 100 Mbit/s at 4K to
 reach 84.
 
-CAMBI is 0 for no banding and climbs as banding worsens. Clip averages stay at
-about 1.2 or below. They hide Sol Levante's flat, bright underwater opening,
-which scores close to 0 in the source. At CRF 26 the encode smooths its faint
+CAMBI is 0 for no banding and climbs as banding worsens. Averaged over a clip it
+stays at about 1.2 or below on every rung, though the average hides Sol
+Levante's weak spot. Its opening shot is a flat, bright underwater scene that
+scores close to 0 in the source. At CRF 26 the encode smooths its faint
 particles into patches, which is the high worst-frame CAMBI below. No Sparks
 frame passes 0.5. Smooth gradients are where the encoder has most to gain on HDR.
 
@@ -151,8 +152,9 @@ frame passes 0.5. Smooth gradients are where the encoder has most to gain on HDR
 At 3840x2160 the defaults declare Level 6.0, because the decoded picture buffer
 holds more frames than Level 5.1 allows. Many 4K TVs stop at 5.1 or 5.2.
 
-For TV delivery pass `--level 5.1`, or 5.2 at 50 or 60 fps. The buffer then
-fits, keeping the B-pyramid and three references at some threaded speed.
+For TV delivery pass `--level 5.1`, or 5.2 at 50 or 60 fps. That fits the
+buffer to the level and keeps the B-pyramid and all three default references,
+at some cost in speed on a threaded encode.
 
 ## The pictures
 

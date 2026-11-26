@@ -37,7 +37,8 @@ note for me without rendering:
 
 `adopt()` in `scripts/build_site.py` pulls `docs/how-h264-works.html` and
 `docs/threading.html` into the build, restyling them onto the site's fonts and
-colors and lifting their contents list into the rail. Edit both in `docs/`. The
+colors and lifting their contents list into the rail. The content, the layout and the
+figures stay as they are. Edit both in `docs/`. The
 nav order is `NAV` at the top of `scripts/build_site.py`.
 
 ## Deploying

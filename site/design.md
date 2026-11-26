@@ -22,8 +22,8 @@ slightly worse encode until it looks like a broken one.
 
 ## The pipeline
 
-Most encoders loop over a frame's blocks and add threads afterward, which runs
-out of room quickly. yah264 is a pipeline of stages instead. Each owns one kind
+Most encoders loop over a frame's blocks and add threads afterward. Because
+that design runs out of room quickly, yah264 is a pipeline of stages instead. Each owns one kind
 of decision. The parallelism lives between them.
 
 The lookahead runs first, on shrunken copies of a window of future frames. It
@@ -36,7 +36,7 @@ keyframe to the next) allows. Inside a frame, rows move as a wavefront. A row
 starts once the row above is far enough ahead. One lock-free pool feeds both.
 
 Two runs at `--threads 1` must produce the same bytes. With more threads the
-bytes may differ, because holding them would rule out optimizations, and x264
+bytes may differ, because holding them to it would rule out optimizations. x264
 doesn't promise it either. Every stream does decode to exactly the picture the
 encoder reconstructed.
 
@@ -73,9 +73,9 @@ ship. This page covers capped CRF, the most used. See
 Macroblock-tree is on by default. It gives a finer quantizer to blocks that
 later frames predict from, since a bit that fifty frames inherit is worth more.
 Variance-adaptive quantization moves bits toward flat areas, where quantization
-shows first. The same signal adjusts the mode decision's lambda, the bits-for-
-error exchange rate, per macroblock, which accounts for much of our quality
-lead over x264.
+shows first. The same signal adjusts the mode decision's lambda, the
+bits-for-error exchange rate, per macroblock. That accounts for much of our
+quality lead over x264.
 
 Under capped CRF the encoder codes to the quality target and the buffer only
 takes bits away. Because the buffer models what a decoder could have
@@ -132,7 +132,7 @@ checkasm tests every kernel against its plain C version and benchmarks it.
 
 | tier | where it runs | coverage |
 |---|---|---|
-| NEON | ARM, including the Apple silicon development machine | about 4,000 lines in five files |
+| NEON | ARM. It came first, because Apple silicon is the development machine. | about 4,000 lines in five files |
 | SSE4.2, AVX2 | x86-64, picked at run time | the same kernel families as NEON |
 | AVX-512 | x86-64 chips that have it, included in every x86-64 build | pixel comparisons. They beat AVX2 on both an AMD and an Intel machine. |
 | SVE | Linux ARM servers with 256-bit SVE, such as AWS Graviton3 | replaces the widest NEON kernels |
