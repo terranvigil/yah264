@@ -19,11 +19,10 @@ That configures into `build/` and compiles. `make test` runs the unit tests.
 the rest.
 
 One build gives you both sample depths. `make build` produces an 8-bit encoder
-library and a 10-bit one. A single `y264` binary links both. `y264` is the
-command for yah264, and `yah264` still works as an alias. Each library
-installs with its own pkg-config file: `yah264.pc` and `yah264_10.pc`.
-`-Dbit_depth` doesn't change any of that. It only picks the depth the tests and
-the in-tree tools build at.
+library and a 10-bit one, which the `y264` command links together. `yah264` also works
+as an alias. Each library installs with its own pkg-config file, `yah264.pc`
+and `yah264_10.pc`. `-Dbit_depth` only picks the depth the tests and the
+in-tree tools build at.
 
 `-Dgpu=enabled` links the Metal compute library. It's off by default.
 
@@ -43,16 +42,25 @@ Raw YUV goes in through `--input-raw`, which needs `--input-res WxH`.
 would hold. `--seek N` drops the first N input frames. `--crop-rect L,T,R,B`
 crops the input before encoding, in luma samples.
 
-The defaults are close to x264's medium preset: `--preset medium --cabac --ref 3
---bframes 3 --transform-8x8`. That lets you compare the two encoders without a
-pile of tuning arguments. Most of the measurements on this site were made that
-way.
+The defaults are close to x264's medium preset:
+
+```
+--preset medium --cabac --ref 3 --bframes 3 --transform-8x8
+```
+
+That lets you compare the two encoders without a pile of tuning arguments. Most
+of the measurements on this site use these defaults.
 
 Two defaults differ from x264's on purpose. We swept both against our own
-quality band. `--aq-strength` is 0.4 where x264 uses 1.0. `--psy-rd` is 2.0
-where x264 uses 1.0. Psychovisual RD trades pixel accuracy for visible texture.
-It's the setting most likely to flatter a VMAF-scored comparison.
-`--tune psnr` turns both off if you want a run without it.
+quality band:
+
+| option | yah264 | x264 |
+|---|--:|--:|
+| `--aq-strength` | 0.4 | 1.0 |
+| `--psy-rd` | 2.0 | 1.0 |
+
+Psychovisual RD trades pixel accuracy for visible texture. It's the setting
+most likely to flatter a VMAF-scored comparison. `--tune psnr` turns both off.
 
 ## Choosing a rate control mode
 
@@ -71,9 +79,9 @@ Capped CRF is a common choice for VOD libraries and adaptive ladders:
 y264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
 ```
 
-The encoder codes to the quality target. The buffer sets a ceiling. Easy
-titles encode at CRF 21 and come out small. Hard titles hit the ceiling and
-stay under it. Nothing in the library ends up undeliverable.
+The encoder codes to the quality target under the buffer's ceiling. Easy titles
+encode at CRF 21 and come out small. Because hard titles hit the ceiling and stay
+under it, nothing in the library ends up undeliverable.
 
 Each GOP after the first assumes a half-full buffer. That keeps concatenated
 segments safe but costs a few bits. Short keyints also run hot. Aim the cap low
@@ -142,12 +150,11 @@ both.
 ## Threading and the memory it costs
 
 `--threads` defaults to auto. Auto picks the smaller of your core count and 16,
-then caps that by what the picture can absorb. The 16 is a conservative default.
-Nobody measured a knee there. Wavefront scaling hits the picture's critical
-path before it runs out of cores, and on a machine with two kinds of core the
-last workers end up on the slower ones. yah264 honors an explicit `--threads N`
-and then clamps it by the picture. The [design page](design.md) has the caps and what
-has been measured.
+then caps that by what the picture can absorb. Nobody measured a knee at 16. It's
+a conservative default. Wavefront scaling hits the picture's critical path before it runs out of
+cores. On a machine with two kinds of core, the last workers also end up on the
+slower ones. An explicit `--threads N` is honored and then clamped by the
+picture. The [design page](design.md) has the caps and what has been measured.
 
 The threaded path streams. It reads on its own thread and writes each GOP as it
 finishes, so clip length isn't the limit. From a file, frames are read in the
@@ -157,9 +164,8 @@ a time. From a pipe, the reader holds a window of up to
 
 yah264 prices the pipe window up front. A job that needs more than half your
 RAM fails at once instead of being killed an hour in. The error quotes the
-figure and the window it came from. If that happens, lower
-`--threads` or `--keyint`, or set the window directly with
-`Y264_STREAM_WINDOW`.
+figure and the window it came from. Lower `--threads` or `--keyint`, or set the
+window directly with `Y264_STREAM_WINDOW`.
 
 The encoder workers have a budget of their own. `--max-memory` defaults to half
 your RAM. When the GOP workers wouldn't fit in it, fewer run at once and each

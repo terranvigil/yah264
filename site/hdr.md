@@ -124,8 +124,7 @@ instead of an SDR rendering of it.
 Each encode is scored against its source at the same size. A 4K encode uses the
 4K model at 1.5 picture heights and a 1080p encode the 1080p model at 3 picture
 heights. Because Sparks runs at 59.94 fps, it's scored with the high-frame-rate
-versions of both. The same run measures banding with CAMBI in
-its PQ mode.
+versions of both. The same run measures banding with CAMBI in its PQ mode.
 
 | clip | content | frames | source |
 |---|---|---|---|
@@ -145,14 +144,14 @@ much harder picture because film grain sits under thousands of moving sparks.
 At 4K it needs about 100 Mbit/s to reach 84.
 
 CAMBI starts at 0 for no banding and climbs as banding gets worse. Averaged
-over a clip it stays at about 1.2 or below on every rung, though the average
-hides Sol Levante's weak spot. Its opening shot is a flat, bright underwater scene
-that scores close to 0 in the source.
+over a clip it stays at about 1.2 or below on every rung. The average hides
+Sol Levante's weak spot, an opening shot of a flat, bright underwater scene that
+scores close to 0 in the source.
 
-At CRF 26 the encode smooths that shot's faint particles into flat patches.
-Its worst frame there reaches about 8 at 1080p and 9 at 4K. At CRF 22 the worst
-frame stays near 4. No Sparks frame passes 0.5 at either CRF. Gradients like
-this one are where the encoder has the most to gain on HDR.
+At CRF 26 the encode smooths that shot's faint
+particles into flat patches. Its worst frame there reaches about 8 at 1080p and
+9 at 4K, against about 4 at CRF 22. No Sparks frame passes 0.5 at either CRF. Gradients like
+Sol Levante's are where the encoder has the most to gain on HDR.
 
 | clip | CRF | Mbit/s | HDR-VMAF | CAMBI mean | CAMBI worst frame |
 |---|--:|--:|--:|--:|--:|
