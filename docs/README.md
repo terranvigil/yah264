@@ -1,43 +1,42 @@
 # yah264 docs
 
-Each subsystem doc says what yah264 does now and why, what we tried that
-didn't work, and what's still open. Current speed and quality numbers are on
-the [results page](https://terranvigil.github.io/yah264/results.html).
+Each subsystem doc covers what yah264 does and why, what didn't work, and
+what's open. Current numbers are on the [results page](https://terranvigil.github.io/yah264/results.html).
 
 ## Start here
 
-- [Plan](plan.md): what yah264 is, the goals and bar it's measured against, where it stands and what's open.
-- [How H.264 works](how-h264-works.html): a walk through H.264 encoding for readers new to the codec.
-- [What we don't do](what-we-dont-do.md): x264 options and features we refuse and the reason for each.
+- [Plan](plan.md): what yah264 is, its goals, status and open work.
+- [How H.264 works](how-h264-works.html): H.264 encoding for newcomers.
+- [What we don't do](what-we-dont-do.md): x264 options we refuse, and why.
 
 ## Subsystems
 
-- [Rate control](rate-control.md): CQP, CRF, ABR, VBV and two-pass, and which one fits which job.
-- [Lookahead and AQ](lookahead-and-aq.md): the lookahead, mb-tree, adaptive quantization and scene cuts.
-- [B-frames](b-frames.md): B-frame placement, the pyramid and direct modes.
-- [Motion and modes](motion-and-modes.md): motion search, partitions and the mode decision.
-- [Threading](threading.md): how the encoder splits work across cores and picks a thread count.
-- [Threading, illustrated](threading.html): the threading model as a site page with diagrams.
-- [SIMD](simd.md): the NEON, SVE, SSE4.2, AVX2 and AVX-512 kernels and how they're checked.
-- [GPU](gpu.md): the GPU and matrix-unit offload we measured and why the encoder stays on the CPU.
+- [Rate control](rate-control.md): CQP, CRF, ABR, VBV and two-pass.
+- [Lookahead and AQ](lookahead-and-aq.md): lookahead, mb-tree, adaptive quantization, scene cuts.
+- [B-frames](b-frames.md): B-frame placement, the pyramid, direct modes.
+- [Motion and modes](motion-and-modes.md): motion search, partitions, mode decision.
+- [Threading](threading.md): splitting work across cores.
+- [Threading, illustrated](threading.html): the threading model, with diagrams.
+- [SIMD](simd.md): the NEON, SVE, SSE4.2, AVX2 and AVX-512 kernels and their checks.
+- [GPU](gpu.md): why the encoder stays on the CPU.
 - [Formats](formats.md): bit depths and chroma formats.
-- [Animation](animation.md): how animated content behaves and what we do about it.
+- [Animation](animation.md): animated content.
 - [Denoising](denoise.md): `--nr` and `--mcstf`, the two opt-in denoisers.
-- [Content selection](content-selection.md): choosing settings per content type and why that isn't automatic.
-- [Shot-based encoding](shot-based.md): the shot table, cut-aware keyframes and per-shot CRF.
-- [Hardware mode](hardware-mode.md): `--hw videotoolbox`, the Mac's hardware encoder behind our options.
+- [Content selection](content-selection.md): settings per content type.
+- [Shot-based encoding](shot-based.md): the shot table, cut-aware keyframes, per-shot CRF.
+- [Hardware mode](hardware-mode.md): `--hw videotoolbox`, the Mac's hardware encoder.
 - [ffmpeg](ffmpeg.md): using yah264 from ffmpeg.
-- [Live control](live-control.md): per-frame control events for live encoding (rate, CRF, QP limits, keyframes, zones), the status call and the replayable control log.
+- [Live control](live-control.md): per-frame control events for live encoding.
 
 ## Reference
 
-- [Options](options.md): every CLI option, its default and how it differs from x264's.
-- [Knobs](knobs.md): every `Y264_*` environment knob with its default and where the code reads it (generated).
-- [Engine interface](engine-interface.md): the contract an orchestrator builds on, shared with yah265 and yaav1.
+- [Options](options.md): each CLI option, its default and how it differs from x264's.
+- [Knobs](knobs.md): the `Y264_*` environment knobs (generated).
+- [Engine interface](engine-interface.md): the orchestrator contract shared with yah265 and yaav1.
 
 ## Measuring
 
-- [Instruments](instruments.md): the profilers, oracles and A/B harnesses that exist, by the question they answer. Read it before building a new one.
-- [Corpus sources](corpus-sources.md): where the test and tuning clips come from and why the two corpora stay apart.
+- [Instruments](instruments.md): existing measurement tools, by question. Read it before building one.
+- [Corpus sources](corpus-sources.md): where test and tuning clips come from.
 - [VMAF](vmaf.md): how we score quality with VMAF v1.
-- [VMAF pipeline audit](vmaf-pipeline-audit.md): the check that nothing about our output depresses the VMAF score.
+- [VMAF pipeline audit](vmaf-pipeline-audit.md): the check that nothing in our output depresses VMAF.
