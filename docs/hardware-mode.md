@@ -79,22 +79,23 @@ turns that block into an error, for scripted use.
 
 ## The trade
 
-The table covers the ten board clips at their ABR targets, scored with VMAF-NEG
-(earlier metric). Our encoder ran at auto threads. Each cell is the median of
-five runs per side on a quiet machine.
+The table covers the ten board clips at their ABR targets. The wall and CPU
+columns are the median of five timed runs per side on a quiet machine. Our
+encoder ran those at auto threads. The quality column is VMAF v1, read with our
+encoder at three threads.
 
-| clip | wall, hardware / ours | CPU, ours / hardware | VMAF, hardware minus ours |
+| clip | wall, hardware / ours | CPU, ours / hardware | VMAF v1, hardware minus ours |
 |---|--:|--:|--:|
-| foreman_cif | 1.88 | 12 | -0.7 |
-| bus_cif | 1.78 | 11 | -6.0 |
-| stefan_cif | 2.29 | 8 | -3.9 |
-| ducks_720p | 0.62 | 48 | -8.1 |
-| park_joy_720p | 0.65 | 32 | -7.4 |
-| fourpeople_720p | 1.45 | 16 | -4.2 |
-| shields_720p | 1.02 | 18 | -4.7 |
+| foreman_cif | 1.88 | 12 | -6.1 |
+| bus_cif | 1.78 | 11 | -11.9 |
+| stefan_cif | 2.29 | 8 | -8.7 |
+| ducks_720p | 0.62 | 48 | -9.9 |
+| park_joy_720p | 0.65 | 32 | -9.2 |
+| fourpeople_720p | 1.45 | 16 | -6.4 |
+| shields_720p | 1.02 | 18 | -7.0 |
 | sunflower_1080p | 0.93 | 18 | -3.9 |
-| pedestrian_1080p | 0.80 | 27 | -4.7 |
-| riverbed_1080p | 0.32 | 46 | -13.9 |
+| pedestrian_1080p | 0.80 | 27 | -5.3 |
+| riverbed_1080p | 0.32 | 46 | -12.6 |
 
 At the median the hardware uses about an eighteenth of our CPU and about the
 same wall time. It's faster on high-rate clips and most HD. On CIF and
@@ -102,9 +103,9 @@ fourpeople it's slower, because opening the session is a large share of a
 short run.
 
 Quality pays for the savings. The hardware scores below us at the same bitrate
-on all ten clips, by 4.7 points at the median. It comes within about 6% of its
+on all ten clips, by 7.8 points at the median. It comes within about 6% of its
 rate target on eight clips. On bus and stefan every encoder undershoots the
-400 kbit/s target. The hardware spends more bits than we do on eight of ten,
+400 kbit/s target. The hardware spends more bits than we do on seven of ten,
 which favors it in the quality column. CPU counts the encoder process only and
 leaves out work the hardware does elsewhere. Use hardware mode when CPU
 matters more than bits.

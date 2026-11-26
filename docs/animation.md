@@ -4,10 +4,10 @@ yah264 treats animation as two classes. Rendered 3D, such as Big Buck Bunny
 and Sintel, behaves differently from hand-drawn 2D, such as Sita Sings the
 Blues. We measure every animation change on both kinds, because a setting that
 helps one kind often costs the other. Against x264 medium we're far ahead on
-CGI and a few points ahead on hand-drawn.
+CGI and slightly behind on hand-drawn.
 
-All numbers here are BD-rate on VMAF-NEG (earlier metric), where negative is
-better. Self-A/Bs are against yah264's shipped default on the same binary.
+Numbers here are BD-rate on VMAF-NEG (earlier metric) unless they say VMAF v1.
+Negative is better. Self-A/Bs are against yah264's shipped default on the same binary.
 Cross-encoder numbers are against x264 medium.
 
 ## What yah264 does
@@ -22,13 +22,13 @@ Cross-encoder numbers are against x264 medium.
 
 ## Where it stands against x264 medium
 
-| clip | kind | BD-rate vs x264 medium |
+| clip | kind | BD-rate on VMAF v1 vs x264 medium |
 |---|---|--:|
-| bbb_720p | 3D CGI | -38.6% |
-| sita_720p | hand-drawn 2D | -3.9% |
+| bbb_720p | 3D CGI | -37.4% |
+| sita_720p | hand-drawn 2D | +1.9% |
 
 Both are short windows of 180 and 140 frames, read at CRF 30 to 42 with both
-encoders at two threads. Since a median over the two would read about -21%
+encoders at two threads. Since a median over the two would read about -18%
 and describe neither clip, we always quote animation results per clip.
 
 On the 10-minute Big Buck Bunny excerpt in the parity tables, scored on VMAF
@@ -56,9 +56,10 @@ capped VBR the two encoders are within 1% of each other.
 
 ## Open questions
 
-- **Hand-drawn leads by less than CGI.** On sita we're about 4% ahead, against
-  4.75% ahead on all-intra (`--keyint 1`). Inter coding still gives back a
-  little. Nothing we've found moves the B-frame share yet, and the obvious
+- **Hand-drawn trails while CGI leads.** On sita we're about 2% behind x264 on
+  VMAF v1. All-intra (`--keyint 1`) read 4.75% ahead on the earlier metric and
+  hasn't been re-read on v1, so whether inter coding is what gives the ground
+  back is open. Nothing we've found moves the B-frame share yet, and the obvious
   candidates are in the table above.
 - **The tune doesn't win on hand-drawn content.** With both encoders on
   `--tune animation`, sita trails by about 14%. Adding `--ref 6`,
@@ -85,7 +86,7 @@ calibrated at 900 kbps. bbb_720p is in the HD band (`scripts/hd_band.py`) but
 not in the standing CRF ladders.
 
     scripts/bdcompare.py --a '...yah264...' --b '...x264...' \
-        --clips bbb_720p,sita_720p --frames 180 --vmaf --points 30,34,38,42
+        --clips bbb_720p,sita_720p --frames 180 --vmaf --points 30,33,36,39,42
 
 Never ship an animation change measured on one clip. bbb and sita disagree
 about almost everything.
