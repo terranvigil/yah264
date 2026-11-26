@@ -206,15 +206,13 @@ cheapest.
 
 ## The ten-clip board
 
-Quality in this section is scored with VMAF-NEG (earlier metric).
-
 The sections below use a ten-clip board of Xiph clips from CIF to 1080p that was
 timed on the same machine.
 
 <div class="aside">
 <p class="aside-title">Four words this page uses a lot</p>
 <p><b>Board.</b> One timed run of both encoders over a fixed set of clips. This section reads the ten-clip board.</p>
-<p><b>Band.</b> The clips and CRF rungs a quality sweep is read over, chosen to fall inside VMAF-NEG 55 to 95.</p>
+<p><b>Band.</b> The clips and rates a quality sweep is read over, chosen so that x264 scores between VMAF v1 88 and 94 on each clip.</p>
 <p><b>Leg.</b> One metric of a goal, read on its own.</p>
 <p><b>Bar.</b> The number a leg has to beat.</p>
 </div>
@@ -230,7 +228,7 @@ metrics. A fifth sits underneath them as a floor.
 |---|---|
 | median speed | 1.00x or faster |
 | worst-clip speed | 1.15x or better |
-| quality | within 0.5 [VMAF-NEG](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) |
+| quality | within 0.5 [VMAF v1](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) |
 | compression | within 1.0% size |
 | pixel accuracy (floor) | no clip more than 1.0 dB below x264 in PSNR-Y at the same bytes |
 
@@ -242,16 +240,15 @@ decisions on VMAF.
 
 A cell is dropped when its own samples spread over 1.15x. A repeated board moves
 a ratio by up to about 0.10. Differences under 0.05 aren't readings. The solve
-leaves about 0.3% residual. The two rates are matched within 0.5%, which is
-wider than any VMAF-NEG gap in the goal table.
+leaves about 0.3% residual. The two rates are matched within 0.5%.
 
-In pure C at CRF, PSNR-Y over the ten clips has a median of +0.17 dB against
-x264. The worst clip is bus_cif at -0.25 dB. The floor passes and the debt list
-is empty.
+At CRF and the same size, yah264 scores a median 1.3 VMAF v1 points above x264
+on the ten clips at one thread, and 1.2 at three threads. Every clip is ahead,
+by at least 0.75. At one thread PSNR-Y has a median of +0.03 dB against x264.
+The worst clip is stefan_cif at -0.51 dB, which puts it on the debt list. The
+floor passes.
 
 ## CRF versus ABR
-
-Quality in this section is scored with VMAF-NEG (earlier metric).
 
 CRF asks an encoder for a quality level and takes whatever bitrate that needs.
 ABR asks for a bitrate and takes whatever quality that buys. No goal is set
@@ -260,11 +257,16 @@ against the ABR table.
 The table below is ABR at matched achieved bitrate on the ten-clip board. The
 tables at the top of this page cover capped VBR.
 
-| goal | configuration | median | max | VMAF-NEG | size |
+| goal | configuration | median | max | VMAF v1 | size |
 |---|---|--:|--:|--:|--:|
-| 1 | pure C, single-threaded | 0.66x | 0.74x | +0.97 | +0.1% |
-| 2 | pure C, multi-threaded | 0.69x | 0.85x | +2.46 | +0.0% |
-| 3 | as-shipped SIMD, multi-threaded | 0.86x | 0.99x | +2.47 | +0.0% |
+| 1 | pure C, single-threaded | 0.66x | 0.74x | +1.73 | +0.2% |
+| 2 | pure C, multi-threaded | 0.69x | 0.85x | +1.93 | -0.1% |
+| 3 | as-shipped SIMD, multi-threaded | 0.86x | 0.99x | +1.93 | -0.1% |
+
+The VMAF v1 and size columns are medians over the ten clips. Goals 2 and 3 code
+the same stream, read at three threads on both encoders. The speed columns come
+from the timed board, at one thread for goal 1 and auto threads for goals 2
+and 3.
 
 x264's target is solved to hit the bitrate we achieved, as the size column
 shows. The rate controller's opening is fitted. A frame can also start against
@@ -332,55 +334,54 @@ that comparison.
 
 ## Quality across the rate range
 
-Quality in this section is scored with VMAF-NEG (earlier metric).
+In the deep band, from VMAF v1 37 to 66, twelve of the thirteen quality-band
+clips reach the band, and yah264 beats x264 on all twelve. The median gain there
+is about 17% in [BD-rate](encoding.html#bd-rate). BD-rate averages the
+comparison across a range of bitrates. Each clip runs 120 frames at one thread,
+with both encoders solved onto the same three or four rates per clip. The quality
+band overlaps the speed board on only six clips.
 
-yah264 does best at low bitrates. In the deep band from VMAF-NEG 55 to 83 it beats
-x264 on 9 of the 10 clips that reach that band. The median gain there is about
-12% in [BD-rate](encoding.html#bd-rate). BD-rate averages the comparison across
-a range of bitrates. The lead fades as bitrate rises and is gone at the top.
-Those ten clips come from the twelve-clip quality band and aren't the ten on
-the speed board. yah264 is ahead on the twelve-clip HD gate set at both sizes,
-more so at 720p. Nothing here was ever tuned against that set.
+yah264 is also ahead on every clip of the twelve-clip HD gate set, more so at
+720p. Nothing here was ever tuned against that set.
 
-| HD gate set | BD-rate on VMAF-NEG | clips ahead |
+| HD gate set | median BD-rate on VMAF v1 | clips ahead |
 |---|--:|--:|
-| 720p | -17.1% | 6 of 6 |
-| 1080p | -12.7% | 5 of 6 |
+| 720p | -19.3% | 6 of 6 |
+| 1080p | -12.5% | 6 of 6 |
 
-Each clip runs 150 frames with both encoders at two threads. We choose the CRF
-points per clip so the top rung sits between VMAF-NEG 89 and 96. crowd_run is the one
-1080p clip behind, at +0.5%.
+Each clip runs 150 frames with both encoders at two threads, over five CRF
+points three apart. The lowest CRF is where x264 scores VMAF v1 93 on that clip.
+crowd_run has the smallest lead, at -6.1%.
 
 ## The hardware mode
-
-Quality in this section is scored with VMAF-NEG (earlier metric).
 
 `--hw videotoolbox` encodes through the Mac's built-in H.264 engine with
 yah264's options mapped onto it. Our scene-cut decides its keyframes. Nothing
 above applies to it, because the stream is the hardware's. The table runs it on
 the same ten clips at the same bitrates.
 
-| clip | kbit/s target | wall, hardware ÷ ours | CPU, ours ÷ hardware | VMAF-NEG, hardware − ours | our VMAF-NEG | hardware VMAF-NEG |
+| clip | kbit/s target | wall, hardware ÷ ours | CPU, ours ÷ hardware | VMAF v1, hardware − ours | our VMAF v1 | hardware VMAF v1 |
 |---|--:|--:|--:|--:|--:|--:|
-| foreman_cif | 400 | 1.88 | 12 | −0.7 | 93.4 | 92.7 |
-| bus_cif | 400 | 1.78 | 11 | −6.0 | 92.4 | 86.4 |
-| stefan_cif | 400 | 2.29 | 8 | −3.9 | 89.1 | 85.2 |
-| ducks_720p | 25000 | 0.62 | 48 | −8.1 | 89.5 | 81.4 |
-| park_joy_720p | 12000 | 0.65 | 32 | −7.4 | 90.2 | 82.8 |
-| fourpeople_720p | 1200 | 1.45 | 16 | −4.2 | 89.7 | 85.4 |
-| shields_720p | 2200 | 1.02 | 18 | −4.7 | 93.4 | 88.6 |
-| sunflower_1080p | 1500 | 0.93 | 18 | −3.9 | 90.8 | 86.8 |
-| pedestrian_1080p | 2800 | 0.80 | 27 | −4.7 | 88.8 | 84.2 |
-| riverbed_1080p | 12500 | 0.32 | 46 | −13.9 | 92.2 | 78.3 |
+| foreman_cif | 400 | 1.88 | 12 | −6.1 | 75.8 | 69.7 |
+| bus_cif | 400 | 1.78 | 11 | −11.9 | 76.8 | 64.9 |
+| stefan_cif | 400 | 2.29 | 8 | −8.7 | 74.3 | 65.7 |
+| ducks_720p | 25000 | 0.62 | 48 | −9.9 | 91.0 | 81.1 |
+| park_joy_720p | 12000 | 0.65 | 32 | −9.2 | 92.3 | 83.1 |
+| fourpeople_720p | 1200 | 1.45 | 16 | −6.4 | 88.5 | 82.1 |
+| shields_720p | 2200 | 1.02 | 18 | −7.0 | 95.7 | 88.7 |
+| sunflower_1080p | 1500 | 0.93 | 18 | −3.9 | 94.2 | 90.3 |
+| pedestrian_1080p | 2800 | 0.80 | 27 | −5.3 | 89.9 | 84.5 |
+| riverbed_1080p | 12500 | 0.32 | 46 | −12.6 | 89.5 | 76.9 |
 
-Each run covers a six-second window, or the whole clip where it's shorter. Our
-encoder runs at auto threads. VMAF is the NEG model.
+Each run covers a six-second window, or the whole clip where it's shorter. The
+wall and CPU columns come from timed runs with our encoder at auto threads. The
+quality columns are VMAF v1 with our encoder at three threads.
 
 At the median the hardware takes about the same wall time as we do and uses
 about an eighteenth of our CPU. It finishes sooner on the high-rate clips and
 on most of HD. On CIF and on fourpeople it's slower, because opening the session
 is a large part of so short a run. The CPU saving costs quality. The hardware
-scores below us at the same bitrate on all ten clips, by 4.7 points at the
+scores below us at the same bitrate on all ten clips, by 7.8 points at the
 median.
 
 Each cell is the median of five runs per side in interleaved order on a quiet
@@ -388,44 +389,43 @@ machine. Wall times spread under 10% within a cell, except foreman at 17% on
 both sides. Because CPU counts the encoder process only, it leaves out
 work the hardware does elsewhere. Both encoders come within about 10% of target on eight
 clips. On bus and stefan every encoder on this page undershoots the 400 kbit/s
-target by a wide margin. On eight of the ten clips the hardware spends more
-bits than we do. Ducks and riverbed are the exceptions. The extra bits favor the
-hardware in the quality column.
+target by a wide margin. On seven of the ten clips the hardware spends more
+bits than we do. Foreman, ducks and riverbed are the exceptions. The extra bits
+favor the hardware in the quality column.
 
 ## Against other encoders
 
-Quality in this section is scored with VMAF-NEG (earlier metric).
-
-| encoder | quality (VMAF-NEG) | pure-C 1-thread | pure-C MT | SIMD MT | size | notes |
+| encoder | quality (VMAF v1) | pure-C 1-thread | pure-C MT | SIMD MT | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| yah264 | +0.54 | 0.65x | **0.66x** | **0.77x** | +0.1% | this repo, ten-clip board at CRF |
+| yah264 | +1.2 | 0.65x | **0.66x** | **0.77x** | +0.1% | this repo, ten-clip board at CRF |
 | x264 | ref | 1.00x | 1.00x | 1.00x | ref | the reference point |
-| openh264 | -15.0 | **0.15x** | 1.01x | 0.94x | +4.0% | a different design point |
+| openh264 | -12.3 | **0.15x** | 1.01x | 0.94x | +3.3% | a different design point |
 
 openh264 beats x264 single-threaded because it does far less work per frame.
-It pays about 15 VMAF-NEG points for that at the same bitrate. Read the speed
+It pays about 12 VMAF v1 points for that at the same bitrate. Read the speed
 and the quality columns as one row. The yah264 row is the ten-clip board. The
 openh264 row runs Cisco's encoder over the same ten clips and bitrates at its
 own defaults. Frame skipping is off so both encoders code every frame. Because
 the row is timed with the command-line encoders, its speed is wall time against
 the x264 command-line tool in the same three builds. Quality and size are
-against x264 at the same target.
-
-| clip | kbit/s target | wall, openh264 ÷ ours | CPU, ours ÷ openh264 | VMAF-NEG, openh264 − ours | our VMAF-NEG | openh264 VMAF-NEG |
-|---|--:|--:|--:|--:|--:|--:|
-| foreman_cif | 400 | 1.0 | 8.2 | −10.0 | 93.4 | 83.4 |
-| bus_cif | 400 | 1.0 | 7.9 | −23.2 | 92.4 | 69.2 |
-| stefan_cif | 400 | 1.0 | 8.2 | −19.1 | 89.1 | 70.0 |
-| ducks_720p | 25000 | 2.0 | 7.4 | −16.0 | 89.5 | 73.5 |
-| park_joy_720p | 12000 | 1.9 | 7.5 | −18.0 | 90.2 | 72.2 |
-| fourpeople_720p | 1200 | 1.3 | 9.6 | −12.6 | 89.8 | 77.2 |
-| shields_720p | 2200 | 1.8 | 7.2 | −14.2 | 93.3 | 79.2 |
-| sunflower_1080p | 1500 | 1.6 | 7.3 | −20.2 | 90.8 | 70.6 |
-| pedestrian_1080p | 2800 | 1.9 | 6.6 | −16.8 | 88.8 | 72.0 |
-| riverbed_1080p | 12500 | 1.8 | 4.8 | −27.7 | 92.2 | 64.5 |
-
-The table runs our encoder at auto threads against openh264 with SIMD at twelve
+medians against x264 at the same target, with all three encoders at three
 threads.
+
+| clip | kbit/s target | wall, openh264 ÷ ours | CPU, ours ÷ openh264 | VMAF v1, openh264 − ours | our VMAF v1 | openh264 VMAF v1 |
+|---|--:|--:|--:|--:|--:|--:|
+| foreman_cif | 400 | 1.0 | 8.2 | −19.5 | 75.8 | 56.3 |
+| bus_cif | 400 | 1.0 | 7.9 | −24.3 | 76.8 | 52.5 |
+| stefan_cif | 400 | 1.0 | 8.2 | −27.5 | 74.3 | 46.8 |
+| ducks_720p | 25000 | 2.0 | 7.4 | −13.6 | 91.0 | 77.4 |
+| park_joy_720p | 12000 | 1.9 | 7.5 | −15.6 | 92.3 | 76.7 |
+| fourpeople_720p | 1200 | 1.3 | 9.6 | −11.1 | 88.5 | 77.4 |
+| shields_720p | 2200 | 1.8 | 7.2 | −11.9 | 95.7 | 83.7 |
+| sunflower_1080p | 1500 | 1.6 | 7.3 | −11.6 | 94.2 | 82.6 |
+| pedestrian_1080p | 2800 | 1.9 | 6.6 | −12.9 | 89.9 | 77.0 |
+| riverbed_1080p | 12500 | 1.8 | 4.8 | −18.8 | 89.5 | 70.7 |
+
+The wall and CPU columns ran our encoder at auto threads against openh264 with
+SIMD at twelve threads. The quality columns ran both at three threads.
 
 openh264 is built for real-time conferencing: no B-frames, no lookahead, a
 light analysis pass. It uses about a seventh of our CPU and scores far below us
@@ -433,12 +433,10 @@ at the same bitrate. Its wall time doesn't fall with thread count, because it
 threads per slice and these streams have one slice. We leave GPU encoders out of
 scope here. They're fixed-function silicon with their own trade-offs.
 
-openh264 comes in 17.4 VMAF-NEG points below us at the median. Its
+openh264 comes in 14.6 VMAF v1 points below us at the median. Its
 wall against ours at auto threads reads 1.68x.
 
 ## Across shots
-
-Quality in this section is scored with VMAF-NEG (earlier metric).
 
 The board clips are single shots, while real content is a chain of them. The
 tables above can't show how an encoder moves bits between an easy shot and a
@@ -449,40 +447,41 @@ rebuilds all three byte for byte.
 
 | sequence | yah264 vs x264 | `--shot-crf` vs x264 |
 |---|--:|--:|
-| five CIF shots over 690 frames | -0.3% | -7.9% |
-| five 720p shots over 750 frames | -6.4% | -12.5% |
-| five 1080p shots over 750 frames | -6.5% | -15.1% |
+| five CIF shots over 690 frames | -12.3% | -22.8% |
+| five 720p shots over 750 frames | -12.8% | -19.5% |
+| five 1080p shots over 750 frames | -8.4% | -16.7% |
 
-The figures are BD-rate on VMAF-NEG against x264 medium at two threads on both
+The figures are BD-rate on VMAF v1 against x264 medium at two threads on both
 encoders. Negative means yah264 spends fewer bits at equal quality.
 
 On every input path, streaming included, yah264 puts the frame-mean part of
 adaptive quantization on the frame's base QP. Its strength is 1.3 under
 uncapped CRF and 1.04 under a VBV cap or a bitrate target. `--shot-crf` goes
 further on file input by sizing each shot against the whole title. The BD-rate
-fits a cubic to four CRF points. That's thinner than the five-point sweeps our
-own rule asks for. Read the table for the direction and rough size of the
-effect. Reproduce it with:
+fits a cubic to five CRF points. Reproduce the CIF and 720p rows with:
 
 ```
-scripts/multishot_bd.py --arms flat=env:Y264_AQ_DC=0.4 new=env: x264
+scripts/multishot_bd.py --threads 2 --points 22,25,28,31,34 --seqs ms_cif_30,ms_720p_50 \
+  --arms new=env: \
+  'shot=build/cli/y264 --input-y4m {src} --crf {q} --shot-crf --threads 2 -o {out}' \
+  'x264=x264 --preset medium --crf {q} --threads 2 --demuxer y4m -o {out} {src}'
 ```
 
-It needs a build from `make` or one configured with `-Ddev_knobs=true`, because
-a default build refuses to encode with `Y264_AQ_DC` set.
+The 1080p row is the same command with `--seqs ms_1080p_25 --points 26,29,32,35,38`.
 
 Each sequence runs 150 frames per shot, except the CIF sequence's third shot at
-90. CIF runs at 30 fps, 720p at 50 and 1080p at 25. The CRF points are 22 to 34.
-At 1080p they're 26 to 38, because CRF 22 there tops VMAF-NEG 96.
+90. CIF runs at 30 fps, 720p at 50 and 1080p at 25. The CRF points are 22 to 34,
+and 26 to 38 at 1080p.
 
-Coded one clip at a time, the same content reads -5.7% on CIF, -14% on 720p and
-+0.4% on 1080p.
+Coded one clip at a time, the same content reads a median -14% on CIF, -14% on
+720p and -12% on 1080p.
 
 ## The corpus
 
 The ten board clips are natural video from Xiph's public test collection. They're
 8-bit 4:2:0 at native resolution. The rate column is the ABR target each clip is
-coded at on the board.
+coded at on the board. The rates were chosen on the earlier metric and are kept
+so the speed columns stay comparable.
 
 | clip | size | what it is | rate |
 |---|---|---|---|
@@ -507,20 +506,18 @@ number fitted and reported on the same clips isn't a measurement.
 
 ## Off-corpus content
 
-Quality in this section is scored with VMAF-NEG (earlier metric).
-
 Content outside that set behaves differently enough that the only summary that
-holds is a range. Because two clips both fairly called animation are 35 BD-rate
+holds is a range. Because two clips both fairly called animation are 39 BD-rate
 points apart, we claim no animation result here as a single number. The
 [animation notes](https://github.com/terranvigil/yah264/blob/main/docs/animation.md)
 have the measurements. That spread is also why a preset-for-preset speed
 comparison stops meaning much once content leaves the set the presets were
 tuned on.
 
-On a 180-frame window of the 3D CGI Big Buck Bunny, yah264 needs 39% fewer bits
-than x264 medium. On 140 frames of the hand-drawn Sita
-Sings the Blues it needs 4% fewer.
+On a 180-frame window of the 3D CGI Big Buck Bunny, yah264 needs 37% fewer bits
+than x264 medium on VMAF v1. On 140 frames of the hand-drawn Sita Sings the Blues
+it needs 2% more.
 
-On the 10-minute Big Buck Bunny excerpt in the parity tables, scored on VMAF v1,
-yah264 needs 1% to 2% fewer bits than x264 at CRF at 720p, 1080p and 4K. At
-capped VBR the two encoders are within 1% of each other.
+On the 10-minute Big Buck Bunny excerpt in the parity tables, yah264 needs 1% to
+2% fewer bits than x264 at CRF at 720p, 1080p and 4K. At capped VBR the two
+encoders are within 1% of each other.

@@ -8,8 +8,13 @@ A general per-clip selector over the content-split constants doesn't work with
 frame-level features. The prize is real, although a small minority of
 sequences holds it.
 
-All numbers are BD-rate on VMAF-NEG (earlier metric) against the shipped default
-at matched achieved bitrate unless noted. Negative is better.
+All numbers are BD-rate on VMAF v1 against the shipped default. Negative is
+better. The gate-corpus ceiling, the `flat < 1` read and the psy flat gate are
+at matched achieved bitrate. The other rows share CRF points between the two
+sides: `--direct auto` at per-clip CRF sets and two threads, the AQ and psy-rd
+rows on CRF ladders. The 239-sequence BVI-AOM labels and everything derived
+from them are on VMAF-NEG (earlier metric), and the page says so where they
+appear.
 
 ## What ships
 
@@ -19,33 +24,35 @@ thread count. None is a per-clip classifier.
 
 | gate | feature | what it switches | default |
 |---|---|---|---|
-| `--direct auto` | per B slice, the running count of macroblocks each direct derivation would have made skippable | spatial or temporal direct | on. CRF band median 0.0%, station2 -33%, stockholm -14%, bus -4%; worst sunflower +3.6%; wall 1.01-1.05x at 12 threads |
-| psy flat gate | share of 16x16 luma macroblocks with variance under 25 | raises the psy-trellis floor on frames that are at least 75% flat | on. Fires on every sintel frame and on no frame of any other corpus clip: sintel -5.6% to -9.0% |
+| `--direct auto` | per B slice, the running count of macroblocks each direct derivation would have made skippable | spatial or temporal direct | on. Median 0.0% against spatial on 14 clips, station2 -32%, stockholm -12%, bus -1.7%; worst sunflower +3.3%; wall 1.01-1.05x at 12 threads |
+| psy flat gate | share of 16x16 luma macroblocks with variance under 25 | raises the psy-trellis floor on frames that are at least 75% flat | on. Fires on every sintel frame and on no frame of any other corpus clip. On VMAF v1 it reads neutral on sintel, within 0.3% |
 | per-MB lambda | the same variance test, per macroblock | mode decision follows mb-tree's QP on non-flat macroblocks only | on. See [animation.md](animation.md) |
 | `--nr` noise gate | spatial Laplacian percentile | coefficient noise reduction on or off per picture | gate armed whenever `--nr` is on |
 | `--mcstf` noise gate | temporal match-error percentile | temporal pre-filter on or off per picture | gate armed whenever `--mcstf` is on; see [denoise.md](denoise.md) |
 
 ## What the evidence says
 
-The ceiling is real but concentrated. Two content-split arms hold most of the
-envelope. `Y264_CRF_CPLX=0` drops the complexity term from CRF, and
+The ceiling is concentrated, and on VMAF v1 it's small on our own corpus. Two
+content-split arms hold most of the envelope. `Y264_CRF_CPLX=0` drops the complexity term from CRF, and
 `Y264_MBTREE_STRENGTH=2.0` runs a stronger mb-tree than the shipped 1.4. Over
 those two arms, a perfect per-sequence choice is worth:
 
 | corpus | mean | median |
 |---|--:|--:|
-| 12-clip gate corpus | -1.33% | -1.25% |
-| 239 BVI-AOM sequences (external, 480x272) | -1.43% | -0.16% |
+| 12-clip gate corpus | -0.29% | -0.02% |
+| 239 BVI-AOM sequences (external, 480x272; VMAF-NEG) | -1.43% | -0.16% |
 
-On external content the top 10% of sequences hold 62% of the gain, and 127 of
-239 want the default.
+On the gate corpus six of the twelve clips want the default. On external
+content, read on the earlier metric, the top 10% of sequences hold 62% of the
+gain, and 127 of 239 want the default.
 
-Deviating blindly is a loss. Applying `CRF_CPLX=0` everywhere reads +0.52%
-mean, and `MBTREE_STRENGTH=2.0` reads +0.55%. Single sequences lose 17-19%. The
-default beats both.
+Deviating blindly is a loss. Applied to every gate clip, `CRF_CPLX=0` costs
++1.20% mean and `MBTREE_STRENGTH=2.0` costs +3.85%. Single clips lose up to
+8.6%. The BVI-AOM labels on the earlier metric say the same, with single
+sequences losing 17-19%. The default beats both.
 
 Frame-level source features don't predict the winner. Here is the rank
-correlation with arm preference over the 239 labeled sequences:
+correlation with arm preference over the 239 labeled sequences, on VMAF-NEG:
 
 | feature | what it is | correlation |
 |---|---|--:|
@@ -56,10 +63,11 @@ correlation with arm preference over the 239 labeled sequences:
 
 `tdiff` ordered the eight arm-winning gate clips perfectly. At n=8 that was
 luck. The best rule from `flat`/`tex` picks the stronger mb-tree when
-`flat < 1`. Held out, it scores -0.29% against a -1.43% ceiling. On the 29
-sequences it fires on it wins 14 and loses 12. That's a coin flip with a few
-big winners. On the gate corpus it fires on coastguard and ducks and loses
-overall, by +0.24% mean.
+`flat < 1`. Held out on the BVI-AOM labels (VMAF-NEG), it scores -0.29%
+against a -1.43% ceiling. On the 29 sequences it fires on it wins 14 and
+loses 12. That's a coin flip with a few big winners. On the gate corpus it
+fires on coastguard and ducks and loses overall: +0.25% mean over the twelve
+clips on VMAF v1, because ducks loses more than coastguard gains.
 
 Other content-split constants point the same way. We refused each as a global
 default because it's narrow:
@@ -67,18 +75,18 @@ default because it's narrow:
 | constant | split |
 |---|---|
 | a larger B-frame QP step of 2.0 | sita gains, ducks and touchdown lose more |
-| `--aq-strength 0` | sintel -6.9%, bbb +6.8% |
-| `--aq-strength 0.2` / `0.6` | riverbed -0.84 at 0.2, blue_sky -0.63 at 0.6: opposite directions |
+| `--aq-strength 0` | sintel -3.4%, bbb +10.6% |
+| `--aq-strength 0.2` / `0.6` | riverbed -1.47 at 0.2, blue_sky -7.09 at 0.6, where 0.2 costs blue_sky +6.72: opposite directions |
 
 ## What didn't work
 
 | idea | why not |
 |---|---|
 | per-clip selection from `tdiff`, `flat`, `tex` or `motion` against the two arms above | no predictive signal on 239 external sequences; don't refit these four |
-| a two-way rule (always pick one arm) | the four clips that want the default lose 1-4.5% each; the abstain decision is most of the problem |
+| a two-way rule (always pick one arm) | the six gate clips that want the default lose 1.2-4.8% each, even on their better arm; the abstain decision is most of the problem |
 | fitting a threshold on the gate corpus | it's the test set. The one-shot gate check on the BVI-AOM rule is already spent, so no threshold may be tuned against it |
 | a QP-gated escape for the B-step split | coastguard loses at its own high-QP rungs. The split follows content, not rate regime |
-| per-class psy-rd at 1.0 or 3.0 | within ±0.3 everywhere; the default holds |
+| per-class psy-rd at 1.0 or 3.0 | 1.0 is within ±0.2 on sita, riverbed, crowd_run and blue_sky; 3.0 costs blue_sky 2.1%. The default holds |
 
 ## Open questions
 
@@ -98,8 +106,8 @@ count. Per-macroblock neural nets are out on cost, since the budget is 100-300
 ns per macroblock.
 
 Two related fitted screens have better-posed labels than content selection.
-One is the 4x4/8x8 transform choice, where an exact oracle reads -1.58% median
-against the shipped heuristic's -1.30%. The other calibrates the bit estimate
+One is the 4x4/8x8 transform choice, where an exact oracle beat the shipped
+heuristic on the earlier metric. The other calibrates the bit estimate
 against real CABAC bits. Today P_Skip is priced at a flat 1 bit and the intra
 mode bonus at a flat 4, and neither looks at lambda.
 
