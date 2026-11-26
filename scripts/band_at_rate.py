@@ -33,7 +33,7 @@ GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
 
 ladders = json.load(open(os.path.join(HERE, "ladders.json")))
 # BANDS=band (default, the standing 88-94 gate -- numbers comparable to every
-# run before this knob existed), deep (the 55-83 extension, ladders_deep.json,
+# run before this knob existed), deep (the v1 37-66 extension, ladders_deep.json,
 # where the regime-shaped arms live), or all (both ladders concatenated per
 # clip). The deep ladders exist so a deep-quant win is visible in THIS gate
 # instead of needing bd.sh's fixed CRF windows with their 29-32 hole

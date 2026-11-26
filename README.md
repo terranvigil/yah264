@@ -66,7 +66,7 @@ On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD b
 
 | mode | wall time | CPU used | VMAF |
 |---|--:|--:|--:|
-| `--hw videotoolbox` vs yah264 SIMD | about the same | 1/21 as much | 4 points lower |
+| `--hw videotoolbox` vs yah264 SIMD | about the same | 1/18 as much | 8 points lower (VMAF v1) |
 
 ## Shot-aware support
 
@@ -74,7 +74,7 @@ Most video is a sequence of shots. Each shot wants different settings. yah264 ca
 
 `--cut-split` scans the source for scene cuts first and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot can then be seeked to, packaged or replaced on its own. It costs no compression, because predicting across a cut gains nothing. The default scene-cut detection is different. It only turns a sudden change into an intra frame inside the lookahead and knows nothing about shots.
 
-`--shot-crf` uses the same scan to give each shot its own quality setting. Hard shots get more bits and easy ones fewer. It's still one encode with no trial encodes. On ten real titles at 1080p it needs a median 1% fewer bits for the same VMAF-NEG score (earlier metric), and 5% fewer for the same PSNR-Y.
+`--shot-crf` uses the same scan to give each shot its own quality setting. Hard shots get a higher CRF and easy ones a lower one, so bits move from the hardest shots to the rest. It's still one encode with no trial encodes. On ten real titles at 1080p it needs a median 3.6% fewer bits for the same VMAF v1 score and wins on nine of them. PSNR-Y averaged over frames agrees. Pooled over the whole clip, PSNR-Y reads the other way, because the hardest shots are where quality drops.
 
 Neither option re-encodes anything. The scan reads the source once before the encode starts. It needs a file as input and won't take a pipe.
 
