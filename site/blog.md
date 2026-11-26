@@ -1,13 +1,13 @@
 ---
 title: Introducing yah264
-description: An H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 and needs a median 10% fewer bits for the same quality.
+description: An H.264/AVC encoder that runs 1.28x to 2.17x faster than x264 and needs a median 10% fewer bits for the same quality.
 image: assets/blog/og-card-v3.png
 type: article
 ---
 
 # Introducing yah264
 
-yah264 is an H.264/AVC encoder that runs 1.2x to 2.1x faster than x264 across a wide range of test video. It needs a median 10% fewer bits for the same quality. The source is on [GitHub](https://github.com/terranvigil/yah264).
+yah264 is an H.264/AVC encoder that runs 1.28x to 2.17x faster than x264 across a wide range of test video. It needs a median 10% fewer bits for the same quality. The source is on [GitHub](https://github.com/terranvigil/yah264).
 
 I've worked on video ingestion pipelines for over 15 years. The key goals are always "lowest cost" and "highest quality" for a given bitrate. And of course speed usually matters too. This is my attempt at all three, for anyone who'd like to try yah264 out.
 
@@ -19,9 +19,9 @@ yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Ea
 
 | build | Apple M5 Max | AWS Graviton4 |
 |---|--:|--:|
-| plain C, one thread | 1.39x to 2.13x | 1.75x |
-| plain C, all cores | 1.41x to 2.04x | 2.27x |
-| SIMD-optimized, all cores (yah264 NEON vs x264's assembly) | 1.22x to 1.89x | 1.43x |
+| plain C, one thread | 1.37x to 2.17x | 1.75x |
+| plain C, all cores | 1.37x to 2.08x | 2.27x |
+| SIMD-optimized, all cores (yah264 NEON vs x264's assembly) | 1.28x to 1.92x | 1.43x |
 
 The Mac ranges run from the slowest group's median to the fastest group's.
 
@@ -32,7 +32,7 @@ The Mac ranges run from the slowest group's median to the fastest group's.
 
 The [results page](results.md) has every number and explains the method. If you want to [check the results yourself](check-it-yourself.md), `make review` in the [repository](https://github.com/terranvigil/yah264) reruns a smaller HD board.
 
-<figure class="chart"><img src="assets/blog/speed.svg" alt="Dot plot: median speedup over x264 for each resolution and length group, at three goals. Every dot sits between 1.22x and 2.13x faster."></figure>
+<figure class="chart"><img src="assets/blog/speed.svg" alt="Dot plot: median speedup over x264 for each resolution and length group, at three goals. Every dot sits between 1.28x and 2.17x faster."></figure>
 
 <figure class="chart"><img src="assets/blog/quality.svg" alt="Bar chart: VMAF v1 points ahead of x264 at the same file size per group, from +0.24 at 2160p short clips to +2.70 at CIF short clips."></figure>
 

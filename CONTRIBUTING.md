@@ -48,8 +48,10 @@ If you are unsure whether something crosses the line, ask in a PR before writing
   worth reading as a lead on a race or an uninitialised read.
 - Every encode the conformance gate produces is decoded by an independent decoder
   (FFmpeg) and checked. Conformance is not optional, but it is not automatic
-  either: `.github/workflows/ci.yml` is `workflow_dispatch` only, deliberately,
-  so run `make conformance` locally before you open a PR and fire the workflow
+  either: in `.github/workflows/ci.yml` the Ubuntu x86-64 job runs on pushes
+  that touch the encoder, its tests or its build, and on a manual run, while
+  the macOS Arm job runs only on a manual run (`workflow_dispatch`). Run
+  `make conformance` locally before you open a PR, and fire the workflow
   when a change wants a second platform.
 - Match the surrounding code style. No trailing whitespace. Tabs are not used;
   indent with four spaces.
