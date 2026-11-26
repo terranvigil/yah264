@@ -1,22 +1,20 @@
 # The GitHub Pages source
 
-Everything published at <https://terranvigil.github.io/yah264/> is built from
-this directory. Edit the markdown, rebuild, look at it.
+Everything at <https://terranvigil.github.io/yah264/> is built from this
+directory.
 
 ## Editing
 
     scripts/site.sh            # build and open the home page
     scripts/site.sh --serve    # build and serve on http://localhost:8000
 
-The first run creates a venv under `local/sitevenv` (git-ignored) and installs
-`markdown`. Nothing else is needed. No Ruby is involved.
+The first run creates a git-ignored venv under `local/sitevenv` with
+`markdown`, the only dependency.
 
-One page per file. The `---` block at the top sets the browser title and the
-meta description. Everything after it is ordinary markdown. Links between
-pages use the `.md` extension and get rewritten to `.html` at build time so that
-they work both on GitHub and on the site.
-
-Leave a note for me anywhere with an HTML comment. It won't render:
+Each page is one file: a `---` block for the browser title and meta
+description, then ordinary markdown. Links use `.md` and become `.html` at
+build time, which makes them work on GitHub and on the site. An HTML comment leaves a
+note for me without rendering:
 
     <!-- TODO(owner): this claim is too strong -->
 
@@ -38,17 +36,13 @@ Leave a note for me anywhere with an HTML comment. It won't render:
 | `assets/site.css` | shared styles, tokens matched to the explainers |
 
 `adopt()` in `scripts/build_site.py` pulls `docs/how-h264-works.html` and
-`docs/threading.html` into the build. It restyles them onto the site's fonts
-and color tokens and lifts their contents list into the site's rail. The
-content, the layout and the figures stay as they are. Edit both pages in
-`docs/`.
-The nav order lives in `NAV` at the top of `scripts/build_site.py`.
+`docs/threading.html` into the build, restyling them onto the site's fonts and
+colors and lifting their contents list into the rail. Edit both in `docs/`. The
+nav order is `NAV` at the top of `scripts/build_site.py`.
 
 ## Deploying
 
-On every push to main that touches this directory, CI runs the same
-`scripts/build_site.py` and publishes `site/_build`. A local preview and the
-deployed site come out of one renderer and can't drift.
-
-Set the Pages source to GitHub Actions once, by hand. It's under Pages in the
-repo's Settings.
+A push to main that touches this directory makes CI run the same
+`scripts/build_site.py` and publish `site/_build`, so preview and site can't
+drift. Set the Pages source to GitHub Actions once, under Pages in the repo's
+Settings.
