@@ -11,26 +11,26 @@ A super-fast, highly efficient H.264/AVC FLOSS encoder.
 
 ## YAH264?
 
-A fast open-source H.264 encoder exists. For 20 years x264 has been the leading software implementation for speed and quality. Beyond highly optimized coding tool algorithms, its hottest code (motion search, deblocking, CABAC) is hand-written assembly. Tens of thousands of lines of it.
+A fast open-source H.264 encoder exists. For 20 years x264 has led software encoding on speed and quality, with its hottest code (motion search, deblocking, CABAC) in tens of thousands of lines of hand-written assembly.
 
-In the past, when working on formats and codecs, I'd start by pulling up the specs and spend weeks working features for small gains. Today, you can use coding agents to accelerate the iteration over a large number of algorithmic optimizations. Prompt with a long list of ideas to try out and in minutes or hours, you have an answer.
+I used to start a codec feature by pulling up the specs and spending weeks for small gains. Coding agents now let you iterate over many algorithmic optimizations at once: prompt with a long list of ideas and in minutes or hours you have an answer.
 
-A fun example came up when we were optimizing the skip check for prediction reuse. Beyond brute force, there are some simple methods for this. After iterating through a number of options, the Cauchy-Schwarz inequality turned out to be a clear winner. We can bound every transform coefficient by the energy of the residual with its mean removed. If every bound is under the quantizer's threshold, the block must be zero and we skip the transform. On our "sunflower" test clip, 79% of the skip check's transforms disappeared.
+One fun example was the skip check for prediction reuse. After trying a number of options, the Cauchy-Schwarz inequality won clearly. It bounds every transform coefficient by the energy of the residual with its mean removed. If every bound is under the quantizer's threshold, the block must be zero and we skip the transform. On our "sunflower" test clip, 79% of the skip check's transforms disappeared.
 
 ## Plan
 
-We use coding agents to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
+We use coding agents to explore the design space. Each coding tool is a slot with several candidate algorithms, which we generate, implement and benchmark against an objective metric until the best combination wins:
 
-1. Build a standard H.264 encoder with the same feature set and options as x264.
-2. Capture x264's performance and quality baseline on a fixed test set of clips.
-3. Measure the speed and compression gaps between the two.
-4. Iterate over each H.264 coding tool, trying different techniques to determine how much of the gap can be closed.
-5. Stop when iterations no longer produce results.
-6. Progress through three stages: single-threaded C, then multi-threaded, then multi-threaded with SIMD optimization.
+1. Build a standard H.264 encoder with x264's feature set and options.
+2. Capture x264's speed and quality baseline on a fixed test set.
+3. Measure the speed and compression gaps.
+4. Try techniques on each coding tool to see how much of the gap closes.
+5. Stop when iterations stop paying.
+6. Go through three stages: single-threaded C, multi-threaded, then multi-threaded with SIMD.
 
 ## Status
 
-yah264 has met and surpassed speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size and gives the same or better quality. Each figure below is how many times faster yah264 finished than x264, in wall time.
+yah264 has passed x264 on speed, compression and quality. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every group yah264 is faster at the same file size, with the same or better quality. Figures are wall-time speedups over x264.
 
 | goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
@@ -38,11 +38,11 @@ yah264 has met and surpassed speed, compression and quality parity with x264. Th
 | 2 | plain C, all cores | 1.37x to 2.08x | 1.33x |
 | 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.28x to 1.92x | 1.12x |
 
-NOTE: Most of the work was done for arm64 because an Apple M5 is my primary development platform. Once we reached parity, I optimized for other platforms and instruction sets too.
+NOTE: Most of the work was on arm64, because an Apple M5 is my development machine. After parity I optimized for other platforms and instruction sets too.
 
 ## Details
 
-On 52 rate ladders over real titles, yah264 uses a median 10% fewer bits than x264 for the same VMAF v1 score. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
+On 52 rate ladders over real titles, yah264 uses a median 10% fewer bits than x264 for the same VMAF v1 score. See the [results page](https://terranvigil.github.io/yah264/results.html) for every cell.
 
 On rented cloud machines:
 
@@ -54,15 +54,15 @@ On rented cloud machines:
 | AMD EPYC (x86-64, AVX-512, on by default where the chip has it) | one thread, CPU time | 7% to 16% less |
 | Intel Xeon (x86-64, AVX2) | one thread, CPU time | 1% to 12% less |
 
-With every core busy on the Intel machine, yah264 takes 4% longer than x264 at 1080p and 10% less time at 4K. Threading on x86-64 is the next fix.
+With every core busy on the Intel machine, yah264 takes 4% longer than x264 at 1080p and 10% less at 4K. x86-64 threading is the next fix.
 
 ## Verify
 
-`make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
+`make review` runs a smaller HD board, as [check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains.
 
 ## Hardware option?
 
-On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD build. Median over the ten clips of the [results page's hardware table](https://terranvigil.github.io/yah264/results.html#the-hardware-mode), same bitrate:
+On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD build. Medians over the [hardware table](https://terranvigil.github.io/yah264/results.html#the-hardware-mode)'s ten clips at the same bitrate:
 
 | mode | wall time | CPU used | VMAF |
 |---|--:|--:|--:|
@@ -70,30 +70,27 @@ On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD b
 
 ## Shot-aware support
 
-Most video is a sequence of shots. Each shot wants different settings. yah264 can adapt per shot in a single pass. It also exposes what an external tool needs to run a full per-shot search.
+yah264 adapts per shot in a single pass and exposes what an external tool needs for a full per-shot search. Both options are off by default. Neither re-encodes. One scan of the source file (no pipes) runs before encoding.
 
-`--cut-split` scans the source for scene cuts first and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot can then be seeked to, packaged or replaced on its own. It costs no compression, because predicting across a cut gains nothing. The default scene-cut detection is different. It only turns a sudden change into an intra frame inside the lookahead and knows nothing about shots.
+`--cut-split` starts every shot on its own keyframe, on top of the regular interval. A shot can then be seeked to, packaged or replaced alone. Because predicting across a cut gains nothing, it costs no compression. The default scene-cut detection only makes a sudden change an intra frame inside the lookahead.
 
-`--shot-crf` uses the same scan to give each shot its own quality setting. Hard shots get a higher CRF and easy ones a lower one, so bits move from the hardest shots to the rest. It's still one encode with no trial encodes. On ten real titles at 1080p it needs a median 3.6% fewer bits for the same VMAF v1 score and wins on nine of them. PSNR-Y averaged over frames agrees. Pooled over the whole clip, PSNR-Y reads the other way, because the hardest shots are where quality drops.
+`--shot-crf` raises CRF on hard shots and lowers it on easy ones. On ten real titles at 1080p it needs a median 3.6% fewer bits for the same VMAF v1 score and wins on nine. PSNR-Y averaged over frames agrees. Pooled over the clip it reads the other way, because the hardest shots are where quality drops.
 
-Neither option re-encodes anything. The scan reads the source once before the encode starts. It needs a file as input and won't take a pipe.
-
-For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Because each shot starts on its own keyframe, a shot encoded alone matches the full encode exactly. That's guaranteed at one thread and usual with more. Trials are exact previews. Any shot can be redone later. Both options are off by default. [The engine interface](docs/engine-interface.md) has the details.
+A full search encodes each shot several ways in parallel, keeps the best and joins them. A shot encoded alone matches the full encode exactly (guaranteed at one thread, usual with more), so trials are exact previews and any shot can be redone later. See [the engine interface](docs/engine-interface.md).
 
 ## Up next
 
-With parity reached on Apple silicon, the work moves to speed on cloud servers. On x86-64 the kernels are written, verified and tuned twice. What's still open is speed with every core busy, where we trail x264 on some clips ([SIMD notes](docs/simd.md)).
-After that come the convex-hull stages in [the plan](docs/plan.md) and [shot-based encoding](docs/shot-based.md).
+Next is speed on cloud servers. The x86-64 kernels are written, verified and tuned twice. All-core speed is open: we trail x264 on some clips ([SIMD notes](docs/simd.md)). Then come the convex-hull stages in [the plan](docs/plan.md) and [shot-based encoding](docs/shot-based.md).
 
 ## Documentation
 
-- [How video encoding works](https://terranvigil.github.io/yah264/encoding.html): the concepts every codec shares.
-- [How H.264 works](https://terranvigil.github.io/yah264/how-h264-works.html): the standard's tools, one by one.
-- [Getting started](https://terranvigil.github.io/yah264/start.html): how to build and run yah264 and what the presets do.
-- [Design](https://terranvigil.github.io/yah264/design.html): how the encoder is put together.
-- [Threading](https://terranvigil.github.io/yah264/threading.html): the many-core pipeline.
-- [Results](https://terranvigil.github.io/yah264/results.html): the goal tables and the quality maps.
-- [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html): reproduce every number here.
+- [How video encoding works](https://terranvigil.github.io/yah264/encoding.html): concepts every codec shares
+- [How H.264 works](https://terranvigil.github.io/yah264/how-h264-works.html): the standard's tools
+- [Getting started](https://terranvigil.github.io/yah264/start.html): build, run, presets
+- [Design](https://terranvigil.github.io/yah264/design.html): how the encoder fits together
+- [Threading](https://terranvigil.github.io/yah264/threading.html): the many-core pipeline
+- [Results](https://terranvigil.github.io/yah264/results.html): goal tables and quality maps
+- [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html): reproduce the numbers
 
 ## Build
 
@@ -104,23 +101,20 @@ meson setup build && ninja -C build
 meson test -C build
 ```
 
-[Getting started](https://terranvigil.github.io/yah264/start.html) covers encoding with yah264,
-including as a library inside ffmpeg with `-c:v libyah264`.
+[Getting started](https://terranvigil.github.io/yah264/start.html) covers encoding, including inside ffmpeg with `-c:v libyah264`.
 
 ## Contributing
 
 Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules.
 
-Every change has to clear the recon-match gate. The encoder's internal copy of
-each decoded frame, the one it predicts the next frames from, must match what an
-independent decoder produces from the bitstream, bit for bit. Output is free to
-change; the encoder's picture of its own output is not. `make test` runs the
-unit tests and `make conformance` runs the gate.
+Every change must clear the recon-match gate: the encoder's copy of each
+decoded frame, which it predicts from, must match an independent decoder's
+output bit for bit. Output is free to change; the encoder's picture of its own
+output is not. `make test` runs the unit tests and `make conformance` the gate.
 
 ## License
 
-GPL-2.0-or-later, stated per file as well as in `LICENSE`. A commercial license
-is available for products that cannot comply with the GPL. x264 and x265 use the
-same arrangement. Linking yah264 into a product puts the product under the GPL
-unless it holds the commercial license.
+GPL-2.0-or-later, stated per file and in `LICENSE`. Linking yah264 into a
+product puts the product under the GPL unless it holds the commercial license, the same
+arrangement x264 and x265 use.
 Commercial terms: terranvigil@gmail.com.

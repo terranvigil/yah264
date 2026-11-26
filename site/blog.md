@@ -9,13 +9,13 @@ type: article
 
 yah264 is an H.264/AVC encoder that runs 1.28x to 2.17x faster than x264 across a wide range of test video. It needs a median 10% fewer bits for the same quality. The source is on [GitHub](https://github.com/terranvigil/yah264).
 
-I've worked on video ingestion pipelines for over 15 years. The key goals are always "lowest cost" and "highest quality" for a given bitrate. And of course speed usually matters too. This is my attempt at all three, for anyone who'd like to try yah264 out.
+I've worked on video ingestion pipelines for over 15 years. The goals are always "lowest cost" and "highest quality" for a given bitrate. Speed usually matters too. This is my attempt at all three.
 
-Because I started development on my MacBook Pro M5 Max, most of the initial optimization was arm64-based. That suited me, since I've found that the lowest-cost instances for encoding are currently arm64. Graviton4 is generally in the range of 10-30% cheaper per frame encoded.
+I developed on a MacBook Pro M5 Max, so most of the optimization started on arm64. That suits me, because the cheapest encoding instances I've found are arm64. Graviton4 is generally 10-30% cheaper per frame.
 
 ## Highlights
 
-yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Each figure is the median speedup over x264 in wall time, at the same file size:
+yah264 is faster than x264 in every group of the test corpus, CIF to 4K. Median wall-time speedup at the same file size:
 
 | build | Apple M5 Max | AWS Graviton4 |
 |---|--:|--:|
@@ -23,14 +23,14 @@ yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Ea
 | plain C, all cores | 1.37x to 2.08x | 2.27x |
 | SIMD-optimized, all cores (yah264 NEON vs x264's assembly) | 1.28x to 1.92x | 1.43x |
 
-The Mac ranges run from the slowest group's median to the fastest group's.
+Mac ranges run from the slowest group's median to the fastest's.
 
-- A median 10% fewer bits for the same VMAF v1 score over 52 rate ladders on real titles.
+- A median 10% fewer bits for the same VMAF v1 score, over 52 rate ladders on real titles.
 - 8-bit and 10-bit in one binary.
 - CRF, ABR, capped CRF and CBR, with VBV and HRD signaling.
 - Presets from `ultrafast` to `placebo`.
 
-The [results page](results.md) has every number and explains the method. If you want to [check the results yourself](check-it-yourself.md), `make review` in the [repository](https://github.com/terranvigil/yah264) reruns a smaller HD board.
+The [results page](results.md) has every number and the method. To [check it yourself](check-it-yourself.md), `make review` in the [repository](https://github.com/terranvigil/yah264) reruns a smaller HD board.
 
 <figure class="chart"><img src="assets/blog/speed.svg" alt="Dot plot: median speedup over x264 for each resolution and length group, at three goals. Every dot sits between 1.28x and 2.17x faster."></figure>
 
@@ -42,16 +42,11 @@ The [results page](results.md) has every number and explains the method. If you 
 
 ## Built for per-shot encoding
 
-Per-shot encoding gives each shot in a title its own settings. The search runs above the encoder. yah264 provides the options and a method to keep that orchestration simple. It finds the shots without a trial encode. It takes a plan of keyframes and quality offsets in a single encode. Because a shot encoded alone matches the same shot in the full encode, trials are exact previews.
-
-For most of the gain without a search, `--shot-crf` adjusts quality per shot in one pass. The options and a step-by-step method are in the docs:
-
-- Shot-aware options: [Getting started](start.md)
-- Orchestrator method: [the engine interface](https://github.com/terranvigil/yah264/blob/main/docs/engine-interface.md)
+Per-shot encoding gives each shot its own settings from a search that runs above the encoder. yah264 keeps that simple. It finds shots without a trial encode and takes a plan of keyframes and quality offsets in one encode. A shot encoded alone matches the same shot in the full encode, so trials are exact previews. For most of the gain without a search, `--shot-crf` adjusts quality per shot in one pass. See the [options](start.md) and the [orchestrator method](https://github.com/terranvigil/yah264/blob/main/docs/engine-interface.md).
 
 ## Per-title encoding
 
-yah264 is the encoder inside a per-title search. My [veo project](https://github.com/terranvigil/veo) does the search itself: bitrate ladders, convex hull and VMAF.
+yah264 is the encoder inside a per-title search, which my [veo project](https://github.com/terranvigil/veo) runs: bitrate ladders, convex hull and VMAF.
 
 ## Running it from ffmpeg
 
@@ -61,15 +56,15 @@ yah264 runs as a library inside ffmpeg:
 ffmpeg -i in.mp4 -c:v libyah264 -preset medium -crf 23 out.mp4
 ```
 
-The wrapper isn't upstream yet. It lives on the `yah264` branch of my [ffmpeg fork](https://github.com/terranvigil/FFmpeg). The [getting started](start.md) page has the build steps.
+Until the wrapper is upstream, it lives on the `yah264` branch of my [ffmpeg fork](https://github.com/terranvigil/FFmpeg). See [getting started](start.md) for the build.
 
 ## On a Mac
 
-`--hw videotoolbox` uses Apple's hardware encoder. It's faster and uses far less CPU. Quality is lower. It's a good fit for previews and proxies.
+`--hw videotoolbox` uses Apple's hardware encoder: faster and far lighter on CPU, but lower quality. It suits previews and proxies.
 
 ## Still being optimized
 
-x86-64 support is working and verified. It uses AVX2, plus AVX-512 where the chip has it. At one thread it already beats x264 on CPU time. With every core busy it still trails x264 on some clips. That's the next fix.
+x86-64 works and is verified, with AVX2 and AVX-512 where the chip has it. At one thread it beats x264 on CPU time. The next fix is all-core speed, where it trails on some clips.
 
 ## Docs
 
@@ -82,7 +77,4 @@ x86-64 support is working and verified. It uses AVX2, plus AVX-512 where the chi
 
 ## Coming next
 
-yah265 (HEVC) and yaav1 (AV1) are on the way. They share yah264's many-core pipeline and its correctness gate. Both build on what we learned here and will be released soon.
-
-- yah265: coming soon
-- yaav1: coming soon
+yah265 (HEVC) and yaav1 (AV1) are coming soon. They share yah264's many-core pipeline and correctness gate.
