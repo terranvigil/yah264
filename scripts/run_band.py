@@ -61,6 +61,9 @@ ARM = os.environ.get("ARM", "")
 # ARM_ARGS: extra CLI flags for the arm side, for knobs that are CLI
 # options rather than env vars (--aq-strength, --psy-rd, ...).
 ARM_ARGS = os.environ.get("ARM_ARGS", "")
+# either one makes it a self-A/B: an ARM_ARGS-only arm used to be scored
+# against x264, so a flag read as a gain over the reference, not over our default
+SELF_AB = bool(ARM or ARM_ARGS)
 
 # VMAF_MODELS=neg (the default) scores VMAF-NEG alone, the only number the band
 # gates on, for a little over half the scoring cost of both models; the per-rung
@@ -73,7 +76,7 @@ GATE = os.environ.get("VMAF_GATE", "VMAF-v1")
 # the remaining clips are not run. Never on the ABR band, whose per-clip noise
 # floor spans 0.2 to 11 points, and never against the reference encoder.
 # EARLY_STOP=0 reads all.
-EARLY_STOP = (os.environ.get("EARLY_STOP", "1") == "1" and bool(ARM)
+EARLY_STOP = (os.environ.get("EARLY_STOP", "1") == "1" and SELF_AB
               and os.environ.get("ARM_VS_X264") != "1")
 EARLY_ONE = float(os.environ.get("EARLY_ONE", "1.0"))
 EARLY_SOME = float(os.environ.get("EARLY_SOME", "0.5"))
@@ -132,7 +135,7 @@ def run(clip, points, mode):
     # better than us" and never "how much of the gap to them does it close" --
     # and for a clip we are BEHIND on, the second question is the one that
     # decides whether the arm is the answer or a rounding error.
-    b = xcmd if (not ARM or os.environ.get("ARM_VS_X264") == "1") else ours
+    b = xcmd if (not SELF_AB or os.environ.get("ARM_VS_X264") == "1") else ours
     cmd = ["python3", "scripts/bdcompare.py", "--vmaf", "--no-cache",
            "--models", MODELS,
            "--subsample", "1", "--clips", clip, "--frames", str(FRAMES),
