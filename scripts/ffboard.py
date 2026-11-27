@@ -494,6 +494,14 @@ def probe(clip):
     num, den = st["r_frame_rate"].split("/")
     fps = float(num) / float(den)
     have = int(st.get("nb_frames") or 0)
+    if not have:
+        # a y4m carries no frame count, so nb_frames is N/A and the window
+        # went uncapped: a 90-frame clip was labelled with the rate of 180
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
+             "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", clip_path(clip)],
+            capture_output=True, text=True).stdout.strip()
+        have = int(out) if out.isdigit() else 0
     return fps, have
 
 # ---------------------------------------------------------------------------
