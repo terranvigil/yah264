@@ -8,8 +8,8 @@ orchestrator that runs above the encoder and handles the trial encodes, the
 resolution ladder and the quality metric. The contract between the two is the
 [engine interface](engine-interface.md), which this page doesn't repeat.
 
-The ten-title `--shot-crf` figures are on VMAF v1. The other quality figures
-on this page are on VMAF-NEG (earlier metric).
+Quality figures on this page are on VMAF v1, except the per-shot oracle in
+What didn't work, which is on VMAF-NEG (earlier metric).
 
 ## How it works
 
@@ -91,9 +91,8 @@ analyze  ->  probe  ->  score  ->  hull+select  ->  assemble (+package)
    Whole-title encodes give the same bytes as per-shot jobs. They win because
    the engine schedules shots across its GOP workers better than an outside
    queue would.
-3. **score.** Decode each segment, upscale to the source size with Lanczos-3,
-   and score VMAF-NEG per frame against the source. Bits come from the
-   segment file.
+3. **score.** Decode each segment, scale segment and source to display
+   resolution (bicubic) and score VMAF v1 per frame. Bits come from the segment file.
 4. **hull and select.** For each unit keep the upper convex hull of
    (bits, frames x quality). For a slope lambda each unit takes the point that
    maximizes `frames * quality - lambda * bits`. Sweeping lambda traces the
@@ -123,7 +122,7 @@ frame count.
 | gates against our own flat CRF, plus a per-shot floor | Equal CRF isn't equal quality across encoders. A mode that wins the average by starving one shot is a visible regression. |
 | the plan, forces and stats share one input-frame index from zero | The orchestrator never translates between coding order and display order. |
 
-Measured against plain CRF at the same setting, over CRF 21 to 33,
+Measured against plain CRF at the same setting over five CRF points,
 `--shot-crf` reads:
 
 | content | BD-rate, VMAF | BD-rate, PSNR-Y |
@@ -131,21 +130,24 @@ Measured against plain CRF at the same setting, over CRF 21 to 33,
 | ten real titles at 1080p: three short segments (two of 2 minutes, Meridian's of 90 s) and seven 10-minute excerpts | -3.6% median on v1, 9 of 10 better | -5.1% median, 9 of 10 better |
 | the three short segments | -7.4% median on v1, 2 of 3 better | -5.7% median, 3 of 3 better |
 | the seven 10-minute excerpts | -3.5% median on v1, 7 of 7 better | -4.4% median, 6 of 7 better |
-| three five-shot sequences at CIF, 720p and 1080p | -1 to -4% on VMAF-NEG | |
+| three five-shot sequences at CIF, 720p and 1080p | -7.7% to -11.8% on v1 | |
 
-The ten titles ran at three threads. PSNR-Y in the table is the mean of the
-per-frame values. Pooled as one mean squared error over the whole clip, it
-reads the other way, with only one title better. That pooling is ruled by the
+The ten titles ran CRF 21 to 33 at three threads. The five-shot sequences ran
+CRF 22 to 34 at CIF and 720p and 26 to 38 at 1080p, at two threads. PSNR-Y in
+the table is the mean of the per-frame values. Pooled as one mean squared
+error over the whole clip, it reads the other way, with only one title better. That pooling is ruled by the
 hardest frames. Those are where the per-shot offsets let quality drop.
 Chimera, a montage of very unlike shots, is the one title that loses on v1.
 
-The prototype's measured hull at one resolution over five CRF points read, in
-BD-VMAF-NEG:
+The prototype's measured hull at one resolution, over five CRF points with two
+threads per GOP, reads:
 
 | window | against flat CRF | against `--shot-crf` |
 |---|---:|---:|
-| the five-shot 720p sequence | -11.7% | -3.4% |
-| a 3000-frame Big Buck Bunny window with 36 shots in 38 GOPs | -2.2% | -4.6% |
+| the five-shot 720p sequence | -9.1% | -3.6% |
+| a 3000-frame Big Buck Bunny window with 17 shots in 22 GOPs | -1.6% | -2.6% |
+
+On the Big Buck Bunny window the hull misses its 3% bar over `--shot-crf`.
 
 Joining one cell's segments reproduced that cell's encode byte for byte.
 
@@ -155,7 +157,7 @@ Joining one cell's segments reproduced that cell's encode byte for byte.
 |---|---|
 | per-shot tool selection (classify shots as grainy, flat, high-motion or static and switch psy-trellis, mb-tree, decimation or AQ strength per class) | A per-shot oracle on long-form windows put a perfect selector at about 1%. That doesn't pay for the machinery. Psy-trellis stays a manual `--tune grain`. |
 | per-shot resolution inside one H.264 stream | Because AVC has no reference-picture resampling, a switch needs new parameter sets, a keyframe and a player that copes. Segmented delivery makes it moot. |
-| an unweighted per-unit objective in the hull selection | Units of unequal length get the wrong points. The Big Buck Bunny assembly came out 4.8% worse than flat CRF. |
+| an unweighted per-unit objective in the hull selection | Units of unequal length get the wrong points. The Big Buck Bunny assembly came out 4.4% worse than flat CRF. |
 
 ## Open questions
 
@@ -163,11 +165,10 @@ Joining one cell's segments reproduced that cell's encode byte for byte.
   agrees when it's averaged over frames and disagrees when it's pooled over
   the whole clip. Which reading a service cares about decides whether the hard
   shots can give up that much.
-- On the Big Buck Bunny window above, scored on VMAF-NEG, `--shot-crf` reads
-  2.6% worse than flat CRF. That points at the pre-scan's inter cost misreading
-  animated pans. On v1, every animated title in the ten-title set wins,
-  Big Buck Bunny's 10-minute excerpt included. Re-score that window on v1
-  before treating pans as a weakness.
+- On the Big Buck Bunny window above, `--shot-crf` reads 1.1% worse than flat
+  CRF on the same GOPs. That points at the pre-scan's inter cost misreading
+  animated pans. The loss looks local to that window: every animated title in
+  the ten-title set still wins, Big Buck Bunny's 10-minute excerpt included.
 - Because CRF works in whole QP steps, shot offsets move bitrate in jumps of
   about 12%. Fractional QP is a separate item.
 - The measured hull with a resolution ladder hasn't run. It would use sparse
@@ -175,9 +176,9 @@ Joining one cell's segments reproduced that cell's encode byte for byte.
   come within 1% BD of the exhaustive hull at half the encodes. A predicted
   hull from the shot table's features starts only if that stage shows trial
   encodes are the cost that matters.
-- The prototype ran on two windows. The rest of the long-form corpus and the
-  other two multi-shot sequences are still to run against the 3% bar over
-  `--shot-crf`.
+- The prototype ran on two windows and cleared the 3% bar over `--shot-crf` on
+  one. The rest of the long-form corpus and the other two multi-shot sequences
+  are still to run.
 
 ## Measuring it
 

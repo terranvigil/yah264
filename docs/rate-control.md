@@ -12,8 +12,10 @@ The models, the VBV and the pipelined decide and account live in
 `src/encoder/rate.c`. Mode setup (`yah264_encoder_open`), the frame-type
 cascade (`frame_qp`) and the lookahead are in `src/encoder/encoder.c`.
 [options.md](options.md) lists the flags, and [knobs.md](knobs.md) has each
-`Y264_*` default quoted here. Quality figures on this page are on VMAF-NEG
-(earlier metric).
+`Y264_*` default quoted here. Quality figures on this page are on VMAF v1,
+except the shared ledger's six-worker reading, which is on VMAF-NEG (earlier
+metric). Rows marked "older build" were read on a build that still had the
+arm's code, before later default changes.
 
 ## How it works
 
@@ -441,18 +443,32 @@ the decide and pop order, never timing.
   B-pyramid, no VBV and a pool of at least `Y264_MT_POOL_MIN` threads. That
   minimum is 2. The lag is 0 at `--threads 1`. In-flight frames are predicted
   from their own complexity instead of their type's mean. On the ABR board at
-  twelve threads it bought 7-10% of wall on 720p and 1080p cells. BD-VMAF-NEG
-  against lag 0 was inside the instrument's +-1.7 on all clips but sintel, which
-  read -1.9 in the lag's favor. stockholm read +1.4.
+  twelve threads it bought 7-10% of wall on 720p and 1080p cells. Its quality
+  cost on VMAF v1 is in the table after this list.
 - **Split anchor drain.** The anchor waits for the predecessor anchor's bits
   because the decide needs them. It leaves that burst's B frames flying. It buys
-  1.04-1.11x where it engages. On cut-heavy content at `--ref 3` it costs about
-  +1.3% BD-VMAF-NEG (sintel, over 48 seconds). Of 12 clips, 8-9 are
-  byte-identical. It engages only when each GOP worker gets a pool of at least
-  `Y264_MT_POOL_MIN` threads.
+  1.04-1.11x where it engages. It costs nothing we can measure. On the older
+  build, against the prologue drain it replaced, sintel at `--ref 3` reads
+  -0.2% BD-VMAF v1 over 48 seconds. It engages only when each GOP worker gets a pool of
+  at least `Y264_MT_POOL_MIN` threads.
 - **Warm-up.** The first 12 decides of each encoder run serial-tight so the
   models calibrate before any lag. P/B scales are seeded in the lowres-cost
   domain.
+
+The table prices lag 1 against lag 0 under one-pass ABR at three threads. Each
+clip ran four rates over 120 frames. The null column is a near-inert arm on
+the same rungs. A lag reading inside it says nothing. Negative favors the lag.
+
+| clip | lag 1 | null |
+|---|---:|---:|
+| sintel_720p | -1.5% | -0.2% |
+| foreman_cif | -1.0% | +0.4% |
+| riverbed_1080p | 0.0% | -0.1% |
+| park_joy_720p | +0.1% | 0.0% |
+| ducks_720p | +0.2% | 0.0% |
+| crowd_run_1080p | +0.5% | -0.3% |
+| samsung_720p | +1.3% | 0.0% |
+| stockholm_720p | +2.1% | +1.3% |
 
 Under a VBV the buffer law is the safety-critical part. The pipeline adds a
 fallback gate for it. At each anchor's arrival, `rcp_vbv_gate` drains
@@ -542,16 +558,16 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Choice | Why |
 | --- | --- |
 | Flat CRF base under mb-tree, plus level 2.3 and fps slope 2.9 | mb-tree handles the per-frame allocation. The constants match bytes at equal `--crf` against x264 medium to a median 5.2% on 22 clips |
-| Frame DC 1.3 under uncapped CRF | lowest worst clip on the CRF band. It recovers long multi-shot titles: a 1080p animated feature reads -1.81% at 1.04 and -5.60% at 1.4. At 1.4 the static deep-band clip starts to pay |
+| Frame DC 1.3 under uncapped CRF | On the earlier metric it had the lowest worst clip on the CRF band and recovered long multi-shot titles. VMAF v1 sees little either way. On a 2-minute window of a 1080p animated feature, 1.04, 1.3 and 1.4 sit within 0.25% of each other against x264 medium. On the deep band, 1.4's cost on the static clips is inside the band's noise |
 | Frame DC 1.04 under capped CRF and bitrate targets | the capped-VBR compliance gate with CBR HRD read 68/72 at 1.3 and 72/72 at 1.04 |
-| `--aq-strength` 0.4 | a seven-clip sweep put the optimum near 0.3. The default sits just above it |
+| `--aq-strength` 0.4 | on VMAF v1, 0.3 reads a median -0.35% against 0.4 on the 13-clip CRF band at matched rate, with 8 clips better. The default sits just above it |
 | RF2 ledger for ABR | it's the CRF path plus a rate factor. We read each constant on the ABR band and the capped-VBR tracking cells |
 | Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27. The fit reads rms 3.2 QP over QP 16-44 on 32 clips |
 | Half-full handoff for segments | it's the CRF fill budget's fixed point, so segments compose without extra machinery |
 | Zero-lag anchors | burst-lagged anchors doubled the rate deviation |
-| Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads, with BD inside the noise on all clips but sintel, which favors the lag |
-| Two-pass offline plan always on | without the plan the I frame got the highest QP in its GOP, at 2.7x a B frame's bytes against 18x with it. With the plan two-pass beats one-pass ABR on all seven corpus clips (-1.61% to -35.66% BD-VMAF-NEG) |
-| Shared ABR ledger across GOP workers | 87.4 against 89.8 VMAF-NEG with six workers on a 1080p title |
+| Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads. On VMAF v1 it's within 1% of lag 0 on five of eight clips and sintel favors it. samsung and stockholm go the other way (see the table under frame threading) |
+| Two-pass offline plan always on | without the plan the I frame got the highest QP in its GOP, at 2.7x a B frame's bytes against 18x with it. On VMAF v1 over 120 frames, two-pass beats one-pass ABR on only three of seven corpus clips, from -2.8% (samsung) to +7.3% (sintel) |
+| Shared ABR ledger across GOP workers | without it, six workers read 87.4 against 89.8 with one on a 1080p title (VMAF-NEG, the earlier metric) |
 | Buffer charged slice payload plus framing | payload alone drifted 30 kbit over a few hundred CBR pictures |
 | CBR dive rule at 2 QP | under CBR, a burst whose rate factor sits more than 2 QP below the regime the bits model was calibrated at takes the serial schedule, because the model under-predicts there. 3 was the largest with no underflow on sintel's four CBR rungs at four and six threads. 2 keeps a QP of margin |
 | Sync-lookahead as ring capacity | fencing the window instead would change mb-tree's math. Capacity is pure latency |
@@ -562,18 +578,18 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | --- | --- |
 | Burst-lagged anchor decides | twice the rate deviation of zero-lag anchors |
 | Lag with in-flight frames predicted at their type's mean | a large loss on sintel, because a black opening credited each in-flight frame at the mean |
-| Lag granted at `--ref 3` without width | 7 of 11 clips lose, akiyo worst, and sintel's rate control fails (+212% over target) |
+| Lag granted at `--ref 3` without width | 7 of 11 clips lose, akiyo worst, and sintel's rate control fails (+212% over target) (earlier metric) |
 | Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals. samsung pays the most bits for the smallest speed gain |
 | A bit-neutral launch split | analysis consumes the QP from its first statement. At most 1.4% of wall is QP-independent |
-| Lowres intra energy as ABR decide complexity | a small gain on park_joy and a large loss on akiyo: near-zero inter cost on static content is a correct read |
-| Geometric blend of intra and inter cost | a large loss on akiyo |
-| A content term on the flat CRF base | +0.6 costs sintel 10%, -0.6 costs akiyo 1.6% |
-| Dropping the B cascade under CRF | ducks -8.92%, sintel +7.00%, no net |
+| Lowres intra energy as ABR decide complexity | a small gain on park_joy and a large loss on akiyo: near-zero inter cost on static content is a correct read (earlier metric) |
+| Geometric blend of intra and inter cost | a large loss on akiyo (earlier metric) |
+| A content term on the flat CRF base | older build. Either sign hurts some clip on VMAF v1. +0.6 costs sintel 10.8%. -0.6 gains sintel 9.3% but costs akiyo 1.0% |
+| Dropping the B cascade under CRF | ducks -3.1%, sintel +5.0% on VMAF v1, no net |
 | An exit constraint on capped-CRF segments | never bound on 30 of 36 cells. Where it did, it cost a compliance cell and spent 600 kbit/s more |
 | Fill horizon 1 for capped CRF | underflows a cell at four threads |
-| `Y264_ABR_QCOMP` 0.7 | +45% BD |
-| Rate-aware lookahead cost consumed by mb-tree | a loss on the mean, largest on foreman and akiyo. Pricing MV rate cuts propagation where mb-tree wants to boost |
-| Lowres SATD candidates in full-res decisions | a small BD loss. The lookahead feeds frame-level decisions only |
+| `Y264_ABR_QCOMP` 0.7 | it loses on 9 of the 13 ABR band clips on VMAF v1, median +1.6%, akiyo +7.2% |
+| Rate-aware lookahead cost consumed by mb-tree | a loss on the mean, largest on foreman and akiyo. Pricing MV rate cuts propagation where mb-tree wants to boost (earlier metric) |
+| Lowres SATD candidates in full-res decisions | a small BD loss. The lookahead feeds frame-level decisions only (earlier metric) |
 | A lookahead thread with no lead | 1.00-1.02x, and +1.5% to +10.6% wall on the clips the lead wins on |
 | Gating the lead on frame size | frame size doesn't predict the lead's gain. Three 720p clips of one size moved -15.2%, -12.3% and +0.8% in wall with the lead |
 
@@ -615,10 +631,8 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 - **Check engagement before pricing a threading knob.** An unengaged arm is
   byte-identical and reads as a 0.00% BD. Because engagement depends on threads
   per GOP worker, a long clip can be inert at 18 threads and engaged at 36.
-- **Short single-GOP windows aren't quality measurements.** sintel's drain-split
-  cost read +11.70% at 144 frames and +1.32% over 1152.
-- **`touchdown_420` can't be used in a BD round.** Three in-band ladders of the
-  same pair read +4.27%, +61.01% and +1.31%.
+- **Short single-GOP windows aren't quality measurements.** A rate-control
+  arm read over one GOP is read on the controller's settling alone.
 - **Read the VMAF band before believing a BD cell.** Pass `--no-cache` to
   bdcompare too, because its cache keys on the command string and a rebuild
   doesn't invalidate it.
