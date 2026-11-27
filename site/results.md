@@ -240,15 +240,23 @@ Repeated boards move, so small differences aren't readings:
 | bitrate solve residual | about 0.3% |
 | the two rates are matched within | 0.5% |
 
-At CRF and the same size every clip is ahead on VMAF v1. The floor passes.
+At CRF and the same size every clip is ahead on VMAF v1. The floor passes
+and the debt list is empty.
 
 | ten-clip board at CRF | value |
 |---|---|
-| median VMAF v1 lead, one thread | 1.3 |
-| median VMAF v1 lead, three threads | 1.2 |
+| median VMAF v1 lead, one thread | 1.45 |
+| median VMAF v1 lead, three threads | 1.25 |
 | smallest VMAF v1 lead on any clip | 0.75 |
 | median PSNR-Y difference, one thread | +0.03 dB |
-| worst PSNR-Y difference | stefan_cif at -0.51 dB, on the debt list |
+| worst PSNR-Y difference, one thread | bus_cif at -0.36 dB |
+| worst PSNR-Y difference, three threads | bus_cif at -0.44 dB |
+
+The three CIF clips trail in PSNR-Y on purpose. Below 720p the encoder codes
+chroma at a finer quantizer than luma, because VMAF v1 rewards it at display
+resolution. On stefan_cif the same bytes buy about 1.2 dB more in each chroma
+plane for 0.33 dB less in luma. Moving the offset back toward x264's balance
+gains PSNR-Y and loses VMAF v1 on all three clips. We keep the trade.
 
 ## CRF versus ABR
 
@@ -372,8 +380,7 @@ median.
   per side on a quiet machine. Spread is under 10%, except foreman at 17%.
 - CPU counts the encoder process only, not work the hardware does elsewhere.
 - Quality: our encoder at three threads.
-- Both come within about 10% of target on eight clips. On bus and stefan every
-  encoder here undershoots 400 kbit/s by a wide margin.
+- Both come within about 10% of target on all ten clips.
 - The hardware spends more bits than we do on seven clips (all but foreman,
   ducks and riverbed), which favors it on quality.
 
@@ -481,6 +488,22 @@ sit 39 BD-rate points apart. On 180 frames of 3D CGI Big Buck Bunny, yah264
 needs 37% fewer bits than x264 medium on VMAF v1. On 140 frames of hand-drawn Sita Sings
 the Blues it needs 2% more. The same spread makes preset-for-preset speed comparisons
 weak off the tuning set.
+
+Both figures use CRF 30 to 42 on both encoders at two threads. Most of
+Sita's ladder falls below VMAF v1 88, where we lead. Read where the bands
+read, x264 at CRF 26 to 34, Sita trails by more:
+
+| Sita Sings the Blues, x264 at VMAF v1 83 to 94 | BD-rate vs x264 |
+|---|--:|
+| two threads on both sides | +4.0% |
+| one thread on both sides | +1.2% |
+
+Two settings cost it. Above one thread the encoder keeps two speed trades in
+its motion and partition searches that its one-thread mode drops. They cost
+Sita 1% to 3%, against about 0.4% on average. And at 720p the encoder's
+finer chroma quantizer suits the clip poorly because its color is flat fills
+between hard edges. With the chroma offset at 0 it's level with x264 at one thread. See
+the [animation notes](https://github.com/terranvigil/yah264/blob/main/docs/animation.md).
 
 On the 10-minute Big Buck Bunny excerpt yah264 needs 1% to 2% fewer bits than
 x264 at CRF, at every resolution. At capped VBR the two are within 1%.
