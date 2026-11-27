@@ -68,9 +68,18 @@ def fps_of(clip):
     return int(m.group(1)) / int(m.group(2)) if m else 30.0
 
 
+def frames_of(clip):
+    """Frames the encode codes: FRAMES, or all a shorter clip has (stefan 90)."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets",
+                        "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0",
+                        os.path.join(ROOT, "tests", "corpus", clip + ".y4m")],
+                       capture_output=True, text=True).stdout.strip()
+    return min(FRAMES, int(r)) if r.isdigit() else FRAMES
+
+
 def targets_of(clip):
     """The band ladder's kbps as byte counts for the encoded frame span."""
-    secs = FRAMES / fps_of(clip)
+    secs = frames_of(clip) / fps_of(clip)
     return [int(kbps * 1000.0 / 8.0 * secs) for kbps in ladders[clip]]
 
 

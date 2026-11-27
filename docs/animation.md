@@ -41,15 +41,52 @@ Per clip, against the shipped default:
 | bbb_720p | 3D CGI | -37.4% |
 | sita_720p | hand-drawn 2D | +1.9% |
 
+Both rows use CRF 30 to 42 on both encoders at two threads. Most of sita's
+ladder falls below VMAF v1 88, where we lead. In the bands' range (x264 at
+CRF 26 to 34), sita trails by more:
+
+| sita_720p, x264 at CRF 26 to 34 (VMAF v1 83 to 94) | BD-rate vs x264 |
+|---|--:|
+| two threads on both sides | +4.0% |
+| one thread on both sides | +1.2% |
+
 Quote animation per clip. The median of the two, about -18%, describes
 neither.
 
 On the 10-minute Big Buck Bunny excerpt, yah264 needs 1% to 2% fewer bits than
 x264 at CRF at 720p, 1080p and 4K. At capped VBR the two are within 1%.
 
+## Why sita trails
+
+Two settings account for nearly all of it, and frame types don't: replaying
+x264's frame types through yah264 leaves the one-thread gap where it was.
+
+At more than one thread the encoder keeps two speed trades, an early exit
+from the motion search and an early end to the partition search, that its
+one-thread mode drops. They cost about 0.4% on average and 1.3% to 2.8% on
+sita. x264's two-thread encode loses nothing here.
+
+At 720p the encoder codes chroma at a finer quantizer than luma, because
+VMAF v1 rewards it on natural video. Sita's color is flat fills between hard
+saturated edges. The extra chroma bits buy little there and come out of luma.
+Every step back toward the luma quantizer helps:
+
+| `--chroma-qp-offset` on sita, two threads | BD-rate vs x264 |
+|---|--:|
+| -4 | +8.9% |
+| -2, the 720p default | +4.0% |
+| 0 | +1.3% |
+| +2 | +0.5% |
+| 0, at one thread | -0.6% |
+
+We haven't changed the default for it. A rule that picks the offset by how
+much chroma detail a picture has would need a measure that separates sita
+from akiyo_cif. Akiyo has about as much chroma detail and does best at -4,
+the most chroma tried.
+
 Sita trails in every configuration but all-intra:
 
-| sita_720p configuration | BD-rate vs x264 |
+| sita_720p configuration, CRF 30 to 42, two threads | BD-rate vs x264 |
 |---|--:|
 | default settings on both sides | +1.9% |
 | all-intra, `--keyint 1` on both sides | -11.4% |
@@ -74,14 +111,19 @@ Sita trails in every configuration but all-intra:
 | a larger B-frame QP step of 2.0 | sita gains, but ducks and touchdown lose more. The best step depends on content |
 | frame dedup or VFR machinery | repeats are already near-free in-codec |
 | screen-content tools (intra block copy, palette) | not in H.264 |
+| shorter B runs on sita (`--b-bias` -45 to -80) | +8% to +11% against x264. Replaying x264's frame types doesn't help either |
+| `--deblock 0:0` on sita | +4.3% against x264, against +4.0% for the default |
 
 ## Open questions
 
-- Why does hand-drawn trail while CGI leads? Inter coding gives back sita's
-  all-intra lead and more. Nothing we've tried moves the B-frame share, and
-  the obvious candidates are in the table above.
-- No `--deblock` offset has been swept on animation. Nothing masks blocking
-  on flat fills, so sweep it at the deep band instead of copying a value.
+- What separates content that wants less chroma from content that wants
+  more? Sita and Sol Levante want less and akiyo wants more. The ratio of
+  chroma to luma detail doesn't separate them.
+- Our motion search reads luma only. Turning chroma off in x264's search
+  costs it 1.4% on sita, so chroma in our motion search is a second-order
+  lead.
+- Only `--deblock 0:0` has been tried on animation. Sweep the offsets at the
+  deep band instead of copying a value.
 - On bbb about half the eventual skips run the full search, against a fifth on
   natural video. That's animation's extra time. Price any fix at 12 threads,
   where most of it overlaps other work.

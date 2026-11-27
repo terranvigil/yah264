@@ -104,7 +104,7 @@ fourpeople, where opening the session is a large share of a short run.
 
 | about the table | |
 |---|---|
-| rate | clips run at their ABR targets. The hardware comes within about 6% of target on eight clips. On bus and stefan every encoder undershoots the 400 kbit/s target |
+| rate | clips run at their ABR targets. The hardware comes within about 6% of target on all ten clips |
 | wall and CPU | median of five timed runs per side on a quiet machine, ours at auto threads. CPU counts the encoder process only, not work the hardware does elsewhere |
 | VMAF v1 | read with our encoder at three threads. The hardware spends more bits than we do on seven of ten clips, which favors it here |
 
