@@ -186,7 +186,7 @@ The [rate control guide](rate-control.md) covers how to choose. The flags:
 | --- | --- | --- | --- |
 | `-q`, `--qp` | 0..51 | 26 | Constant QP. It's the mode you get if you name no other. |
 | `-B`, `--bitrate` | kbit/s | off | Single-pass ABR to an average bitrate. |
-| `--crf` | ~0..51 | off | Constant rate factor. Decimals are accepted, but see the staircase note in the rate control guide. |
+| `--crf` | 0.1..51 | off | Constant rate factor. Decimals are accepted, but see the staircase note in the rate control guide. |
 | `--vbv-maxrate` | kbit/s | 0 = off | VBV peak rate. It needs `--vbv-bufsize`, and either alone does nothing. |
 | `--vbv-bufsize` | kbit | 0 = off | VBV buffer size. |
 | `--vbv-init` | float | full | Initial VBV occupancy: a fraction of `--vbv-bufsize` at or below 1, kbit above it. It matters only where the VBV actually limits the rate. |
