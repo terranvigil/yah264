@@ -218,7 +218,7 @@ before later default changes.
 | no grain scaling inside a fade | A fade from black opened the grain gate on a third of sintel's frames for no visible gain. It cost sintel about 4% BD-VMAF v1 against the reference. Without it sintel moves from behind the reference to ahead of it. The banding windows all keep their verdicts. The rest of the corpus codes byte-identically or within noise. |
 | flat-content psy-trellis gate | sintel reads -0.6% on the CRF band and -0.9% on the deep band, the second inside that band's noise. It costs +0.8% wall on sintel. The other corpus clips are byte-identical. The content that gains is flat and dark, not grainy. |
 | scene-cut floor 0.90 | Real cuts read 0.93 or more. False cuts on continuous content read 0.62 to 0.89. Over the full clips, parkrun reads -2.6% and perseverance 720p -1.0%. |
-| scene-cut jump 0.10 | Removes false cuts where the falling threshold walks onto a high, steady ratio, as on fog, water or a tilt. Real shot boundaries are all kept. With the floor in place it changes no output on coastguard, parkrun, perseverance 720p or sunflower over the full clips at CRF 30, nor on coastguard at CRF 23, 27 and 35. |
+| scene-cut jump 0.10 | Removes false cuts where the falling threshold walks onto a high, steady ratio, as on fog, water or a tilt. Real shot boundaries are all kept. With the floor in place it changes no output on coastguard, parkrun, perseverance 720p or sunflower over the full clips at CRF 23, 27, 30 and 35. |
 | demote threshold 0.77 | At 0.90 riverbed's water read 0.79 to 0.81. It coded B frames from anchors four frames apart and fell behind. At 0.77 it codes P. No other clip reads above 0.74. The CRF band is byte-identical. |
 
 ## What didn't work
