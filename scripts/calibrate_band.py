@@ -48,9 +48,11 @@ def probe(clip, crf, work, frames):
     if r.returncode != 0 or not os.path.exists(out):
         return None
     bits = os.path.getsize(out) * 8
-    # kbps at the clip's real framerate, read from the y4m header
+    # kbps at the clip's real framerate, read from the y4m header, over the
+    # frames coded: a clip shorter than --frames (stefan has 90) codes all it has
     fps = read_fps(src)
-    kbps = bits / (frames / fps) / 1000.0
+    coded = bd._coded_frames(out) or frames
+    kbps = bits / (coded / fps) / 1000.0
     v = bd.vmaf_of(out, src, work)
     os.unlink(out)
     if not v or bd.GATE not in v:

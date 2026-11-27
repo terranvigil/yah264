@@ -241,7 +241,8 @@ Repeated boards move, so small differences aren't readings:
 | the two rates are matched within | 0.5% |
 
 At CRF and the same size every clip is ahead on VMAF v1. The floor passes
-and the debt list is empty.
+and the board's debt list is empty. The class table near the top reads
+stefan_cif at -0.54 dB because it reads the whole clip at other rates.
 
 | ten-clip board at CRF | value |
 |---|---|
@@ -252,11 +253,20 @@ and the debt list is empty.
 | worst PSNR-Y difference, one thread | bus_cif at -0.36 dB |
 | worst PSNR-Y difference, three threads | bus_cif at -0.44 dB |
 
-The three CIF clips trail in PSNR-Y on purpose. Below 720p the encoder codes
+Most of the CIF clips' PSNR-Y deficit is chosen. Below 720p the encoder codes
 chroma at a finer quantizer than luma, because VMAF v1 rewards it at display
-resolution. On stefan_cif the same bytes buy about 1.2 dB more in each chroma
-plane for 0.33 dB less in luma. Moving the offset back toward x264's balance
-gains PSNR-Y and loses VMAF v1 on all three clips. We keep the trade.
+resolution. Setting the chroma offset to 0 shows how much of each clip's gap
+that accounts for. These are one-thread encodes at the board's sizes:
+
+| CIF clip, against x264 | PSNR-Y, default | PSNR-Y, offset 0 | VMAF v1, default | VMAF v1, offset 0 |
+|---|--:|--:|--:|--:|
+| foreman_cif | -0.24 dB | -0.02 dB | +3.5 | +1.7 |
+| bus_cif | -0.38 dB | -0.27 dB | +2.5 | +0.8 |
+| stefan_cif | -0.31 dB | -0.04 dB | +1.7 | +0.4 |
+
+On foreman and stefan the offset is nearly all of it. Most of bus's gap
+stays at offset 0 and comes from somewhere else. Because every clip loses
+VMAF v1 at offset 0, we keep the default.
 
 ## CRF versus ABR
 
@@ -298,6 +308,9 @@ riverbed under ABR with SIMD.
 | single-threaded | 3.8% | 4.0% |
 
 The opening is fitted on seventeen non-board cells, holding the board out.
+
+The stefan_cif and bus_cif speed cells and the rate-error table predate the
+fix that sizes short clips' windows correctly, and will be re-timed.
 
 ## Reproducing the tables
 
@@ -391,6 +404,9 @@ median.
 | yah264 | +1.2 | 0.65x | **0.66x** | **0.77x** | +0.1% | this repo, ten-clip board at CRF |
 | x264 | ref | 1.00x | 1.00x | 1.00x | ref | the reference point |
 | openh264 | -12.3 | **0.15x** | 1.01x | 0.94x | +3.3% | a different design point |
+
+The yah264 speed columns include stefan_cif and bus_cif cells timed before the
+board's frame-count fix. They'll be re-timed.
 
 openh264 beats x264 single-threaded by doing far less work per frame, and pays
 about 12 VMAF v1 points for it. The yah264 row is the ten-clip board. The
@@ -490,8 +506,8 @@ the Blues it needs 2% more. The same spread makes preset-for-preset speed compar
 weak off the tuning set.
 
 Both figures use CRF 30 to 42 on both encoders at two threads. Most of
-Sita's ladder falls below VMAF v1 88, where we lead. Read where the bands
-read, x264 at CRF 26 to 34, Sita trails by more:
+Sita's ladder falls below VMAF v1 88, where we lead. In the bands' range
+(x264 at CRF 26 to 34), Sita trails by more:
 
 | Sita Sings the Blues, x264 at VMAF v1 83 to 94 | BD-rate vs x264 |
 |---|--:|
@@ -502,8 +518,8 @@ Two settings cost it. Above one thread the encoder keeps two speed trades in
 its motion and partition searches that its one-thread mode drops. They cost
 Sita 1% to 3%, against about 0.4% on average. And at 720p the encoder's
 finer chroma quantizer suits the clip poorly because its color is flat fills
-between hard edges. With the chroma offset at 0 it's level with x264 at one thread. See
-the [animation notes](https://github.com/terranvigil/yah264/blob/main/docs/animation.md).
+between hard edges. With the chroma offset at 0 it's level with x264 at one
+thread. See the [animation notes](https://github.com/terranvigil/yah264/blob/main/docs/animation.md).
 
 On the 10-minute Big Buck Bunny excerpt yah264 needs 1% to 2% fewer bits than
 x264 at CRF, at every resolution. At capped VBR the two are within 1%.

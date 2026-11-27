@@ -42,8 +42,8 @@ Per clip, against the shipped default:
 | sita_720p | hand-drawn 2D | +1.9% |
 
 Both rows use CRF 30 to 42 on both encoders at two threads. Most of sita's
-ladder falls below VMAF v1 88, where we lead. Read where the bands read, its
-gap is larger:
+ladder falls below VMAF v1 88, where we lead. In the bands' range (x264 at
+CRF 26 to 34), sita trails by more:
 
 | sita_720p, x264 at CRF 26 to 34 (VMAF v1 83 to 94) | BD-rate vs x264 |
 |---|--:|
@@ -81,12 +81,12 @@ Every step back toward the luma quantizer helps:
 
 We haven't changed the default for it. A rule that picks the offset by how
 much chroma detail a picture has would need a measure that separates sita
-from akiyo_cif. Akiyo has about as much chroma detail and wants the most
-chroma of any setting.
+from akiyo_cif. Akiyo has about as much chroma detail and does best at -4,
+the most chroma tried.
 
 Sita trails in every configuration but all-intra:
 
-| sita_720p configuration | BD-rate vs x264 |
+| sita_720p configuration, CRF 30 to 42, two threads | BD-rate vs x264 |
 |---|--:|
 | default settings on both sides | +1.9% |
 | all-intra, `--keyint 1` on both sides | -11.4% |
@@ -120,7 +120,7 @@ Sita trails in every configuration but all-intra:
   more? Sita and Sol Levante want less and akiyo wants more. The ratio of
   chroma to luma detail doesn't separate them.
 - Our motion search reads luma only. Turning chroma off in x264's search
-  costs it 1.4% on sita. A color edge with little luma contrast is a smaller
+  costs it 1.4% on sita, so chroma in our motion search is a second-order
   lead.
 - Only `--deblock 0:0` has been tried on animation. Sweep the offsets at the
   deep band instead of copying a value.
