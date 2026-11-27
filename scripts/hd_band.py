@@ -703,7 +703,7 @@ def main():
               f"{live[0][0]}={live[0][1]}" if NULL_FIT and live else
               "null:  none stored; one live control per clip" if live else
               "null:  stored, no live control")
-    print(f"vmaf:  models {bd.MODELS}, score cache "
+    print(f"vmaf:  {bd.GATE if bd.GATE != 'VMAF-NEG' else 'models ' + bd.MODELS}, score cache "
           f"{'on' if bd.SCORE_CACHE else 'off'}; early stop "
           + (f"on (one clip > {EARLY_ONE:+.2f}% or {EARLY_N} > {EARLY_SOME:+.2f}%)"
              if EARLY_STOP else "off"))
@@ -825,7 +825,7 @@ def main():
               f"{(tot['miss'] + tot['hit'] + tot['probe']) / n:.0f} encodes a clip"
               + ("  [cache off]" if NO_CACHE else ""))
         print(f"  vmaf scores: {bd.SCORE_STATS['miss']} computed, "
-              f"{bd.SCORE_STATS['hit']} from the score cache (models {bd.MODELS})")
+              f"{bd.SCORE_STATS['hit']} from the score cache ({bd.GATE if bd.GATE != 'VMAF-NEG' else 'models ' + bd.MODELS})")
 
 
 main()

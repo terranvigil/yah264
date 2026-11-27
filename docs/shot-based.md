@@ -91,8 +91,8 @@ analyze  ->  probe  ->  score  ->  hull+select  ->  assemble (+package)
    Whole-title encodes give the same bytes as per-shot jobs. They win because
    the engine schedules shots across its GOP workers better than an outside
    queue would.
-3. **score.** Decode each segment, scale it to display resolution and score
-   VMAF v1 per frame against the source. Bits come from the segment file.
+3. **score.** Decode each segment, scale segment and source to display
+   resolution (bicubic) and score VMAF v1 per frame. Bits come from the segment file.
 4. **hull and select.** For each unit keep the upper convex hull of
    (bits, frames x quality). For a slope lambda each unit takes the point that
    maximizes `frames * quality - lambda * bits`. Sweeping lambda traces the
@@ -122,7 +122,7 @@ frame count.
 | gates against our own flat CRF, plus a per-shot floor | Equal CRF isn't equal quality across encoders. A mode that wins the average by starving one shot is a visible regression. |
 | the plan, forces and stats share one input-frame index from zero | The orchestrator never translates between coding order and display order. |
 
-Measured against plain CRF at the same setting, over CRF 21 to 33,
+Measured against plain CRF at the same setting over five CRF points,
 `--shot-crf` reads:
 
 | content | BD-rate, VMAF | BD-rate, PSNR-Y |
@@ -132,9 +132,10 @@ Measured against plain CRF at the same setting, over CRF 21 to 33,
 | the seven 10-minute excerpts | -3.5% median on v1, 7 of 7 better | -4.4% median, 6 of 7 better |
 | three five-shot sequences at CIF, 720p and 1080p | -7.7% to -11.8% on v1 | |
 
-The ten titles ran at three threads and the five-shot sequences at two.
-PSNR-Y in the table is the mean of the per-frame values. Pooled as one mean squared error over the whole clip, it
-reads the other way, with only one title better. That pooling is ruled by the
+The ten titles ran CRF 21 to 33 at three threads. The five-shot sequences ran
+CRF 22 to 34 at CIF and 720p and 26 to 38 at 1080p, at two threads. PSNR-Y in
+the table is the mean of the per-frame values. Pooled as one mean squared
+error over the whole clip, it reads the other way, with only one title better. That pooling is ruled by the
 hardest frames. Those are where the per-shot offsets let quality drop.
 Chimera, a montage of very unlike shots, is the one title that loses on v1.
 

@@ -190,8 +190,9 @@ cadence. [B frames](b-frames.md) covers the pyramid and the B coding itself.
 
 ## What we chose and why
 
-BD figures on this page are BD-VMAF v1 at matched achieved bitrate. The few
-that are still on VMAF-NEG (earlier metric) say so. Negative is better.
+BD figures on this page are BD-VMAF v1 at matched achieved bitrate, unless a
+row says equal CRF. HD band rows use that band's shared CRF rungs. The few
+figures still on VMAF-NEG (earlier metric) say so. Negative is better.
 Rows marked "older build" were read on a build that still had the arm's code,
 before later default changes.
 
@@ -203,21 +204,21 @@ before later default changes.
 | floor 2 on mb-tree frames, 16 on non-reference B | On the HD band, floor 1 on mb-tree frames reads a median +0.16% and costs bbb 720p 0.8%, though perseverance 720p gains 1.9%. A B floor of 1 reads a median -0.03%, inside the band's noise. |
 | absolute anchor 4.5 | Against no anchor the 13-clip CRF band reads a mean of -1.07% but a flat median (+0.04%), with only 6 clips better. The gain sits on sintel (-7.1%) and park_joy (-5.0%). On the earlier metric it was a median -5.17% with 11 of 12 better. 7.5 costs samsung 2.3%. |
 | DC strength 1.3 under uncapped CRF | On the earlier metric it had the lowest worst clip on the CRF band and recovered long multi-shot titles. On v1, a 2-minute window of a 1080p animated feature puts 1.04, 1.3 and 1.4 within 0.25% of each other against x264 medium. On the deep band 1.4 costs the static clips +0.3% to +0.7%, inside the band's noise. |
-| DC rate weighting 0.25 | It loses to no weighting on all three multi-shot sequences: +0.9%, +2.0% and +1.9%. On the earlier metric it won on all three. Against 0.5 it's mixed. |
+| DC rate weighting 0.25 | It loses to no weighting on all three multi-shot sequences: +0.9%, +2.0% and +1.9%. It's kept pending a v1 re-tune. On the earlier metric it won on all three. Against 0.5 it's mixed. |
 | B center pull 1.3, level 6.0 | A pull of 0 costs mobile 1.4% and sintel 0.6%, and gains stefan 0.4%. 1.6 costs akiyo 1.2% under ABR. |
 | mb-tree strength 1.4 | Restoring the full 2.0 closes the bitrate gap at equal CRF but costs 12 of 13 clips, median +4.0%. fourpeople reads +14%. |
-| mb-tree AC gain 1.7 | It was the sweep optimum on the earlier metric. On v1 it isn't: 1.0 reads a CRF band median of -0.08% against it, 7 of 13 better, and fourpeople -9.1%. |
-| reference-B mb-tree field | It loses on v1. With the field off the CRF band reads a median -0.52%, 8 of 13 better. Under ABR it's flat (median -0.09%). It costs about 3% of wall. On the earlier metric it read -2.09% on the CRF band. |
+| mb-tree AC gain 1.7 | It was the sweep optimum on the earlier metric and is kept pending a v1 re-tune. On v1 it isn't the optimum: 1.0 reads a CRF band median of -0.08% against it, 7 of 13 better, and fourpeople -9.1%. |
+| reference-B mb-tree field | It loses on v1 and is kept pending a v1 re-tune. With the field off the CRF band reads a median -0.52%, 8 of 13 better. Under ABR it's flat (median -0.09%). It costs about 3% of wall. On the earlier metric it read -2.09% on the CRF band. |
 | motion-rate lambda 8 in propagation | Without it a well-tracked block passes nearly all its cost on, and importance piles up along long chains until the offsets saturate. |
-| corrected lowres costs (source half-pel phases, subpel start, the six directional modes where needed) | Older build, against the uncorrected costs: t1 CRF band median -0.34%, multi-shot -1.7%, -3.8% and -0.7%. +0.7% instructions at 1080p. |
+| corrected lowres costs (source half-pel phases, subpel start, the six directional modes where needed) | Older build, against the uncorrected costs: t1 CRF band median -0.34% at equal CRF, multi-shot -1.7%, -3.8% and -0.7%. +0.7% instructions at 1080p. |
 | `--psy-rd 2.0` | On VMAF-NEG (earlier metric) the basin ran from 2.0 to 3.0, and 2.0 was the most uniform: median -0.17%, 7 of 12 better, worst +0.74%. |
 | psy-RD 5x on dark, smooth blocks | On five dark windows from three titles at the reference's size, the share of dark smooth blocks coded flat falls from 66% to 23% on a mostly dark frame. The reference codes 32% of them flat. Against 1x the HD band reads a median +0.05% and a worst clip of +0.34%. 3x keeps less grain. 8x keeps no more. |
 | a gated 6-point dark cut | It keeps dark grain and gradients from coding flat, within the banding check's margins of the reference on every window. Applied to every dark frame, it spends bits where nothing can band. The gate limits it to frames with bright areas or with much dark grain or gradient. |
 | flat black left out of the grain share on mostly black frames | A black stage around a lit subject kept the gate shut and left its dark gradient banded. Leaving flat black out on every frame also opened the gate on dark CG shadow and on slow fades from black, where it spent bits for no banding gain. We hold the rule to mostly black frames that aren't fading. |
-| no grain scaling inside a fade | A fade from black opened the grain gate on a third of sintel's frames for no visible gain. It cost sintel about 4% BD-VMAF v1 (not NEG) against the reference. Without it sintel moves from behind the reference to ahead of it. The banding windows all keep their verdicts. The rest of the corpus codes byte-identically or within noise. |
+| no grain scaling inside a fade | A fade from black opened the grain gate on a third of sintel's frames for no visible gain. It cost sintel about 4% BD-VMAF v1 against the reference. Without it sintel moves from behind the reference to ahead of it. The banding windows all keep their verdicts. The rest of the corpus codes byte-identically or within noise. |
 | flat-content psy-trellis gate | sintel reads -0.6% on the CRF band and -0.9% on the deep band, the second inside that band's noise. It costs +0.8% wall on sintel. The other corpus clips are byte-identical. The content that gains is flat and dark, not grainy. |
 | scene-cut floor 0.90 | Real cuts read 0.93 or more. False cuts on continuous content read 0.62 to 0.89. Over the full clips, parkrun reads -2.6% and perseverance 720p -1.0%. |
-| scene-cut jump 0.10 | Removes false cuts where the falling threshold walks onto a high, steady ratio, as on fog, water or a tilt. Real shot boundaries are all kept. With the floor in place it changes no cut on coastguard, parkrun, perseverance 720p or sunflower. |
+| scene-cut jump 0.10 | Removes false cuts where the falling threshold walks onto a high, steady ratio, as on fog, water or a tilt. Real shot boundaries are all kept. With the floor in place it changes no output on coastguard, parkrun, perseverance 720p or sunflower over the full clips at CRF 30, nor on coastguard at CRF 23, 27 and 35. |
 | demote threshold 0.77 | At 0.90 riverbed's water read 0.79 to 0.81. It coded B frames from anchors four frames apart and fell behind. At 0.77 it codes P. No other clip reads above 0.74. The CRF band is byte-identical. |
 
 ## What didn't work
@@ -225,9 +226,9 @@ before later default changes.
 | idea | why not |
 |---|---|
 | Chroma in the AQ energy | Older build, equal CRF: -1.8% to +0.8% on six CIF clips, better on four, for 9% of the mb-tree bucket. On the earlier metric it was neutral. |
-| A gain that grows with frame energy above 1 | It lost on stefan and on the HD clips. |
+| A gain that grows with frame energy above 1 | It lost on stefan and on the HD clips (earlier metric). |
 | The spread gain on non-reference B under a bitrate target | It costs mobile's ABR band 0.75%. That path runs gain 1 there. |
-| Pulling only B frames busier than the level | Nothing on perseverance, a small loss on sintel. |
+| Pulling only B frames busier than the level | Nothing on perseverance, a small loss on sintel (earlier metric). |
 | The DC term as a per-macroblock offset instead of on the base QP | mobile loses: consumers keyed on the base QP (lambda, cascade, psy, trellis) don't see it. |
 | A CRF base term from lowres complexity under mb-tree | Older build. Either sign hurts some clip: +0.6 costs sintel 10.8%. -0.6 gains sintel 9.3% but costs akiyo 1.0%. |
 | Centering the mb-tree boost under CRF | Destroys the cross-frame gain on static content (akiyo). |
@@ -241,20 +242,19 @@ before later default changes.
 | Whole-run B placement | Older build. A 2-minute Cosmos window gains 1.1%. On the CRF band the median is 0, coastguard loses 2.8% and samsung gains 1.7%. It costs +3.5% instructions at best and stays off. |
 | `--b-bias` below 0 | -50 costs 2.7% to 24% on four CIF clips. Above 0 does nothing on that content, since every run is already full. |
 | The field-ME previous-frame leg for cut sums | Because it finds better matches, the sums fall below the calibrated cut threshold. chimera 2160p lost two real cuts. |
-| A cheaper four-mode lowres intra on 2160p | It lost on chimera. |
+| A cheaper four-mode lowres intra on 2160p | It lost on chimera (earlier metric). |
 | Suppressing a cut inside `--min-keyint` entirely | sintel's early cut coded straight through as a B cadence and spent 76% of the clip's bits on the 8 frames after it. |
 
 ## Open questions
 
 - Why the best AQ strength sits at 0.3 to 0.4, so far below x264 medium's 1.0.
-  The old lead was that the field also weights mb-tree's propagation and
-  starves it at 0.4. On v1 that doesn't hold on bus: mb-tree is worth -6.2% at
-  0.4 and -3.8% at 1.0.
+  mb-tree is worth more at 0.4 than at 1.0 on bus (-6.2% against -3.8%), so
+  starved propagation doesn't explain it.
 - On the seven cells swept, depth 50 is better than 40 on bbb 1080p and never
   worse beyond the spread. Whether it helps at 2160p, and whether that pays its
   memory and lookahead time there, is unmeasured.
-- The reference-B mb-tree field loses on the v1 CRF band but still helps sintel
-  a little. Which content it hurts, and why, is open.
+- The reference-B mb-tree field loses on the v1 CRF band. Which content it
+  hurts, and why, is open.
 - `--tune grain` still sets psy-rd 1.5. That value was measured against an
   older default of 1.0 and hasn't been re-measured against 2.0.
 

@@ -14,7 +14,8 @@ cascade (`frame_qp`) and the lookahead are in `src/encoder/encoder.c`.
 [options.md](options.md) lists the flags, and [knobs.md](knobs.md) has each
 `Y264_*` default quoted here. Quality figures on this page are on VMAF v1,
 except the shared ledger's six-worker reading, which is on VMAF-NEG (earlier
-metric).
+metric). Rows marked "older build" were read on a build that still had the
+arm's code, before later default changes.
 
 ## How it works
 
@@ -446,9 +447,9 @@ the decide and pop order, never timing.
   cost on VMAF v1 is in the table after this list.
 - **Split anchor drain.** The anchor waits for the predecessor anchor's bits
   because the decide needs them. It leaves that burst's B frames flying. It buys
-  1.04-1.11x where it engages. It costs nothing we can measure: against the
-  prologue drain it replaced, sintel at `--ref 3` reads -0.2% BD-VMAF v1 over
-  48 seconds. It engages only when each GOP worker gets a pool of
+  1.04-1.11x where it engages. It costs nothing we can measure. On the older
+  build, against the prologue drain it replaced, sintel at `--ref 3` reads
+  -0.2% BD-VMAF v1 over 48 seconds. It engages only when each GOP worker gets a pool of
   at least `Y264_MT_POOL_MIN` threads.
 - **Warm-up.** The first 12 decides of each encoder run serial-tight so the
   models calibrate before any lag. P/B scales are seeded in the lowres-cost
@@ -577,18 +578,18 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | --- | --- |
 | Burst-lagged anchor decides | twice the rate deviation of zero-lag anchors |
 | Lag with in-flight frames predicted at their type's mean | a large loss on sintel, because a black opening credited each in-flight frame at the mean |
-| Lag granted at `--ref 3` without width | 7 of 11 clips lose, akiyo worst, and sintel's rate control fails (+212% over target) |
+| Lag granted at `--ref 3` without width | 7 of 11 clips lose, akiyo worst, and sintel's rate control fails (+212% over target) (earlier metric) |
 | Launching the anchor before its predecessor drains | the decide prices the burst off missing actuals. samsung pays the most bits for the smallest speed gain |
 | A bit-neutral launch split | analysis consumes the QP from its first statement. At most 1.4% of wall is QP-independent |
-| Lowres intra energy as ABR decide complexity | a small gain on park_joy and a large loss on akiyo: near-zero inter cost on static content is a correct read |
-| Geometric blend of intra and inter cost | a large loss on akiyo |
-| A content term on the flat CRF base | either sign hurts some clip on VMAF v1. +0.6 costs sintel 10.8%. -0.6 gains sintel 9.3% but costs akiyo 1.0% |
+| Lowres intra energy as ABR decide complexity | a small gain on park_joy and a large loss on akiyo: near-zero inter cost on static content is a correct read (earlier metric) |
+| Geometric blend of intra and inter cost | a large loss on akiyo (earlier metric) |
+| A content term on the flat CRF base | older build. Either sign hurts some clip on VMAF v1. +0.6 costs sintel 10.8%. -0.6 gains sintel 9.3% but costs akiyo 1.0% |
 | Dropping the B cascade under CRF | ducks -3.1%, sintel +5.0% on VMAF v1, no net |
 | An exit constraint on capped-CRF segments | never bound on 30 of 36 cells. Where it did, it cost a compliance cell and spent 600 kbit/s more |
 | Fill horizon 1 for capped CRF | underflows a cell at four threads |
 | `Y264_ABR_QCOMP` 0.7 | it loses on 9 of the 13 ABR band clips on VMAF v1, median +1.6%, akiyo +7.2% |
-| Rate-aware lookahead cost consumed by mb-tree | a loss on the mean, largest on foreman and akiyo. Pricing MV rate cuts propagation where mb-tree wants to boost |
-| Lowres SATD candidates in full-res decisions | a small BD loss. The lookahead feeds frame-level decisions only |
+| Rate-aware lookahead cost consumed by mb-tree | a loss on the mean, largest on foreman and akiyo. Pricing MV rate cuts propagation where mb-tree wants to boost (earlier metric) |
+| Lowres SATD candidates in full-res decisions | a small BD loss. The lookahead feeds frame-level decisions only (earlier metric) |
 | A lookahead thread with no lead | 1.00-1.02x, and +1.5% to +10.6% wall on the clips the lead wins on |
 | Gating the lead on frame size | frame size doesn't predict the lead's gain. Three 720p clips of one size moved -15.2%, -12.3% and +0.8% in wall with the lead |
 
@@ -632,8 +633,6 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
   per GOP worker, a long clip can be inert at 18 threads and engaged at 36.
 - **Short single-GOP windows aren't quality measurements.** A rate-control
   arm read over one GOP is read on the controller's settling alone.
-- **`touchdown_420` is a noisy BD clip.** A near-inert pair read -0.4% to
-  -1.0% on VMAF v1 across three in-band CRF ladders.
 - **Read the VMAF band before believing a BD cell.** Pass `--no-cache` to
   bdcompare too, because its cache keys on the command string and a rebuild
   doesn't invalidate it.
