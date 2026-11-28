@@ -102,7 +102,7 @@ extern "C" {
 #endif
 
 #define YAH264_VERSION_MAJOR 0
-#define YAH264_VERSION_MINOR 2
+#define YAH264_VERSION_MINOR 3
 #define YAH264_VERSION_PATCH 0
 
 /* Chroma sampling (planar Y, Cb, Cr).
