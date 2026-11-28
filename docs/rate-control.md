@@ -13,9 +13,9 @@ The models, the VBV and the pipelined decide and account live in
 cascade (`frame_qp`) and the lookahead are in `src/encoder/encoder.c`.
 [options.md](options.md) lists the flags, and [knobs.md](knobs.md) has each
 `Y264_*` default quoted here. Quality figures on this page are on VMAF v1,
-except the shared ledger's six-worker reading, which is on VMAF-NEG (earlier
-metric). Rows marked "older build" were read on a build that still had the
-arm's code, before later default changes.
+except rows marked "earlier metric", which were read on VMAF v0.6.1. Rows
+marked "older build" were read on a build that still had the arm's code,
+before later default changes.
 
 ## How it works
 
@@ -381,16 +381,26 @@ GOP workers ABR keeps one rate problem:
   state. The GOPs in between are credited at target.
 - **Shared ledger**: concurrent ABR GOPs read and write one rate factor.
   Chained through the carry alone, the first W GOPs each solved their own rate
-  problem cold. Every later one read a ledger W GOPs stale. On a 1080p title at
-  12.5 Mbit/s capped VBR, 6 parallel GOPs read VMAF-NEG 87.4 against 89.8 with
-  one worker. The shared ledger isn't used under two-pass, whose budget is
-  already per GOP, or under `--gop-threads`.
+  problem cold. Every later one read a ledger W GOPs stale. In the table below,
+  six unshared workers undershoot the target by three times as much as one
+  worker and score lower. The shared ledger isn't used under two-pass, whose
+  budget is already per GOP, or under `--gop-threads`.
 - **Two-pass** splits the stats file at the GOP markers a threaded pass 1
   writes. Each GOP takes the share of the budget its complexity earns. Because
   a serial pass 1 writes no markers, its pass 2 runs serially too. Under a VBV
   the GOPs join at levels the splitter plans (see [Two-pass](#two-pass)).
 - **`--keyint 1` with a VBV** runs one encoder: a one-frame GOP has no frame
   of its own to correct the buffer level its segment assumed.
+
+Sol Levante at 1080p, 2494 frames, capped VBR at 12.5 Mbit/s, `--threads 6`:
+
+| GOP workers | build | rate vs target | VMAF v1 |
+|---|---|--:|--:|
+| 6, shared ledger | current | -3.5% | 95.11 |
+| 1 | current | -3.0% | 94.39 |
+| 6, unshared | older build, AQ 0.25 | -9.5% | 92.96 |
+| 6, shared ledger | older build, AQ 0.25 | -3.4% | 94.36 |
+| 1 | older build, AQ 0.25 | -2.8% | 93.71 |
 
 ### What VBV actually guarantees
 
@@ -567,7 +577,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Zero-lag anchors | burst-lagged anchors doubled the rate deviation |
 | Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads. On VMAF v1 it's within 1% of lag 0 on five of eight clips and sintel favors it. samsung and stockholm go the other way (see the table under frame threading) |
 | Two-pass offline plan always on | without the plan the I frame got the highest QP in its GOP, at 2.7x a B frame's bytes against 18x with it. On VMAF v1 over 120 frames, two-pass beats one-pass ABR on only three of seven corpus clips, from -2.8% (samsung) to +7.3% (sintel) |
-| Shared ABR ledger across GOP workers | without it, six workers read 87.4 against 89.8 with one on a 1080p title (VMAF-NEG, the earlier metric) |
+| Shared ABR ledger across GOP workers | without it, six workers on a 1080p title came in 9.5% under target and read VMAF v1 92.96 against 93.71 with one worker (older build, see the ledger table above) |
 | Buffer charged slice payload plus framing | payload alone drifted 30 kbit over a few hundred CBR pictures |
 | CBR dive rule at 2 QP | under CBR, a burst whose rate factor sits more than 2 QP below the regime the bits model was calibrated at takes the serial schedule, because the model under-predicts there. 3 was the largest with no underflow on sintel's four CBR rungs at four and six threads. 2 keeps a QP of margin |
 | Sync-lookahead as ring capacity | fencing the window instead would change mb-tree's math. Capacity is pure latency |

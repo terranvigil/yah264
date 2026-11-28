@@ -74,12 +74,13 @@ header says otherwise.
 
 Operating points come from `scripts/parity-clip-calib.sh` on 6-second
 windows at medium and one thread. Each is the lowest ABR target that puts us
-in VMAF 88-94 with our rate error within a few percent. Calibrate new clips
-the same way, never by hand.
+at VMAF v1 88-94 with both encoders within about 8% of target. ducks is the
+exception. Because both overshoot it at every rate, its point is the rate in
+our 88-94 range that tracks closest. Calibrate new clips the same way, never by
+hand.
 
-The current points were chosen on VMAF v0.6.1 (the earlier metric), though
-the script now scores v1. They stay put to keep the board's speed columns
-comparable, until the next timed board moves them to v1.
+The current points were chosen on VMAF v1 at display resolution with the
+0.25 AQ default.
 
 old_town and stockholm have no calibrated point. No point in the band has a
 clean rate: our ABR runs 4-11% over target across the middle of both
@@ -87,7 +88,7 @@ ladders. Rate error depends on content, window length and
 thread count for both encoders. Name all three when you quote one.
 
 A calibration point isn't a quality verdict. At matched ABR targets x264 can
-read 4-7 VMAF ahead on stockholm, shields and blue_sky, where our CRF BD
+read 4-7 VMAF ahead on stockholm and blue_sky, where our CRF BD
 curve is well ahead. That gap comes from ABR allocation and says nothing
 about compression.
 

@@ -82,31 +82,32 @@ bitrate on all ten board clips. Use it when CPU matters more than bits.
 
 | clip | wall, hardware / ours | CPU, ours / hardware | VMAF v1, hardware minus ours |
 |---|--:|--:|--:|
-| foreman_cif | 1.88 | 12 | -6.1 |
-| bus_cif | 1.78 | 11 | -11.9 |
-| stefan_cif | 2.29 | 8 | -8.7 |
-| ducks_720p | 0.62 | 48 | -9.9 |
-| park_joy_720p | 0.65 | 32 | -9.2 |
-| fourpeople_720p | 1.45 | 16 | -6.4 |
-| shields_720p | 1.02 | 18 | -7.0 |
-| sunflower_1080p | 0.93 | 18 | -3.9 |
-| pedestrian_1080p | 0.80 | 27 | -5.3 |
-| riverbed_1080p | 0.32 | 46 | -12.6 |
+| foreman_cif | 1.57 | 16 | -2.5 |
+| bus_cif | 1.69 | 13 | -8.1 |
+| stefan_cif | 2.08 | 10 | -4.3 |
+| ducks_720p | 0.60 | 45 | -10.6 |
+| park_joy_720p | 0.69 | 29 | -10.6 |
+| fourpeople_720p | 1.64 | 14 | -6.6 |
+| shields_720p | 1.20 | 15 | -14.7 |
+| sunflower_1080p | 1.13 | 14 | -5.8 |
+| pedestrian_1080p | 0.86 | 25 | -6.1 |
+| riverbed_1080p | 0.35 | 46 | -12.7 |
 
 | at the median | hardware against ours |
 |---|---|
-| CPU | about an eighteenth |
-| wall time | about the same |
-| VMAF v1 | 7.8 points lower |
+| CPU | about a fifteenth |
+| wall time | 1.17x ours |
+| VMAF v1 | 7.3 points lower |
 
-The hardware is faster on high-rate clips and most HD. It's slower on CIF and
-fourpeople, where opening the session is a large share of a short run.
+The hardware is faster on ducks, park_joy, pedestrian and riverbed. It's
+slower on CIF and on the three HD clips at 1 Mbit/s or less, where opening the
+session is a large share of a short run.
 
 | about the table | |
 |---|---|
-| rate | clips run at their ABR targets. The hardware comes within about 6% of target on all ten clips |
+| rate | clips run at the board's ABR targets. The hardware comes within 7% of target on all ten clips |
 | wall and CPU | median of five timed runs per side on a quiet machine, ours at auto threads. CPU counts the encoder process only, not work the hardware does elsewhere |
-| VMAF v1 | read with our encoder at three threads. The hardware spends more bits than we do on seven of ten clips, which favors it here |
+| VMAF v1 | read with our encoder at three threads. The hardware spends more bits than we do on eight of ten clips, which favors it here |
 
 ## What we chose and why
 

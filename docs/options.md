@@ -411,11 +411,11 @@ the recon-match cells.
 The table compares intra refresh with keyframes at the same period: `--keyint
 60`, `--bframes 0`, a one-second VBV (`--bitrate R --vbv-maxrate R
 --vbv-bufsize R`) and `--no-scenecut` on the keyframe side. Each encode is 180
-frames at `--threads 1`, at four rates from half to 1.5 times the board rate.
+frames at `--threads 1`, at four rates from half to 1.5 times the rate in the table.
 Positive BD-rate means intra refresh needs more bits. Peak is the largest frame
-after the IDR over the mean frame size, at the board rate.
+after the IDR over the mean frame size, at that rate.
 
-| Clip | Board rate | BD-rate (VMAF v1) | Peak, intra refresh | Peak, keyframes |
+| Clip | Rate, kbit/s | BD-rate (VMAF v1) | Peak, intra refresh | Peak, keyframes |
 | --- | --- | --- | --- | --- |
 | foreman_cif | 400 | +15.4% | 2.5x | 6.6x |
 | bus_cif | 400 | +3.7% | 2.1x | 6.7x |
