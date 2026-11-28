@@ -53,7 +53,7 @@ if _nocurve:
           f"(calibrate_band.py writes scripts/curves.json)", file=sys.stderr)
     ladders = {c: v for c, v in ladders.items() if c in CURVE}
 
-# ARM: when set, the comparison is yah264-against-yah264 (env-gated arm vs the
+# ARM or ARM_ARGS: when either is set, the comparison is yah264-against-yah264 (env-gated arm vs the
 # shipped default) instead of yah264-against-x264. That is the right shape for
 # gating a speed change for BD-neutrality -- same ladder both sides, so the
 # rates are matched by construction and no ladder-placement artifact can enter.
@@ -61,8 +61,8 @@ ARM = os.environ.get("ARM", "")
 # ARM_ARGS: extra CLI flags for the arm side, for knobs that are CLI
 # options rather than env vars (--aq-strength, --psy-rd, ...).
 ARM_ARGS = os.environ.get("ARM_ARGS", "")
-# either one makes it a self-A/B: an ARM_ARGS-only arm used to be scored
-# against x264, so a flag read as a gain over the reference, not over our default
+# either one makes it a self-A/B; otherwise a flag-only arm would be scored
+# against x264 and read as a gain over the reference, not over our default
 SELF_AB = bool(ARM or ARM_ARGS)
 
 # VMAF_MODELS=neg (the default) scores VMAF-NEG alone, the only number the band

@@ -488,7 +488,7 @@ typedef struct {
  * cqm_4x4/cqm_8x8 at the end of this struct). Any
  * matrix but flat needs High profile. */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
-                             * Default 0.4, which is what every shipped non-CQP
+                             * Default 0.25, which is what every shipped non-CQP
                              * encode runs. encoder_open forces 0 at CQP. */
     int sei;                /* 1 = emit a settings SEI (unregistered user data) */
     int sar_num;            /* sample aspect ratio W:H (0 = unspecified/square) */

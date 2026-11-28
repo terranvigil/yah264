@@ -1444,9 +1444,10 @@ static void usage(const char *argv0)
         "                     print. -v adds the resolved settings line.\n"
         "  --no-progress      no progress line (it only appears on a terminal)\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
-        "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"   /* x264-ok */
-        "   --bframes 3 --transform-8x8 --aq-strength 0.25, so `y264 --input-y4m\n"
-        "   in.y4m` is directly comparable to `x264 in.y4m`.)\n"   /* x264-ok */
+        "  (bare default mirrors x264 medium's tool-set: --preset medium --cabac\n"   /* x264-ok */
+        "   --ref 3 --bframes 3 --transform-8x8, so `y264 --input-y4m in.y4m` is\n"
+        "   directly comparable to `x264 in.y4m`; --aq-strength 0.25 and --psy-rd\n"   /* x264-ok */
+        "   2.0 differ on purpose.)\n"
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme,\n"
         "                     subpel, ref, lookahead and more. Default = medium\n"
         "                     (x264-match); veryslow/placebo are the max-quality tier.\n"   /* x264-ok */
@@ -7369,7 +7370,7 @@ static int cli_main(int argc, char **argv)
     param.timebase.fps_den = fps_den;
     /* with no --preset the bare default is medium with its tool-set (CABAC,
      * ref 3, bframes 3, 8x8dct), close to the reference's medium; aq_strength
-     * 0.4 and psy_rd 2.0 differ from it on purpose (params.c). the preset sets
+     * 0.25 and psy_rd 2.0 differ from it on purpose (params.c). the preset sets
      * subme, subpel, ref and lookahead; an explicit flag overrides it. */
     if (!preset) preset = "medium";
     if (g_api->param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */

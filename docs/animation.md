@@ -12,7 +12,7 @@ shipped default on the same binary.
 | setting | what it does | why |
 |---|---|---|
 | `--tune animation` | adds four B frames and changes nothing else: seven at every preset with B frames, four at ultrafast. An explicit `--bframes` wins over it | B frames are the one tune element that helps both CGI clips. Wall is neutral on bbb and 0.945x on sintel. The tune costs sita |
-| adaptive quantization | 0.25 default | 0.2 reads better on all three clips. The 0.25 default comes from the real-title ladders. AQ off splits the class |
+| adaptive quantization | 0.25 default | the default comes from the real-title ladders. Against 0.4, 0.2 reads better on all three clips and AQ off splits the class |
 | mode-decision lambda | follows the mb-tree part of each macroblock's QP, on non-flat macroblocks only | at the frame QP, mb-tree's finer quantizer on static line art got priced into skip. Per-MB lambda takes about two thirds off sita's gap to x264 and reads -0.75% median on the CRF band. It also helps the CGI clips |
 | psy-trellis on flat frames | the psy flat gate raises psy-trellis on frames where at least 75% of macroblocks are near-flat | the gate fires on every frame of sintel and on no frame of the other corpus clips. On VMAF v1 it reads neutral on sintel: within 0.3% at matched rate on the standing band and within 0.1% at CRF 30 to 42 |
 | repeated frames | no special handling | held frames are already cheap. A bbb cut with half its frames repeated encodes 18% faster than the unique-frame cut |
@@ -24,9 +24,9 @@ Per clip, against the shipped default:
 | `--tune animation` | -22.9% | +3.0% | -11.2% |
 | five B frames in place of the tune's seven | +17.8% | | |
 | per-MB lambda, on against off | -4.6% | gap to x264 from +5.8% to +1.9% | -0.7% |
-| `--aq-strength 0.2` | -1.4% | -2.7% | -3.6% |
-| AQ off | +10.6% | | -3.4% |
-| `--aq-strength 0.6` | +1.6% | +1.3% | +3.1% |
+| `--aq-strength 0.2`, against 0.4 | -1.4% | -2.7% | -3.6% |
+| AQ off, against 0.4 | +10.6% | | -3.4% |
+| `--aq-strength 0.6`, against 0.4 | +1.6% | +1.3% | +3.1% |
 | `--psy-rd` 0.4 or 1.0 | +0.5% to +0.9% | within 0.2% | -1.0% to -1.4% |
 | `--ref 6` or `--ref 9` | within 0.4% | -1.6% to -2.0% | +0.6% |
 | psy-trellis 0.5 in the tune | +0.2% | | byte-identical |
