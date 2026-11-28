@@ -2,7 +2,7 @@ project('yah264', 'c',
   # Keep in step with YAH264_VERSION_* in include/yah264.h, which is what
   # yah264_version() is built from. A release that changes the ABI moves
   # YAH264_ABI_VERSION and the soversion below with it.
-  version : '0.2.0',
+  version : '0.3.0',
   license : 'GPL-2.0-or-later',
   default_options : [
     'c_std=c11',
