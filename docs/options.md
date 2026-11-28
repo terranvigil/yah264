@@ -196,7 +196,7 @@ The [rate control guide](rate-control.md) covers how to choose. The flags:
 | `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type, in single-pass ABR and in the two-pass allocator. |
 | `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass, paired with `--bitrate`. 1 writes stats, 2 reads them, and 3 reads them and writes them back for a further pass to refine against a real encode. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. See [Output and scratch files](#output-and-scratch-files). |
-| `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization strength. 0 disables it. |
+| `--aq-strength` | float | 0.25 rate-controlled, 0.0 at CQP | Variance adaptive quantization strength. 0 disables it. |
 | `--aq-mode` | 1 or 2 | 2 | The AQ form: 1 is plain log2-variance and 2 is adaptive. `0` is refused, and AQ off is `--aq-strength 0`. |
 | `--abr-model` | `default`, `rf` | `default` | ABR bit allocation without mb-tree (`--bframes 0 --rc-lookahead 0`). See [below](#--abr-model-rf-matters-only-without-mb-tree). |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window, at most 64 frames. 0 turns the window off. |
@@ -221,19 +221,12 @@ encode as 1.
 `--qblur` is accepted and ignored with a warning, since the planner has no
 quantizer blur.
 
-`--aq-strength` defaults to 0.4 under CRF, ABR and two-pass and 0.0 under
-constant QP. An explicit value, `0` included, wins. 0.4 is this encoder's
-measured value, where x264 medium uses 1.0. On seven CIF clips in VMAF v1 the
-lowest value tried reads best:
-
-| `--aq-strength` | BD-rate against 0.4 |
-| --- | --- |
-| 0.2 | -2.6% median, although stefan still loses +0.33% |
-| 0.3 | -0.1% |
-| 0.5, 0.6 | lose |
-
-Why the best value sits so far below the reference's default is an open
-question.
+`--aq-strength` defaults to 0.25 under CRF, ABR and two-pass and 0.0 under
+constant QP. An explicit value, `0` included, wins. 0.25 is this encoder's
+measured value, where x264 medium uses 1.0. Against 0.4 in VMAF v1 it reads a
+median -1.0% BD-rate on the real-title ladders at CRF and -0.6% under capped
+VBR. Dark titles under VBR give back up to 0.6%. Why the best value sits so far
+below the reference's default is an open question.
 
 ### `--crf-max` buys quality with the buffer model
 

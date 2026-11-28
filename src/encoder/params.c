@@ -121,8 +121,11 @@ void yah264_param_default(yah264_param_t *param)
      * It used to be left at zero here and resolved by the CLI, which meant a
      * library caller got AQ off and no indication of it: the ffmpeg wrapper
      * emitted 32% more bits than the CLI at the same CRF before this moved.
-     * encoder_open still forces 0 at CQP, so this is the non-CQP value. */
-    param->aq_strength = 0.4f;
+     * encoder_open still forces 0 at CQP, so this is the non-CQP value.
+     * 0.25 over 0.4: on the published real-title ladders (VMAF v1) it reads a
+     * median -1.0% BD-rate at CRF and -0.6% under capped VBR, -1.3% on the
+     * ABR band; the dark 10-minute title gives back up to 0.6% under VBR. */
+    param->aq_strength = 0.25f;
     param->annexb = 1;
     /* The three that the encoder spelled as literals until 2026-09-16. Written
  * explicitly for the same reason `sei` and `annexb` are: their default is ON

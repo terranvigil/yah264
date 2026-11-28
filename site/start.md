@@ -46,7 +46,7 @@ purpose, swept against our own quality band:
 
 | option | yah264 | x264 |
 |---|--:|--:|
-| `--aq-strength` | 0.4 | 1.0 |
+| `--aq-strength` | 0.25 | 1.0 |
 | `--psy-rd` | 2.0 | 1.0 |
 
 Psychovisual RD trades pixel accuracy for visible texture, the setting most

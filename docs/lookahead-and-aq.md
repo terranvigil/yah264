@@ -48,7 +48,7 @@ the lookahead window is on. Because constant QP turns it off along with AQ,
 
 **Variance AQ.** Each macroblock's energy is `l = log2(variance + floor)` on
 luma. The variance is on the 8-bit scale at every depth. The offset is
-`strength * gain * (l - center)`. `--aq-strength` defaults to 0.4 in every
+`strength * gain * (l - center)`. `--aq-strength` defaults to 0.25 in every
 rate-controlled mode and 0 at constant QP. The default, `--aq-mode 2`, adds a
 per-frame gain from the spread of `l` across the frame. When a frame's blocks
 all sit near one energy (a dark scene, a fade, a flat cartoon background), its
@@ -199,7 +199,7 @@ before later default changes.
 | choice | why |
 |---|---|
 | `--rc-lookahead 40` | On v1, we swept 30, 40 and 50 at CRF and VBR on seven of the 720p and 1080p real-title cells: the three 1080p segments, tears, bbb and the 10-minute meridian excerpt at 1080p, and sintel at 720p. x264 medium ran at its own 40. Both encoders ran on three threads. 50 beats 40 by 0.7 points on bbb 1080p CRF and 0.4 on bbb VBR. Sintel 720p CRF and the meridian excerpt in VBR also read best at 50. They're only 0.2 ahead of 40, inside the spread. On those two, 30 is what falls behind. Everywhere else the three depths are within 0.4 points. That spread is the most a near-null control or a second VBR run moved one cell's BD. The 2160p cells aren't swept on v1. Each frame of depth costs about 22 MiB per instance at 2160p. |
-| `--aq-strength 0.4` | 0.3 reads a median -0.35% against 0.4 on the 13-clip CRF band, with 8 clips better. At 1.0, AQ loses 3% to 13% on the four clips read. |
+| `--aq-strength 0.25` | Against 0.4 on the real-title ladders it reads a median -1.0% BD-rate at CRF and -0.6% under capped VBR. Dark titles under VBR give back up to 0.6%. Against 0.4, 1.0 loses 3% to 13% on the four clips read. |
 | `--aq-mode 2` gain constants | A spread exponent of 0.5 loses 2.1% on sintel. A gain cap of 1.2 costs the HD band a median 0.38%, with perseverance 720p the worst at +1.5%. |
 | floor 2 on mb-tree frames, 16 on non-reference B | On the HD band, floor 1 on mb-tree frames reads a median +0.16% and costs bbb 720p 0.8%, though perseverance 720p gains 1.9%. A B floor of 1 reads a median -0.03%, inside the band's noise. |
 | absolute anchor 4.5 | Against no anchor the 13-clip CRF band reads a mean of -1.07% but a flat median (+0.04%), with only 6 clips better. The gain sits on sintel (-7.1%) and park_joy (-5.0%). On the earlier metric it was a median -5.17% with 11 of 12 better. 7.5 costs samsung 2.3%. |
@@ -247,7 +247,7 @@ before later default changes.
 
 ## Open questions
 
-- Why the best AQ strength sits at 0.3 to 0.4, so far below x264 medium's 1.0.
+- Why the best AQ strength sits near 0.25, so far below x264 medium's 1.0.
   mb-tree is worth more at 0.4 than at 1.0 on bus (-6.2% against -3.8%), so
   starved propagation doesn't explain it.
 - On the seven cells swept, depth 50 is better than 40 on bbb 1080p and never

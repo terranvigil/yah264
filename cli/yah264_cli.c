@@ -1444,9 +1444,10 @@ static void usage(const char *argv0)
         "                     print. -v adds the resolved settings line.\n"
         "  --no-progress      no progress line (it only appears on a terminal)\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
-        "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"   /* x264-ok */
-        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `y264 --input-y4m\n"
-        "   in.y4m` is directly comparable to `x264 in.y4m`.)\n"   /* x264-ok */
+        "  (bare default mirrors x264 medium's tool-set: --preset medium --cabac\n"   /* x264-ok */
+        "   --ref 3 --bframes 3 --transform-8x8, so `y264 --input-y4m in.y4m` is\n"
+        "   directly comparable to `x264 in.y4m`; --aq-strength 0.25 and --psy-rd\n"   /* x264-ok */
+        "   2.0 differ on purpose.)\n"
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme,\n"
         "                     subpel, ref, lookahead and more. Default = medium\n"
         "                     (x264-match); veryslow/placebo are the max-quality tier.\n"   /* x264-ok */
@@ -1520,7 +1521,7 @@ static void usage(const char *argv0)
         "                     error). 4:2:0 8-bit only.\n"
         "  --frames N         stop after N frames (0 = all)\n"
         "  --aq-strength F    variance adaptive quantization strength (0 = off;\n"
-        "                     default 0.4 for CRF/ABR/2-pass, off for pure CQP;\n"
+        "                     default 0.25 for CRF/ABR/2-pass, off for pure CQP;\n"
         "                     x264's default is 1.0)\n"   /* x264-ok */
         "  --rc-lookahead N   mb-tree lookahead window in frames (default from\n"
         "                     --preset, medium = 40; 0 = off; at most 64, a larger\n"
@@ -7369,7 +7370,7 @@ static int cli_main(int argc, char **argv)
     param.timebase.fps_den = fps_den;
     /* with no --preset the bare default is medium with its tool-set (CABAC,
      * ref 3, bframes 3, 8x8dct), close to the reference's medium; aq_strength
-     * 0.4 and psy_rd 2.0 differ from it on purpose (params.c). the preset sets
+     * 0.25 and psy_rd 2.0 differ from it on purpose (params.c). the preset sets
      * subme, subpel, ref and lookahead; an explicit flag overrides it. */
     if (!preset) preset = "medium";
     if (g_api->param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */
@@ -7628,27 +7629,13 @@ static int cli_main(int argc, char **argv)
         param.rc.method = YAH264_RC_CRF;
         param.rc.rf = crf;
     }
-    /* AQ default: 0.4 for rate-controlled modes (ABR/CRF/2-pass); off for
- * pure CQP (byte-identity); explicit --aq-strength (incl 0) always
- * overrides.
- *
- * It is deliberately NOT the reference encoder's medium 1.0. `Y264_CRF_CPLX` is default on,
- * and under its absolute AQ anchor this knob does a DIFFERENT job -- it
- * scales the offsets' distance from the anchor, not just their spread
- * around a frame mean -- so matching the reference encoder's number does not match the reference encoder's
- * behaviour. Swept in that regime with `scripts/bd_at_rate.py` at matched
- * achieved bitrate (0.2 / 0.3 / 0.4 / 0.5 / 0.7 / 1.0 on bus, mobile and
- * samsung), the turn is at 0.4 and it is a clear one: 0.3 and 0.2 fall back
- * off it, 0.5 and 0.7 degrade.
- *
- * Corpus, 0.4 against 1.0, twelve clips: **CRF median -3.81%, 11 of 12
- * negative, worst +1.07%** (touchdown -27.03, sintel -15.58, coastguard
- * -9.96). And unlike the absolute anchor it holds on the other band too --
- * **ABR median -3.21%, 9 of 12**, with the two positives inside that band's
- * own noise floor (bench/lowrate/abr_noise.py: 0.1-3.4 points on these
- * clips). So this one is not scoped to CRF. */
+    /* the aq default is off at pure cqp (byte identity) and 0.25 otherwise;
+     * an explicit --aq-strength, 0 included, always wins. it isn't the
+     * reference's 1.0 because under the absolute aq anchor this knob scales
+     * the offsets' distance from the anchor, not just their spread around
+     * the frame mean, so the same number means a stronger field here. */
     if (aq_strength < 0.f)
-        aq_strength = (param.rc.method != YAH264_RC_CQP) ? 0.4f : 0.f;
+        aq_strength = (param.rc.method != YAH264_RC_CQP) ? 0.25f : 0.f;
     param.aq_strength = aq_strength;
     if (no_sei) param.sei = 0;
     /* SAR: an explicit --sar wins; else carry the Y4M 'A' tag through to the

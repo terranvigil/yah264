@@ -76,8 +76,8 @@ Other content-split constants we refused as global defaults:
 | constant | split |
 |---|---|
 | a larger B-frame QP step of 2.0 | sita gains, ducks and touchdown lose more |
-| `--aq-strength 0` | sintel -3.4%, bbb +10.6% |
-| `--aq-strength 0.2` / `0.6` | riverbed -1.47 at 0.2, blue_sky -7.09 at 0.6, where 0.2 costs blue_sky +6.72: opposite directions |
+| `--aq-strength 0`, against 0.4 | sintel -3.4%, bbb +10.6% |
+| `--aq-strength 0.2` / `0.6`, against 0.4 | riverbed -1.47 at 0.2, blue_sky -7.09 at 0.6, where 0.2 costs blue_sky +6.72: opposite directions |
 
 ## What didn't work
 

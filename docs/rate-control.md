@@ -344,7 +344,7 @@ began.
 
 ### Frame-level AQ strength by mode
 
-Per-MB AQ is `--aq-strength` times a per-frame gain. The strength is 0.4 in
+Per-MB AQ is `--aq-strength` times a per-frame gain. The strength is 0.25 in
 every rate-controlled mode and 0 at CQP. Because the AQ offset under CRF and
 ABR is anchored to an absolute energy level instead of the frame mean, the
 field has a frame DC. `crf_frame_dc` adds that DC to the anchor's base QP at its
@@ -560,7 +560,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Flat CRF base under mb-tree, plus level 2.3 and fps slope 2.9 | mb-tree handles the per-frame allocation. The constants match bytes at equal `--crf` against x264 medium to a median 5.2% on 22 clips |
 | Frame DC 1.3 under uncapped CRF | On the earlier metric it had the lowest worst clip on the CRF band and recovered long multi-shot titles. VMAF v1 sees little either way. On a 2-minute window of a 1080p animated feature, 1.04, 1.3 and 1.4 sit within 0.25% of each other against x264 medium. On the deep band, 1.4's cost on the static clips is inside the band's noise |
 | Frame DC 1.04 under capped CRF and bitrate targets | the capped-VBR compliance gate with CBR HRD read 68/72 at 1.3 and 72/72 at 1.04 |
-| `--aq-strength` 0.4 | on VMAF v1, 0.3 reads a median -0.35% against 0.4 on the 13-clip CRF band at matched rate, with 8 clips better. The default sits just above it |
+| `--aq-strength` 0.25 | against 0.4 on the real-title ladders it reads a median -1.0% at CRF and -0.6% under capped VBR; dark titles under VBR give back up to 0.6% |
 | RF2 ledger for ABR | it's the CRF path plus a rate factor. We read each constant on the ABR band and the capped-VBR tracking cells |
 | Fitted ABR opening QP | a resolution-only seed opened 720p at QP 6 against a settling point of 27. The fit reads rms 3.2 QP over QP 16-44 on 32 clips |
 | Half-full handoff for segments | it's the CRF fill budget's fixed point, so segments compose without extra machinery |
