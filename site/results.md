@@ -300,8 +300,8 @@ Median ratio by class, over three CIF, four 720p and three 1080p clips:
 | 2 | 0.63x | 0.61x | 0.61x | 0.72x | 0.63x | 0.65x |
 | 3 | 0.71x | 0.73x | 0.70x | 0.80x | 0.77x | 0.77x |
 
-The slowest cells have SIMD on: shields in both modes, now that it runs at
-1 Mbit/s, and riverbed under ABR.
+The slowest cells have SIMD on: shields in both modes, at 1 Mbit/s, and
+riverbed under ABR.
 
 The rate error is each encoder's delivered ABR rate against the clip's rate:
 
@@ -310,9 +310,11 @@ The rate error is each encoder's delivered ABR rate against the clip's rate:
 | multi-threaded | 1.9% | 8.2% |
 | single-threaded | 2.1% | 4.7% |
 
-Both encoders track ducks loosely. At every rate tried, we overshoot it by 7%
-and x264 by 10%. The opening is fitted on seventeen non-board cells,
-holding the board out.
+Both encoders overshoot ducks at every rate tried. At its board rate on one
+thread, we overshoot it by 7% and x264 by 10%. Multi-threaded under ABR, x264
+overshoots riverbed by 37.8%, which is behind riverbed's outlier in the
+rate-matched legs. The opening is fitted on seventeen non-board cells, holding
+the board out.
 
 ## Reproducing the tables
 
@@ -368,8 +370,8 @@ starting where x264 scores VMAF v1 93. crowd_run has the smallest lead, at
 ## The hardware mode
 
 `--hw videotoolbox` encodes through the Mac's H.264 engine with our options
-mapped onto it and our scene-cut placing keyframes. Because the
-stream is the hardware's, nothing above applies. Same ten clips, at the board's rates:
+mapped onto it and our scene-cut placing keyframes. Because the stream is the
+hardware's, nothing above applies. Same ten clips, at the board's rates:
 
 | clip | kbit/s target | wall, hardware ÷ ours | CPU, ours ÷ hardware | VMAF v1, hardware − ours | our VMAF v1 | hardware VMAF v1 |
 |---|--:|--:|--:|--:|--:|--:|
@@ -387,8 +389,8 @@ stream is the hardware's, nothing above applies. Same ten clips, at the board's 
 At the median the hardware takes 1.17x our wall time on about a fifteenth of
 our CPU. It's faster on ducks, park_joy, pedestrian and riverbed. It's slower
 on CIF and on the three HD clips at 1 Mbit/s or less, where opening the
-session is a large part of so short a run. It scores below us at the same bitrate on all ten clips, by 7.3
-points at the median.
+session is a large part of so short a run. It scores below us at the same
+bitrate on all ten clips, by 7.3 points at the median.
 
 - Runs cover six seconds, or the whole clip if shorter.
 - Wall and CPU: our encoder at auto threads, median of five interleaved runs
@@ -475,9 +477,9 @@ The 1080p row is the same command with `--seqs ms_1080p_25 --points 26,29,32,35,
 
 The ten board clips are natural 8-bit 4:2:0 video from Xiph's public
 collection, at native resolution. The rate is each clip's ABR target: the
-lowest rate at which both encoders track it and yah264 scores VMAF v1 88 to 94
-at one thread. Because ducks never tracks closely on either encoder, its rate
-is the in-band one that comes closest.
+lowest rate at which yah264 scores VMAF v1 88 to 94 at one thread and both
+encoders come within about 8% of it. Because both overshoot ducks at every
+rate, its rate is the one in yah264's 88 to 94 range that tracks closest.
 
 | clip | size | what it is | rate |
 |---|---|---|---|

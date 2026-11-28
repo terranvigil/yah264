@@ -99,11 +99,15 @@
 # worse. Comparing one against the other reads as a regression that is not
 # there. Say which board produced a number, every time.
 # The rates were re-chosen on VMAF v1 at display resolution with the 0.25 AQ
-# default, by the rule above (scripts/parity-clip-calib.sh, one thread). yah264
-# lands at v1 88.2-92.2 on every clip. ducks_720p overshoots on both encoders at
-# every rate tried (+7% ours, +10% x264), so its point is the in-band rate that
-# tracks closest. x264 undershoots stefan and fourpeople by 6-8%, and both
-# encoders undershoot pedestrian by about 5%.
+# default (scripts/parity-clip-calib.sh, one thread). The rule with its
+# tolerance: the lowest target where yah264 scores v1 88-94 and both encoders
+# land within about 8% of it. yah264 lands at v1 88.2-92.2 on every clip.
+# stefan is accepted with x264 at -7.7%. ducks_720p is the exception: every
+# rate tried overshoots on both, so its point is the rate in yah264's 88-94
+# range that tracks closest (at it, one thread: +7% ours, +10% x264).
+# shields_720p's pick, 1000, is the floor of the ladder that was swept, so the
+# floor bounded it. x264 undershoots fourpeople by 6%, and both encoders
+# undershoot pedestrian by about 5%.
 CLIPS="${CLIPS:-foreman_cif:1300 bus_cif:1000 stefan_cif:1000 ducks_720p:21000 park_joy_720p:10000 fourpeople_720p:1000 shields_720p:1000 sunflower_1080p:900 pedestrian_1080p:2400 riverbed_1080p:12500}"
 
 # ---------------------------------------------------------------------------

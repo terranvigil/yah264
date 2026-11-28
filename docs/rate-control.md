@@ -12,8 +12,9 @@ The models, the VBV and the pipelined decide and account live in
 `src/encoder/rate.c`. Mode setup (`yah264_encoder_open`), the frame-type
 cascade (`frame_qp`) and the lookahead are in `src/encoder/encoder.c`.
 [options.md](options.md) lists the flags, and [knobs.md](knobs.md) has each
-`Y264_*` default quoted here. Quality figures on this page are on VMAF v1.
-Rows marked "older build" were read on a build that still had the arm's code,
+`Y264_*` default quoted here. Quality figures on this page are on VMAF v1,
+except rows marked "earlier metric", which were read on VMAF v0.6.1. Rows
+marked "older build" were read on a build that still had the arm's code,
 before later default changes.
 
 ## How it works
@@ -576,7 +577,7 @@ A `- 1` bound would then admit it. Byte-identity caught that at every lead on
 | Zero-lag anchors | burst-lagged anchors doubled the rate deviation |
 | Lag 1 above one thread | 7-10% of wall on 720p/1080p ABR at twelve threads. On VMAF v1 it's within 1% of lag 0 on five of eight clips and sintel favors it. samsung and stockholm go the other way (see the table under frame threading) |
 | Two-pass offline plan always on | without the plan the I frame got the highest QP in its GOP, at 2.7x a B frame's bytes against 18x with it. On VMAF v1 over 120 frames, two-pass beats one-pass ABR on only three of seven corpus clips, from -2.8% (samsung) to +7.3% (sintel) |
-| Shared ABR ledger across GOP workers | without it, six workers read 87.4 against 89.8 with one on a 1080p title (VMAF-NEG, the earlier metric) |
+| Shared ABR ledger across GOP workers | without it, six workers on a 1080p title came in 9.5% under target and read VMAF v1 92.96 against 93.71 with one worker (older build, see the ledger table above) |
 | Buffer charged slice payload plus framing | payload alone drifted 30 kbit over a few hundred CBR pictures |
 | CBR dive rule at 2 QP | under CBR, a burst whose rate factor sits more than 2 QP below the regime the bits model was calibrated at takes the serial schedule, because the model under-predicts there. 3 was the largest with no underflow on sintel's four CBR rungs at four and six threads. 2 keeps a QP of margin |
 | Sync-lookahead as ring capacity | fencing the window instead would change mb-tree's math. Capacity is pure latency |
