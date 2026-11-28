@@ -98,7 +98,13 @@
 # CLIs with per-process setup inside the measurement and reads about 0.19x
 # worse. Comparing one against the other reads as a regression that is not
 # there. Say which board produced a number, every time.
-CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 fourpeople_720p:1200 shields_720p:2200 sunflower_1080p:1500 pedestrian_1080p:2800 riverbed_1080p:12500}"
+# The rates were re-chosen on VMAF v1 at display resolution with the 0.25 AQ
+# default, by the rule above (scripts/parity-clip-calib.sh, one thread). yah264
+# lands at v1 88.2-92.2 on every clip. ducks_720p overshoots on both encoders at
+# every rate tried (+7% ours, +10% x264), so its point is the in-band rate that
+# tracks closest. x264 undershoots stefan and fourpeople by 6-8%, and both
+# encoders undershoot pedestrian by about 5%.
+CLIPS="${CLIPS:-foreman_cif:1300 bus_cif:1000 stefan_cif:1000 ducks_720p:21000 park_joy_720p:10000 fourpeople_720p:1000 shields_720p:1000 sunflower_1080p:900 pedestrian_1080p:2400 riverbed_1080p:12500}"
 
 # ---------------------------------------------------------------------------
 # 2026-09-22: THE 4K PAIR (item board-4k-longform).

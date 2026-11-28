@@ -12,10 +12,9 @@ The models, the VBV and the pipelined decide and account live in
 `src/encoder/rate.c`. Mode setup (`yah264_encoder_open`), the frame-type
 cascade (`frame_qp`) and the lookahead are in `src/encoder/encoder.c`.
 [options.md](options.md) lists the flags, and [knobs.md](knobs.md) has each
-`Y264_*` default quoted here. Quality figures on this page are on VMAF v1,
-except the shared ledger's six-worker reading, which is on VMAF-NEG (earlier
-metric). Rows marked "older build" were read on a build that still had the
-arm's code, before later default changes.
+`Y264_*` default quoted here. Quality figures on this page are on VMAF v1.
+Rows marked "older build" were read on a build that still had the arm's code,
+before later default changes.
 
 ## How it works
 
@@ -381,16 +380,26 @@ GOP workers ABR keeps one rate problem:
   state. The GOPs in between are credited at target.
 - **Shared ledger**: concurrent ABR GOPs read and write one rate factor.
   Chained through the carry alone, the first W GOPs each solved their own rate
-  problem cold. Every later one read a ledger W GOPs stale. On a 1080p title at
-  12.5 Mbit/s capped VBR, 6 parallel GOPs read VMAF-NEG 87.4 against 89.8 with
-  one worker. The shared ledger isn't used under two-pass, whose budget is
-  already per GOP, or under `--gop-threads`.
+  problem cold. Every later one read a ledger W GOPs stale. In the table below,
+  six unshared workers undershoot the target by three times as much as one
+  worker and score lower. The shared ledger isn't used under two-pass, whose
+  budget is already per GOP, or under `--gop-threads`.
 - **Two-pass** splits the stats file at the GOP markers a threaded pass 1
   writes. Each GOP takes the share of the budget its complexity earns. Because
   a serial pass 1 writes no markers, its pass 2 runs serially too. Under a VBV
   the GOPs join at levels the splitter plans (see [Two-pass](#two-pass)).
 - **`--keyint 1` with a VBV** runs one encoder: a one-frame GOP has no frame
   of its own to correct the buffer level its segment assumed.
+
+Sol Levante at 1080p, 2494 frames, capped VBR at 12.5 Mbit/s, `--threads 6`:
+
+| GOP workers | build | rate vs target | VMAF v1 |
+|---|---|--:|--:|
+| 6, shared ledger | current | -3.5% | 95.11 |
+| 1 | current | -3.0% | 94.39 |
+| 6, unshared | older build, AQ 0.25 | -9.5% | 92.96 |
+| 6, shared ledger | older build, AQ 0.25 | -3.4% | 94.36 |
+| 1 | older build, AQ 0.25 | -2.8% | 93.71 |
 
 ### What VBV actually guarantees
 

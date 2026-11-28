@@ -66,7 +66,7 @@ On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD b
 
 | mode | wall time | CPU used | VMAF |
 |---|--:|--:|--:|
-| `--hw videotoolbox` vs yah264 SIMD | about the same | 1/18 as much | 8 points lower (VMAF v1) |
+| `--hw videotoolbox` vs yah264 SIMD | 1.17x as long | 1/15 as much | 7 points lower (VMAF v1) |
 
 ## Shot-aware support
 
